@@ -711,5 +711,33 @@ def tokens_list_cmd(
         typer.echo(f"  {r.id}  scope={r.scope}  hash={r.hash[:16]}…  last_used={last}")
 
 
+@app.command("publish")
+def publish_cmd(
+    tenant_id: str = typer.Option(..., "--tenant"),
+    max_jobs: int = typer.Option(50, "--max-jobs"),
+    max_attempts: int = typer.Option(4, "--max-attempts"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Drain pending publish_jobs for a tenant. Runs one pass and exits."""
+    from nexoclip.db import apply_migrations
+    from nexoclip.publish import run_publish_jobs
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            outcome = await run_publish_jobs(
+                tenant_id, db, max_jobs=max_jobs, max_attempts=max_attempts
+            )
+            typer.echo(
+                f"sent={outcome.sent} transient={outcome.transient_failures} "
+                f"failed={outcome.permanent_failures}"
+            )
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()

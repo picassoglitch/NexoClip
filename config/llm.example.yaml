@@ -1,0 +1,81 @@
+# LLM provider configuration.
+# Copy to llm.yaml and edit as needed.
+#
+# API keys are loaded from environment variables (see .env.example).
+# This file controls model selection, routing, and rate limits — not credentials.
+
+providers:
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com
+    models:
+      standard: claude-haiku-4-5-20251001       # fast + cheap, great for structured short-form
+      premium: claude-opus-4-7                  # premium quality for high-stakes generation
+    rate_limits:
+      requests_per_minute: 1000
+      input_tokens_per_minute: 400000
+      output_tokens_per_minute: 80000
+    timeout_s: 30
+
+  openai:
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    models:
+      standard: gpt-4o-mini
+      premium: gpt-4o
+    rate_limits:
+      requests_per_minute: 500
+    timeout_s: 30
+
+# Routing rules per "purpose" (the use case of the call).
+# The router resolves: purpose -> quality -> provider -> model.
+routing:
+  variant_generation:
+    default_quality: standard
+    primary: anthropic
+    fallbacks: [openai]
+
+  variant_generation_visual:                    # Phase 2+, multimodal
+    default_quality: premium
+    primary: anthropic
+    fallbacks: [openai]
+
+  clip_scoring:                                 # Phase 2+, multimodal scoring
+    default_quality: premium
+    primary: anthropic
+    fallbacks: [openai]
+
+  agent_decision:                               # alter-ego auto-approval reasoning
+    default_quality: premium
+    primary: anthropic
+    fallbacks: [openai]
+
+# Reliability
+retry:
+  max_attempts: 3
+  initial_backoff_s: 1.0
+  backoff_multiplier: 4.0
+  retryable_status_codes: [429, 500, 502, 503, 504]
+
+circuit_breaker:
+  error_rate_threshold: 0.20                    # >20% errors over window -> trip
+  window_s: 300
+  recovery_s: 300
+
+# Cost tracking — used to compute cost_usd_micros per call.
+# These rates are illustrative; verify against current provider pricing before launch.
+pricing:
+  anthropic:
+    claude-haiku-4-5-20251001:
+      input_per_mtok_usd: 0.80
+      output_per_mtok_usd: 4.00
+    claude-opus-4-7:
+      input_per_mtok_usd: 15.00
+      output_per_mtok_usd: 75.00
+  openai:
+    gpt-4o-mini:
+      input_per_mtok_usd: 0.15
+      output_per_mtok_usd: 0.60
+    gpt-4o:
+      input_per_mtok_usd: 2.50
+      output_per_mtok_usd: 10.00

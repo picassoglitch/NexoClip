@@ -49,6 +49,7 @@ async def ingest_vod(
     *,
     stream_id: str | None = None,
     force: bool = False,
+    chat_replay_source: Path | None = None,
 ) -> Stream:
     """Download a VOD and extract its audio. Returns a Stream.
 
@@ -58,6 +59,9 @@ async def ingest_vod(
         output_dir: Root directory; a `<stream_id>/` subdirectory is created.
         stream_id: Optional existing stream ID for resumes. New ULID if omitted.
         force: If true, overwrite existing files even when `stream.json` exists.
+        chat_replay_source: Optional path to a JSONL of chat messages
+            (one `ChatMessage` per line). Phase 1 doesn't fetch chat replay
+            from platforms automatically — pass a pre-fetched file or skip.
     """
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,20 @@ async def ingest_vod(
     audio_path = source_dir / "audio.wav"
 
     if not force and stream_json.exists():
-        return Stream.model_validate_json(stream_json.read_text("utf-8"))
+        cached = Stream.model_validate_json(stream_json.read_text("utf-8"))
+        # Resume: still import chat replay if a new source is provided this run.
+        if chat_replay_source is not None:
+            from .chat_replay import chat_replay_path, import_chat_replay
+
+            import_chat_replay(
+                source=chat_replay_source,
+                stream_dir=stream_dir,
+                stream_id=cached.id,
+                tenant_id=cached.tenant_id,
+            )
+            cached = cached.model_copy(update={"source_chat_path": chat_replay_path(stream_dir)})
+            stream_json.write_text(cached.model_dump_json(indent=2), encoding="utf-8")
+        return cached
 
     platform = detect_platform(vod_url)
 
@@ -85,6 +102,18 @@ async def ingest_vod(
     if duration_s <= 0.0:
         duration_s = await asyncio.to_thread(_ffprobe_duration, video_path)
 
+    chat_path: Path | None = None
+    if chat_replay_source is not None:
+        from .chat_replay import chat_replay_path, import_chat_replay
+
+        import_chat_replay(
+            source=chat_replay_source,
+            stream_dir=stream_dir,
+            stream_id=sid,
+            tenant_id=tenant_id,
+        )
+        chat_path = chat_replay_path(stream_dir)
+
     stream = Stream(
         id=sid,
         tenant_id=tenant_id,
@@ -95,6 +124,7 @@ async def ingest_vod(
         duration_s=duration_s,
         source_video_path=video_path,
         source_audio_path=audio_path,
+        source_chat_path=chat_path,
     )
     stream_json.write_text(stream.model_dump_json(indent=2), encoding="utf-8")
     return stream

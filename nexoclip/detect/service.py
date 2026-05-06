@@ -1,17 +1,20 @@
-"""Voice-trigger detection over a Whisper transcript.
+"""Trigger detection — voice-phrase + chat-heat fan-in.
 
-Algorithm:
-1. Flatten the transcript into `(text, ts, end_ts, prob)` tuples.
-2. For each configured phrase, slide a window the size of the phrase token
-   count across the flat list, computing Levenshtein on the joined+normalized
-   strings. A hit is any window with edit distance <= `fuzzy_distance`.
-3. Each hit becomes a `Candidate(timestamp, score, reason="voice", evidence)`.
-4. Cluster candidates whose timestamps are within `merge_window_s` of the
-   previous candidate; pick the highest-scoring as the cluster anchor and
-   union evidence under `evidence["matches"]`.
+Detectors:
+1. Voice triggers (existing Phase 0 logic, internal to this file): slide
+   each configured phrase across the Whisper transcript and emit a hit
+   when Levenshtein <= `fuzzy_distance`.
+2. Chat heat (Phase 1, in `chat_heat.py`): rolling-baseline spike test
+   on chat-replay msg/sec.
 
-Phase 0 has only this detector; chat/audio/visual fan-in arrives in Phase 1
-and will share the same `Candidate` shape.
+`detect_candidates(...)` is the public entry point that runs both detectors
+and merges their output. Adjacent candidates within `merge_window_s` get
+clustered; the highest-scoring per cluster wins, and per-signal evidence
+unions under `evidence["matches"]` so reviewers can see which detectors
+fired together.
+
+Phase 1 ships voice + chat. Audio energy lands in Task 4; visual signals
+in Tasks 5-6. All three plug into the same fusion path.
 """
 
 from __future__ import annotations
@@ -23,9 +26,10 @@ from pathlib import Path
 
 from nexoclip.config import DetectionConfig
 from nexoclip.errors import DetectionError
-from nexoclip.ingest import Stream
+from nexoclip.ingest import ChatReplay, Stream
 from nexoclip.transcribe import Transcript
 
+from .chat_heat import detect_chat_heat
 from .levenshtein import levenshtein
 from .models import Candidate, CandidateBatch
 
@@ -165,6 +169,43 @@ def _merge_candidates(candidates: list[Candidate], *, window_s: float) -> list[C
             )
         )
     return merged
+
+
+def detect_candidates(
+    tenant_id: str,
+    stream: Stream,
+    transcript: Transcript,
+    config: DetectionConfig,
+    *,
+    chat_replay: ChatReplay | None = None,
+) -> list[Candidate]:
+    """Run every available detector and return the fused candidate stream.
+
+    Phase 1 detectors:
+        * voice triggers (always available — uses the transcript)
+        * chat heat (skipped silently when `chat_replay is None`, e.g. for
+          platforms we haven't fetched chat from yet)
+
+    Each detector emits its own Candidates; this function concatenates
+    them and re-runs `_merge_candidates(window_s=config.merge_window_s)`
+    so voice + chat hits within the same window collapse into one cluster
+    with `evidence["matches"]` listing both sources.
+    """
+    voice = detect_voice_triggers(
+        tenant_id=tenant_id, stream=stream, transcript=transcript, config=config
+    )
+    chat: list[Candidate] = []
+    if chat_replay is not None:
+        chat = detect_chat_heat(
+            tenant_id=tenant_id,
+            stream=stream,
+            chat_replay=chat_replay,
+            config=config.chat_heat,
+        )
+    if not chat:
+        # Voice-only — already merged by detect_voice_triggers.
+        return voice
+    return _merge_candidates(voice + chat, window_s=config.merge_window_s)
 
 
 def save_candidates(stream_dir: Path, batch: CandidateBatch) -> Path:

@@ -31,10 +31,21 @@ class VoiceDetectorConfig(BaseModel):
     )
 
 
+class ChatHeatConfig(BaseModel):
+    """Chat heat detector — spike when msg/sec >> rolling baseline."""
+
+    enabled: bool = False
+    weight: float = Field(default=0.7, ge=0.0)
+    baseline_window_s: float = Field(default=300.0, gt=0.0)
+    spike_ratio: float = Field(default=3.0, gt=0.0)
+    absolute_floor_msg_per_s: float = Field(default=5.0, ge=0.0)
+
+
 class DetectionConfig(BaseModel):
     """All detector configuration."""
 
     voice: VoiceDetectorConfig = Field(default_factory=VoiceDetectorConfig)
+    chat_heat: ChatHeatConfig = Field(default_factory=ChatHeatConfig)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 

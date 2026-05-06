@@ -85,6 +85,11 @@ def ingest(
     force: bool = typer.Option(
         False, "--force", help="Re-download and re-extract even if outputs exist."
     ),
+    chat_replay: Path | None = typer.Option(
+        None,
+        "--chat-replay",
+        help="Path to a JSONL of chat messages (Phase 1 doesn't fetch from platforms).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print the Stream as JSON to stdout."),
 ) -> None:
     """Download a VOD and extract its audio. Idempotent."""
@@ -99,6 +104,7 @@ def ingest(
                 output_dir=output_dir,
                 stream_id=stream_id,
                 force=force,
+                chat_replay_source=chat_replay,
             )
         )
     except IngestError as e:
@@ -195,12 +201,12 @@ def detect(
     ),
     json_output: bool = typer.Option(False, "--json", help="Print candidates as JSON."),
 ) -> None:
-    """Detect voice-trigger candidates in an already-transcribed stream."""
+    """Detect candidates (voice + chat) in an already-transcribed stream."""
     from nexoclip.config import load_config
-    from nexoclip.detect import detect_voice_triggers, save_candidates
+    from nexoclip.detect import detect_candidates, save_candidates
     from nexoclip.detect.models import CandidateBatch
     from nexoclip.errors import DetectionError, IngestError, TranscriptionError
-    from nexoclip.ingest import load_stream
+    from nexoclip.ingest import load_chat_replay, load_stream
     from nexoclip.settings import get_settings
     from nexoclip.transcribe import load_transcript
 
@@ -212,11 +218,13 @@ def detect(
         stream = load_stream(stream_dir)
         transcript = load_transcript(stream_dir)
         config = load_config(config_path)
-        candidates = detect_voice_triggers(
+        chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=effective_tenant)
+        candidates = detect_candidates(
             tenant_id=effective_tenant,
             stream=stream,
             transcript=transcript,
             config=config.detection,
+            chat_replay=chat_replay,
         )
     except (IngestError, TranscriptionError, DetectionError) as e:
         typer.echo(f"detect failed: {e}", err=True)
@@ -420,6 +428,11 @@ def process(
     db_path: Path | None = typer.Option(
         None, "--db-path", help="Override NEXOCLIP_DB_PATH for this run."
     ),
+    chat_replay: Path | None = typer.Option(
+        None,
+        "--chat-replay",
+        help="Path to a JSONL of chat messages, fed to the chat heat detector.",
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="Print the full manifest as JSON when complete."
     ),
@@ -462,6 +475,7 @@ def process(
                 quality=quality_arg,
                 force=force,
                 db_path=effective_db_path,
+                chat_replay_source=chat_replay,
             )
         )
     except (

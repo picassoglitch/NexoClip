@@ -49,7 +49,7 @@ from nexoclip.db.adapters import (
 from nexoclip.detect import (
     Candidate,
     CandidateBatch,
-    detect_voice_triggers,
+    detect_candidates,
     save_candidates,
 )
 from nexoclip.errors import NexoClipError, VariantError
@@ -59,7 +59,7 @@ from nexoclip.events import (
     STREAM_PROCESSED,
     emit,
 )
-from nexoclip.ingest import Stream, ingest_vod
+from nexoclip.ingest import Stream, ingest_vod, load_chat_replay
 from nexoclip.llm import LLMConfig, LLMRouter, Variant, load_llm_config
 from nexoclip.llm.config import Quality
 from nexoclip.logging import get_logger
@@ -185,6 +185,7 @@ async def process_vod(
     quality: Quality | None = None,
     force: bool = False,
     db_path: str | None = None,
+    chat_replay_source: Path | None = None,
     deps: PipelineDeps | None = None,
 ) -> StreamManifest:
     """Run the full Phase 0 pipeline against `vod_url`. Returns the manifest.
@@ -197,6 +198,11 @@ async def process_vod(
     tenant must already exist in the DB (use `nexoclip tenants add`).
     Without `db_path`, the pipeline runs filesystem-only — useful for
     tests and Phase 0-style invocations.
+
+    Pass `chat_replay_source` (a path to a JSONL of `ChatMessage` rows)
+    to feed the chat heat detector. Phase 1 doesn't fetch chat replay
+    from platforms automatically — Phase 2 will add Kick / Twitch / YT
+    fetchers behind the same import path.
     """
     deps = deps or PipelineDeps()
     config = deps.config or load_config()
@@ -226,6 +232,7 @@ async def process_vod(
                 n_variants=n_variants,
                 quality=quality,
                 force=force,
+                chat_replay_source=chat_replay_source,
                 started_at=started_at,
                 config=config,
                 llm_config=llm_config,
@@ -260,6 +267,7 @@ async def _run_pipeline(
     n_variants: int,
     quality: Quality | None,
     force: bool,
+    chat_replay_source: Path | None,
     started_at: str,
     config: NexoClipConfig,
     llm_config: LLMConfig,
@@ -275,6 +283,7 @@ async def _run_pipeline(
             output_dir=output_dir,
             stream_id=stream_id,
             force=force,
+            chat_replay_source=chat_replay_source,
         )
         if db is not None:
             await StreamsRepo(db).upsert(stream_to_row(stream))
@@ -310,11 +319,13 @@ async def _run_pipeline(
 
     # 3) detect (also saves candidates.json)
     with _step("detect"):
-        candidates = detect_voice_triggers(
+        chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=tenant_id)
+        candidates = detect_candidates(
             tenant_id=tenant_id,
             stream=stream,
             transcript=transcript,
             config=config.detection,
+            chat_replay=chat_replay,
         )
         save_candidates(
             stream_dir,

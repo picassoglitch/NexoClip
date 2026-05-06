@@ -1,4 +1,4 @@
-"""Tests for `detect_candidates` — voice + chat fusion."""
+"""Tests for `detect_candidates` — voice + chat + audio + visual fusion."""
 
 from __future__ import annotations
 
@@ -11,10 +11,12 @@ from nexoclip.config import (
     AudioEnergyConfig,
     ChatHeatConfig,
     DetectionConfig,
+    VisualConfig,
     VoiceDetectorConfig,
 )
 from nexoclip.detect import detect_candidates
 from nexoclip.ingest import ChatMessage, ChatReplay, Stream
+from nexoclip.vision import VisualSignal, VisualSignalTrack
 
 from ._fixtures import make_stream, make_transcript
 
@@ -24,6 +26,7 @@ def _detection_config(
     voice_phrases: list[str] | None = None,
     chat_enabled: bool = True,
     audio_enabled: bool = False,
+    visual_enabled: bool = False,
     merge_window_s: float = 30.0,
 ) -> DetectionConfig:
     return DetectionConfig(
@@ -47,6 +50,15 @@ def _detection_config(
             baseline_window_s=5.0,
             spike_ratio=2.5,
             sustain_s=1.5,
+        ),
+        visual=VisualConfig(
+            enabled=visual_enabled,
+            weight=0.6,
+            cut_weight=1.0,
+            emotion_weight=0.7,
+            motion_weight=0.5,
+            motion_baseline_window_s=10.0,
+            motion_spike_ratio=2.0,
         ),
         merge_window_s=merge_window_s,
     )
@@ -179,6 +191,85 @@ def test_chat_disabled_still_returns_voice() -> None:
         transcript=transcript,
         config=_detection_config(chat_enabled=False),
         chat_replay=chat,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].reason == "voice"
+
+
+def test_visual_only_fires_when_others_quiet() -> None:
+    """Visual track with a smile transition produces a single visual candidate."""
+    transcript = make_transcript(words=[(0.0, 0.5, " hola", 0.9)])
+    track = VisualSignalTrack(
+        stream_id="str_01TEST",
+        tenant_id="default",
+        signals=[
+            VisualSignal(ts_offset_s=0.0, face_emotion="neutral"),
+            VisualSignal(ts_offset_s=10.0, face_emotion="smile"),
+        ],
+    )
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=_detection_config(visual_enabled=True, chat_enabled=False),
+        chat_replay=None,
+        visual_track=track,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].reason == "visual"
+    assert candidates[0].timestamp == 10.0
+
+
+def test_voice_chat_audio_visual_all_four_fuse(tmp_path: Path) -> None:
+    """All four detectors firing within merge_window_s collapse to one
+    cluster carrying every signal under evidence['matches']."""
+    audio_path = tmp_path / "audio.wav"
+    _write_loud_wav(audio_path, loud_start_s=12.0, loud_dur_s=3.0)
+    stream = _stream_with_audio(audio_path)
+
+    transcript = make_transcript(words=[(12.0, 13.0, " clipéalo", 0.9)])
+    chat = _chat_with_spike_at(15)
+    visual_track = VisualSignalTrack(
+        stream_id="str_01TEST",
+        tenant_id="default",
+        signals=[
+            VisualSignal(ts_offset_s=float(s)) for s in range(11)
+        ]
+        + [VisualSignal(ts_offset_s=14.0, scene_cut=True, face_emotion="smile")],
+    )
+
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=stream,
+        transcript=transcript,
+        config=_detection_config(audio_enabled=True, visual_enabled=True),
+        chat_replay=chat,
+        visual_track=visual_track,
+    )
+    assert len(candidates) == 1
+    matches = candidates[0].evidence["matches"]
+    # Voice + chat + audio + visual all contributed.
+    assert len(matches) >= 4
+
+
+def test_visual_disabled_does_not_load_track() -> None:
+    """Passing a track but config.visual.enabled=False is a no-op."""
+    transcript = make_transcript(words=[(10.0, 11.0, " clipéalo", 0.9)])
+    track = VisualSignalTrack(
+        stream_id="str_01TEST",
+        tenant_id="default",
+        signals=[
+            VisualSignal(ts_offset_s=0.0, face_emotion="neutral"),
+            VisualSignal(ts_offset_s=5.0, face_emotion="smile"),
+        ],
+    )
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=_detection_config(visual_enabled=False),
+        chat_replay=None,
+        visual_track=track,
     )
     assert len(candidates) == 1
     assert candidates[0].reason == "voice"

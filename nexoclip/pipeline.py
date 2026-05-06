@@ -67,6 +67,7 @@ from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
 from nexoclip.variants import Persona, generate_variants, load_personas
 from nexoclip.vision import analyze_video as _analyze_video
+from nexoclip.vision import load_visual_signals
 
 _MANIFEST_SCHEMA_VERSION = 1
 _log = get_logger("nexoclip.pipeline")
@@ -336,12 +337,14 @@ async def _run_pipeline(
     # 3) detect (also saves candidates.json)
     with _step("detect"):
         chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=tenant_id)
+        visual_track = load_visual_signals(stream_dir)
         candidates = detect_candidates(
             tenant_id=tenant_id,
             stream=stream,
             transcript=transcript,
             config=config.detection,
             chat_replay=chat_replay,
+            visual_track=visual_track,
         )
         save_candidates(
             stream_dir,

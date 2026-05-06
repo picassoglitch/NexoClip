@@ -54,12 +54,31 @@ class AudioEnergyConfig(BaseModel):
     sustain_s: float = Field(default=1.5, ge=0.0)
 
 
+class VisualConfig(BaseModel):
+    """Visual detector — fuses scene cuts, emotion transitions, and motion
+    spikes (from `analyze-video`'s VisualSignalTrack) into Candidates.
+    """
+
+    enabled: bool = False
+    weight: float = Field(default=0.6, ge=0.0, description="Outer multiplier on the visual score.")
+    cut_weight: float = Field(default=1.0, ge=0.0)
+    emotion_weight: float = Field(default=0.7, ge=0.0)
+    motion_weight: float = Field(default=0.5, ge=0.0)
+    motion_baseline_window_s: float = Field(default=30.0, gt=0.0)
+    motion_spike_ratio: float = Field(default=2.0, gt=0.0)
+    emotion_labels: list[str] = Field(
+        default_factory=lambda: ["smile", "laugh", "shock"],
+        description="Which face_emotion values count as 'strong' (worth firing on).",
+    )
+
+
 class DetectionConfig(BaseModel):
     """All detector configuration."""
 
     voice: VoiceDetectorConfig = Field(default_factory=VoiceDetectorConfig)
     chat_heat: ChatHeatConfig = Field(default_factory=ChatHeatConfig)
     audio_energy: AudioEnergyConfig = Field(default_factory=AudioEnergyConfig)
+    visual: VisualConfig = Field(default_factory=VisualConfig)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 

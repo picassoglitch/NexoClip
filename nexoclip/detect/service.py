@@ -28,11 +28,13 @@ from nexoclip.config import DetectionConfig
 from nexoclip.errors import DetectionError
 from nexoclip.ingest import ChatReplay, Stream
 from nexoclip.transcribe import Transcript
+from nexoclip.vision import VisualSignalTrack
 
 from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
 from .levenshtein import levenshtein
 from .models import Candidate, CandidateBatch
+from .visual_signals import detect_visual_candidates
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,7 @@ def detect_candidates(
     config: DetectionConfig,
     *,
     chat_replay: ChatReplay | None = None,
+    visual_track: VisualSignalTrack | None = None,
 ) -> list[Candidate]:
     """Run every available detector and return the fused candidate stream.
 
@@ -187,6 +190,8 @@ def detect_candidates(
         * chat heat (skipped silently when `chat_replay is None`)
         * audio energy (skipped silently when `audio_energy.enabled is
           False`; otherwise reads `stream.source_audio_path`)
+        * visual signals (skipped silently when `visual_track is None`,
+          e.g. when `analyze-video` hasn't run on this stream)
 
     Each detector emits its own Candidates; this function concatenates
     them and re-runs `_merge_candidates(window_s=config.merge_window_s)`
@@ -207,10 +212,18 @@ def detect_candidates(
     audio: list[Candidate] = detect_audio_energy(
         tenant_id=tenant_id, stream=stream, config=config.audio_energy
     )
-    if not chat and not audio:
+    visual: list[Candidate] = []
+    if visual_track is not None:
+        visual = detect_visual_candidates(
+            tenant_id=tenant_id,
+            stream=stream,
+            track=visual_track,
+            config=config.visual,
+        )
+    if not chat and not audio and not visual:
         # Voice-only — already merged by detect_voice_triggers.
         return voice
-    return _merge_candidates(voice + chat + audio, window_s=config.merge_window_s)
+    return _merge_candidates(voice + chat + audio + visual, window_s=config.merge_window_s)
 
 
 def save_candidates(stream_dir: Path, batch: CandidateBatch) -> Path:

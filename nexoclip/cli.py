@@ -256,7 +256,7 @@ def detect(
     ),
     json_output: bool = typer.Option(False, "--json", help="Print candidates as JSON."),
 ) -> None:
-    """Detect candidates (voice + chat) in an already-transcribed stream."""
+    """Detect candidates (voice + chat + audio + visual) in an already-transcribed stream."""
     from nexoclip.config import load_config
     from nexoclip.detect import detect_candidates, save_candidates
     from nexoclip.detect.models import CandidateBatch
@@ -264,6 +264,7 @@ def detect(
     from nexoclip.ingest import load_chat_replay, load_stream
     from nexoclip.settings import get_settings
     from nexoclip.transcribe import load_transcript
+    from nexoclip.vision import load_visual_signals
 
     settings = get_settings()
     stream_dir = Path(output_dir).resolve() / stream_id
@@ -274,12 +275,14 @@ def detect(
         transcript = load_transcript(stream_dir)
         config = load_config(config_path)
         chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=effective_tenant)
+        visual_track = load_visual_signals(stream_dir)
         candidates = detect_candidates(
             tenant_id=effective_tenant,
             stream=stream,
             transcript=transcript,
             config=config.detection,
             chat_replay=chat_replay,
+            visual_track=visual_track,
         )
     except (IngestError, TranscriptionError, DetectionError) as e:
         typer.echo(f"detect failed: {e}", err=True)

@@ -45,10 +45,12 @@ dependencies = [
     # Env
     "python-dotenv>=1.0",
 
-    # Local vision pipeline (Phase 1 Task 5): scene cuts, face/emotion, motion
+    # Local vision pipeline (Phase 1 Task 5): scene cuts, face presence, motion.
+    # Face detection uses OpenCV's bundled Haar Cascade (cv2.data.haarcascades)
+    # — no model download, no extra dep. Real emotion classification arrives
+    # in Phase 2 via the multimodal LLM; Phase 1 only signals face-present.
     "scenedetect>=0.6.4",
     "opencv-python>=4.10",
-    "mediapipe>=0.10.14",
 ]
 
 [project.optional-dependencies]
@@ -99,7 +101,6 @@ module = [
     "ffmpeg.*",
     "yaml",
     "scenedetect.*",
-    "mediapipe.*",
     "cv2.*",
 ]
 ignore_missing_imports = true

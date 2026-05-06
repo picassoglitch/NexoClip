@@ -95,6 +95,14 @@ def candidate_to_row(candidate: Candidate, *, stream_id: str, tenant_id: str) ->
 
 
 def clip_to_row(clip: Clip) -> ClipRow:
+    smart_box: dict[str, float] | None = None
+    if clip.smart_crop_box is not None:
+        smart_box = {
+            "x": float(clip.smart_crop_box.x),
+            "y": float(clip.smart_crop_box.y),
+            "w": float(clip.smart_crop_box.w),
+            "h": float(clip.smart_crop_box.h),
+        }
     return ClipRow(
         id=clip.id,
         stream_id=clip.stream_id,
@@ -106,8 +114,8 @@ def clip_to_row(clip: Clip) -> ClipRow:
         width=clip.width,
         height=clip.height,
         path=str(clip.path),
-        smart_crop_box=None,
-        thumbnail_frame_path=None,
+        smart_crop_box=smart_box,
+        thumbnail_frame_path=str(clip.thumbnail_path) if clip.thumbnail_path else None,
         status="cut",
         created_at=_now(),
     )

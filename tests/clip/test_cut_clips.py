@@ -31,6 +31,18 @@ def _stub_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return calls
 
 
+def _stub_smart_crop_and_thumbnail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make smart_crop + thumbnail no-ops for tests with placeholder videos.
+
+    The real CV libs can't decode the seed_stream's `b"\x00\x00fakevideo"`
+    bytes; the production path is `_safe_smart_crop` / `_safe_thumbnail`
+    which catch ClipError and skip — these stubs short-circuit that path
+    so tests can assert on ffmpeg args without coupling to vision deps.
+    """
+    monkeypatch.setattr(clip_service, "_safe_smart_crop", lambda **_kw: None)
+    monkeypatch.setattr(clip_service, "_safe_thumbnail", lambda **_kw: None)
+
+
 def test_cuts_one_clip_per_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

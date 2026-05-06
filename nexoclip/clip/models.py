@@ -9,6 +9,20 @@ from pydantic import BaseModel, Field
 from nexoclip.detect import Candidate
 
 
+class SmartCropBox(BaseModel):
+    """Pixel-space crop window over the source frame.
+
+    `(x, y)` is the top-left corner; `(w, h)` is the crop size in source
+    pixels. Phase 1's smart_crop chooses these so faces stay in frame
+    after the 9:16 reformat.
+    """
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+
+
 class Clip(BaseModel):
     """One vertical clip cut + reformatted from a source VOD."""
 
@@ -22,6 +36,8 @@ class Clip(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     path: Path
+    smart_crop_box: SmartCropBox | None = None
+    thumbnail_path: Path | None = None
 
 
 class ClipManifest(BaseModel):

@@ -2,9 +2,11 @@
 
 Pipeline per candidate:
     1. Fast cut         → `_cut.mp4` (`-ss` before `-i`, `-c copy`; may snap to keyframe).
-    2. Reformat 9:16    → `clip.mp4` (`crop=ih*9/16:ih,scale=W:H`, libx264 + aac).
+    2. Smart-crop       → choose a face-centered 9:16 box on the source frame.
+    3. Auto-thumbnail   → pick the sharpest face-bearing frame, save JPEG.
+    4. Reformat 9:16    → `clip.mp4` (`crop=W:H:X:Y,scale=Wo:Ho`, libx264 + aac).
 
-Caption burning is deliberately skipped in Phase 0 — see PHASE_0.md.
+Caption burning is deliberately skipped in Phase 0/1 — see PHASE_0.md.
 
 Layout:
     <output_dir>/<stream_id>/
@@ -12,6 +14,7 @@ Layout:
         clips/
             <clip_id>/
                 clip.mp4
+                thumbnail.jpg
                 metadata.json
 """
 
@@ -26,8 +29,13 @@ from nexoclip.detect import Candidate
 from nexoclip.errors import ClipError
 from nexoclip.ids import new_id
 from nexoclip.ingest import Stream
+from nexoclip.logging import get_logger
 
-from .models import Clip, ClipManifest
+from .models import Clip, ClipManifest, SmartCropBox
+from .smart_crop import compute_smart_crop_box, crop_box_to_ffmpeg_filter
+from .thumbnail import pick_thumbnail, save_thumbnail
+
+_log = get_logger("nexoclip.clip")
 
 
 def cut_window(
@@ -121,6 +129,20 @@ def _cut_all(
         intermediate = clip_dir / "_cut.mp4"
         final = clip_dir / "clip.mp4"
 
+        # Smart crop + thumbnail: pre-decode pass on the source video.
+        # Failures here fall back gracefully — vision deps may be absent
+        # (test stubs with placeholder bytes) or the source may not have
+        # any detectable faces. The clip still ships either way.
+        smart_box = _safe_smart_crop(
+            video_path=stream.source_video_path, start_s=start, end_s=end
+        )
+        thumbnail_path = _safe_thumbnail(
+            video_path=stream.source_video_path,
+            start_s=start,
+            end_s=end,
+            clip_dir=clip_dir,
+        )
+
         try:
             _ffmpeg_fast_cut(
                 video_path=stream.source_video_path,
@@ -132,6 +154,7 @@ def _cut_all(
                 in_path=intermediate,
                 out_path=final,
                 cfg=cfg,
+                smart_box=smart_box,
             )
         finally:
             if intermediate.exists():
@@ -148,10 +171,35 @@ def _cut_all(
             width=cfg.output_width,
             height=cfg.output_height,
             path=final,
+            smart_crop_box=smart_box,
+            thumbnail_path=thumbnail_path,
         )
         (clip_dir / "metadata.json").write_text(clip.model_dump_json(indent=2), encoding="utf-8")
         clips.append(clip)
     return clips
+
+
+def _safe_smart_crop(
+    *, video_path: Path, start_s: float, end_s: float
+) -> SmartCropBox | None:
+    """Run smart_crop, log + skip on failure (e.g. unreadable test stub video)."""
+    try:
+        return compute_smart_crop_box(video_path, start_s=start_s, end_s=end_s)
+    except ClipError as e:
+        _log.warning("smart_crop.skipped", reason=str(e))
+        return None
+
+
+def _safe_thumbnail(
+    *, video_path: Path, start_s: float, end_s: float, clip_dir: Path
+) -> Path | None:
+    """Run pick_thumbnail + save_thumbnail; log + skip on failure."""
+    try:
+        jpeg, _ts, _bd = pick_thumbnail(video_path, start_s=start_s, end_s=end_s)
+        return save_thumbnail(clip_dir, jpeg)
+    except ClipError as e:
+        _log.warning("thumbnail.skipped", reason=str(e))
+        return None
 
 
 def _ffmpeg_fast_cut(
@@ -176,9 +224,20 @@ def _ffmpeg_fast_cut(
     _run_ffmpeg(cmd, what=f"fast cut at {start_s:.3f}s")
 
 
-def _ffmpeg_reformat_9_16(*, in_path: Path, out_path: Path, cfg: ClipConfig) -> None:
-    """Center-crop to 9:16 and scale to the configured resolution."""
-    vf = f"crop=ih*9/16:ih,scale={cfg.output_width}:{cfg.output_height}"
+def _ffmpeg_reformat_9_16(
+    *,
+    in_path: Path,
+    out_path: Path,
+    cfg: ClipConfig,
+    smart_box: SmartCropBox | None = None,
+) -> None:
+    """Crop to 9:16 (smart-box or center) and scale to the configured resolution."""
+    if smart_box is not None:
+        vf = crop_box_to_ffmpeg_filter(
+            smart_box, output_w=cfg.output_width, output_h=cfg.output_height
+        )
+    else:
+        vf = f"crop=ih*9/16:ih,scale={cfg.output_width}:{cfg.output_height}"
     cmd = [
         "ffmpeg",
         "-y",

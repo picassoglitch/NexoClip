@@ -1,43 +1,34 @@
-"""MediaPipe Face Mesh face detection + lightweight smile heuristic.
+"""Face presence detection via OpenCV's bundled Haar Cascade.
 
-Phase 1 ships a coarse `neutral` vs `smile` label using mouth-corner
-landmark geometry: if both corners (idx 61 and 291) are above the lip
-midpoint (idx 13/14) by at least `_SMILE_THRESHOLD` of normalized image
-height, we call it a smile. Otherwise neutral.
+Phase 1 only signals **face-present** (no emotion classification). Haar
+gives a bounding box, not landmarks, so the smile-vs-neutral heuristic
+that earlier drafts shipped with would need a different model entirely.
+We deliberately don't bring one in: Phase 2's multimodal LLM does real
+emotion classification (laugh / shock / anger / sad), and a hand-tuned
+landmark heuristic for `smile` alone wouldn't earn its calibration cost.
 
-Real emotion classification — laugh / shock / anger / sad — is Phase 2,
-when the multimodal LLM can interpret the whole face. Hand-tuning
-landmark heuristics for the harder labels would burn a lot of calibration
-time on top of a heuristic that the LLM does better anyway.
+When a face is detected we emit `emotion="neutral"` so the downstream
+visual_signals fan-in keeps a stable shape; the strong-emotion edge in
+`detect_visual_candidates` simply won't fire on Phase 1 face data, which
+is the correct behavior - the LLM upgrade lights it up later.
 
-Sampling: 2 fps by default per PHASE_1.md §5. The MediaPipe model is
-loaded once per call (cached `FaceMesh` instance) and released on exit.
+Sampling: 2 fps by default per PHASE_1.md SS5. The Haar detector loads
+once per call.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from nexoclip.errors import DetectionError
 
-from .models import FaceEmotion, FaceFrame
-
-# Mouth-corner landmark indices in MediaPipe's 468-point Face Mesh.
-_UPPER_LIP_CENTER = 13
-_LOWER_LIP_CENTER = 14
-_LEFT_MOUTH_CORNER = 61
-_RIGHT_MOUTH_CORNER = 291
-# How much higher the corners must be (in normalized image-y coords) than
-# the lip midpoint before we call it a smile. ~1% of image height.
-_SMILE_THRESHOLD = 0.01
+from .models import FaceFrame
 
 
 def detect_face_emotions(video_path: Path, *, sample_rate_hz: float = 2.0) -> list[FaceFrame]:
     """Return one FaceFrame per sampled frame (default = 2 fps)."""
     import cv2
-    import mediapipe as mp
 
     if not video_path.exists():
         raise DetectionError(f"video file missing: {video_path}")
@@ -52,57 +43,41 @@ def detect_face_emotions(video_path: Path, *, sample_rate_hz: float = 2.0) -> li
             raise DetectionError(f"unknown fps for {video_path}")
         frame_skip = max(1, round(fps / sample_rate_hz))
 
-        frames: list[FaceFrame] = []
-        face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+        detector = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
         )
-        try:
-            frame_idx = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if frame_idx % frame_skip == 0:
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    results = face_mesh.process(rgb)
-                    ts = frame_idx / fps
-                    frames.append(_face_frame_from_results(ts, results))
-                frame_idx += 1
-        finally:
-            face_mesh.close()
+        haar_ok = not detector.empty()
+
+        frames: list[FaceFrame] = []
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % frame_skip == 0:
+                ts = frame_idx / fps
+                frames.append(_face_frame_from_frame(ts, frame, detector if haar_ok else None))
+            frame_idx += 1
     finally:
         cap.release()
 
     return frames
 
 
-def _face_frame_from_results(ts: float, results: Any) -> FaceFrame:
-    landmarks_list = getattr(results, "multi_face_landmarks", None)
-    if not landmarks_list:
+def _face_frame_from_frame(ts: float, frame: Any, detector: Any | None) -> FaceFrame:
+    """Run Haar on `frame` and return a FaceFrame.
+
+    `detector` may be None when the Haar XML is unavailable - we degrade
+    to "no face" rather than raise so downstream still gets per-second rows.
+    """
+    if detector is None:
         return FaceFrame(ts=ts, has_face=False)
-    landmarks = landmarks_list[0].landmark
-    emotion = _emotion_from_landmarks(landmarks)
-    return FaceFrame(ts=ts, has_face=True, emotion=emotion, confidence=0.7)
+    import cv2
 
-
-def _emotion_from_landmarks(landmarks: Any) -> FaceEmotion:
-    """Heuristic: smile when both mouth corners are above the lip midpoint."""
-    try:
-        upper = landmarks[_UPPER_LIP_CENTER]
-        lower = landmarks[_LOWER_LIP_CENTER]
-        left = landmarks[_LEFT_MOUTH_CORNER]
-        right = landmarks[_RIGHT_MOUTH_CORNER]
-    except (IndexError, KeyError):
-        return "neutral"
-    mid_y = (upper.y + lower.y) / 2.0
-    # In image-y, smaller y == higher on screen.
-    corners_above_midline = left.y < mid_y - _SMILE_THRESHOLD and right.y < mid_y - _SMILE_THRESHOLD
-    return "smile" if corners_above_midline else "neutral"
-
-
-# Exposed so tests can stub the heuristic without instantiating MediaPipe.
-emotion_classifier: Callable[[Any], FaceEmotion] = _emotion_from_landmarks
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = detector.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+    )
+    if len(faces) == 0:
+        return FaceFrame(ts=ts, has_face=False)
+    return FaceFrame(ts=ts, has_face=True, emotion="neutral", confidence=0.7)

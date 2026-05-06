@@ -19,7 +19,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -143,6 +143,18 @@ class LLMRouter:
                     attempts=getattr(e, "attempts", 1),
                 )
                 last_error = e
+                # If there's another provider in the chain to try, emit
+                # llm.fallback so dashboards can flag flaky primaries.
+                if provider_name != provider_chain[-1]:
+                    await self._emit_event(
+                        tenant_id=tenant_id,
+                        type_="llm.fallback",
+                        payload={
+                            "purpose": purpose,
+                            "provider": provider_name,
+                            "error": f"{type(e).__name__}: {e}",
+                        },
+                    )
                 continue
 
             cost = self._compute_cost_micros(
@@ -164,6 +176,17 @@ class LLMRouter:
             )
             return validated
 
+        await self._emit_event(
+            tenant_id=tenant_id,
+            type_="llm.exhausted",
+            payload={
+                "purpose": purpose,
+                "providers_tried": provider_chain,
+                "error": f"{type(last_error).__name__}: {last_error}"
+                if last_error is not None
+                else None,
+            },
+        )
         raise LLMError(
             f"all providers failed for purpose={purpose!r}: {last_error}"
         ) from last_error
@@ -307,6 +330,25 @@ class LLMRouter:
                 # Best-effort — the LLM call already happened and the JSONL
                 # has the row; a DB write failure must not propagate up.
                 pass
+
+    async def _emit_event(
+        self,
+        *,
+        tenant_id: str,
+        type_: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Append an llm.* event row when a DB is wired in. Best-effort."""
+        if self._db is None:
+            return
+        from nexoclip.events import emit
+        from nexoclip.tenancy import bound_tenant
+
+        try:
+            with bound_tenant(tenant_id):
+                await emit(self._db, type_, payload)
+        except Exception:
+            pass
 
 
 def _read_api_keys(config: LLMConfig) -> dict[str, str]:

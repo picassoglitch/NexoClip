@@ -53,6 +53,12 @@ from nexoclip.detect import (
     save_candidates,
 )
 from nexoclip.errors import NexoClipError, VariantError
+from nexoclip.events import (
+    CLIP_READY_FOR_REVIEW,
+    STREAM_CREATED,
+    STREAM_PROCESSED,
+    emit,
+)
 from nexoclip.ingest import Stream, ingest_vod
 from nexoclip.llm import LLMConfig, LLMRouter, Variant, load_llm_config
 from nexoclip.llm.config import Quality
@@ -272,6 +278,16 @@ async def _run_pipeline(
         )
         if db is not None:
             await StreamsRepo(db).upsert(stream_to_row(stream))
+            await emit(
+                db,
+                STREAM_CREATED,
+                {
+                    "stream_id": stream.id,
+                    "vod_url": stream.vod_url,
+                    "platform": stream.platform,
+                    "duration_s": stream.duration_s,
+                },
+            )
 
     structlog.contextvars.bind_contextvars(stream_id=stream.id)
     stream_dir = output_dir / stream.id
@@ -365,6 +381,16 @@ async def _run_pipeline(
                     for v in variants
                 ]
                 await VariantsRepo(db).replace_for_clip_persona(clip.id, persona.id, variant_rows)
+                await emit(
+                    db,
+                    CLIP_READY_FOR_REVIEW,
+                    {
+                        "clip_id": clip.id,
+                        "stream_id": stream.id,
+                        "persona_id": persona.id,
+                        "variant_count": len(variants),
+                    },
+                )
 
     # 6) manifest
     manifest = StreamManifest(
@@ -389,6 +415,17 @@ async def _run_pipeline(
         llm_calls=manifest.llm_spend.total_calls,
         cost_usd_micros=manifest.llm_spend.total_cost_usd_micros,
     )
+    if db is not None:
+        await emit(
+            db,
+            STREAM_PROCESSED,
+            {
+                "stream_id": stream.id,
+                "clip_count": len(clip_entries),
+                "llm_calls": manifest.llm_spend.total_calls,
+                "cost_usd_micros": manifest.llm_spend.total_cost_usd_micros,
+            },
+        )
     return manifest
 
 

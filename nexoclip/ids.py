@@ -10,7 +10,20 @@ from typing import Literal
 
 from ulid import ULID
 
-EntityKind = Literal["str", "clp", "var", "job", "ten", "usr", "tok", "evt", "cnd", "llm"]
+EntityKind = Literal[
+    "str",
+    "clp",
+    "var",
+    "job",
+    "ten",
+    "usr",
+    "tok",
+    "evt",
+    "cnd",
+    "llm",
+    "acc",  # connected accounts (Buffer / future platforms)
+    "pjb",  # publish jobs
+]
 
 
 def new_id(kind: EntityKind) -> str:

@@ -32,9 +32,11 @@ from .models import (
     ApiTokenRow,
     CandidateRow,
     ClipRow,
+    ConnectedAccount,
     Event,
     LLMCallRow,
     PersonaRow,
+    PublishJob,
     StreamRow,
     Tenant,
     TranscriptRow,
@@ -703,6 +705,149 @@ def _variant_from_row(row: aiosqlite.Row) -> VariantRow:
     d = dict(row)
     d["hashtags"] = json.loads(d.pop("hashtags_json") or "[]")
     return VariantRow.model_validate(d)
+
+
+class ConnectedAccountsRepo:
+    """Per-tenant social-account connections (Buffer, etc.).
+
+    Phase 1 only inserts + lists; Phase 3's OAuth flow will refresh tokens
+    via a separate path. The `oauth_blob` column carries provider-specific
+    credentials as opaque JSON - the publisher (Task 11) reads it.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        platform: str,
+        external_id: str,
+        display_name: str | None = None,
+        oauth_blob: dict[str, object] | None = None,
+    ) -> ConnectedAccount:
+        tenant_id = current_tenant_id()
+        account_id = new_id("acc")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO connected_accounts "
+            "(id, tenant_id, platform, external_id, display_name, oauth_blob_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                account_id,
+                tenant_id,
+                platform,
+                external_id,
+                display_name,
+                json.dumps(oauth_blob) if oauth_blob is not None else None,
+                _now(),
+            ),
+        )
+        await conn.commit()
+        acct = await self.get(account_id)
+        assert acct is not None
+        return acct
+
+    async def get(self, account_id: str) -> ConnectedAccount | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id, tenant_id, platform, external_id, display_name, "
+            "oauth_blob_json, created_at FROM connected_accounts "
+            "WHERE id = ? AND tenant_id = ?",
+            (account_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return _connected_account_from_row(row)
+
+    async def list_for_tenant(self) -> list[ConnectedAccount]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id, tenant_id, platform, external_id, display_name, "
+            "oauth_blob_json, created_at FROM connected_accounts "
+            "WHERE tenant_id = ? ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_connected_account_from_row(r) for r in await cur.fetchall()]
+
+
+def _connected_account_from_row(row: aiosqlite.Row) -> ConnectedAccount:
+    d = dict(row)
+    blob = d.pop("oauth_blob_json")
+    d["oauth_blob"] = json.loads(blob) if blob else None
+    return ConnectedAccount.model_validate(d)
+
+
+class PublishJobsRepo:
+    """Pending / running / sent publish jobs.
+
+    Task 9 uses `enqueue` to write rows; Task 11's worker reads pending
+    jobs via `list_pending`, transitions them through the status column,
+    and records final state.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def enqueue(
+        self,
+        *,
+        clip_id: str,
+        variant_id: str,
+        account_id: str,
+        platform: str,
+        scheduled_for: str | None = None,
+    ) -> PublishJob:
+        tenant_id = current_tenant_id()
+        job_id = new_id("pjb")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO publish_jobs "
+            "(id, tenant_id, clip_id, variant_id, account_id, platform, "
+            "status, attempts, last_error, scheduled_for, external_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, ?)",
+            (
+                job_id,
+                tenant_id,
+                clip_id,
+                variant_id,
+                account_id,
+                platform,
+                scheduled_for,
+                _now(),
+            ),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT * FROM publish_jobs WHERE id = ? AND tenant_id = ?",
+            (job_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        return PublishJob.model_validate(dict(row))
+
+    async def list_for_clip(self, clip_id: str) -> list[PublishJob]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM publish_jobs WHERE tenant_id = ? AND clip_id = ? "
+            "ORDER BY created_at",
+            (tenant_id, clip_id),
+        )
+        return [PublishJob.model_validate(dict(r)) for r in await cur.fetchall()]
+
+    async def list_pending(self, *, limit: int = 50) -> list[PublishJob]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM publish_jobs WHERE tenant_id = ? AND status = 'pending' "
+            "ORDER BY created_at LIMIT ?",
+            (tenant_id, limit),
+        )
+        return [PublishJob.model_validate(dict(r)) for r in await cur.fetchall()]
 
 
 class VisualSignalsRepo:

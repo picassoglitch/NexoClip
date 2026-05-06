@@ -51,6 +51,12 @@ dependencies = [
     # in Phase 2 via the multimodal LLM; Phase 1 only signals face-present.
     "scenedetect>=0.6.4",
     "opencv-python>=4.10",
+
+    # REST API + HTMX dashboard (Phase 1 Tasks 9-10).
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -85,6 +91,8 @@ ignore = ["E501"]                       # line length is enforced by formatter
 
 [tool.ruff.lint.per-file-ignores]
 "nexoclip/cli.py" = ["B008"]            # typer.Option(...) defaults are idiomatic
+"nexoclip/api/routers/*.py" = ["B008"]  # FastAPI Depends(...) defaults are idiomatic
+"nexoclip/api/deps.py" = ["B008"]       # FastAPI Depends(...) defaults are idiomatic
 
 [tool.ruff.format]
 quote-style = "double"

@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import functools
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -26,7 +27,7 @@ from pydantic import BaseModel, ValidationError
 from nexoclip.errors import LLMError
 
 from .config import LLMConfig, ProviderConfig, Quality
-from .provider import LLMProvider, ProviderResult, RetryableLLMError
+from .provider import LLMProvider, MultimodalImage, ProviderResult, RetryableLLMError
 
 if TYPE_CHECKING:
     from nexoclip.db import Database
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=BaseModel)
 
 ProviderFactory = Callable[[str, ProviderConfig, str], LLMProvider | None]
+ProviderInvoker = Callable[[LLMProvider, str], Awaitable[ProviderResult]]
 
 
 class CallLogRow(BaseModel):
@@ -96,17 +98,85 @@ class LLMRouter:
         schema: type[T],
         quality: Quality | None = None,
     ) -> T:
-        """Run one LLM completion with retries + provider fallback.
+        """Run one text-only LLM completion with retries + provider fallback.
 
         Args:
             tenant_id: Owns the call (cost is attributed here).
             purpose: Routing key (e.g. `variant_generation`). Must exist in
                 `config.routing`.
             system: System prompt (persona voice, instructions, etc.).
-            user: User prompt — typically the clip context.
+            user: User prompt - typically the clip context.
             schema: Pydantic model the response must validate against.
             quality: Override the routing rule's `default_quality`.
         """
+
+        async def invoke(provider: LLMProvider, model: str) -> ProviderResult:
+            return await provider.complete(
+                tenant_id=tenant_id,
+                model=model,
+                system=system,
+                user=user,
+                schema=schema,
+            )
+
+        return await self._invoke(
+            tenant_id=tenant_id,
+            purpose=purpose,
+            schema=schema,
+            quality=quality,
+            invoke_provider=invoke,
+        )
+
+    async def complete_multimodal(
+        self,
+        *,
+        tenant_id: str,
+        purpose: str,
+        system: str,
+        user: str,
+        images: list[MultimodalImage],
+        schema: type[T],
+        quality: Quality | None = None,
+    ) -> T:
+        """Run one multimodal (text + images) completion.
+
+        Same retry/fallback/cost-log path as `complete()` - the only
+        difference is the provider call carries an `images` list. Phase 1
+        ships local-bytes images (re-encoded to base64 inside the Anthropic
+        provider); Phase 3 will extend this to S3 URLs without changing the
+        router signature.
+        """
+        if not images:
+            raise LLMError("complete_multimodal requires at least one image")
+
+        async def invoke(provider: LLMProvider, model: str) -> ProviderResult:
+            return await provider.complete_multimodal(
+                tenant_id=tenant_id,
+                model=model,
+                system=system,
+                user=user,
+                images=images,
+                schema=schema,
+            )
+
+        return await self._invoke(
+            tenant_id=tenant_id,
+            purpose=purpose,
+            schema=schema,
+            quality=quality,
+            invoke_provider=invoke,
+        )
+
+    async def _invoke(
+        self,
+        *,
+        tenant_id: str,
+        purpose: str,
+        schema: type[T],
+        quality: Quality | None,
+        invoke_provider: ProviderInvoker,
+    ) -> T:
+        """Run the provider chain for a single call (text or multimodal)."""
         rule = self._config.routing.get(purpose)
         if rule is None:
             raise LLMError(f"unknown routing purpose: {purpose}")
@@ -124,12 +194,8 @@ class LLMRouter:
 
             try:
                 validated, attempts, result = await self._call_with_retries(
-                    provider=provider,
-                    model=model,
-                    tenant_id=tenant_id,
-                    system=system,
-                    user=user,
                     schema=schema,
+                    invoke=functools.partial(invoke_provider, provider, model),
                 )
             except (LLMError, ValidationError) as e:
                 await self._log(
@@ -194,25 +260,15 @@ class LLMRouter:
     async def _call_with_retries(
         self,
         *,
-        provider: LLMProvider,
-        model: str,
-        tenant_id: str,
-        system: str,
-        user: str,
         schema: type[T],
+        invoke: Callable[[], Awaitable[ProviderResult]],
     ) -> tuple[T, int, ProviderResult]:
         """Drive a single provider through `RetryConfig.max_attempts`."""
         retry = self._config.retry
         last_err: Exception | None = None
         for attempt in range(1, retry.max_attempts + 1):
             try:
-                result = await provider.complete(
-                    tenant_id=tenant_id,
-                    model=model,
-                    system=system,
-                    user=user,
-                    schema=schema,
-                )
+                result = await invoke()
                 validated = schema.model_validate(result.output)
                 return validated, attempt, result
             except RetryableLLMError as e:
@@ -222,7 +278,7 @@ class LLMRouter:
                     await asyncio.sleep(backoff)
                 continue
             except ValidationError as e:
-                # Treat schema violations as retryable — the LLM may produce a
+                # Treat schema violations as retryable - the LLM may produce a
                 # better-formed object on the next attempt.
                 last_err = e
                 if attempt < retry.max_attempts:

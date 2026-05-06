@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from nexoclip.errors import VariantError
+from nexoclip.llm import FrameCache
 from nexoclip.variants import generate_variants
 
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
@@ -247,5 +248,157 @@ def test_invalid_n_raises(tmp_path: Path) -> None:
                 persona=make_persona(),
                 router=router,
                 n=0,
+            )
+        )
+
+
+def _seed_vision_cache(clip, *, n_frames: int = 3) -> FrameCache:
+    """Pre-populate the cache so `_gather_vision_frames` never decodes the placeholder mp4."""
+    cache = FrameCache()
+    duration = clip.duration_s
+    for i in range(n_frames):
+        offset = duration * (i + 1) / (n_frames + 1)
+        source_ts = clip.start_s + offset
+        cache.put(clip.stream_id, source_ts, f"jpeg-{i}".encode())
+    return cache
+
+
+def test_use_vision_routes_through_complete_multimodal(tmp_path: Path) -> None:
+    """`use_vision=True` -> FakeProvider sees a multimodal call carrying 3 frames."""
+    clip = make_clip(tmp_path)
+    persona = make_persona()
+    fake = FakeProvider("anthropic")
+    fake.queue_success(_success_payload(n=3))
+    router = make_router_with_fake(fake)
+    cache = _seed_vision_cache(clip, n_frames=3)
+
+    result = asyncio.run(
+        generate_variants(
+            tenant_id="default",
+            clip=clip,
+            persona=persona,
+            router=router,
+            n=3,
+            use_vision=True,
+            frame_cache=cache,
+        )
+    )
+    assert len(result) == 3
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["kind"] == "multimodal"
+    assert call["n_images"] == 3
+    # Cache pre-population stuffed deterministic blobs at idx 0/1/2.
+    assert call["images"][0].data == b"jpeg-0"
+    assert call["images"][2].data == b"jpeg-2"
+
+
+def test_use_vision_cache_hit_skips_redecoding(tmp_path: Path, monkeypatch) -> None:
+    """A pre-warmed cache means we never call `sample_frames`."""
+    clip = make_clip(tmp_path)
+    persona = make_persona()
+    fake = FakeProvider("anthropic")
+    fake.queue_success(_success_payload(n=3))
+    router = make_router_with_fake(fake)
+    cache = _seed_vision_cache(clip, n_frames=3)
+
+    sampler_calls: list[int] = []
+
+    def explode(*_args, **_kwargs):
+        sampler_calls.append(1)
+        raise AssertionError("sample_frames should not be called on cache hit")
+
+    monkeypatch.setattr("nexoclip.vision.frame_sampler.sample_frames", explode)
+
+    asyncio.run(
+        generate_variants(
+            tenant_id="default",
+            clip=clip,
+            persona=persona,
+            router=router,
+            n=3,
+            use_vision=True,
+            frame_cache=cache,
+        )
+    )
+    assert sampler_calls == []
+
+
+def test_use_vision_cache_miss_invokes_sampler(tmp_path: Path, monkeypatch) -> None:
+    """Empty cache -> sample_frames is called once per requested frame, results cached."""
+    clip = make_clip(tmp_path)
+    persona = make_persona()
+    fake = FakeProvider("anthropic")
+    fake.queue_success(_success_payload(n=3))
+    router = make_router_with_fake(fake)
+    cache = FrameCache()
+
+    sampler_calls: list[float] = []
+
+    def fake_sample_frames(video_path, ts, n=1, *, spread_s=None):
+        sampler_calls.append(float(ts))
+        return [f"decoded-{ts:.2f}".encode()]
+
+    monkeypatch.setattr("nexoclip.vision.frame_sampler.sample_frames", fake_sample_frames)
+
+    asyncio.run(
+        generate_variants(
+            tenant_id="default",
+            clip=clip,
+            persona=persona,
+            router=router,
+            n=3,
+            use_vision=True,
+            frame_cache=cache,
+            n_vision_frames=3,
+        )
+    )
+    # 3 frames sampled -> 3 sampler calls -> 3 cache entries seeded.
+    assert len(sampler_calls) == 3
+    assert len(cache) == 3
+    # Frames flowed into the multimodal call.
+    call = fake.calls[0]
+    assert call["kind"] == "multimodal"
+    assert call["n_images"] == 3
+    assert call["images"][0].data.startswith(b"decoded-")
+
+
+def test_use_vision_default_off_still_uses_text_path(tmp_path: Path) -> None:
+    clip = make_clip(tmp_path)
+    persona = make_persona()
+    fake = FakeProvider("anthropic")
+    fake.queue_success(_success_payload(n=3))
+    router = make_router_with_fake(fake)
+
+    asyncio.run(
+        generate_variants(
+            tenant_id="default",
+            clip=clip,
+            persona=persona,
+            router=router,
+            n=3,
+        )
+    )
+    assert fake.calls[0]["kind"] == "text"
+
+
+def test_use_vision_invalid_n_frames_raises(tmp_path: Path) -> None:
+    clip = make_clip(tmp_path)
+    persona = make_persona()
+    fake = FakeProvider("anthropic")
+    fake.queue_success(_success_payload(n=3))
+    router = make_router_with_fake(fake)
+
+    with pytest.raises(VariantError, match="n_vision_frames"):
+        asyncio.run(
+            generate_variants(
+                tenant_id="default",
+                clip=clip,
+                persona=persona,
+                router=router,
+                n=3,
+                use_vision=True,
+                frame_cache=FrameCache(),
+                n_vision_frames=0,
             )
         )

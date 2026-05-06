@@ -1,11 +1,17 @@
-"""Variant generator — turns a clip + persona into N caption variants.
+"""Variant generator - turns a clip + persona into N caption variants.
 
 Path through the system per CLAUDE.md (rule #3, rule #5):
-    persona voice + clip evidence → prompt → LLMRouter.complete(VariantBatch)
-                                                       ↓
+    persona voice + clip evidence -> prompt -> LLMRouter.complete(VariantBatch)
+                                                       v
                                   validated Pydantic Variants
-                                                       ↓
+                                                       v
                                   saved to `<clip_dir>/variants.json`
+
+When `use_vision=True`, the same path runs through `complete_multimodal`
+with three frames sampled across the cut clip. The frames are cached by
+(stream_id, source_ts) so a second persona pass on the same clip - or a
+retry inside the router - reuses the JPEG bytes instead of re-decoding
+the video.
 """
 
 from __future__ import annotations
@@ -14,13 +20,14 @@ from pathlib import Path
 
 from nexoclip.clip import Clip
 from nexoclip.errors import VariantError
-from nexoclip.llm import LLMRouter, Variant, VariantBatch
+from nexoclip.llm import FrameCache, LLMRouter, MultimodalImage, Variant, VariantBatch
 from nexoclip.llm.config import Quality
 
 from .models import VariantsFile
 from .personas import Persona
 
 _PURPOSE = "variant_generation"
+_DEFAULT_VISION_FRAMES = 3
 
 
 async def generate_variants(
@@ -35,6 +42,9 @@ async def generate_variants(
     quality: Quality | None = None,
     clip_dir: Path | None = None,
     force: bool = False,
+    use_vision: bool = False,
+    frame_cache: FrameCache | None = None,
+    n_vision_frames: int = _DEFAULT_VISION_FRAMES,
 ) -> list[Variant]:
     """Generate `n` caption variants for `clip` in `persona`'s voice.
 
@@ -49,6 +59,14 @@ async def generate_variants(
         quality: Override `default_quality` for this purpose.
         clip_dir: Where to save `variants.json`. Defaults to `clip.path.parent`.
         force: Re-generate even if `variants.json` already matches this persona.
+        use_vision: When True, sample `n_vision_frames` JPEGs from the cut
+            clip and route through `complete_multimodal`. The persona has to
+            be on a vision-capable model for this to make sense - the router
+            doesn't second-guess that decision.
+        frame_cache: Optional shared cache. When omitted in vision mode, a
+            fresh per-call cache is created (still avoids the second decode
+            on a router-side retry).
+        n_vision_frames: How many frames to sample. Defaults to 3.
     """
     if tenant_id != clip.tenant_id:
         raise VariantError(f"tenant mismatch: caller={tenant_id!r}, clip={clip.tenant_id!r}")
@@ -77,14 +95,30 @@ async def generate_variants(
         chat_snippet=chat_snippet,
     )
 
-    batch: VariantBatch = await router.complete(
-        tenant_id=tenant_id,
-        purpose=_PURPOSE,
-        system=system,
-        user=user,
-        schema=VariantBatch,
-        quality=quality,
-    )
+    if use_vision:
+        images = _gather_vision_frames(
+            clip=clip,
+            n_frames=n_vision_frames,
+            cache=frame_cache if frame_cache is not None else FrameCache(),
+        )
+        batch: VariantBatch = await router.complete_multimodal(
+            tenant_id=tenant_id,
+            purpose=_PURPOSE,
+            system=system,
+            user=user,
+            images=images,
+            schema=VariantBatch,
+            quality=quality,
+        )
+    else:
+        batch = await router.complete(
+            tenant_id=tenant_id,
+            purpose=_PURPOSE,
+            system=system,
+            user=user,
+            schema=VariantBatch,
+            quality=quality,
+        )
     if not batch.variants:
         raise VariantError(f"LLM returned 0 variants for clip={clip.id} persona={persona.id}")
 
@@ -100,6 +134,42 @@ async def generate_variants(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(file.model_dump_json(indent=2), encoding="utf-8")
     return variants
+
+
+def _gather_vision_frames(
+    *, clip: Clip, n_frames: int, cache: FrameCache
+) -> list[MultimodalImage]:
+    """Sample `n_frames` from the cut clip, caching by source-stream ts.
+
+    Sample offsets are spread evenly across the clip's interior - first
+    sample at `duration / (n+1)`, last at `n * duration / (n+1)` - which
+    avoids picking the very first/last frame (often a fade or letterbox).
+    """
+    if n_frames < 1:
+        raise VariantError(f"n_vision_frames must be >= 1, got {n_frames}")
+    duration = max(0.0, clip.duration_s)
+    offsets = [duration * (i + 1) / (n_frames + 1) for i in range(n_frames)]
+
+    blobs: list[bytes] = []
+    for offset in offsets:
+        source_ts = clip.start_s + offset
+        cached = cache.get(clip.stream_id, source_ts)
+        if cached is not None:
+            blobs.append(cached)
+            continue
+
+        from nexoclip.vision.frame_sampler import sample_frames
+
+        sampled = sample_frames(clip.path, ts=offset, n=1, spread_s=0.0)
+        if not sampled:
+            raise VariantError(
+                f"frame_sampler returned 0 frames for clip={clip.id} ts={source_ts}"
+            )
+        blob = sampled[0]
+        cache.put(clip.stream_id, source_ts, blob)
+        blobs.append(blob)
+
+    return [MultimodalImage(media_type="image/jpeg", data=blob) for blob in blobs]
 
 
 def _build_prompts(

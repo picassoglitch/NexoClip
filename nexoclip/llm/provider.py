@@ -1,16 +1,21 @@
 """Provider abstraction shared by all LLM backends.
 
-The router doesn't know about Anthropic vs OpenAI specifics — it just calls
-`provider.complete(...)` and gets back a `ProviderResult`. New providers
-implement the `LLMProvider` protocol and the router calls them via the
-`provider_factory` injected into its constructor.
+The router doesn't know about Anthropic vs OpenAI specifics - it just calls
+`provider.complete(...)` (or `complete_multimodal(...)`) and gets back a
+`ProviderResult`. New providers implement the `LLMProvider` protocol and the
+router calls them via the `provider_factory` injected into its constructor.
+
+Phase 1 adds the multimodal surface; Phase 0 only used `complete`. Providers
+that don't support vision (e.g. a future text-only fallback) should raise
+`LLMError` from `complete_multimodal`; the router treats that like any other
+provider failure and falls through to the next entry in the chain.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexoclip.errors import LLMError
 
@@ -36,6 +41,21 @@ class ProviderResult(BaseModel):
     model: str
 
 
+class MultimodalImage(BaseModel):
+    """One image attached to a multimodal LLM call.
+
+    Phase 1 carries raw JPEG/PNG bytes; the provider does whatever encoding
+    the wire format wants (base64 for Anthropic, multipart for others). Phase
+    3 will add a remote-URL variant once the dashboard backs onto S3 - the
+    provider switch on `media_type`/`url` will land then.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    media_type: Literal["image/jpeg", "image/png", "image/webp"] = "image/jpeg"
+    data: bytes = Field(description="Raw image bytes (JPEG/PNG/WebP).")
+
+
 class LLMProvider(Protocol):
     """Minimal surface every provider must expose to the router."""
 
@@ -46,5 +66,16 @@ class LLMProvider(Protocol):
         model: str,
         system: str,
         user: str,
+        schema: type[BaseModel],
+    ) -> ProviderResult: ...
+
+    async def complete_multimodal(
+        self,
+        *,
+        tenant_id: str,
+        model: str,
+        system: str,
+        user: str,
+        images: list[MultimodalImage],
         schema: type[BaseModel],
     ) -> ProviderResult: ...

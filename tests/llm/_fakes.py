@@ -1,4 +1,4 @@
-"""Fake LLM provider — records calls, replays canned outputs / errors."""
+"""Fake LLM provider - records calls, replays canned outputs / errors."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from nexoclip.errors import LLMError
-from nexoclip.llm import LLMProvider, ProviderResult, RetryableLLMError
+from nexoclip.llm import LLMProvider, MultimodalImage, ProviderResult, RetryableLLMError
 
 
 class FakeProvider(LLMProvider):
@@ -52,6 +52,7 @@ class FakeProvider(LLMProvider):
     ) -> ProviderResult:
         self.calls.append(
             {
+                "kind": "text",
                 "tenant_id": tenant_id,
                 "model": model,
                 "system": system,
@@ -59,6 +60,33 @@ class FakeProvider(LLMProvider):
                 "schema": schema.__name__,
             }
         )
+        return self._next()
+
+    async def complete_multimodal(
+        self,
+        *,
+        tenant_id: str,
+        model: str,
+        system: str,
+        user: str,
+        images: list[MultimodalImage],
+        schema: type[BaseModel],
+    ) -> ProviderResult:
+        self.calls.append(
+            {
+                "kind": "multimodal",
+                "tenant_id": tenant_id,
+                "model": model,
+                "system": system,
+                "user": user,
+                "images": list(images),
+                "n_images": len(images),
+                "schema": schema.__name__,
+            }
+        )
+        return self._next()
+
+    def _next(self) -> ProviderResult:
         if not self._responses:
             raise AssertionError(f"FakeProvider({self.name}): no queued response")
         nxt = self._responses.pop(0)

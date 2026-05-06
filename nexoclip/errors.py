@@ -35,5 +35,9 @@ class VariantError(NexoClipError):
     """Variant generation failed (clip not found, bad persona, etc.)."""
 
 
+class TenancyError(NexoClipError):
+    """Tenancy contract violation: no tenant bound, mismatch, unknown token."""
+
+
 class QuotaExceeded(NexoClipError):  # noqa: N818  # name pinned by CLAUDE.md
     """Tenant quota would be exceeded by this call."""

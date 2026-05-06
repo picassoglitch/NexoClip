@@ -7,20 +7,39 @@ Phase 0 commands (see PHASE_0.md):
     nexoclip cut <stream_id>
     nexoclip variants <clip_id> --persona <persona_id>
     nexoclip process <vod_url>          # orchestrates all of the above
+
+Phase 1 admin commands (see PHASE_1.md):
+    nexoclip db init
+    nexoclip tenants add <id> "<name>"
+    nexoclip tenants list
+    nexoclip tokens issue --tenant <id> [--scope full|read]
+    nexoclip tokens list   --tenant <id>
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from nexoclip.db import Database
+    from nexoclip.db.models import ApiTokenRow, Tenant
 
 app = typer.Typer(
     name="nexoclip",
     help="VOD-to-clips pipeline.",
     no_args_is_help=True,
 )
+
+db_app = typer.Typer(name="db", help="Database admin commands.", no_args_is_help=True)
+tenants_app = typer.Typer(name="tenants", help="Tenant management.", no_args_is_help=True)
+tokens_app = typer.Typer(name="tokens", help="API token management.", no_args_is_help=True)
+app.add_typer(db_app)
+app.add_typer(tenants_app)
+app.add_typer(tokens_app)
 
 
 @app.callback()
@@ -465,6 +484,148 @@ def process(
         typer.echo(
             f"  - {c.id}  [{c.start_s:>7.1f}s..{c.end_s:>7.1f}s]  {len(entry.variants)} variants"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 admin commands: db init, tenants add/list, tokens issue/list.
+# ---------------------------------------------------------------------------
+
+
+def _open_db(db_path: str | Path | None) -> Database:
+    from nexoclip.db import Database
+    from nexoclip.settings import get_settings
+
+    return Database(Path(db_path) if db_path else Path(get_settings().db_path))
+
+
+@db_app.command("init")
+def db_init_cmd(
+    db_path: Path | None = typer.Option(
+        None, "--db-path", help="Override NEXOCLIP_DB_PATH for this command."
+    ),
+) -> None:
+    """Apply Phase 1 migrations against the configured SQLite file."""
+    from nexoclip.db import apply_migrations
+
+    async def _run() -> int:
+        db = _open_db(db_path)
+        try:
+            return await apply_migrations(db)
+        finally:
+            await db.close()
+
+    version = asyncio.run(_run())
+    typer.echo(f"schema_version = {version}")
+
+
+@tenants_app.command("add")
+def tenants_add_cmd(
+    tenant_id: str = typer.Argument(..., help="Stable tenant id, e.g. `aldo`."),
+    name: str = typer.Argument(..., help="Display name."),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Create a new tenant row."""
+    from nexoclip.db import TenantsRepo, apply_migrations
+
+    async def _run() -> str:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            repo = TenantsRepo(db)
+            t = await repo.create(tenant_id=tenant_id, name=name)
+            return t.id
+        finally:
+            await db.close()
+
+    created = asyncio.run(_run())
+    typer.echo(f"created tenant: {created}")
+
+
+@tenants_app.command("list")
+def tenants_list_cmd(
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """List all tenants."""
+    from nexoclip.db import TenantsRepo, apply_migrations
+
+    async def _run() -> list[Tenant]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            return await TenantsRepo(db).list_all()
+        finally:
+            await db.close()
+
+    tenants = asyncio.run(_run())
+    if not tenants:
+        typer.echo("(no tenants)")
+        return
+    for t in tenants:
+        typer.echo(f"  {t.id}  {t.name}  ({t.created_at})")
+
+
+@tokens_app.command("issue")
+def tokens_issue_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant the token authenticates."),
+    scope: str = typer.Option("full", "--scope", help="`full` or `read`."),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Mint a new API token. Prints the raw token ONCE -- store it now."""
+    from nexoclip.db import ApiTokensRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant, mint_token
+
+    if scope not in ("full", "read"):
+        typer.echo(f"--scope must be 'full' or 'read', got {scope!r}", err=True)
+        raise typer.Exit(code=2)
+
+    async def _run() -> str:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                raise typer.Exit(code=1)
+            raw, hashed = mint_token()
+            with bound_tenant(tenant_id):
+                await ApiTokensRepo(db).create(hash_=hashed, scope=scope)
+            return raw
+        finally:
+            await db.close()
+
+    raw = asyncio.run(_run())
+    typer.echo(raw)
+    typer.echo(
+        "(store this token now -- it is not retrievable again; only its sha256 "
+        "hash is persisted in the database)",
+        err=True,
+    )
+
+
+@tokens_app.command("list")
+def tokens_list_cmd(
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """List tokens for a tenant (hashes + scopes only -- no raw tokens)."""
+    from nexoclip.db import ApiTokensRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> list[ApiTokenRow]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            with bound_tenant(tenant_id):
+                return await ApiTokensRepo(db).list_for_tenant()
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if not rows:
+        typer.echo("(no tokens)")
+        return
+    for r in rows:
+        last = r.last_used_at or "(never)"
+        typer.echo(f"  {r.id}  scope={r.scope}  hash={r.hash[:16]}…  last_used={last}")
 
 
 if __name__ == "__main__":

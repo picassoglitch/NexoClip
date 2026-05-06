@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     default_tenant_id: str = "default"
     default_output_dir: str = "./out"
+    db_path: str = "./nexoclip.db"
 
     whisper_device: str = "cuda"
     whisper_model: str = "medium"

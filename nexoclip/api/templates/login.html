@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>NexoClip - Login</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+</head>
+<body>
+  <main class="container" style="max-width: 24rem; margin-top: 4rem;">
+    <hgroup>
+      <h2>NexoClip</h2>
+      <p>Paste your API token to sign in.</p>
+    </hgroup>
+    {% if error %}<article style="background: #fee2e2; color: #991b1b;">{{ error }}</article>{% endif %}
+    <form action="/dashboard/login" method="post">
+      <label>
+        API token
+        <input type="password" name="token" placeholder="tok_..." required autofocus>
+      </label>
+      <button type="submit">Sign in</button>
+    </form>
+    <small>Issue a token via <code>nexoclip tokens issue --tenant &lt;id&gt; --scope full</code>.</small>
+  </main>
+</body>
+</html>

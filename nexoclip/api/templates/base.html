@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}NexoClip{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <style>
+    .clip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+    .clip-card { padding: 0.75rem; border: 1px solid var(--pico-muted-border-color); border-radius: 0.5rem; }
+    .status-badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; }
+    .status-cut { background: var(--pico-primary-background); color: var(--pico-primary-inverse); }
+    .status-ready_for_review { background: #fef3c7; color: #92400e; }
+    .status-approved { background: #d1fae5; color: #065f46; }
+    .status-rejected { background: #fee2e2; color: #991b1b; }
+    .status-published { background: #dbeafe; color: #1e40af; }
+  </style>
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul>
+        <li><strong><a href="/dashboard/streams">NexoClip</a></strong></li>
+      </ul>
+      <ul>
+        <li><a href="/dashboard/streams">Streams</a></li>
+        <li><a href="/dashboard/personas">Personas</a></li>
+        <li><a href="/dashboard/connected-accounts">Accounts</a></li>
+        <li><a href="/dashboard/llm-calls">LLM Spend</a></li>
+        <li><a href="/dashboard/settings/llm">LLM Settings</a></li>
+        <li><form action="/dashboard/logout" method="post" style="display:inline"><button class="secondary outline">Logout</button></form></li>
+      </ul>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

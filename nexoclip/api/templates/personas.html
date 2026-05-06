@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Personas - NexoClip{% endblock %}
+{% block content %}
+<h2>Personas</h2>
+
+<article>
+  <header><strong>New persona</strong></header>
+  <form action="/dashboard/personas" method="post">
+    <div class="grid">
+      <label>id <input name="id" required placeholder="aldo_villanueva"></label>
+      <label>Name <input name="name" required></label>
+      <label>Primary lang <input name="primary_language" required value="es" maxlength="5"></label>
+    </div>
+    <label>Voice prompt <textarea name="voice_prompt" rows="3" required></textarea></label>
+    <label>Target languages (comma-separated) <input name="target_languages" placeholder="es, en"></label>
+    <label>Routing tags (comma-separated) <input name="routing_tags" placeholder="mindset, irl"></label>
+    <button type="submit">Create</button>
+  </form>
+</article>
+
+<table>
+  <thead><tr><th>ID</th><th>Name</th><th>Lang</th><th>Targets</th><th>Tags</th><th></th></tr></thead>
+  <tbody>
+    {% for p in personas %}
+    <tr>
+      <td><code>{{ p.id }}</code></td>
+      <td>{{ p.name }}</td>
+      <td>{{ p.primary_language }}</td>
+      <td><small>{{ p.target_languages|join(", ") }}</small></td>
+      <td><small>{{ p.routing_tags|join(", ") }}</small></td>
+      <td><a href="/dashboard/personas/{{ p.id }}/edit" role="button" class="secondary outline">Edit</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6"><em>No personas yet.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

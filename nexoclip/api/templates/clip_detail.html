@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Clip {{ clip.id }} - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Clip review</h2>
+  <p>
+    <span class="status-badge status-{{ clip.status }}" id="clip-status">{{ clip.status }}</span>
+    &middot; <code>{{ clip.id }}</code> &middot; {{ "%.1f"|format(clip.duration_s) }}s
+  </p>
+</hgroup>
+
+<article>
+  <header><strong>Player</strong></header>
+  <p><small>Path: <code>{{ clip.path }}</code></small></p>
+  <video controls preload="metadata" style="width: 100%; max-width: 360px;">
+    <source src="/dashboard/clips/{{ clip.id }}/media">
+  </video>
+</article>
+
+<article>
+  <header><strong>Variants</strong></header>
+  {% if variants %}
+  <form action="/dashboard/clips/{{ clip.id }}/publish" method="post">
+    {% for v in variants %}
+    <label>
+      <input type="radio" name="variant_id" value="{{ v.id }}" {% if loop.first %}checked{% endif %}>
+      <strong>{{ v.language }}</strong> &middot; {{ v.caption }}
+      {% if v.title_card_text %}<br><small>Title card: <em>{{ v.title_card_text }}</em></small>{% endif %}
+      {% if v.hashtags %}<br><small>{{ v.hashtags|map("string")|map("upper")|join(" #") }}</small>{% endif %}
+    </label><br>
+    {% endfor %}
+    <button type="submit" {% if clip.status != "approved" %}disabled{% endif %}>
+      Publish to {{ accounts|length }} account{% if accounts|length != 1 %}s{% endif %}
+    </button>
+    {% if clip.status != "approved" %}
+    <small>Approve the clip first to enable publishing.</small>
+    {% endif %}
+  </form>
+  {% else %}
+  <p><em>No variants generated yet.</em></p>
+  {% endif %}
+</article>
+
+<article>
+  <header><strong>Status</strong></header>
+  <div hx-target="#clip-status" hx-swap="outerHTML">
+    {% for target in valid_transitions %}
+    <button hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
+            class="{% if target == 'rejected' %}contrast{% endif %}">
+      Mark {{ target }}
+    </button>
+    {% endfor %}
+    {% if not valid_transitions %}
+    <small><em>Final status - no further transitions.</em></small>
+    {% endif %}
+  </div>
+</article>
+{% endblock %}

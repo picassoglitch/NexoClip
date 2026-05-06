@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ persona.id }} - NexoClip{% endblock %}
+{% block content %}
+<h2>Edit persona <code>{{ persona.id }}</code></h2>
+<form action="/dashboard/personas/{{ persona.id }}" method="post">
+  <div class="grid">
+    <label>Name <input name="name" value="{{ persona.name }}"></label>
+    <label>Primary lang <input name="primary_language" value="{{ persona.primary_language }}"></label>
+  </div>
+  <label>Voice prompt <textarea name="voice_prompt" rows="3">{{ persona.voice_prompt }}</textarea></label>
+  <label>Target languages <input name="target_languages" value="{{ persona.target_languages|join(', ') }}"></label>
+  <label>Routing tags <input name="routing_tags" value="{{ persona.routing_tags|join(', ') }}"></label>
+  <button type="submit">Save</button>
+  <a href="/dashboard/personas" role="button" class="secondary outline">Cancel</a>
+</form>
+{% endblock %}

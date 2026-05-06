@@ -22,11 +22,21 @@ from nexoclip.tenancy import hash_token
 
 # These paths are exempt from auth. Keep tight - everything else MUST carry
 # a valid bearer token before any handler logic runs.
+# Anything matching `_PUBLIC_PREFIXES` (path startswith) skips auth.
+# `/dashboard/login` is public so the login form can render and POST without
+# a token; everything under `/dashboard` past login still needs auth via cookie.
 _PUBLIC_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/openapi.json", "/docs", "/redoc"})
+_PUBLIC_PREFIXES: tuple[str, ...] = ("/dashboard/login", "/static/")
+_COOKIE_NAME = "nexoclip_token"
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Authenticate every non-public request with a bearer API token."""
+    """Authenticate every non-public request with a bearer API token.
+
+    Reads the token from `Authorization: Bearer ...` first; falls through
+    to the `nexoclip_token` cookie so the HTMX dashboard works after a
+    `POST /dashboard/login` sets the cookie.
+    """
 
     def __init__(self, app: object, *, db: Database) -> None:
         super().__init__(app)  # type: ignore[arg-type]
@@ -37,31 +47,43 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if request.url.path in _PUBLIC_PATHS:
+        path = request.url.path
+        if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        header = request.headers.get("authorization", "")
-        if not header.lower().startswith("bearer "):
-            return _unauthorized("missing bearer token")
-        raw = header[len("bearer ") :].strip()
+        raw = _extract_token(request)
         if not raw:
-            return _unauthorized("empty bearer token")
+            return _unauthorized(request, "missing bearer token")
 
         try:
             token_hash = hash_token(raw)
         except Exception:
-            return _unauthorized("invalid token")
+            return _unauthorized(request, "invalid token")
 
         token_row = await ApiTokensRepo(self._db).lookup_by_hash(token_hash)
         if token_row is None:
-            return _unauthorized("unknown token")
+            return _unauthorized(request, "unknown token")
 
         request.state.tenant_id = token_row.tenant_id
         request.state.token_scope = token_row.scope
         return await call_next(request)
 
 
-def _unauthorized(detail: str) -> JSONResponse:
+def _extract_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        token = header[len("bearer ") :].strip()
+        if token:
+            return token
+    return request.cookies.get(_COOKIE_NAME, "").strip()
+
+
+def _unauthorized(request: Request, detail: str) -> Response:
+    """Dashboard pages get an HTML redirect to /dashboard/login; API JSON otherwise."""
+    if request.url.path.startswith("/dashboard"):
+        from starlette.responses import RedirectResponse
+
+        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_303_SEE_OTHER)
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"detail": detail},

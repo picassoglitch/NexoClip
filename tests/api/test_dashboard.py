@@ -1,0 +1,254 @@
+"""HTMX dashboard - login flow + page rendering + status PATCH."""
+
+from __future__ import annotations
+
+import datetime as _dt
+
+import httpx
+
+from nexoclip.db import (
+    ClipsRepo,
+    Database,
+    StreamsRepo,
+)
+from nexoclip.db.models import (
+    CandidateRow,
+    ClipRow,
+    StreamRow,
+)
+from nexoclip.tenancy import bound_tenant
+
+
+def _now() -> str:
+    return _dt.datetime.now(_dt.UTC).isoformat()
+
+
+async def test_dashboard_redirects_to_login_when_unauthed(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/dashboard/streams", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dashboard/login"
+
+
+async def test_login_form_renders(client: httpx.AsyncClient) -> None:
+    r = await client.get("/dashboard/login")
+    assert r.status_code == 200
+    assert "API token" in r.text
+    assert 'name="token"' in r.text
+
+
+async def test_login_with_unknown_token_shows_error(client: httpx.AsyncClient) -> None:
+    r = await client.post("/dashboard/login", data={"token": "tok_nope"})
+    assert r.status_code == 401
+    assert "unknown token" in r.text
+
+
+async def test_login_with_valid_token_sets_cookie(
+    client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
+) -> None:
+    r = await client.post(
+        "/dashboard/login",
+        data={"token": tenants["alice"]["token"]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dashboard/streams"
+    assert "nexoclip_token" in r.headers.get("set-cookie", "")
+
+
+async def test_streams_page_renders_with_cookie_auth(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    tenant_id = tenants["alice"]["id"]
+    with bound_tenant(tenant_id):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_dash1",
+                tenant_id=tenant_id,
+                vod_url="https://example.com/v",
+                platform="kick",
+                title="Live show",
+                channel="aldo",
+                duration_s=600.0,
+                source_video_path="/tmp/x.mp4",
+                source_audio_path="/tmp/x.wav",
+                status="ingested",
+                created_at=_now(),
+            )
+        )
+    # Sign in.
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.get("/dashboard/streams")
+    assert r.status_code == 200
+    assert "Live show" in r.text
+    # Persona dropdown is empty -> "process new VOD" form still renders.
+    assert "Process new VOD" in r.text
+
+
+async def test_personas_page_renders_and_creates(
+    client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
+) -> None:
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.get("/dashboard/personas")
+    assert r.status_code == 200
+    assert "No personas yet" in r.text
+
+    r = await client.post(
+        "/dashboard/personas",
+        data={
+            "id": "aldo",
+            "name": "Aldo",
+            "primary_language": "es",
+            "voice_prompt": "direct",
+            "target_languages": "es, en",
+            "routing_tags": "mindset,irl",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    r = await client.get("/dashboard/personas")
+    assert "Aldo" in r.text
+    assert "aldo" in r.text
+
+
+async def test_logout_clears_cookie(
+    client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
+) -> None:
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.post("/dashboard/logout", follow_redirects=False)
+    assert r.status_code == 303
+    # Subsequent dashboard request should redirect to login again.
+    r = await client.get("/dashboard/streams", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dashboard/login"
+
+
+async def test_clip_status_patch_returns_html_badge(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    from nexoclip.db import CandidatesRepo
+
+    tenant_id = tenants["alice"]["id"]
+    with bound_tenant(tenant_id):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_dh",
+                tenant_id=tenant_id,
+                vod_url="https://example.com/v",
+                platform="kick",
+                title="t",
+                channel="c",
+                duration_s=60.0,
+                source_video_path="/tmp/x.mp4",
+                source_audio_path="/tmp/x.wav",
+                status="ingested",
+                created_at=_now(),
+            )
+        )
+        await CandidatesRepo(db).upsert_many(
+            [
+                CandidateRow(
+                    id="cnd_dh",
+                    stream_id="str_dh",
+                    tenant_id=tenant_id,
+                    ts=10.0,
+                    score=0.9,
+                    reason="voice",
+                    evidence={},
+                    created_at=_now(),
+                )
+            ]
+        )
+        await ClipsRepo(db).upsert_many(
+            [
+                ClipRow(
+                    id="clp_dh",
+                    stream_id="str_dh",
+                    tenant_id=tenant_id,
+                    candidate_id="cnd_dh",
+                    start_s=0.0,
+                    end_s=10.0,
+                    duration_s=10.0,
+                    width=1080,
+                    height=1920,
+                    path="/tmp/c.mp4",
+                    status="cut",
+                    created_at=_now(),
+                )
+            ]
+        )
+
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.patch("/dashboard/clips/clp_dh/status?to=ready_for_review")
+    assert r.status_code == 200
+    assert "ready_for_review" in r.text
+    assert 'id="clip-status"' in r.text
+
+    # DB row should reflect the new status.
+    with bound_tenant(tenant_id):
+        clip = await ClipsRepo(db).get("clp_dh")
+    assert clip is not None
+    assert clip.status == "ready_for_review"
+
+
+async def test_other_tenants_clip_status_patch_404s(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """Bob's cookie can't transition Alice's clip even with a guessed id."""
+    from nexoclip.db import CandidatesRepo
+
+    tenant_id = tenants["alice"]["id"]
+    with bound_tenant(tenant_id):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_a",
+                tenant_id=tenant_id,
+                vod_url="x",
+                platform="kick",
+                title="t",
+                channel="c",
+                duration_s=60.0,
+                source_video_path="/tmp/x.mp4",
+                source_audio_path="/tmp/x.wav",
+                status="ingested",
+                created_at=_now(),
+            )
+        )
+        await CandidatesRepo(db).upsert_many(
+            [
+                CandidateRow(
+                    id="cnd_a",
+                    stream_id="str_a",
+                    tenant_id=tenant_id,
+                    ts=1.0,
+                    score=0.5,
+                    reason="voice",
+                    evidence={},
+                    created_at=_now(),
+                )
+            ]
+        )
+        await ClipsRepo(db).upsert_many(
+            [
+                ClipRow(
+                    id="clp_a",
+                    stream_id="str_a",
+                    tenant_id=tenant_id,
+                    candidate_id="cnd_a",
+                    start_s=0.0,
+                    end_s=10.0,
+                    duration_s=10.0,
+                    width=1080,
+                    height=1920,
+                    path="/tmp/c.mp4",
+                    status="cut",
+                    created_at=_now(),
+                )
+            ]
+        )
+
+    await client.post("/dashboard/login", data={"token": tenants["bob"]["token"]})
+    r = await client.patch("/dashboard/clips/clp_a/status?to=ready_for_review")
+    assert r.status_code == 404

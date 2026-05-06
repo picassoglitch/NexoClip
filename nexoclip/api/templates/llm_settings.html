@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}LLM settings - NexoClip{% endblock %}
+{% block content %}
+<h2>LLM routing</h2>
+<p>Read from <code>config/llm.yaml</code>. Phase 1 ships read-only inspection;
+   editing routing rules requires a config-file change + restart.</p>
+
+<article>
+  <header><strong>Providers</strong></header>
+  <table>
+    <thead><tr><th>Provider</th><th>Standard model</th><th>Premium model</th><th>Timeout</th></tr></thead>
+    <tbody>
+      {% for name, p in providers.items() %}
+      <tr>
+        <td><strong>{{ name }}</strong></td>
+        <td><small>{{ p.models.standard }}</small></td>
+        <td><small>{{ p.models.premium or "-" }}</small></td>
+        <td>{{ p.timeout_s }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+
+<article>
+  <header><strong>Routing</strong></header>
+  <table>
+    <thead><tr><th>Purpose</th><th>Default quality</th><th>Primary</th><th>Fallbacks</th></tr></thead>
+    <tbody>
+      {% for purpose, rule in routing.items() %}
+      <tr>
+        <td><code>{{ purpose }}</code></td>
+        <td>{{ rule.default_quality }}</td>
+        <td>{{ rule.primary }}</td>
+        <td><small>{{ rule.fallbacks|join(", ") or "-" }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}

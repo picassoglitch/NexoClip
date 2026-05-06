@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}LLM Spend - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>LLM spend</h2>
+  <p>Total: <strong>${{ "%.4f"|format(total_usd) }}</strong> across {{ calls|length }} calls.</p>
+</hgroup>
+<table>
+  <thead>
+    <tr><th>Time</th><th>Purpose</th><th>Model</th><th>In</th><th>Out</th><th>USD</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for c in calls %}
+    <tr>
+      <td><small>{{ c.ts[:19] }}</small></td>
+      <td>{{ c.purpose }}</td>
+      <td><small>{{ c.provider }}/{{ c.model }}</small></td>
+      <td>{{ c.input_tokens }}</td>
+      <td>{{ c.output_tokens }}</td>
+      <td>${{ "%.4f"|format(c.cost_usd_micros / 1000000) }}</td>
+      <td>{% if c.status == "ok" %}OK{% else %}<span class="status-badge status-rejected">{{ c.status }}</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7"><em>No LLM calls yet.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ stream.title or stream.id }} - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>{{ stream.title or stream.vod_url }}</h2>
+  <p>
+    <span class="status-badge status-{{ stream.status }}">{{ stream.status }}</span>
+    {{ stream.platform }} - {{ stream.channel or "-" }} - {{ "%.0f"|format(stream.duration_s) }}s
+  </p>
+</hgroup>
+
+<article>
+  <header><strong>Run summary</strong></header>
+  <ul>
+    <li><strong>Stream id:</strong> <code>{{ stream.id }}</code></li>
+    <li><strong>VOD URL:</strong> <a href="{{ stream.vod_url }}">{{ stream.vod_url }}</a></li>
+    <li><strong>Candidates:</strong> {{ candidates|length }}</li>
+    <li><strong>Clips:</strong> {{ clips|length }}</li>
+  </ul>
+</article>
+
+<h3>Clips</h3>
+<div class="clip-grid">
+  {% for c in clips %}
+  <div class="clip-card">
+    <div><strong>{{ "%.1fs"|format(c.duration_s) }}</strong> &middot;
+         <span class="status-badge status-{{ c.status }}">{{ c.status }}</span></div>
+    <div><small>{{ "%.1f"|format(c.start_s) }}-{{ "%.1f"|format(c.end_s) }}s</small></div>
+    <div><a href="/dashboard/clips/{{ c.id }}">Review</a></div>
+  </div>
+  {% else %}
+  <div><em>No clips yet - the pipeline may still be running.</em></div>
+  {% endfor %}
+</div>
+
+<h3>Candidates</h3>
+<table>
+  <thead><tr><th>ts</th><th>Reason</th><th>Score</th><th>Phrase / signal</th></tr></thead>
+  <tbody>
+    {% for c in candidates %}
+    <tr>
+      <td>{{ "%.1f"|format(c.ts) }}s</td>
+      <td>{{ c.reason }}</td>
+      <td>{{ "%.3f"|format(c.score) }}</td>
+      <td><small>{{ c.evidence.get("phrase") or c.evidence.get("transcript_snippet") or "-" }}</small></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4"><em>No candidates.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

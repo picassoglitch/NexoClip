@@ -17,6 +17,7 @@ from nexoclip.db import Database
 from ._pipeline import PipelineKickoff, PipelineRunner, default_pipeline_runner
 from .auth import BearerAuthMiddleware
 from .routers import clips as clips_router
+from .routers import dashboard as dashboard_router
 from .routers import llm_calls as llm_calls_router
 from .routers import personas as personas_router
 from .routers import streams as streams_router
@@ -50,5 +51,6 @@ def create_app(
     app.include_router(clips_router.router)
     app.include_router(personas_router.router)
     app.include_router(llm_calls_router.router)
+    app.include_router(dashboard_router.router)
 
     return app

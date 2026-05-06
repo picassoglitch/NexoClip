@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Streams - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Streams</h2>
+  <p>Tenant: <code>{{ tenant_id }}</code></p>
+</hgroup>
+
+<article>
+  <header><strong>Process new VOD</strong></header>
+  <form action="/dashboard/streams" method="post">
+    <label>
+      VOD URL
+      <input type="url" name="vod_url" placeholder="https://kick.com/..." required>
+    </label>
+    <label>
+      Persona
+      <select name="persona_id" required>
+        {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Kick off pipeline</button>
+  </form>
+</article>
+
+<table>
+  <thead>
+    <tr><th>Title</th><th>Channel</th><th>Duration</th><th>Status</th><th>Created</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for s in streams %}
+    <tr>
+      <td>{{ s.title or s.vod_url }}</td>
+      <td>{{ s.channel or "-" }}</td>
+      <td>{{ "%.0f"|format(s.duration_s) }}s</td>
+      <td><span class="status-badge status-{{ s.status }}">{{ s.status }}</span></td>
+      <td><small>{{ s.created_at[:19] }}</small></td>
+      <td><a href="/dashboard/streams/{{ s.id }}" role="button" class="secondary outline">Open</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6"><em>No streams yet.</em></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

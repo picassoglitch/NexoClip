@@ -30,12 +30,16 @@ from nexoclip.tenancy import current_tenant_id
 from .connection import Database
 from .models import (
     ApiTokenRow,
+    CandidateRow,
+    ClipRow,
     Event,
     LLMCallRow,
     PersonaRow,
     StreamRow,
     Tenant,
+    TranscriptRow,
     User,
+    VariantRow,
 )
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -204,6 +208,45 @@ class PersonasRepo:
             "INSERT INTO personas (id, tenant_id, name, primary_language, "
             "target_languages_json, voice_prompt, routing_tags_json, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                persona_id,
+                tenant_id,
+                name,
+                primary_language,
+                json.dumps(target_languages),
+                voice_prompt,
+                json.dumps(routing_tags or []),
+                _now(),
+            ),
+        )
+        await conn.commit()
+        p = await self.get(persona_id)
+        assert p is not None
+        return p
+
+    async def upsert(
+        self,
+        *,
+        persona_id: str,
+        name: str,
+        primary_language: str,
+        target_languages: list[str],
+        voice_prompt: str,
+        routing_tags: list[str] | None = None,
+    ) -> PersonaRow:
+        """Insert or replace. Used by the YAML→DB transition in Task 1."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO personas (id, tenant_id, name, primary_language, "
+            "target_languages_json, voice_prompt, routing_tags_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "name = excluded.name, "
+            "primary_language = excluded.primary_language, "
+            "target_languages_json = excluded.target_languages_json, "
+            "voice_prompt = excluded.voice_prompt, "
+            "routing_tags_json = excluded.routing_tags_json",
             (
                 persona_id,
                 tenant_id,
@@ -410,3 +453,253 @@ def _model(cls: type[_M], row: aiosqlite.Row | None) -> _M | None:
     if row is None:
         return None
     return cls.model_validate(dict(row))
+
+
+# ---------------------------------------------------------------------------
+# Pipeline repos: transcripts, candidates, clips, variants.
+#
+# All four follow the same pattern as StreamsRepo: every read filters by
+# `current_tenant_id()`; every write asserts the row's tenant_id matches.
+# Bulk methods are idempotent on insert conflicts so resuming a partially-
+# committed pipeline doesn't duplicate rows.
+# ---------------------------------------------------------------------------
+
+
+class TranscriptsRepo:
+    """One transcript per stream (PK is stream_id)."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def upsert(self, row: TranscriptRow) -> TranscriptRow:
+        if row.tenant_id != current_tenant_id():
+            raise TenancyError(
+                f"transcript tenant {row.tenant_id!r} != bound {current_tenant_id()!r}"
+            )
+        conn = await self._db.connect()
+        # Replace any existing transcript for this stream — Whisper output
+        # for the same stream is deterministic enough that a re-run is fine.
+        await conn.execute(
+            "INSERT INTO transcripts "
+            "(stream_id, tenant_id, language, duration_s, model, segments_json, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(stream_id) DO UPDATE SET "
+            "language = excluded.language, "
+            "duration_s = excluded.duration_s, "
+            "model = excluded.model, "
+            "segments_json = excluded.segments_json",
+            (
+                row.stream_id,
+                row.tenant_id,
+                row.language,
+                row.duration_s,
+                row.model,
+                row.segments_json,
+                row.created_at,
+            ),
+        )
+        await conn.commit()
+        existing = await self.get(row.stream_id)
+        assert existing is not None
+        return existing
+
+    async def get(self, stream_id: str) -> TranscriptRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM transcripts WHERE stream_id = ? AND tenant_id = ?",
+            (stream_id, tenant_id),
+        )
+        return _model(TranscriptRow, await cur.fetchone())
+
+
+class CandidatesRepo:
+    """Detected candidates. Insert is idempotent on (id) so resumes work."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def upsert_many(self, rows: list[CandidateRow]) -> int:
+        """Insert candidates, ignoring conflicts. Returns count inserted (or 0)."""
+        if not rows:
+            return 0
+        bound = current_tenant_id()
+        for row in rows:
+            if row.tenant_id != bound:
+                raise TenancyError(f"candidate tenant {row.tenant_id!r} != bound {bound!r}")
+        conn = await self._db.connect()
+        await conn.executemany(
+            "INSERT OR IGNORE INTO candidates "
+            "(id, stream_id, tenant_id, ts, score, reason, evidence_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    r.id,
+                    r.stream_id,
+                    r.tenant_id,
+                    r.ts,
+                    r.score,
+                    r.reason,
+                    json.dumps(r.evidence),
+                    r.created_at,
+                )
+                for r in rows
+            ],
+        )
+        await conn.commit()
+        return len(rows)
+
+    async def list_for_stream(self, stream_id: str) -> list[CandidateRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM candidates WHERE tenant_id = ? AND stream_id = ? ORDER BY ts",
+            (tenant_id, stream_id),
+        )
+        return [_candidate_from_row(r) for r in await cur.fetchall()]
+
+
+def _candidate_from_row(row: aiosqlite.Row) -> CandidateRow:
+    d = dict(row)
+    d["evidence"] = json.loads(d.pop("evidence_json") or "{}")
+    return CandidateRow.model_validate(d)
+
+
+class ClipsRepo:
+    """Clips. Inserts are INSERT OR IGNORE so the same (id) on resume is a no-op."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def upsert_many(self, rows: list[ClipRow]) -> int:
+        if not rows:
+            return 0
+        bound = current_tenant_id()
+        for row in rows:
+            if row.tenant_id != bound:
+                raise TenancyError(f"clip tenant {row.tenant_id!r} != bound {bound!r}")
+        conn = await self._db.connect()
+        await conn.executemany(
+            "INSERT OR IGNORE INTO clips "
+            "(id, stream_id, tenant_id, candidate_id, start_s, end_s, duration_s, "
+            "width, height, path, smart_crop_box_json, thumbnail_frame_path, status, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    r.id,
+                    r.stream_id,
+                    r.tenant_id,
+                    r.candidate_id,
+                    r.start_s,
+                    r.end_s,
+                    r.duration_s,
+                    r.width,
+                    r.height,
+                    r.path,
+                    json.dumps(r.smart_crop_box) if r.smart_crop_box else None,
+                    r.thumbnail_frame_path,
+                    r.status,
+                    r.created_at,
+                )
+                for r in rows
+            ],
+        )
+        await conn.commit()
+        return len(rows)
+
+    async def get(self, clip_id: str) -> ClipRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM clips WHERE id = ? AND tenant_id = ?",
+            (clip_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _clip_from_row(row) if row else None
+
+    async def list_for_stream(self, stream_id: str) -> list[ClipRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM clips WHERE tenant_id = ? AND stream_id = ? ORDER BY created_at",
+            (tenant_id, stream_id),
+        )
+        return [_clip_from_row(r) for r in await cur.fetchall()]
+
+
+def _clip_from_row(row: aiosqlite.Row) -> ClipRow:
+    d = dict(row)
+    box = d.pop("smart_crop_box_json")
+    d["smart_crop_box"] = json.loads(box) if box else None
+    return ClipRow.model_validate(d)
+
+
+class VariantsRepo:
+    """Variants per (clip, persona). Re-running with a new persona adds rows."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def replace_for_clip_persona(
+        self, clip_id: str, persona_id: str, rows: list[VariantRow]
+    ) -> int:
+        """Delete the existing batch for (clip, persona), then insert the new rows."""
+        bound = current_tenant_id()
+        for row in rows:
+            if row.tenant_id != bound:
+                raise TenancyError(f"variant tenant {row.tenant_id!r} != bound {bound!r}")
+            if row.clip_id != clip_id or row.persona_id != persona_id:
+                raise TenancyError("variant clip_id/persona_id must match the replace target")
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM variants WHERE tenant_id = ? AND clip_id = ? AND persona_id = ?",
+            (bound, clip_id, persona_id),
+        )
+        if rows:
+            await conn.executemany(
+                "INSERT INTO variants "
+                "(id, clip_id, tenant_id, persona_id, language, caption, "
+                "title_card_text, hashtags_json, model, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        r.id,
+                        r.clip_id,
+                        r.tenant_id,
+                        r.persona_id,
+                        r.language,
+                        r.caption,
+                        r.title_card_text,
+                        json.dumps(r.hashtags),
+                        r.model,
+                        r.created_at,
+                    )
+                    for r in rows
+                ],
+            )
+        await conn.commit()
+        return len(rows)
+
+    async def list_for_clip(
+        self, clip_id: str, *, persona_id: str | None = None
+    ) -> list[VariantRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        if persona_id is None:
+            cur = await conn.execute(
+                "SELECT * FROM variants WHERE tenant_id = ? AND clip_id = ? ORDER BY created_at",
+                (tenant_id, clip_id),
+            )
+        else:
+            cur = await conn.execute(
+                "SELECT * FROM variants WHERE tenant_id = ? AND clip_id = ? "
+                "AND persona_id = ? ORDER BY created_at",
+                (tenant_id, clip_id, persona_id),
+            )
+        return [_variant_from_row(r) for r in await cur.fetchall()]
+
+
+def _variant_from_row(row: aiosqlite.Row) -> VariantRow:
+    d = dict(row)
+    d["hashtags"] = json.loads(d.pop("hashtags_json") or "[]")
+    return VariantRow.model_validate(d)

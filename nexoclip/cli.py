@@ -414,6 +414,12 @@ def process(
     force: bool = typer.Option(
         False, "--force", help="Re-run every step even when its output exists."
     ),
+    no_db: bool = typer.Option(
+        False, "--no-db", help="Skip dual-write to SQLite (filesystem only)."
+    ),
+    db_path: Path | None = typer.Option(
+        None, "--db-path", help="Override NEXOCLIP_DB_PATH for this run."
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="Print the full manifest as JSON when complete."
     ),
@@ -424,6 +430,7 @@ def process(
         DetectionError,
         IngestError,
         LLMError,
+        TenancyError,
         TranscriptionError,
         VariantError,
     )
@@ -440,6 +447,8 @@ def process(
             raise typer.Exit(code=2)
         quality_arg = quality  # type: ignore[assignment]
 
+    effective_db_path = None if no_db else (str(db_path) if db_path else settings.db_path)
+
     try:
         manifest = asyncio.run(
             process_vod(
@@ -452,6 +461,7 @@ def process(
                 n_variants=n,
                 quality=quality_arg,
                 force=force,
+                db_path=effective_db_path,
             )
         )
     except (
@@ -461,6 +471,7 @@ def process(
         ClipError,
         VariantError,
         LLMError,
+        TenancyError,
     ) as e:
         typer.echo(f"process failed: {e}", err=True)
         raise typer.Exit(code=1) from e

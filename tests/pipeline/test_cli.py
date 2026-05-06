@@ -133,6 +133,7 @@ def test_process_command_writes_manifest(
             str(tmp_path),
             "--n",
             "2",
+            "--no-db",  # this CLI test predates Task 1 dual-write
             "--json",
         ],
     )

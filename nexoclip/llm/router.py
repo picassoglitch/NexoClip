@@ -19,7 +19,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -27,6 +27,9 @@ from nexoclip.errors import LLMError
 
 from .config import LLMConfig, ProviderConfig, Quality
 from .provider import LLMProvider, ProviderResult, RetryableLLMError
+
+if TYPE_CHECKING:
+    from nexoclip.db import Database
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -71,12 +74,14 @@ class LLMRouter:
         *,
         api_keys: dict[str, str] | None = None,
         call_log_path: Path | None = None,
+        db: Database | None = None,
         provider_factory: ProviderFactory | None = None,
         clock: Callable[[], _dt.datetime] | None = None,
     ):
         self._config = config
         self._api_keys = api_keys if api_keys is not None else _read_api_keys(config)
         self._call_log_path = call_log_path
+        self._db = db
         self._provider_factory = provider_factory or _default_provider_factory
         self._clock = clock or (lambda: _dt.datetime.now(_dt.UTC))
         self._providers: dict[str, LLMProvider | None] = {}
@@ -127,7 +132,7 @@ class LLMRouter:
                     schema=schema,
                 )
             except (LLMError, ValidationError) as e:
-                self._log(
+                await self._log(
                     tenant_id=tenant_id,
                     purpose=purpose,
                     provider=provider_name,
@@ -146,7 +151,7 @@ class LLMRouter:
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             )
-            self._log(
+            await self._log(
                 tenant_id=tenant_id,
                 purpose=purpose,
                 provider=provider_name,
@@ -228,7 +233,7 @@ class LLMRouter:
         )
         return round(cost)
 
-    def _log(
+    async def _log(
         self,
         *,
         tenant_id: str,
@@ -243,10 +248,15 @@ class LLMRouter:
         error: str | None = None,
         attempts: int = 1,
     ) -> None:
-        if self._call_log_path is None:
-            return
+        """Write one cost-tracking row to the JSONL breadcrumb and the DB.
+
+        Both writes are best-effort — the LLM call already happened, so
+        a write failure here must not propagate up. The JSONL is the
+        Phase 0 carry-over; the DB row is the Phase 1 source of truth.
+        """
+        ts = self._clock().isoformat()
         row = CallLogRow(
-            ts=self._clock().isoformat(),
+            ts=ts,
             tenant_id=tenant_id,
             purpose=purpose,
             provider=provider,
@@ -259,14 +269,44 @@ class LLMRouter:
             error=error,
             attempts=attempts,
         )
-        try:
-            self._call_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._call_log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(row.model_dump(), ensure_ascii=False))
-                f.write("\n")
-        except OSError:
-            # Logging failures must not propagate — the LLM call already happened.
-            pass
+
+        if self._call_log_path is not None:
+            try:
+                self._call_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._call_log_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row.model_dump(), ensure_ascii=False))
+                    f.write("\n")
+            except OSError:
+                pass
+
+        if self._db is not None:
+            from nexoclip.db import LLMCallsRepo
+            from nexoclip.db.models import LLMCallRow
+            from nexoclip.ids import new_id
+            from nexoclip.tenancy import bound_tenant
+
+            db_row = LLMCallRow(
+                id=new_id("llm"),
+                tenant_id=tenant_id,
+                purpose=purpose,
+                provider=provider,
+                model=model,
+                quality=quality,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd_micros=cost_usd_micros,
+                status=status,
+                error=error,
+                attempts=attempts,
+                ts=ts,
+            )
+            try:
+                with bound_tenant(tenant_id):
+                    await LLMCallsRepo(self._db).record(db_row)
+            except Exception:
+                # Best-effort — the LLM call already happened and the JSONL
+                # has the row; a DB write failure must not propagate up.
+                pass
 
 
 def _read_api_keys(config: LLMConfig) -> dict[str, str]:

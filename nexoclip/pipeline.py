@@ -18,8 +18,8 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,23 @@ from pydantic import BaseModel, Field
 
 from nexoclip.clip import Clip, cut_clips
 from nexoclip.config import NexoClipConfig, load_config
+from nexoclip.db import (
+    CandidatesRepo,
+    ClipsRepo,
+    Database,
+    PersonasRepo,
+    StreamsRepo,
+    TranscriptsRepo,
+    VariantsRepo,
+    db_session,
+)
+from nexoclip.db.adapters import (
+    candidate_to_row,
+    clip_to_row,
+    stream_to_row,
+    transcript_to_row,
+    variant_to_row,
+)
 from nexoclip.detect import (
     Candidate,
     CandidateBatch,
@@ -161,6 +178,7 @@ async def process_vod(
     n_variants: int = 5,
     quality: Quality | None = None,
     force: bool = False,
+    db_path: str | None = None,
     deps: PipelineDeps | None = None,
 ) -> StreamManifest:
     """Run the full Phase 0 pipeline against `vod_url`. Returns the manifest.
@@ -168,6 +186,11 @@ async def process_vod(
     Pass `stream_id` to resume a known stream; ingest will reuse the cached
     `stream.json` instead of minting a new ULID, and every downstream step
     finds its idempotency cache.
+
+    Pass `db_path` to dual-write through the SQLite tenancy + repos. The
+    tenant must already exist in the DB (use `nexoclip tenants add`).
+    Without `db_path`, the pipeline runs filesystem-only — useful for
+    tests and Phase 0-style invocations.
     """
     deps = deps or PipelineDeps()
     config = deps.config or load_config()
@@ -186,104 +209,187 @@ async def process_vod(
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(tenant_id=tenant_id, persona_id=persona.id)
     try:
-        # 1) ingest
-        with _step("ingest", vod_url=vod_url):
-            stream = await ingest_vod(
+        async with _maybe_db_session(tenant_id=tenant_id, db_path=db_path) as db:
+            return await _run_pipeline(
                 tenant_id=tenant_id,
                 vod_url=vod_url,
                 output_dir=output_dir,
+                persona=persona,
                 stream_id=stream_id,
+                language=language,
+                n_variants=n_variants,
+                quality=quality,
                 force=force,
+                started_at=started_at,
+                config=config,
+                llm_config=llm_config,
+                settings=settings,
+                deps=deps,
+                db=db,
             )
-        structlog.contextvars.bind_contextvars(stream_id=stream.id)
-        stream_dir = output_dir / stream.id
-        call_log_path = stream_dir / "llm_calls.jsonl"
-
-        # 2) transcribe
-        whisper_lang = language or "es"
-        with _step("transcribe", model=settings.whisper_model, device=settings.whisper_device):
-            transcript = await transcribe(
-                tenant_id=tenant_id,
-                stream=stream,
-                model_size=settings.whisper_model,
-                device=settings.whisper_device,
-                compute_type=settings.whisper_compute_type,
-                language=whisper_lang,
-                force=force,
-            )
-
-        # 3) detect (also saves candidates.json)
-        with _step("detect"):
-            candidates = detect_voice_triggers(
-                tenant_id=tenant_id,
-                stream=stream,
-                transcript=transcript,
-                config=config.detection,
-            )
-            save_candidates(
-                stream_dir,
-                CandidateBatch(stream_id=stream.id, tenant_id=tenant_id, candidates=candidates),
-            )
-        _log.info("detect.candidates", count=len(candidates))
-
-        # 4) cut clips
-        with _step("cut", candidate_count=len(candidates)):
-            clips = await cut_clips(
-                tenant_id=tenant_id,
-                stream=stream,
-                candidates=candidates,
-                output_dir=output_dir,
-                config=config.clip,
-                force=force,
-            )
-
-        # 5) variants per clip — build the router AFTER stream_dir exists.
-        router = (
-            deps.router_factory(stream_dir)
-            if deps.router_factory
-            else LLMRouter(config=llm_config, call_log_path=call_log_path)
-        )
-        clip_entries: list[ClipEntry] = []
-        with _step("variants", clip_count=len(clips), n=n_variants):
-            for clip in clips:
-                variants = await generate_variants(
-                    tenant_id=tenant_id,
-                    clip=clip,
-                    persona=persona,
-                    router=router,
-                    n=n_variants,
-                    language=language,
-                    quality=quality,
-                    force=force,
-                )
-                clip_entries.append(ClipEntry(clip=clip, persona_id=persona.id, variants=variants))
-
-        # 6) manifest
-        manifest = StreamManifest(
-            started_at=started_at,
-            completed_at=deps.clock().isoformat(),
-            tenant_id=tenant_id,
-            persona_id=persona.id,
-            persona_name=persona.name,
-            language=language or persona.primary_language,
-            n_variants_requested=n_variants,
-            stream=stream,
-            transcript=TranscriptSummary.from_transcript(transcript),
-            candidates=candidates,
-            clip_entries=clip_entries,
-            llm_spend=_read_llm_spend(call_log_path),
-        )
-        manifest_path = stream_dir / "manifest.json"
-        manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        _log.info(
-            "pipeline.done",
-            clips=len(clip_entries),
-            llm_calls=manifest.llm_spend.total_calls,
-            cost_usd_micros=manifest.llm_spend.total_cost_usd_micros,
-        )
-        return manifest
     finally:
         structlog.contextvars.clear_contextvars()
+
+
+@asynccontextmanager
+async def _maybe_db_session(
+    *, tenant_id: str, db_path: str | None
+) -> AsyncIterator[Database | None]:
+    """Yield an open Database (with tenant bound) or None when no path is given."""
+    if db_path is None:
+        yield None
+    else:
+        async with db_session(tenant_id=tenant_id, db_path=db_path) as db:
+            yield db
+
+
+async def _run_pipeline(
+    *,
+    tenant_id: str,
+    vod_url: str,
+    output_dir: Path,
+    persona: Persona,
+    stream_id: str | None,
+    language: str | None,
+    n_variants: int,
+    quality: Quality | None,
+    force: bool,
+    started_at: str,
+    config: NexoClipConfig,
+    llm_config: LLMConfig,
+    settings: Settings,
+    deps: PipelineDeps,
+    db: Database | None,
+) -> StreamManifest:
+    # 1) ingest
+    with _step("ingest", vod_url=vod_url):
+        stream = await ingest_vod(
+            tenant_id=tenant_id,
+            vod_url=vod_url,
+            output_dir=output_dir,
+            stream_id=stream_id,
+            force=force,
+        )
+        if db is not None:
+            await StreamsRepo(db).upsert(stream_to_row(stream))
+
+    structlog.contextvars.bind_contextvars(stream_id=stream.id)
+    stream_dir = output_dir / stream.id
+    call_log_path = stream_dir / "llm_calls.jsonl"
+
+    # 2) transcribe
+    whisper_lang = language or "es"
+    with _step("transcribe", model=settings.whisper_model, device=settings.whisper_device):
+        transcript = await transcribe(
+            tenant_id=tenant_id,
+            stream=stream,
+            model_size=settings.whisper_model,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+            language=whisper_lang,
+            force=force,
+        )
+        if db is not None:
+            await TranscriptsRepo(db).upsert(transcript_to_row(transcript))
+
+    # 3) detect (also saves candidates.json)
+    with _step("detect"):
+        candidates = detect_voice_triggers(
+            tenant_id=tenant_id,
+            stream=stream,
+            transcript=transcript,
+            config=config.detection,
+        )
+        save_candidates(
+            stream_dir,
+            CandidateBatch(stream_id=stream.id, tenant_id=tenant_id, candidates=candidates),
+        )
+        if db is not None:
+            candidate_rows = [
+                candidate_to_row(c, stream_id=stream.id, tenant_id=tenant_id) for c in candidates
+            ]
+            await CandidatesRepo(db).upsert_many(candidate_rows)
+    _log.info("detect.candidates", count=len(candidates))
+
+    # 4) cut clips
+    with _step("cut", candidate_count=len(candidates)):
+        clips = await cut_clips(
+            tenant_id=tenant_id,
+            stream=stream,
+            candidates=candidates,
+            output_dir=output_dir,
+            config=config.clip,
+            force=force,
+        )
+        if db is not None:
+            await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])
+
+    # 5) variants per clip — build the router AFTER stream_dir exists.
+    router = (
+        deps.router_factory(stream_dir)
+        if deps.router_factory
+        else LLMRouter(config=llm_config, call_log_path=call_log_path, db=db)
+    )
+    if db is not None:
+        # Persona must exist in DB so variants can FK to it.
+        await PersonasRepo(db).upsert(
+            persona_id=persona.id,
+            name=persona.name,
+            primary_language=persona.primary_language,
+            target_languages=persona.target_languages,
+            voice_prompt=persona.voice_prompt,
+            routing_tags=persona.routing_tags,
+        )
+    clip_entries: list[ClipEntry] = []
+    with _step("variants", clip_count=len(clips), n=n_variants):
+        for clip in clips:
+            variants = await generate_variants(
+                tenant_id=tenant_id,
+                clip=clip,
+                persona=persona,
+                router=router,
+                n=n_variants,
+                language=language,
+                quality=quality,
+                force=force,
+            )
+            clip_entries.append(ClipEntry(clip=clip, persona_id=persona.id, variants=variants))
+            if db is not None:
+                variant_rows = [
+                    variant_to_row(
+                        v,
+                        clip_id=clip.id,
+                        tenant_id=tenant_id,
+                        persona_id=persona.id,
+                    )
+                    for v in variants
+                ]
+                await VariantsRepo(db).replace_for_clip_persona(clip.id, persona.id, variant_rows)
+
+    # 6) manifest
+    manifest = StreamManifest(
+        started_at=started_at,
+        completed_at=deps.clock().isoformat(),
+        tenant_id=tenant_id,
+        persona_id=persona.id,
+        persona_name=persona.name,
+        language=language or persona.primary_language,
+        n_variants_requested=n_variants,
+        stream=stream,
+        transcript=TranscriptSummary.from_transcript(transcript),
+        candidates=candidates,
+        clip_entries=clip_entries,
+        llm_spend=_read_llm_spend(call_log_path),
+    )
+    manifest_path = stream_dir / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    _log.info(
+        "pipeline.done",
+        clips=len(clip_entries),
+        llm_calls=manifest.llm_spend.total_calls,
+        cost_usd_micros=manifest.llm_spend.total_cost_usd_micros,
+    )
+    return manifest
 
 
 def _read_llm_spend(call_log_path: Path) -> LLMSpend:

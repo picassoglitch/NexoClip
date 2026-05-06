@@ -41,11 +41,25 @@ class ChatHeatConfig(BaseModel):
     absolute_floor_msg_per_s: float = Field(default=5.0, ge=0.0)
 
 
+class AudioEnergyConfig(BaseModel):
+    """Audio energy detector — spike when frame RMS >> rolling baseline,
+    sustained for at least `sustain_s` to suppress one-frame pops.
+    """
+
+    enabled: bool = False
+    weight: float = Field(default=0.5, ge=0.0)
+    frame_s: float = Field(default=0.5, gt=0.0, description="RMS bin size in seconds.")
+    baseline_window_s: float = Field(default=300.0, gt=0.0)
+    spike_ratio: float = Field(default=2.5, gt=0.0)
+    sustain_s: float = Field(default=1.5, ge=0.0)
+
+
 class DetectionConfig(BaseModel):
     """All detector configuration."""
 
     voice: VoiceDetectorConfig = Field(default_factory=VoiceDetectorConfig)
     chat_heat: ChatHeatConfig = Field(default_factory=ChatHeatConfig)
+    audio_energy: AudioEnergyConfig = Field(default_factory=AudioEnergyConfig)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 

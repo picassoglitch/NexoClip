@@ -29,6 +29,7 @@ from nexoclip.errors import DetectionError
 from nexoclip.ingest import ChatReplay, Stream
 from nexoclip.transcribe import Transcript
 
+from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
 from .levenshtein import levenshtein
 from .models import Candidate, CandidateBatch
@@ -183,13 +184,14 @@ def detect_candidates(
 
     Phase 1 detectors:
         * voice triggers (always available — uses the transcript)
-        * chat heat (skipped silently when `chat_replay is None`, e.g. for
-          platforms we haven't fetched chat from yet)
+        * chat heat (skipped silently when `chat_replay is None`)
+        * audio energy (skipped silently when `audio_energy.enabled is
+          False`; otherwise reads `stream.source_audio_path`)
 
     Each detector emits its own Candidates; this function concatenates
     them and re-runs `_merge_candidates(window_s=config.merge_window_s)`
-    so voice + chat hits within the same window collapse into one cluster
-    with `evidence["matches"]` listing both sources.
+    so hits from different signals within the same window collapse into
+    one cluster with `evidence["matches"]` listing each source.
     """
     voice = detect_voice_triggers(
         tenant_id=tenant_id, stream=stream, transcript=transcript, config=config
@@ -202,10 +204,13 @@ def detect_candidates(
             chat_replay=chat_replay,
             config=config.chat_heat,
         )
-    if not chat:
+    audio: list[Candidate] = detect_audio_energy(
+        tenant_id=tenant_id, stream=stream, config=config.audio_energy
+    )
+    if not chat and not audio:
         # Voice-only — already merged by detect_voice_triggers.
         return voice
-    return _merge_candidates(voice + chat, window_s=config.merge_window_s)
+    return _merge_candidates(voice + chat + audio, window_s=config.merge_window_s)
 
 
 def save_candidates(stream_dir: Path, batch: CandidateBatch) -> Path:

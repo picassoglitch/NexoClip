@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from nexoclip.config import ChatHeatConfig, DetectionConfig, VoiceDetectorConfig
+import wave
+from pathlib import Path
+
+import numpy as np
+
+from nexoclip.config import (
+    AudioEnergyConfig,
+    ChatHeatConfig,
+    DetectionConfig,
+    VoiceDetectorConfig,
+)
 from nexoclip.detect import detect_candidates
-from nexoclip.ingest import ChatMessage, ChatReplay
+from nexoclip.ingest import ChatMessage, ChatReplay, Stream
 
 from ._fixtures import make_stream, make_transcript
 
@@ -13,6 +23,7 @@ def _detection_config(
     *,
     voice_phrases: list[str] | None = None,
     chat_enabled: bool = True,
+    audio_enabled: bool = False,
     merge_window_s: float = 30.0,
 ) -> DetectionConfig:
     return DetectionConfig(
@@ -29,7 +40,52 @@ def _detection_config(
             spike_ratio=3.0,
             absolute_floor_msg_per_s=5.0,
         ),
+        audio_energy=AudioEnergyConfig(
+            enabled=audio_enabled,
+            weight=0.5,
+            frame_s=0.5,
+            baseline_window_s=5.0,
+            spike_ratio=2.5,
+            sustain_s=1.5,
+        ),
         merge_window_s=merge_window_s,
+    )
+
+
+def _write_loud_wav(path: Path, *, loud_start_s: float, loud_dur_s: float) -> None:
+    rng = np.random.default_rng(0)
+    sr = 16000
+    parts: list[np.ndarray] = []
+    for dur, amp in [
+        (loud_start_s, 0.02),
+        (loud_dur_s, 0.4),
+        (5.0, 0.02),
+    ]:
+        n = int(sr * dur)
+        if n <= 0:
+            continue
+        signal = rng.normal(0.0, amp, n)
+        parts.append(np.clip(signal * 32767.0, -32768.0, 32767.0).astype(np.int16))
+    full = np.concatenate(parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(full.tobytes())
+
+
+def _stream_with_audio(audio_path: Path) -> Stream:
+    return Stream(
+        id="str_01TEST",
+        tenant_id="default",
+        vod_url="https://kick.com/c/videos/1",
+        platform="kick",
+        title="t",
+        channel="c",
+        duration_s=600.0,
+        source_video_path=audio_path.with_name("video.mp4"),
+        source_audio_path=audio_path,
     )
 
 
@@ -123,6 +179,62 @@ def test_chat_disabled_still_returns_voice() -> None:
         transcript=transcript,
         config=_detection_config(chat_enabled=False),
         chat_replay=chat,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].reason == "voice"
+
+
+def test_audio_voice_chat_all_three_fuse(tmp_path: Path) -> None:
+    """Voice at 12s, audio spike around 13s, chat spike at 15s — all three
+    within merge_window_s=30 should collapse into one cluster carrying
+    all three pieces of evidence."""
+    audio_path = tmp_path / "audio.wav"
+    _write_loud_wav(audio_path, loud_start_s=12.0, loud_dur_s=3.0)
+    stream = _stream_with_audio(audio_path)
+
+    transcript = make_transcript(words=[(12.0, 13.0, " clipéalo", 0.9)])
+    chat = _chat_with_spike_at(15)
+
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=stream,
+        transcript=transcript,
+        config=_detection_config(audio_enabled=True),
+        chat_replay=chat,
+    )
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert "matches" in c.evidence
+    # Three signals firing in the same window all show up under matches.
+    assert len(c.evidence["matches"]) >= 3
+
+
+def test_audio_only_fires_when_chat_replay_absent(tmp_path: Path) -> None:
+    audio_path = tmp_path / "audio.wav"
+    _write_loud_wav(audio_path, loud_start_s=10.0, loud_dur_s=3.0)
+    stream = _stream_with_audio(audio_path)
+    transcript = make_transcript(words=[(0.0, 0.5, " hola", 0.9)])
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=stream,
+        transcript=transcript,
+        config=_detection_config(audio_enabled=True, chat_enabled=False),
+        chat_replay=None,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].reason == "audio"
+
+
+def test_audio_disabled_does_not_open_wav(tmp_path: Path) -> None:
+    """Disabled detector returns empty without touching the audio file."""
+    transcript = make_transcript(words=[(10.0, 11.0, " clipéalo", 0.9)])
+    # Stream has no audio file on disk — detector should still skip cleanly.
+    candidates = detect_candidates(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=_detection_config(audio_enabled=False, chat_enabled=False),
+        chat_replay=None,
     )
     assert len(candidates) == 1
     assert candidates[0].reason == "voice"

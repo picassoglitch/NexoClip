@@ -187,6 +187,61 @@ def transcribe(
     typer.echo(f"  words:    {word_count}")
 
 
+@app.command(name="analyze-video")
+def analyze_video_cmd(
+    stream_id: str = typer.Argument(..., help="Stream ID produced by `nexoclip ingest`."),
+    output_dir: Path = typer.Option(
+        Path("./out"), "--output-dir", "-o", help="Root directory holding `<stream_id>/`."
+    ),
+    tenant_id: str | None = typer.Option(
+        None, "--tenant-id", help="Override tenant; defaults to NEXOCLIP_DEFAULT_TENANT_ID."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run even when `visual_signals.json` exists."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print the VisualSignalTrack as JSON."),
+) -> None:
+    """Run the local vision pipeline (scene cuts + motion + face/emotion)."""
+    from nexoclip.errors import DetectionError, IngestError
+    from nexoclip.ingest import load_stream
+    from nexoclip.settings import get_settings
+    from nexoclip.vision import analyze_video
+
+    settings = get_settings()
+    stream_dir = Path(output_dir).resolve() / stream_id
+    effective_tenant = tenant_id or settings.default_tenant_id
+
+    try:
+        stream = load_stream(stream_dir)
+        track = asyncio.run(
+            analyze_video(
+                tenant_id=effective_tenant,
+                stream=stream,
+                output_dir=Path(output_dir).resolve(),
+                force=force,
+            )
+        )
+    except (IngestError, DetectionError) as e:
+        typer.echo(f"analyze-video failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if json_output:
+        typer.echo(track.model_dump_json(indent=2))
+        return
+
+    cut_count = sum(1 for s in track.signals if s.scene_cut)
+    smile_count = sum(1 for s in track.signals if s.face_emotion == "smile")
+    motion_max = max(
+        (s.motion_energy for s in track.signals if s.motion_energy is not None),
+        default=0.0,
+    )
+    typer.echo(f"stream_id:  {track.stream_id}")
+    typer.echo(f"  seconds:  {len(track.signals)}")
+    typer.echo(f"  cuts:     {cut_count}")
+    typer.echo(f"  smiles:   {smile_count}")
+    typer.echo(f"  motion (max): {motion_max:.4f}")
+
+
 @app.command()
 def detect(
     stream_id: str = typer.Argument(..., help="Stream ID produced by `nexoclip ingest`."),

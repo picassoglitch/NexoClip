@@ -20,6 +20,7 @@ from .repos import (
     TranscriptsRepo,
     UsersRepo,
     VariantsRepo,
+    VisualSignalsRepo,
 )
 from .session import db_session
 
@@ -37,6 +38,7 @@ __all__ = [
     "TranscriptsRepo",
     "UsersRepo",
     "VariantsRepo",
+    "VisualSignalsRepo",
     "apply_migrations",
     "db_session",
     "schema_version",

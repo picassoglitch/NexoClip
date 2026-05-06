@@ -52,7 +52,7 @@ from nexoclip.detect import (
     detect_candidates,
     save_candidates,
 )
-from nexoclip.errors import NexoClipError, VariantError
+from nexoclip.errors import DetectionError, NexoClipError, VariantError
 from nexoclip.events import (
     CLIP_READY_FOR_REVIEW,
     STREAM_CREATED,
@@ -66,6 +66,7 @@ from nexoclip.logging import get_logger
 from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
 from nexoclip.variants import Persona, generate_variants, load_personas
+from nexoclip.vision import analyze_video as _analyze_video
 
 _MANIFEST_SCHEMA_VERSION = 1
 _log = get_logger("nexoclip.pipeline")
@@ -301,6 +302,21 @@ async def _run_pipeline(
     structlog.contextvars.bind_contextvars(stream_id=stream.id)
     stream_dir = output_dir / stream.id
     call_log_path = stream_dir / "llm_calls.jsonl"
+
+    # 2a) analyze video — local CV pipeline. Skip silently if the video
+    # file isn't actually decodable (test stubs, corrupted downloads).
+    # The signal lands in <stream_dir>/visual_signals.json regardless of DB.
+    with _step("analyze_video"):
+        try:
+            await _analyze_video(
+                tenant_id=tenant_id,
+                stream=stream,
+                output_dir=output_dir,
+                db=db,
+                force=force,
+            )
+        except DetectionError as e:
+            _log.warning("analyze_video.skipped", reason=str(e))
 
     # 2) transcribe
     whisper_lang = language or "es"

@@ -703,3 +703,80 @@ def _variant_from_row(row: aiosqlite.Row) -> VariantRow:
     d = dict(row)
     d["hashtags"] = json.loads(d.pop("hashtags_json") or "[]")
     return VariantRow.model_validate(d)
+
+
+class VisualSignalsRepo:
+    """One row per second of visual signals per stream.
+
+    `replace_for_stream` is the canonical write — re-running analyze_video
+    wipes the prior batch and inserts the new one. Composite PK is
+    `(stream_id, ts_offset_s)`.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def replace_for_stream(
+        self,
+        stream_id: str,
+        track: object,  # nexoclip.vision.VisualSignalTrack — avoid import cycle
+    ) -> int:
+        bound = current_tenant_id()
+        # Late-bound to avoid a hard import cycle with nexoclip.vision.
+        from nexoclip.vision import VisualSignalTrack
+
+        if not isinstance(track, VisualSignalTrack):
+            raise TenancyError("replace_for_stream requires a VisualSignalTrack")
+        if track.tenant_id != bound:
+            raise TenancyError(f"visual_signals tenant {track.tenant_id!r} != bound {bound!r}")
+        if track.stream_id != stream_id:
+            raise TenancyError(f"track.stream_id {track.stream_id!r} != target {stream_id!r}")
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM visual_signals WHERE tenant_id = ? AND stream_id = ?",
+            (bound, stream_id),
+        )
+        if track.signals:
+            await conn.executemany(
+                "INSERT INTO visual_signals "
+                "(stream_id, tenant_id, ts_offset_s, scene_cut, face_emotion, "
+                "motion_energy, text_changed) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        stream_id,
+                        bound,
+                        s.ts_offset_s,
+                        1 if s.scene_cut else 0,
+                        s.face_emotion,
+                        s.motion_energy,
+                        1 if s.text_changed else 0,
+                    )
+                    for s in track.signals
+                ],
+            )
+        await conn.commit()
+        return len(track.signals)
+
+    async def list_for_stream(self, stream_id: str) -> list[dict[str, Any]]:
+        """Return raw rows so callers (or tests) can compare directly."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT stream_id, tenant_id, ts_offset_s, scene_cut, face_emotion, "
+            "motion_energy, text_changed FROM visual_signals "
+            "WHERE tenant_id = ? AND stream_id = ? ORDER BY ts_offset_s",
+            (tenant_id, stream_id),
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "stream_id": r["stream_id"],
+                "tenant_id": r["tenant_id"],
+                "ts_offset_s": float(r["ts_offset_s"]),
+                "scene_cut": bool(r["scene_cut"]),
+                "face_emotion": r["face_emotion"],
+                "motion_energy": r["motion_energy"],
+                "text_changed": bool(r["text_changed"]),
+            }
+            for r in rows
+        ]

@@ -44,6 +44,11 @@ dependencies = [
 
     # Env
     "python-dotenv>=1.0",
+
+    # Local vision pipeline (Phase 1 Task 5): scene cuts, face/emotion, motion
+    "scenedetect>=0.6.4",
+    "opencv-python>=4.10",
+    "mediapipe>=0.10.14",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +93,15 @@ strict = true
 exclude = ["tests/"]
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "yt_dlp.*", "ffmpeg.*", "yaml"]
+module = [
+    "faster_whisper.*",
+    "yt_dlp.*",
+    "ffmpeg.*",
+    "yaml",
+    "scenedetect.*",
+    "mediapipe.*",
+    "cv2.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

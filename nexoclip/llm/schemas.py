@@ -36,3 +36,40 @@ class VariantBatch(BaseModel):
     """Wrapper returned by the LLM when generating multiple variants at once."""
 
     variants: list[Variant] = Field(default_factory=list)
+
+
+class RescoreVerdict(BaseModel):
+    """Vision-LLM verdict on whether a candidate is *actually* clip-worthy.
+
+    Phase 2 Task 3 schema. The LLM sees N frames sampled around the
+    candidate timestamp + the audio/chat context the heuristic detector
+    fired on, and returns a single number plus a short reason.
+
+    `score` is 0.0-1.0 where:
+        * < 0.30  — the moment doesn't look like a real reaction; suppress
+        * 0.30-0.65 — ambiguous; keep heuristic ranking
+        * > 0.65  — strong on-screen reaction; promote
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Confidence the moment is genuinely clip-worthy.",
+    )
+    face_emotion: str | None = Field(
+        default=None,
+        description=(
+            "One of {neutral, smile, laugh, shock, anger, sad}, or null when "
+            "no face is visible / readable. Propagates back into visual_signals."
+        ),
+    )
+    reason: str = Field(
+        min_length=1,
+        max_length=400,
+        description=(
+            "One short sentence: what the model saw that justifies the score. "
+            "Surfaces in the dashboard's confidence-breakdown panel."
+        ),
+    )

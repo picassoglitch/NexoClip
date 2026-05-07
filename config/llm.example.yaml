@@ -45,6 +45,11 @@ routing:
     primary: anthropic
     fallbacks: [openai]
 
+  vision_rescore:                               # Phase 2 Task 3, vision-LLM rescore of top-K candidates
+    default_quality: standard                   # premium = opt-in via --quality flag
+    primary: anthropic
+    fallbacks: [openai]
+
   agent_decision:                               # alter-ego auto-approval reasoning
     default_quality: premium
     primary: anthropic

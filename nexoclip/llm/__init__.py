@@ -5,7 +5,7 @@ from .frame_cache import FrameCache
 from .frame_store import FrameStore, MemoryFrameStore
 from .provider import LLMProvider, MultimodalImage, ProviderResult, RetryableLLMError
 from .router import CallLogRow, LLMRouter
-from .schemas import Variant, VariantBatch
+from .schemas import RescoreVerdict, Variant, VariantBatch
 
 __all__ = [
     "CallLogRow",
@@ -19,6 +19,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderResult",
     "Quality",
+    "RescoreVerdict",
     "RetryableLLMError",
     "RoutingRule",
     "Variant",

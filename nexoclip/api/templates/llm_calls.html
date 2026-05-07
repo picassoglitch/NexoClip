@@ -3,8 +3,72 @@
 {% block content %}
 <hgroup>
   <h2>LLM spend</h2>
-  <p>Total: <strong>${{ "%.4f"|format(total_usd) }}</strong> across {{ calls|length }} calls.</p>
+  <p><small>Auto-refreshes every 60s.</small></p>
 </hgroup>
+
+<div hx-get="/dashboard/llm-calls" hx-trigger="every 60s" hx-swap="none"></div>
+
+<div class="grid">
+  <article>
+    <header><strong>Today</strong></header>
+    <h3>${{ "%.4f"|format(projection.today_micros / 1000000) }}</h3>
+    {% if projection.daily_budget_micros %}
+      <small>daily ceiling ${{ "%.2f"|format(projection.daily_budget_micros / 1000000) }}</small>
+      {% set pct = (projection.budget_consumed_frac * 100)|round|int %}
+      <progress value="{{ projection.budget_consumed_frac if projection.budget_consumed_frac <= 1.0 else 1.0 }}" max="1.0"></progress>
+      <small>{{ pct }}% consumed</small>
+    {% else %}
+      <small>budget unlimited</small>
+    {% endif %}
+  </article>
+  <article>
+    <header><strong>Month-to-date</strong></header>
+    <h3>${{ "%.4f"|format(projection.mtd_micros / 1000000) }}</h3>
+    <small>{{ projection.n_calls_mtd }} calls</small>
+  </article>
+  <article>
+    <header><strong>Projected EOM</strong></header>
+    <h3>${{ "%.4f"|format(projection.projected_eom_micros / 1000000) }}</h3>
+    <small>linear from MTD pace</small>
+  </article>
+</div>
+
+<div class="grid">
+  <article>
+    <header><strong>By purpose (MTD)</strong></header>
+    <table>
+      <thead><tr><th>Purpose</th><th>USD</th></tr></thead>
+      <tbody>
+        {% for purpose, micros in projection.by_purpose.items() %}
+        <tr>
+          <td><code>{{ purpose }}</code></td>
+          <td>${{ "%.4f"|format(micros / 1000000) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="2"><em>nothing this month</em></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+  <article>
+    <header><strong>By model (MTD)</strong></header>
+    <table>
+      <thead><tr><th>Model</th><th>USD</th></tr></thead>
+      <tbody>
+        {% for model, micros in projection.by_model.items() %}
+        <tr>
+          <td><small>{{ model }}</small></td>
+          <td>${{ "%.4f"|format(micros / 1000000) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="2"><em>nothing this month</em></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</div>
+
+<h3>Recent calls</h3>
 <table>
   <thead>
     <tr><th>Time</th><th>Purpose</th><th>Model</th><th>In</th><th>Out</th><th>USD</th><th>Status</th></tr>

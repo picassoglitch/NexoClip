@@ -398,10 +398,15 @@ async def llm_calls_view(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.cost import compute_cost_projection
+
     calls = await LLMCallsRepo(db).list_for_tenant(limit=200)
+    projection = await compute_cost_projection(db)
     total_usd = sum(c.cost_usd_micros for c in calls) / 1_000_000.0
     return templates.TemplateResponse(
-        request, "llm_calls.html", {"calls": calls, "total_usd": total_usd}
+        request,
+        "llm_calls.html",
+        {"calls": calls, "total_usd": total_usd, "projection": projection},
     )
 
 

@@ -52,6 +52,27 @@ def _now() -> str:
     return _dt.datetime.now(_dt.UTC).isoformat()
 
 
+class _Unset:
+    """Sentinel singleton for kwargs where `None` is a legal "clear to NULL" value.
+
+    Used by `TenantsRepo.set_budget` so callers can distinguish "leave the
+    column alone" (omit kwarg) from "set the column to NULL" (pass None).
+    """
+
+    _instance: _Unset | None = None
+
+    def __new__(cls) -> _Unset:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "_UNSET"
+
+
+_UNSET = _Unset()
+
+
 class TenantsRepo:
     """Tenants table — the one place where we don't filter by tenant_id."""
 
@@ -97,20 +118,24 @@ class TenantsRepo:
         self,
         tenant_id: str,
         *,
-        daily_llm_budget_usd_micros: int | None = None,
-        daily_publish_limit: int | None = None,
-        rescore_concurrency_cap: int | None = None,
+        daily_llm_budget_usd_micros: int | None | _Unset = _UNSET,
+        daily_publish_limit: int | None | _Unset = _UNSET,
+        rescore_concurrency_cap: int | _Unset = _UNSET,
     ) -> Tenant:
-        """Update governor knobs. Pass None to leave a knob alone."""
+        """Update governor knobs.
+
+        A passed `None` *clears* the cap to NULL (unlimited). To leave a
+        column untouched, omit the kwarg (sentinel `_UNSET`).
+        """
         sets: list[str] = []
         values: list[object] = []
-        if daily_llm_budget_usd_micros is not None:
+        if not isinstance(daily_llm_budget_usd_micros, _Unset):
             sets.append("daily_llm_budget_usd_micros = ?")
             values.append(daily_llm_budget_usd_micros)
-        if daily_publish_limit is not None:
+        if not isinstance(daily_publish_limit, _Unset):
             sets.append("daily_publish_limit = ?")
             values.append(daily_publish_limit)
-        if rescore_concurrency_cap is not None:
+        if not isinstance(rescore_concurrency_cap, _Unset):
             sets.append("rescore_concurrency_cap = ?")
             values.append(rescore_concurrency_cap)
         if not sets:

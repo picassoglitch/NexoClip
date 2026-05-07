@@ -20,7 +20,7 @@ import asyncio
 import datetime as _dt
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -32,9 +32,13 @@ from nexoclip.db import (
     VariantsRepo,
 )
 from nexoclip.db.models import ConnectedAccount, PublishJob, VariantRow
+from nexoclip.errors import QuotaExceeded
 from nexoclip.tenancy import bound_tenant
 
 from .buffer import BufferClient, BufferError
+
+if TYPE_CHECKING:
+    from nexoclip.governance import BudgetGovernor
 
 _log = structlog.get_logger(__name__)
 
@@ -84,12 +88,18 @@ async def run_publish_jobs(
     backoff_multiplier: float = _DEFAULT_BACKOFF_MULTIPLIER,
     buffer_factory: BufferClientFactory | None = None,
     sleep: Callable[[float], Awaitable[None]] | None = None,
+    governor: BudgetGovernor | None = None,
 ) -> PublishOutcome:
     """Drain pending publish_jobs for `tenant_id`. Returns a roll-up.
 
     `buffer_factory` and `sleep` are test seams - tests pass a fake client
     factory and an async no-op sleep so the retry-with-backoff path runs
     deterministically.
+
+    `governor` is the Phase 2 budget governor. When supplied,
+    `check_publish_quota` is consulted before each dispatch; once the daily
+    quota is exhausted we stop dispatching (remaining `pending` jobs roll
+    over to tomorrow's drain pass).
     """
     factory = buffer_factory or _default_buffer_factory
     sleeper = sleep or asyncio.sleep
@@ -98,6 +108,7 @@ async def run_publish_jobs(
     transient = 0
     permanent = 0
     skipped = 0
+    quota_exhausted = False
 
     with bound_tenant(tenant_id):
         jobs_repo = PublishJobsRepo(db)
@@ -117,6 +128,24 @@ async def run_publish_jobs(
         variant_cache: dict[tuple[str, str], VariantRow] = {}
 
         for job in pending:
+            # Phase 2: budget governor gate. Once today's publish quota is
+            # exhausted, stop the drain - leave remaining `pending` rows for
+            # tomorrow rather than burning retries against a hard limit.
+            if governor is not None and not quota_exhausted:
+                try:
+                    await governor.check_publish_quota(
+                        tenant_id, platform=job.platform
+                    )
+                except QuotaExceeded as e:
+                    quota_exhausted = True
+                    await events_repo.emit(
+                        type="publish.quota_exhausted",
+                        payload={"platform": job.platform, "error": str(e)},
+                    )
+            if quota_exhausted:
+                skipped += 1
+                continue
+
             account = accounts_index.get(job.account_id)
             if account is None:
                 await _mark_failed(

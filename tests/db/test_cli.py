@@ -62,6 +62,73 @@ def test_tokens_issue_then_list(tmp_path: Path) -> None:
     assert raw_token not in r2.output
 
 
+def test_tenants_set_budget_sets_dollars_micros(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "x.db"
+    runner.invoke(app, ["db", "init", "--db-path", str(db_path)])
+    runner.invoke(
+        app, ["tenants", "add", "aldo", "Aldo", "--db-path", str(db_path)]
+    )
+    r = runner.invoke(
+        app,
+        [
+            "tenants",
+            "set-budget",
+            "aldo",
+            "--daily-usd",
+            "5.00",
+            "--publish-limit",
+            "50",
+            "--rescore-cap",
+            "8",
+            "--db-path",
+            str(db_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "$5.00" in r.output
+    assert "publish/d=50" in r.output
+    assert "rescore_cap=8" in r.output
+
+    # `tenants list` reflects the new values.
+    r2 = runner.invoke(app, ["tenants", "list", "--db-path", str(db_path)])
+    assert "$5.00" in r2.output
+
+
+def test_tenants_set_budget_zero_clears_to_unlimited(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "x.db"
+    runner.invoke(app, ["db", "init", "--db-path", str(db_path)])
+    runner.invoke(
+        app, ["tenants", "add", "aldo", "Aldo", "--db-path", str(db_path)]
+    )
+    runner.invoke(
+        app,
+        ["tenants", "set-budget", "aldo", "--daily-usd", "5.00", "--db-path", str(db_path)],
+    )
+    # Now clear it.
+    r = runner.invoke(
+        app,
+        ["tenants", "set-budget", "aldo", "--daily-usd", "0", "--db-path", str(db_path)],
+    )
+    assert r.exit_code == 0, r.output
+    assert "budget=unlimited" in r.output
+
+
+def test_tenants_set_budget_no_args_exits_2(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db_path = tmp_path / "x.db"
+    runner.invoke(app, ["db", "init", "--db-path", str(db_path)])
+    runner.invoke(
+        app, ["tenants", "add", "aldo", "Aldo", "--db-path", str(db_path)]
+    )
+    r = runner.invoke(
+        app, ["tenants", "set-budget", "aldo", "--db-path", str(db_path)]
+    )
+    assert r.exit_code == 2
+    assert "nothing to update" in (r.stderr or r.output)
+
+
 def test_tokens_issue_invalid_scope_exits_2(tmp_path: Path) -> None:
     runner = CliRunner()
     db_path = tmp_path / "x.db"

@@ -41,3 +41,21 @@ class TenancyError(NexoClipError):
 
 class QuotaExceeded(NexoClipError):  # noqa: N818  # name pinned by CLAUDE.md
     """Tenant quota would be exceeded by this call."""
+
+
+class BudgetExceeded(NexoClipError):  # noqa: N818
+    """Tenant's daily LLM USD budget would be exceeded by this call.
+
+    Raised by the BudgetGovernor (P2 Task 1) before LLMRouter issues a
+    request. Higher-up callers catch this, emit `llm.budget_exhausted`,
+    and halt the current pipeline run cleanly.
+    """
+
+
+class CooldownActive(NexoClipError):  # noqa: N818
+    """Repeated low-confidence rescore verdicts triggered a cooldown.
+
+    The governor refuses new rescore requests until `cooldown_s` after the
+    last refusal. Operators can clear it by lowering the threshold or
+    waiting it out.
+    """

@@ -24,13 +24,14 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from nexoclip.errors import LLMError
+from nexoclip.errors import BudgetExceeded, LLMError
 
 from .config import LLMConfig, ProviderConfig, Quality
 from .provider import LLMProvider, MultimodalImage, ProviderResult, RetryableLLMError
 
 if TYPE_CHECKING:
     from nexoclip.db import Database
+    from nexoclip.governance import BudgetGovernor
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -79,6 +80,7 @@ class LLMRouter:
         db: Database | None = None,
         provider_factory: ProviderFactory | None = None,
         clock: Callable[[], _dt.datetime] | None = None,
+        governor: BudgetGovernor | None = None,
     ):
         self._config = config
         self._api_keys = api_keys if api_keys is not None else _read_api_keys(config)
@@ -87,6 +89,10 @@ class LLMRouter:
         self._provider_factory = provider_factory or _default_provider_factory
         self._clock = clock or (lambda: _dt.datetime.now(_dt.UTC))
         self._providers: dict[str, LLMProvider | None] = {}
+        # Phase 2: optional pre-call gate. When set, every complete*() consults
+        # `governor.check_llm_spend(tenant_id)` before issuing the request and
+        # re-raises BudgetExceeded after emitting `llm.budget_exhausted`.
+        self._governor = governor
 
     async def complete(
         self,
@@ -181,6 +187,20 @@ class LLMRouter:
         if rule is None:
             raise LLMError(f"unknown routing purpose: {purpose}")
         effective_quality: Quality = quality or rule.default_quality
+
+        # Pre-call budget gate (Phase 2 Task 1). Refuses cleanly if today's
+        # tenant LLM spend already meets the daily ceiling. Emits an event
+        # so the dashboard's spend cards know why traffic stopped.
+        if self._governor is not None:
+            try:
+                await self._governor.check_llm_spend(tenant_id)
+            except BudgetExceeded as e:
+                await self._emit_event(
+                    tenant_id=tenant_id,
+                    type_="llm.budget_exhausted",
+                    payload={"purpose": purpose, "error": str(e)},
+                )
+                raise
 
         provider_chain = [rule.primary, *rule.fallbacks]
         last_error: Exception | None = None

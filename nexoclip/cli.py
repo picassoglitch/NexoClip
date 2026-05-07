@@ -644,7 +644,87 @@ def tenants_list_cmd(
         typer.echo("(no tenants)")
         return
     for t in tenants:
-        typer.echo(f"  {t.id}  {t.name}  ({t.created_at})")
+        budget = (
+            f"${t.daily_llm_budget_usd_micros / 1_000_000:.2f}"
+            if t.daily_llm_budget_usd_micros is not None
+            else "unlimited"
+        )
+        publish_cap = (
+            str(t.daily_publish_limit) if t.daily_publish_limit is not None else "unlimited"
+        )
+        typer.echo(
+            f"  {t.id}  {t.name}  ({t.created_at})  "
+            f"budget={budget}  publish/d={publish_cap}  "
+            f"rescore_cap={t.rescore_concurrency_cap}"
+        )
+
+
+@tenants_app.command("set-budget")
+def tenants_set_budget_cmd(
+    tenant_id: str = typer.Argument(..., help="Tenant id."),
+    daily_usd: float | None = typer.Option(
+        None,
+        "--daily-usd",
+        help="Daily LLM USD ceiling. Omit to leave unchanged; pass 0 = unlimited.",
+    ),
+    publish_limit: int | None = typer.Option(
+        None, "--publish-limit", help="Daily publish_jobs ceiling. Pass 0 = unlimited."
+    ),
+    rescore_cap: int | None = typer.Option(
+        None, "--rescore-cap", help="Max concurrent vision rescores per tenant.", min=1
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Tune the budget governor knobs for a tenant.
+
+    Pass 0 (or any value <= 0) for `--daily-usd` / `--publish-limit` to
+    flip the cap to NULL (= unlimited). Pass nothing to leave the column
+    untouched.
+    """
+    from nexoclip.db import TenantsRepo, apply_migrations
+
+    if daily_usd is None and publish_limit is None and rescore_cap is None:
+        typer.echo("nothing to update; pass --daily-usd, --publish-limit, or --rescore-cap", err=True)
+        raise typer.Exit(code=2)
+
+    async def _run() -> Tenant:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            repo = TenantsRepo(db)
+            if await repo.get(tenant_id) is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            kwargs: dict[str, int | None] = {}
+            if daily_usd is not None:
+                kwargs["daily_llm_budget_usd_micros"] = (
+                    None if daily_usd <= 0 else round(daily_usd * 1_000_000)
+                )
+            if publish_limit is not None:
+                kwargs["daily_publish_limit"] = (
+                    None if publish_limit <= 0 else publish_limit
+                )
+            if rescore_cap is not None:
+                kwargs["rescore_concurrency_cap"] = rescore_cap
+            return await repo.set_budget(tenant_id, **kwargs)  # type: ignore[arg-type]
+        finally:
+            await db.close()
+
+    updated = asyncio.run(_run())
+    budget = (
+        f"${updated.daily_llm_budget_usd_micros / 1_000_000:.2f}"
+        if updated.daily_llm_budget_usd_micros is not None
+        else "unlimited"
+    )
+    publish_cap = (
+        str(updated.daily_publish_limit)
+        if updated.daily_publish_limit is not None
+        else "unlimited"
+    )
+    typer.echo(
+        f"  budget={budget}  publish/d={publish_cap}  "
+        f"rescore_cap={updated.rescore_concurrency_cap}"
+    )
 
 
 @tokens_app.command("issue")

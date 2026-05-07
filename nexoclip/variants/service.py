@@ -20,7 +20,14 @@ from pathlib import Path
 
 from nexoclip.clip import Clip
 from nexoclip.errors import VariantError
-from nexoclip.llm import FrameCache, LLMRouter, MultimodalImage, Variant, VariantBatch
+from nexoclip.llm import (
+    FrameStore,
+    LLMRouter,
+    MemoryFrameStore,
+    MultimodalImage,
+    Variant,
+    VariantBatch,
+)
 from nexoclip.llm.config import Quality
 
 from .models import VariantsFile
@@ -43,7 +50,7 @@ async def generate_variants(
     clip_dir: Path | None = None,
     force: bool = False,
     use_vision: bool = False,
-    frame_cache: FrameCache | None = None,
+    frame_cache: FrameStore | None = None,
     n_vision_frames: int = _DEFAULT_VISION_FRAMES,
 ) -> list[Variant]:
     """Generate `n` caption variants for `clip` in `persona`'s voice.
@@ -99,7 +106,7 @@ async def generate_variants(
         images = _gather_vision_frames(
             clip=clip,
             n_frames=n_vision_frames,
-            cache=frame_cache if frame_cache is not None else FrameCache(),
+            cache=frame_cache if frame_cache is not None else MemoryFrameStore(),
         )
         batch: VariantBatch = await router.complete_multimodal(
             tenant_id=tenant_id,
@@ -137,7 +144,7 @@ async def generate_variants(
 
 
 def _gather_vision_frames(
-    *, clip: Clip, n_frames: int, cache: FrameCache
+    *, clip: Clip, n_frames: int, cache: FrameStore
 ) -> list[MultimodalImage]:
     """Sample `n_frames` from the cut clip, caching by source-stream ts.
 

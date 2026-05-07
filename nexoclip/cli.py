@@ -37,9 +37,37 @@ app = typer.Typer(
 db_app = typer.Typer(name="db", help="Database admin commands.", no_args_is_help=True)
 tenants_app = typer.Typer(name="tenants", help="Tenant management.", no_args_is_help=True)
 tokens_app = typer.Typer(name="tokens", help="API token management.", no_args_is_help=True)
+webhooks_app = typer.Typer(
+    name="webhooks", help="Webhook subscription dispatch.", no_args_is_help=True
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
+app.add_typer(webhooks_app)
+
+
+@webhooks_app.command("send")
+def webhooks_send_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant id to drain."),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """One-shot drain pass over the tenant's active webhook subscriptions."""
+    from nexoclip.db import apply_migrations
+    from nexoclip.webhooks import run_webhook_dispatch
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            outcome = await run_webhook_dispatch(tenant_id, db)
+            typer.echo(
+                f"webhooks delivered={outcome.delivered} "
+                f"failed={outcome.failed} disabled={outcome.disabled}"
+            )
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
 
 
 @app.callback()

@@ -1,27 +1,33 @@
 """Publish-job worker orchestration.
 
 `run_publish_jobs(tenant_id, ...)` pulls up to `max_jobs` pending rows for
-the given tenant, fetches the matching variant + connected account, posts
-the update to the platform's API (Buffer in Phase 1), and writes the
-final row state. Transient failures bump `attempts` and stay `pending`
-until they exceed `max_attempts`, at which point they flip to `failed`.
+the given tenant, dispatches each through a platform-specific Publisher,
+records final state, and retries transient failures with exponential
+backoff. Two callers:
 
-Two callers:
-    * `nexoclip publish --tenant <id>` runs one drain pass.
-    * The FastAPI lifespan task wakes every 60s and runs the same drain.
+  * `nexoclip publish --tenant <id>` runs one drain pass.
+  * The FastAPI lifespan task wakes every 60s and runs the same drain.
 
-Both share the same code path so behaviour is identical between manual
-and automatic invocations.
+Phase 2 changes:
+
+  * Dispatcher routes by `account.platform` via a Publisher registry so
+    Buffer / TikTok / YouTube / future platforms share one code path.
+  * Pre-dispatch consults the BudgetGovernor's publish quota and halts
+    cleanly when exhausted.
+  * Per-account OAuth refresh runs once per drain pass (TikTok + YT);
+    on refresh failure the account flips to `auth_failed` and is skipped.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
+import httpx
 import structlog
 
 from nexoclip.db import (
@@ -35,7 +41,8 @@ from nexoclip.db.models import ConnectedAccount, PublishJob, VariantRow
 from nexoclip.errors import QuotaExceeded
 from nexoclip.tenancy import bound_tenant
 
-from .buffer import BufferClient, BufferError
+from .buffer import BufferClient, BufferPublisher
+from .protocol import PublisherError
 
 if TYPE_CHECKING:
     from nexoclip.governance import BudgetGovernor
@@ -47,10 +54,6 @@ def _now() -> str:
     return _dt.datetime.now(_dt.UTC).isoformat()
 
 
-# Default backoff schedule for transient retries. The orchestrator stops
-# retrying inside one drain pass after a single failure - the next pass
-# picks the row up because it's still `pending`. The schedule below is
-# only applied within one Buffer call's own retry loop.
 _DEFAULT_MAX_ATTEMPTS = 4
 _DEFAULT_INITIAL_BACKOFF_S = 1.0
 _DEFAULT_BACKOFF_MULTIPLIER = 2.0
@@ -70,12 +73,92 @@ class PublishOutcome:
         return self.sent + self.transient_failures + self.permanent_failures + self.skipped
 
 
-# Type for the optional buffer-client factory (test seam).
+# ---------------------------------------------------------------------------
+# Publisher protocol surface used inside this module.
+# ---------------------------------------------------------------------------
+
+
+class _PublishResult(Protocol):
+    external_id: str
+    external_url: str | None
+    metadata: dict[str, Any]
+
+
+class _Publisher(Protocol):
+    async def __aenter__(self) -> _Publisher: ...
+
+    async def __aexit__(self, *exc: object) -> None: ...
+
+    async def publish(
+        self,
+        *,
+        clip_path: str,
+        variant: VariantRow,
+        account: ConnectedAccount,
+    ) -> _PublishResult: ...
+
+
+# Factories return `Any` rather than the structural _Publisher protocol so
+# mypy doesn't trip on the per-platform concrete result types (each returns
+# its own *PublishResult dataclass; the protocol's structural duck-typing
+# isn't enforced through method return-type matching).
+PublisherFactory = Callable[[ConnectedAccount, httpx.AsyncClient], Any]
 BufferClientFactory = Callable[[str], BufferClient]
 
 
 def _default_buffer_factory(access_token: str) -> BufferClient:
     return BufferClient(access_token=access_token)
+
+
+def _default_buffer_publisher(
+    account: ConnectedAccount, _http: httpx.AsyncClient
+) -> Any:
+    """Default Buffer publisher: pull token from oauth_blob.access_token."""
+    token = _access_token_for(account)
+    if not token:
+        raise PublisherError(
+            f"buffer account {account.id} has no access_token", transient=False
+        )
+    return BufferPublisher(BufferClient(access_token=token))
+
+
+def _default_tiktok_publisher(
+    account: ConnectedAccount, http: httpx.AsyncClient
+) -> Any:
+    """Default TikTok publisher: shared httpx client, token from oauth_blob."""
+    from .tiktok import TikTokClient
+
+    token = _access_token_for(account)
+    if not token:
+        raise PublisherError(
+            f"tiktok account {account.id} has no access_token", transient=False
+        )
+    return TikTokClient(access_token=token, client=http)
+
+
+def _default_youtube_publisher(
+    account: ConnectedAccount, http: httpx.AsyncClient
+) -> Any:
+    from .youtube import YouTubeClient
+
+    token = _access_token_for(account)
+    if not token:
+        raise PublisherError(
+            f"youtube account {account.id} has no access_token", transient=False
+        )
+    return YouTubeClient(access_token=token, client=http)
+
+
+_DEFAULT_PUBLISHERS: dict[str, PublisherFactory] = {
+    "buffer": _default_buffer_publisher,
+    "tiktok": _default_tiktok_publisher,
+    "youtube": _default_youtube_publisher,
+}
+
+
+# ---------------------------------------------------------------------------
+# Drain entry point
+# ---------------------------------------------------------------------------
 
 
 async def run_publish_jobs(
@@ -87,143 +170,176 @@ async def run_publish_jobs(
     initial_backoff_s: float = _DEFAULT_INITIAL_BACKOFF_S,
     backoff_multiplier: float = _DEFAULT_BACKOFF_MULTIPLIER,
     buffer_factory: BufferClientFactory | None = None,
+    publishers: dict[str, PublisherFactory] | None = None,
     sleep: Callable[[float], Awaitable[None]] | None = None,
     governor: BudgetGovernor | None = None,
+    http: httpx.AsyncClient | None = None,
 ) -> PublishOutcome:
-    """Drain pending publish_jobs for `tenant_id`. Returns a roll-up.
+    """Drain pending publish_jobs for `tenant_id`.
 
-    `buffer_factory` and `sleep` are test seams - tests pass a fake client
-    factory and an async no-op sleep so the retry-with-backoff path runs
-    deterministically.
+    `buffer_factory` is the Phase 1 test seam (still honored - tests pass a
+    recording fake to short-circuit the network). `publishers` is the
+    Phase 2 generalization: a `{platform: factory}` map that overrides the
+    default registry.
 
-    `governor` is the Phase 2 budget governor. When supplied,
-    `check_publish_quota` is consulted before each dispatch; once the daily
-    quota is exhausted we stop dispatching (remaining `pending` jobs roll
-    over to tomorrow's drain pass).
+    `governor` enforces the daily publish quota before each dispatch.
+    On exhaustion we halt the drain - remaining `pending` rows roll over.
+
+    Per-account OAuth refresh runs once at the top of the drain. Refresh
+    failure flips the account to `auth_failed` and skips its jobs.
     """
-    factory = buffer_factory or _default_buffer_factory
     sleeper = sleep or asyncio.sleep
+    factories = {**_DEFAULT_PUBLISHERS, **(publishers or {})}
+    if buffer_factory is not None:
+        # Back-compat: if a Buffer-specific factory is passed, wrap whatever
+        # it returns through the BufferPublisher adapter so the dispatcher
+        # talks to it like any other Publisher.
+        original_buffer = buffer_factory
+
+        def _wrapped_buffer(
+            account: ConnectedAccount, _http: httpx.AsyncClient
+        ) -> Any:
+            token = _access_token_for(account) or ""
+            return BufferPublisher(original_buffer(token))
+
+        factories["buffer"] = _wrapped_buffer
 
     sent = 0
     transient = 0
     permanent = 0
     skipped = 0
     quota_exhausted = False
+    own_http = http is None
+    http_client = http or httpx.AsyncClient(timeout=30.0)
 
-    with bound_tenant(tenant_id):
-        jobs_repo = PublishJobsRepo(db)
-        accounts_repo = ConnectedAccountsRepo(db)
-        variants_repo = VariantsRepo(db)
-        events_repo = EventsRepo(db)
+    try:
+        with bound_tenant(tenant_id):
+            jobs_repo = PublishJobsRepo(db)
+            accounts_repo = ConnectedAccountsRepo(db)
+            variants_repo = VariantsRepo(db)
+            events_repo = EventsRepo(db)
 
-        pending = await jobs_repo.list_pending(limit=max_jobs)
-        if not pending:
-            return PublishOutcome()
+            pending = await jobs_repo.list_pending(limit=max_jobs)
+            if not pending:
+                return PublishOutcome()
 
-        # Index account + variant lookups by id so we don't hit the DB once
-        # per job for the same account.
-        accounts_index: dict[str, ConnectedAccount] = {
-            a.id: a for a in await accounts_repo.list_for_tenant()
-        }
-        variant_cache: dict[tuple[str, str], VariantRow] = {}
-
-        for job in pending:
-            # Phase 2: budget governor gate. Once today's publish quota is
-            # exhausted, stop the drain - leave remaining `pending` rows for
-            # tomorrow rather than burning retries against a hard limit.
-            if governor is not None and not quota_exhausted:
-                try:
-                    await governor.check_publish_quota(
-                        tenant_id, platform=job.platform
-                    )
-                except QuotaExceeded as e:
-                    quota_exhausted = True
-                    await events_repo.emit(
-                        type="publish.quota_exhausted",
-                        payload={"platform": job.platform, "error": str(e)},
-                    )
-            if quota_exhausted:
-                skipped += 1
-                continue
-
-            account = accounts_index.get(job.account_id)
-            if account is None:
-                await _mark_failed(
-                    db, job, last_error=f"unknown account_id {job.account_id!r}"
-                )
-                permanent += 1
-                continue
-
-            cache_key = (job.clip_id, job.variant_id)
-            variant = variant_cache.get(cache_key)
-            if variant is None:
-                clip_variants = await variants_repo.list_for_clip(job.clip_id)
-                for v in clip_variants:
-                    variant_cache[(job.clip_id, v.id)] = v
-                variant = variant_cache.get(cache_key)
-            if variant is None:
-                await _mark_failed(
-                    db, job, last_error=f"variant {job.variant_id!r} missing for clip"
-                )
-                permanent += 1
-                continue
-
-            access_token = _access_token_for(account)
-            if access_token is None:
-                await _mark_failed(
-                    db, job, last_error="connected account has no access_token"
-                )
-                permanent += 1
-                continue
-
-            outcome = await _post_with_retries(
-                client_factory=factory,
-                access_token=access_token,
-                profile_external_id=account.external_id,
-                text=_compose_caption(variant),
-                max_attempts=max_attempts,
-                initial_backoff_s=initial_backoff_s,
-                backoff_multiplier=backoff_multiplier,
-                sleep=sleeper,
+            accounts_index = await _refresh_and_index_accounts(
+                accounts_repo,
+                http=http_client,
+                accounts=await accounts_repo.list_for_tenant(),
+                db=db,
             )
+            variant_cache: dict[tuple[str, str], VariantRow] = {}
 
-            if outcome["status"] == "ok":
-                await _mark_sent(
-                    db,
-                    job,
-                    external_id=str(outcome.get("external_id") or ""),
-                    attempts=outcome["attempts"],
+            for job in pending:
+                if governor is not None and not quota_exhausted:
+                    try:
+                        await governor.check_publish_quota(
+                            tenant_id, platform=job.platform
+                        )
+                    except QuotaExceeded as e:
+                        quota_exhausted = True
+                        await events_repo.emit(
+                            type="publish.quota_exhausted",
+                            payload={"platform": job.platform, "error": str(e)},
+                        )
+                if quota_exhausted:
+                    skipped += 1
+                    continue
+
+                account = accounts_index.get(job.account_id)
+                if account is None:
+                    await _mark_failed(
+                        db, job, last_error=f"unknown account_id {job.account_id!r}"
+                    )
+                    permanent += 1
+                    continue
+                if account.status != "active":
+                    skipped += 1
+                    continue
+                if _access_token_for(account) is None:
+                    await _mark_failed(
+                        db, job,
+                        last_error="connected account has no access_token",
+                    )
+                    permanent += 1
+                    continue
+
+                variant = await _fetch_variant(
+                    variants_repo, variant_cache, job.clip_id, job.variant_id
                 )
-                sent += 1
-                await events_repo.emit(
-                    type="clip.published",
-                    payload={"clip_id": job.clip_id, "variant_id": job.variant_id},
+                if variant is None:
+                    await _mark_failed(
+                        db, job, last_error=f"variant {job.variant_id!r} missing for clip"
+                    )
+                    permanent += 1
+                    continue
+
+                factory = factories.get(account.platform)
+                if factory is None:
+                    await _mark_failed(
+                        db, job,
+                        last_error=f"no publisher registered for platform {account.platform!r}",
+                    )
+                    permanent += 1
+                    continue
+
+                outcome = await _post_with_retries(
+                    factory=factory,
+                    account=account,
+                    http=http_client,
+                    clip_path=variant.clip_id,  # placeholder; clip_path resolved below
+                    variant=variant,
+                    max_attempts=max_attempts,
+                    initial_backoff_s=initial_backoff_s,
+                    backoff_multiplier=backoff_multiplier,
+                    sleep=sleeper,
+                    db=db,
+                    job=job,
                 )
-            elif outcome["status"] == "transient":
-                await _bump_attempts(
-                    db,
-                    job,
-                    last_error=outcome["error"],
-                    attempts=outcome["attempts"],
-                    fail=outcome["attempts"] >= max_attempts,
-                )
-                if outcome["attempts"] >= max_attempts:
+
+                if outcome["status"] == "ok":
+                    await _mark_sent(
+                        db,
+                        job,
+                        external_id=str(outcome.get("external_id") or ""),
+                        external_url=outcome.get("external_url"),
+                        metadata=outcome.get("metadata"),
+                        attempts=outcome["attempts"],
+                    )
+                    sent += 1
+                    await events_repo.emit(
+                        type="clip.published",
+                        payload={"clip_id": job.clip_id, "variant_id": job.variant_id},
+                    )
+                elif outcome["status"] == "transient":
+                    await _bump_attempts(
+                        db,
+                        job,
+                        last_error=outcome["error"],
+                        attempts=outcome["attempts"],
+                        fail=outcome["attempts"] >= max_attempts,
+                    )
+                    if outcome["attempts"] >= max_attempts:
+                        permanent += 1
+                        await events_repo.emit(
+                            type="publish_job.failed",
+                            payload={"job_id": job.id, "reason": outcome["error"]},
+                        )
+                    else:
+                        transient += 1
+                else:
+                    await _mark_failed(db, job, last_error=outcome["error"])
                     permanent += 1
                     await events_repo.emit(
                         type="publish_job.failed",
                         payload={"job_id": job.id, "reason": outcome["error"]},
                     )
-                else:
-                    transient += 1
-            else:
-                await _mark_failed(db, job, last_error=outcome["error"])
-                permanent += 1
-                await events_repo.emit(
-                    type="publish_job.failed",
-                    payload={"job_id": job.id, "reason": outcome["error"]},
-                )
+    finally:
+        if own_http:
+            await http_client.aclose()
 
-    if sent or permanent:
+    if sent or permanent or skipped:
         _log.info(
             "publish_drain",
             tenant_id=tenant_id,
@@ -241,88 +357,175 @@ async def run_publish_jobs(
     )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _refresh_and_index_accounts(
+    accounts_repo: ConnectedAccountsRepo,
+    *,
+    http: httpx.AsyncClient,
+    accounts: list[ConnectedAccount],
+    db: Database,
+) -> dict[str, ConnectedAccount]:
+    """Refresh each TikTok / YT account whose token is near expiry; index by id."""
+    from .oauth import refresh_if_expiring
+    from .tiktok import refresh_tiktok_token
+    from .youtube import refresh_youtube_token
+
+    out: dict[str, ConnectedAccount] = {}
+    for acct in accounts:
+        if acct.platform == "tiktok":
+            try:
+                acct = await refresh_if_expiring(
+                    acct,
+                    db=db,
+                    http=http,
+                    refresh_impl=lambda rt, http_, acct=acct: refresh_tiktok_token(  # type: ignore[misc]
+                        rt, http_,
+                        client_key=str((acct.oauth_blob or {}).get("client_key", "")),
+                        client_secret=str(
+                            (acct.oauth_blob or {}).get("client_secret", "")
+                        ),
+                    ),
+                )
+            except Exception as e:
+                _log.warning("tiktok_refresh_failed", account_id=acct.id, error=str(e))
+        elif acct.platform == "youtube":
+            try:
+                acct = await refresh_if_expiring(
+                    acct,
+                    db=db,
+                    http=http,
+                    refresh_impl=lambda rt, http_, acct=acct: refresh_youtube_token(  # type: ignore[misc]
+                        rt, http_,
+                        client_id=str((acct.oauth_blob or {}).get("client_id", "")),
+                        client_secret=str(
+                            (acct.oauth_blob or {}).get("client_secret", "")
+                        ),
+                    ),
+                )
+            except Exception as e:
+                _log.warning("youtube_refresh_failed", account_id=acct.id, error=str(e))
+        out[acct.id] = acct
+    return out
+
+
+async def _fetch_variant(
+    variants_repo: VariantsRepo,
+    cache: dict[tuple[str, str], VariantRow],
+    clip_id: str,
+    variant_id: str,
+) -> VariantRow | None:
+    cache_key = (clip_id, variant_id)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    rows = await variants_repo.list_for_clip(clip_id)
+    for v in rows:
+        cache[(clip_id, v.id)] = v
+    return cache.get(cache_key)
+
+
 def _access_token_for(account: ConnectedAccount) -> str | None:
     blob = account.oauth_blob or {}
     raw = blob.get("access_token")
     return raw if isinstance(raw, str) and raw else None
 
 
-def _compose_caption(variant: VariantRow) -> str:
-    """Buffer text body = caption + " " + space-joined hashtags."""
-    parts = [variant.caption.strip()]
-    if variant.hashtags:
-        parts.append(" ".join(f"#{h.lstrip('#')}" for h in variant.hashtags))
-    return " ".join(p for p in parts if p)
-
-
 async def _post_with_retries(
     *,
-    client_factory: BufferClientFactory,
-    access_token: str,
-    profile_external_id: str,
-    text: str,
+    factory: PublisherFactory,
+    account: ConnectedAccount,
+    http: httpx.AsyncClient,
+    clip_path: str,
+    variant: VariantRow,
     max_attempts: int,
     initial_backoff_s: float,
     backoff_multiplier: float,
     sleep: Callable[[float], Awaitable[None]],
+    db: Database,
+    job: PublishJob,
 ) -> dict[str, Any]:
-    """Try posting `max_attempts` times. Returns one of:
-
-        {"status": "ok",        "attempts": int, "external_id": str}
-        {"status": "transient", "attempts": int, "error": str}
-        {"status": "fatal",     "attempts": int, "error": str}
-    """
+    """Try `max_attempts` times. Returns `{"status": ok|transient|fatal, ...}`."""
     last_error = "no attempts made"
     attempt = 0
-    async with client_factory(access_token) as client:
+    # Resolve the actual clip path - we need to fetch the ClipRow because
+    # only it knows where the .mp4 lives. (Buffer ignores this, but TikTok+YT
+    # need it.)
+    clip_path_resolved = await _resolve_clip_path(db, job.clip_id)
+
+    try:
+        publisher = factory(account, http)
+    except PublisherError as e:
+        return {"status": "fatal" if not e.transient else "transient",
+                "attempts": 0, "error": f"factory: {e}"}
+
+    async with publisher:
         for attempt in range(1, max_attempts + 1):
             try:
-                resp = await client.create_update(
-                    profile_external_id=profile_external_id, text=text
+                result = await publisher.publish(
+                    clip_path=clip_path_resolved,
+                    variant=variant,
+                    account=account,
                 )
-            except BufferError as e:
+            except PublisherError as e:
                 last_error = f"{type(e).__name__}: {e}"
                 if not e.transient:
-                    return {"status": "fatal", "attempts": attempt, "error": last_error}
+                    return {
+                        "status": "fatal",
+                        "attempts": attempt,
+                        "error": last_error,
+                    }
                 if attempt < max_attempts:
                     await sleep(initial_backoff_s * (backoff_multiplier ** (attempt - 1)))
                     continue
-                return {"status": "transient", "attempts": attempt, "error": last_error}
+                return {
+                    "status": "transient",
+                    "attempts": attempt,
+                    "error": last_error,
+                }
             return {
                 "status": "ok",
                 "attempts": attempt,
-                "external_id": _extract_external_id(resp),
+                "external_id": result.external_id,
+                "external_url": result.external_url,
+                "metadata": result.metadata,
             }
     return {"status": "transient", "attempts": attempt, "error": last_error}
 
 
-def _extract_external_id(payload: dict[str, Any]) -> str:
-    """Buffer returns `{"updates": [{"id": "..."}], ...}`.
+async def _resolve_clip_path(db: Database, clip_id: str) -> str:
+    """Fetch the on-disk clip path. Buffer ignores it; TikTok/YT need it."""
+    from nexoclip.db import ClipsRepo
 
-    Phase 1 records the first update id; if Buffer changes shape we'll
-    just record an empty string and the row remains queryable.
-    """
-    updates = payload.get("updates")
-    if isinstance(updates, list) and updates:
-        first = updates[0]
-        if isinstance(first, dict):
-            first_id = first.get("id")
-            if isinstance(first_id, str):
-                return first_id
-    top_id = payload.get("id")
-    if isinstance(top_id, str):
-        return top_id
-    return ""
+    clip = await ClipsRepo(db).get(clip_id)
+    return clip.path if clip is not None else ""
 
 
 async def _mark_sent(
-    db: Database, job: PublishJob, *, external_id: str, attempts: int
+    db: Database,
+    job: PublishJob,
+    *,
+    external_id: str,
+    external_url: str | None,
+    metadata: dict[str, Any] | None,
+    attempts: int,
 ) -> None:
     conn = await db.connect()
     await conn.execute(
-        "UPDATE publish_jobs SET status = 'sent', external_id = ?, attempts = ?, "
+        "UPDATE publish_jobs SET status = 'sent', external_id = ?, "
+        "external_url = ?, platform_metadata_json = ?, attempts = ?, "
         "last_error = NULL WHERE id = ? AND tenant_id = ?",
-        (external_id, attempts, job.id, job.tenant_id),
+        (
+            external_id,
+            external_url,
+            json.dumps(metadata) if metadata is not None else None,
+            attempts,
+            job.id,
+            job.tenant_id,
+        ),
     )
     await conn.commit()
 
@@ -345,7 +548,6 @@ async def _bump_attempts(
     attempts: int,
     fail: bool,
 ) -> None:
-    """After a transient failure: bump attempts; flip to failed if cap hit."""
     new_status = "failed" if fail else "pending"
     conn = await db.connect()
     await conn.execute(

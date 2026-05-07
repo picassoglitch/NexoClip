@@ -13,11 +13,22 @@ Phase 2 adds native TikTok / YT Shorts publishers behind the same
 """
 
 from .buffer import BufferClient, BufferError
+from .oauth import RefreshedToken, refresh_if_expiring
+from .protocol import PublisherError
 from .service import PublishOutcome, run_publish_jobs
+from .tiktok import TikTokClient, TikTokError
+from .youtube import YouTubeClient, YouTubeError
 
 __all__ = [
     "BufferClient",
     "BufferError",
     "PublishOutcome",
+    "PublisherError",
+    "RefreshedToken",
+    "TikTokClient",
+    "TikTokError",
+    "YouTubeClient",
+    "YouTubeError",
+    "refresh_if_expiring",
     "run_publish_jobs",
 ]

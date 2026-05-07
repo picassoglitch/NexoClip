@@ -13,9 +13,15 @@ configured cap; fatal ones go straight to `failed`.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from .protocol import PublisherError
+
+if TYPE_CHECKING:
+    from nexoclip.db.models import ConnectedAccount, VariantRow
 
 # Buffer Classic API. Phase 3 will switch to the new "Publishing API" once
 # their migration is GA; the client surface here doesn't change.
@@ -24,11 +30,11 @@ DEFAULT_BASE_URL = "https://api.bufferapp.com"
 _TRANSIENT_STATUSES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 
 
-class BufferError(Exception):
+class BufferError(PublisherError):
     """Buffer API call failed.
 
-    `transient=True` means the orchestrator should retry; `transient=False`
-    means give up immediately.
+    Inherits the `transient` flag from `PublisherError`; the orchestrator
+    retries transient errors with backoff and gives up after `max_attempts`.
     """
 
     def __init__(
@@ -38,8 +44,7 @@ class BufferError(Exception):
         transient: bool = False,
         status_code: int | None = None,
     ):
-        super().__init__(message)
-        self.transient = transient
+        super().__init__(message, transient=transient)
         self.status_code = status_code
 
 
@@ -122,3 +127,67 @@ class BufferClient:
         except ValueError as e:
             raise BufferError(f"buffer returned non-JSON: {e}", transient=False) from e
         return payload
+
+
+@dataclass(frozen=True)
+class BufferPublishResult:
+    external_id: str
+    external_url: str | None
+    metadata: dict[str, Any]
+
+
+class BufferPublisher:
+    """Adapter so BufferClient fits the unified `Publisher` protocol.
+
+    The dispatcher's loop calls `publisher.publish(clip_path, variant,
+    account)` regardless of platform; the adapter turns that into Buffer's
+    `create_update(profile_external_id, text)`.
+    """
+
+    def __init__(self, client: BufferClient) -> None:
+        self._client = client
+
+    async def __aenter__(self) -> BufferPublisher:
+        await self._client.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._client.__aexit__(*exc)
+
+    async def publish(
+        self,
+        *,
+        clip_path: str,
+        variant: VariantRow,
+        account: ConnectedAccount,
+    ) -> BufferPublishResult:
+        text = _compose_caption(variant)
+        resp = await self._client.create_update(
+            profile_external_id=account.external_id, text=text
+        )
+        return BufferPublishResult(
+            external_id=_extract_external_id(resp),
+            external_url=None,
+            metadata=resp,
+        )
+
+
+def _compose_caption(variant: VariantRow) -> str:
+    parts = [variant.caption.strip()]
+    if variant.hashtags:
+        parts.append(" ".join(f"#{h.lstrip('#')}" for h in variant.hashtags))
+    return " ".join(p for p in parts if p)
+
+
+def _extract_external_id(payload: dict[str, Any]) -> str:
+    updates = payload.get("updates")
+    if isinstance(updates, list) and updates:
+        first = updates[0]
+        if isinstance(first, dict):
+            first_id = first.get("id")
+            if isinstance(first_id, str):
+                return first_id
+    top_id = payload.get("id")
+    if isinstance(top_id, str):
+        return top_id
+    return ""

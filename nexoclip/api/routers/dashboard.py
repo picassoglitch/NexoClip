@@ -180,12 +180,15 @@ async def clip_detail(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.clip import clip_breakdown
+
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     variants = await VariantsRepo(db).list_for_clip(clip_id)
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
+    breakdown = await clip_breakdown(db, clip_id)
     return templates.TemplateResponse(
         request,
         "clip_detail.html",
@@ -194,6 +197,7 @@ async def clip_detail(
             "variants": variants,
             "accounts": accounts,
             "valid_transitions": valid_transitions,
+            "breakdown": breakdown,
         },
     )
 

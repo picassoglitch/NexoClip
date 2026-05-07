@@ -55,4 +55,80 @@
     {% endif %}
   </div>
 </article>
+
+<article>
+  <header><strong>Why this clip?</strong></header>
+  <table class="confidence-breakdown">
+    <tr>
+      <th scope="row">Heuristic that fired</th>
+      <td>
+        <code>{{ breakdown.heuristic_reason }}</code>
+        ({{ "%.3f"|format(breakdown.heuristic_score) }})
+      </td>
+    </tr>
+    <tr>
+      <th scope="row">Motion score</th>
+      <td>
+        {% if breakdown.motion_score is not none %}
+          {{ "%.3f"|format(breakdown.motion_score) }}
+          <small>(avg motion energy across the clip)</small>
+        {% else %}
+          <em>n/a — visual signals not analyzed</em>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th scope="row">Face presence</th>
+      <td>
+        {% if breakdown.face_presence is not none %}
+          {{ "%.0f%%"|format(breakdown.face_presence * 100) }}
+          <small>of seconds with a detected face</small>
+        {% else %}
+          <em>n/a</em>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th scope="row">Speaking intensity</th>
+      <td>
+        {% if breakdown.speaking_intensity is not none %}
+          {{ "%.2f"|format(breakdown.speaking_intensity) }} words/sec
+        {% else %}
+          <em>n/a — no transcript</em>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th scope="row">Reaction confidence</th>
+      <td>
+        {% if breakdown.reaction_confidence is not none %}
+          {{ "%.3f"|format(breakdown.reaction_confidence) }}
+          <small>(vision-LLM rescore)</small>
+        {% else %}
+          <em>not rescored — heuristic ranking stands</em>
+        {% endif %}
+      </td>
+    </tr>
+    {% if breakdown.rescore_delta is not none %}
+    <tr>
+      <th scope="row">Rescore delta</th>
+      <td>
+        <span class="status-badge {% if breakdown.rescore_delta >= 0 %}status-approved{% else %}status-rejected{% endif %}">
+          {{ "%+.3f"|format(breakdown.rescore_delta) }}
+        </span>
+        <small>
+          (vision rescore vs heuristic; positive = the LLM thought this was
+          better than the heuristic ranking)
+        </small>
+      </td>
+    </tr>
+    {% endif %}
+    {% if breakdown.rescore_reason %}
+    <tr>
+      <th scope="row">Rescore reason</th>
+      <td><em>"{{ breakdown.rescore_reason }}"</em></td>
+    </tr>
+    {% endif %}
+  </table>
+</article>
 {% endblock %}

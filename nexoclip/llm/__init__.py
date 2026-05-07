@@ -5,10 +5,19 @@ from .frame_cache import FrameCache
 from .frame_store import FrameStore, MemoryFrameStore
 from .provider import LLMProvider, MultimodalImage, ProviderResult, RetryableLLMError
 from .router import CallLogRow, LLMRouter
-from .schemas import RescoreVerdict, Variant, VariantBatch
+from .schemas import (
+    CropBoxVerdict,
+    FaceEmotionVerdict,
+    RescoreVerdict,
+    ThumbnailPickVerdict,
+    Variant,
+    VariantBatch,
+)
 
 __all__ = [
     "CallLogRow",
+    "CropBoxVerdict",
+    "FaceEmotionVerdict",
     "FrameCache",
     "FrameStore",
     "LLMConfig",
@@ -22,6 +31,7 @@ __all__ = [
     "RescoreVerdict",
     "RetryableLLMError",
     "RoutingRule",
+    "ThumbnailPickVerdict",
     "Variant",
     "VariantBatch",
     "load_llm_config",

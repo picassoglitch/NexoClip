@@ -38,6 +38,56 @@ class VariantBatch(BaseModel):
     variants: list[Variant] = Field(default_factory=list)
 
 
+class CropBoxVerdict(BaseModel):
+    """Vision-LLM verdict for the 9:16 smart-crop picker (P2 Task 5).
+
+    The model gets a representative frame at the clip's anchor + the
+    source resolution, and returns the *fractional* crop box (0..1 range)
+    so we can scale it to whatever frame size the clip uses. The picker
+    converts these fractions to integer pixel coords before persisting.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    x_frac: float = Field(
+        ge=0.0, le=1.0, description="Left edge of the 9:16 crop, fraction of source width."
+    )
+    width_frac: float = Field(
+        gt=0.0, le=1.0, description="Crop width, fraction of source width."
+    )
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class ThumbnailPickVerdict(BaseModel):
+    """Vision-LLM verdict for the auto-thumbnail picker (P2 Task 5).
+
+    The model sees N candidate frames sampled across the clip; it returns
+    the index of the strongest frame and a one-sentence reason.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    index: int = Field(ge=0, description="0-based index into the N frames shown.")
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class FaceEmotionVerdict(BaseModel):
+    """Vision-LLM verdict for one sampled frame's face emotion (P2 Task 6).
+
+    `has_face=False` clears `emotion` to null. Otherwise emotion takes one
+    of the FaceEmotion labels mirrored from `nexoclip.vision.models`.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    has_face: bool
+    emotion: str | None = Field(
+        default=None,
+        description="neutral | smile | laugh | shock | anger | sad. Null when no face.",
+    )
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class RescoreVerdict(BaseModel):
     """Vision-LLM verdict on whether a candidate is *actually* clip-worthy.
 

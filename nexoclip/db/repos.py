@@ -42,6 +42,7 @@ from .models import (
     TranscriptRow,
     User,
     VariantRow,
+    WebhookSubscription,
 )
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -70,7 +71,9 @@ class TenantsRepo:
     async def get(self, tenant_id: str) -> Tenant | None:
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT id, name, created_at FROM tenants WHERE id = ?",
+            "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
+            "daily_publish_limit, rescore_concurrency_cap "
+            "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
         return _model(Tenant, await cur.fetchone())
@@ -83,8 +86,43 @@ class TenantsRepo:
 
     async def list_all(self) -> list[Tenant]:
         conn = await self._db.connect()
-        cur = await conn.execute("SELECT id, name, created_at FROM tenants ORDER BY created_at")
+        cur = await conn.execute(
+            "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
+            "daily_publish_limit, rescore_concurrency_cap "
+            "FROM tenants ORDER BY created_at"
+        )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]
+
+    async def set_budget(
+        self,
+        tenant_id: str,
+        *,
+        daily_llm_budget_usd_micros: int | None = None,
+        daily_publish_limit: int | None = None,
+        rescore_concurrency_cap: int | None = None,
+    ) -> Tenant:
+        """Update governor knobs. Pass None to leave a knob alone."""
+        sets: list[str] = []
+        values: list[object] = []
+        if daily_llm_budget_usd_micros is not None:
+            sets.append("daily_llm_budget_usd_micros = ?")
+            values.append(daily_llm_budget_usd_micros)
+        if daily_publish_limit is not None:
+            sets.append("daily_publish_limit = ?")
+            values.append(daily_publish_limit)
+        if rescore_concurrency_cap is not None:
+            sets.append("rescore_concurrency_cap = ?")
+            values.append(rescore_concurrency_cap)
+        if not sets:
+            return await self.get_or_raise(tenant_id)
+        values.append(tenant_id)
+        conn = await self._db.connect()
+        await conn.execute(
+            f"UPDATE tenants SET {', '.join(sets)} WHERE id = ?",
+            tuple(values),
+        )
+        await conn.commit()
+        return await self.get_or_raise(tenant_id)
 
 
 class UsersRepo:
@@ -391,6 +429,24 @@ class LLMCallsRepo:
         )
         return [LLMCallRow.model_validate(dict(r)) for r in await cur.fetchall()]
 
+    async def total_spend_today_micros(self) -> int:
+        """Sum of `cost_usd_micros` for the bound tenant since 00:00 UTC.
+
+        The budget governor (P2 Task 1) calls this before each LLM request
+        to decide whether the projected next-call cost would push today
+        past `tenants.daily_llm_budget_usd_micros`.
+        """
+        tenant_id = current_tenant_id()
+        cutoff = _start_of_utc_today()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
+            "WHERE tenant_id = ? AND ts >= ?",
+            (tenant_id, cutoff),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
 
 class EventsRepo:
     """Append-only event log. Every state transition lands here."""
@@ -560,6 +616,35 @@ class CandidatesRepo:
         )
         return [_candidate_from_row(r) for r in await cur.fetchall()]
 
+    async def update_rescore(
+        self,
+        candidate_id: str,
+        *,
+        rescore_score: float | None,
+        rescore_reason: str | None,
+        rescore_model: str | None,
+    ) -> CandidateRow:
+        """Persist a vision-LLM rescore verdict (P2 Task 3 writes here).
+
+        Pass None for all three to clear a prior verdict.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE candidates SET rescore_score = ?, rescore_reason = ?, "
+            "rescore_model = ? WHERE id = ? AND tenant_id = ?",
+            (rescore_score, rescore_reason, rescore_model, candidate_id, tenant_id),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT * FROM candidates WHERE id = ? AND tenant_id = ?",
+            (candidate_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise NexoClipError(f"candidate not found: {candidate_id}")
+        return _candidate_from_row(row)
+
 
 def _candidate_from_row(row: aiosqlite.Row) -> CandidateRow:
     d = dict(row)
@@ -707,12 +792,18 @@ def _variant_from_row(row: aiosqlite.Row) -> VariantRow:
     return VariantRow.model_validate(d)
 
 
-class ConnectedAccountsRepo:
-    """Per-tenant social-account connections (Buffer, etc.).
+_ACCOUNT_COLS = (
+    "id, tenant_id, platform, external_id, display_name, oauth_blob_json, "
+    "created_at, refresh_token, expires_at, scopes_json, status"
+)
 
-    Phase 1 only inserts + lists; Phase 3's OAuth flow will refresh tokens
-    via a separate path. The `oauth_blob` column carries provider-specific
-    credentials as opaque JSON - the publisher (Task 11) reads it.
+
+class ConnectedAccountsRepo:
+    """Per-tenant social-account connections (Buffer / TikTok / YouTube).
+
+    Phase 2 adds OAuth refresh tracking (`refresh_token`, `expires_at`,
+    `scopes`, `status`). The publisher dispatcher (P2 Task 10) refreshes
+    expired tokens via `update_oauth` before posting.
     """
 
     def __init__(self, db: Database):
@@ -725,14 +816,18 @@ class ConnectedAccountsRepo:
         external_id: str,
         display_name: str | None = None,
         oauth_blob: dict[str, object] | None = None,
+        refresh_token: str | None = None,
+        expires_at: str | None = None,
+        scopes: list[str] | None = None,
     ) -> ConnectedAccount:
         tenant_id = current_tenant_id()
         account_id = new_id("acc")
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO connected_accounts "
-            "(id, tenant_id, platform, external_id, display_name, oauth_blob_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, tenant_id, platform, external_id, display_name, oauth_blob_json, "
+            "created_at, refresh_token, expires_at, scopes_json, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')",
             (
                 account_id,
                 tenant_id,
@@ -741,6 +836,9 @@ class ConnectedAccountsRepo:
                 display_name,
                 json.dumps(oauth_blob) if oauth_blob is not None else None,
                 _now(),
+                refresh_token,
+                expires_at,
+                json.dumps(scopes) if scopes is not None else None,
             ),
         )
         await conn.commit()
@@ -752,8 +850,7 @@ class ConnectedAccountsRepo:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT id, tenant_id, platform, external_id, display_name, "
-            "oauth_blob_json, created_at FROM connected_accounts "
+            f"SELECT {_ACCOUNT_COLS} FROM connected_accounts "
             "WHERE id = ? AND tenant_id = ?",
             (account_id, tenant_id),
         )
@@ -766,27 +863,93 @@ class ConnectedAccountsRepo:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT id, tenant_id, platform, external_id, display_name, "
-            "oauth_blob_json, created_at FROM connected_accounts "
+            f"SELECT {_ACCOUNT_COLS} FROM connected_accounts "
             "WHERE tenant_id = ? ORDER BY created_at",
             (tenant_id,),
         )
         return [_connected_account_from_row(r) for r in await cur.fetchall()]
+
+    async def update_oauth(
+        self,
+        account_id: str,
+        *,
+        oauth_blob: dict[str, object] | None = None,
+        refresh_token: str | None = None,
+        expires_at: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> ConnectedAccount:
+        """Persist a fresh OAuth bundle after a refresh round-trip.
+
+        Only the kwargs you pass get updated; pass None to leave a column
+        alone. Status stays as-is unless `mark_status` is called separately.
+        """
+        tenant_id = current_tenant_id()
+        sets: list[str] = []
+        values: list[object] = []
+        if oauth_blob is not None:
+            sets.append("oauth_blob_json = ?")
+            values.append(json.dumps(oauth_blob))
+        if refresh_token is not None:
+            sets.append("refresh_token = ?")
+            values.append(refresh_token)
+        if expires_at is not None:
+            sets.append("expires_at = ?")
+            values.append(expires_at)
+        if scopes is not None:
+            sets.append("scopes_json = ?")
+            values.append(json.dumps(scopes))
+        if not sets:
+            existing = await self.get(account_id)
+            if existing is None:
+                raise NexoClipError(f"connected_account not found: {account_id}")
+            return existing
+        values.extend([account_id, tenant_id])
+        conn = await self._db.connect()
+        await conn.execute(
+            f"UPDATE connected_accounts SET {', '.join(sets)} "
+            "WHERE id = ? AND tenant_id = ?",
+            tuple(values),
+        )
+        await conn.commit()
+        existing = await self.get(account_id)
+        if existing is None:
+            raise NexoClipError(f"connected_account not found: {account_id}")
+        return existing
+
+    async def mark_status(self, account_id: str, status: str) -> ConnectedAccount:
+        """Flip an account's lifecycle status (`active` / `auth_failed` / `disabled`)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE connected_accounts SET status = ? WHERE id = ? AND tenant_id = ?",
+            (status, account_id, tenant_id),
+        )
+        await conn.commit()
+        existing = await self.get(account_id)
+        if existing is None:
+            raise NexoClipError(f"connected_account not found: {account_id}")
+        return existing
 
 
 def _connected_account_from_row(row: aiosqlite.Row) -> ConnectedAccount:
     d = dict(row)
     blob = d.pop("oauth_blob_json")
     d["oauth_blob"] = json.loads(blob) if blob else None
+    scopes_blob = d.pop("scopes_json", None)
+    d["scopes"] = json.loads(scopes_blob) if scopes_blob else []
     return ConnectedAccount.model_validate(d)
 
 
 class PublishJobsRepo:
     """Pending / running / sent publish jobs.
 
-    Task 9 uses `enqueue` to write rows; Task 11's worker reads pending
-    jobs via `list_pending`, transitions them through the status column,
-    and records final state.
+    Task 9 uses `enqueue` to write rows; the worker (Phase 1 Buffer / P2
+    TikTok+YT) reads pending jobs via `list_pending`, transitions them
+    through the status column, and records final state.
+
+    Phase 2 adds `external_url` + `platform_metadata_json` for native-
+    publisher response payloads (the URL we'd open in a browser, plus
+    raw API bits we want to keep around for debugging).
     """
 
     def __init__(self, db: Database):
@@ -807,8 +970,9 @@ class PublishJobsRepo:
         await conn.execute(
             "INSERT INTO publish_jobs "
             "(id, tenant_id, clip_id, variant_id, account_id, platform, "
-            "status, attempts, last_error, scheduled_for, external_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, ?)",
+            "status, attempts, last_error, scheduled_for, external_id, "
+            "external_url, platform_metadata_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, NULL, NULL, ?)",
             (
                 job_id,
                 tenant_id,
@@ -827,7 +991,7 @@ class PublishJobsRepo:
         )
         row = await cur.fetchone()
         assert row is not None
-        return PublishJob.model_validate(dict(row))
+        return _publish_job_from_row(row)
 
     async def list_for_clip(self, clip_id: str) -> list[PublishJob]:
         tenant_id = current_tenant_id()
@@ -837,7 +1001,7 @@ class PublishJobsRepo:
             "ORDER BY created_at",
             (tenant_id, clip_id),
         )
-        return [PublishJob.model_validate(dict(r)) for r in await cur.fetchall()]
+        return [_publish_job_from_row(r) for r in await cur.fetchall()]
 
     async def list_pending(self, *, limit: int = 50) -> list[PublishJob]:
         tenant_id = current_tenant_id()
@@ -847,7 +1011,45 @@ class PublishJobsRepo:
             "ORDER BY created_at LIMIT ?",
             (tenant_id, limit),
         )
-        return [PublishJob.model_validate(dict(r)) for r in await cur.fetchall()]
+        return [_publish_job_from_row(r) for r in await cur.fetchall()]
+
+    async def count_for_tenant_today(self, *, platform: str | None = None) -> int:
+        """Today's (UTC) publish_jobs count for the bound tenant.
+
+        The budget governor (P2 Task 1) calls this to enforce
+        `tenants.daily_publish_limit`. `platform=None` counts across all
+        platforms; passing a value scopes it.
+        """
+        tenant_id = current_tenant_id()
+        cutoff = _start_of_utc_today()
+        conn = await self._db.connect()
+        if platform is None:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM publish_jobs "
+                "WHERE tenant_id = ? AND created_at >= ?",
+                (tenant_id, cutoff),
+            )
+        else:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM publish_jobs "
+                "WHERE tenant_id = ? AND platform = ? AND created_at >= ?",
+                (tenant_id, platform, cutoff),
+            )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def _publish_job_from_row(row: aiosqlite.Row) -> PublishJob:
+    d = dict(row)
+    meta = d.pop("platform_metadata_json", None)
+    d["platform_metadata"] = json.loads(meta) if meta else None
+    return PublishJob.model_validate(d)
+
+
+def _start_of_utc_today() -> str:
+    """ISO-8601 timestamp for 00:00:00 UTC today (used as a 'since' filter)."""
+    now = _dt.datetime.now(_dt.UTC)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 class VisualSignalsRepo:
@@ -925,3 +1127,122 @@ class VisualSignalsRepo:
             }
             for r in rows
         ]
+
+
+# ---------------------------------------------------------------------------
+# Webhook subscriptions (P2 Task 12 worker drains; this repo is the storage).
+# ---------------------------------------------------------------------------
+
+
+_WEBHOOK_COLS = (
+    "id, tenant_id, url, types_json, secret, status, created_at, "
+    "last_dispatch_ts, failure_count"
+)
+
+
+class WebhookSubscriptionsRepo:
+    """CRUD over `webhook_subscriptions`.
+
+    Phase 2 stores one HMAC secret per subscription, generated at create
+    time and returned to the caller once (mirrors `api_tokens`).
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        url: str,
+        types: list[str],
+        secret: str,
+    ) -> WebhookSubscription:
+        tenant_id = current_tenant_id()
+        sub_id = new_id("whk")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO webhook_subscriptions "
+            "(id, tenant_id, url, types_json, secret, status, created_at, "
+            "last_dispatch_ts, failure_count) "
+            "VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, 0)",
+            (sub_id, tenant_id, url, json.dumps(types), secret, _now()),
+        )
+        await conn.commit()
+        sub = await self.get(sub_id)
+        assert sub is not None
+        return sub
+
+    async def get(self, sub_id: str) -> WebhookSubscription | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_WEBHOOK_COLS} FROM webhook_subscriptions "
+            "WHERE id = ? AND tenant_id = ?",
+            (sub_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _webhook_from_row(row) if row else None
+
+    async def list_for_tenant(
+        self, *, status: str | None = None
+    ) -> list[WebhookSubscription]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        if status is None:
+            cur = await conn.execute(
+                f"SELECT {_WEBHOOK_COLS} FROM webhook_subscriptions "
+                "WHERE tenant_id = ? ORDER BY created_at",
+                (tenant_id,),
+            )
+        else:
+            cur = await conn.execute(
+                f"SELECT {_WEBHOOK_COLS} FROM webhook_subscriptions "
+                "WHERE tenant_id = ? AND status = ? ORDER BY created_at",
+                (tenant_id, status),
+            )
+        return [_webhook_from_row(r) for r in await cur.fetchall()]
+
+    async def delete(self, sub_id: str) -> bool:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "DELETE FROM webhook_subscriptions WHERE id = ? AND tenant_id = ?",
+            (sub_id, tenant_id),
+        )
+        await conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def record_dispatch(self, sub_id: str, *, ts: str) -> None:
+        """Bump `last_dispatch_ts` after a successful drain pass."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE webhook_subscriptions SET last_dispatch_ts = ?, failure_count = 0 "
+            "WHERE id = ? AND tenant_id = ?",
+            (ts, sub_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def record_failure(self, sub_id: str) -> int:
+        """Increment `failure_count` after a failed POST. Returns the new count."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE webhook_subscriptions SET failure_count = failure_count + 1 "
+            "WHERE id = ? AND tenant_id = ?",
+            (sub_id, tenant_id),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT failure_count FROM webhook_subscriptions "
+            "WHERE id = ? AND tenant_id = ?",
+            (sub_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def _webhook_from_row(row: aiosqlite.Row) -> WebhookSubscription:
+    d = dict(row)
+    d["types"] = json.loads(d.pop("types_json") or "[]")
+    return WebhookSubscription.model_validate(d)

@@ -23,6 +23,10 @@ class Tenant(BaseModel):
     id: str
     name: str
     created_at: str
+    # Phase 2 budget governor knobs. NULL == unlimited.
+    daily_llm_budget_usd_micros: int | None = None
+    daily_publish_limit: int | None = None
+    rescore_concurrency_cap: int = 4
 
 
 class User(BaseModel):
@@ -70,6 +74,11 @@ class ConnectedAccount(BaseModel):
     display_name: str | None = None
     oauth_blob: dict[str, object] | None = None
     created_at: str
+    # Phase 2: OAuth refresh + lifecycle tracking.
+    refresh_token: str | None = None
+    expires_at: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: str = "active"  # active | auth_failed | disabled
 
 
 # ---------- Pipeline ----------
@@ -111,6 +120,10 @@ class CandidateRow(BaseModel):
     reason: str
     evidence: dict[str, object] = Field(default_factory=dict)
     created_at: str
+    # Phase 2: vision-LLM rescore verdict (NULL until --vision-rescore runs).
+    rescore_score: float | None = None
+    rescore_reason: str | None = None
+    rescore_model: str | None = None
 
 
 class ClipRow(BaseModel):
@@ -176,6 +189,9 @@ class PublishJob(BaseModel):
     scheduled_for: str | None = None
     external_id: str | None = None
     created_at: str
+    # Phase 2: native-publisher metadata (TikTok/YT shareable URL, raw API response bits).
+    external_url: str | None = None
+    platform_metadata: dict[str, object] | None = None
 
 
 class Event(BaseModel):
@@ -196,3 +212,18 @@ class VisualSignalRow(BaseModel):
     face_emotion: str | None = None
     motion_energy: float | None = None
     text_changed: bool = False
+
+
+class WebhookSubscription(BaseModel):
+    """Phase 2: outbound HMAC-signed event delivery to subscriber URLs."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    tenant_id: str
+    url: str
+    types: list[str] = Field(default_factory=list)
+    secret: str
+    status: str = "active"  # active | disabled
+    created_at: str
+    last_dispatch_ts: str | None = None
+    failure_count: int = 0

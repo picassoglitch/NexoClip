@@ -10,20 +10,23 @@ from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
 
-async def test_apply_migrations_brings_empty_db_to_version_1(db: Database) -> None:
+_CURRENT_HEAD = 2  # bumped each time we add a migration
+
+
+async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:
     v = await apply_migrations(db)
-    assert v == 1
-    assert await schema_version(db) == 1
+    assert v == _CURRENT_HEAD
+    assert await schema_version(db) == _CURRENT_HEAD
 
 
 async def test_apply_migrations_is_idempotent(db: Database) -> None:
     v1 = await apply_migrations(db)
     v2 = await apply_migrations(db)
-    assert v1 == 1
-    assert v2 == 1
+    assert v1 == _CURRENT_HEAD
+    assert v2 == _CURRENT_HEAD
 
 
-async def test_schema_creates_all_phase_1_tables(migrated_db: Database) -> None:
+async def test_schema_creates_all_phase_1_and_2_tables(migrated_db: Database) -> None:
     conn = await migrated_db.connect()
     cur = await conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -45,6 +48,7 @@ async def test_schema_creates_all_phase_1_tables(migrated_db: Database) -> None:
         "publish_jobs",
         "events",
         "visual_signals",
+        "webhook_subscriptions",  # Phase 2
     }
     assert expected <= names, f"missing tables: {expected - names}"
 

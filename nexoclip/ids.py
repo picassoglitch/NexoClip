@@ -23,6 +23,7 @@ EntityKind = Literal[
     "llm",
     "acc",  # connected accounts (Buffer / future platforms)
     "pjb",  # publish jobs
+    "whk",  # webhook subscriptions (Phase 2)
 ]
 
 

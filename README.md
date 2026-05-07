@@ -2,7 +2,15 @@
 
 Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips.
 
-**Status:** Phase 0 (spike) — the spine is up. `nexoclip process <vod_url> --persona <id>` runs the full ingest → transcribe → detect → cut → variants pipeline and writes a manifest.
+**Status:** Phase 1 complete. The Phase 0 CLI (`nexoclip process …`) still works; on top of that the project now ships:
+
+- Multi-tenant core: SQLite + tenancy contract, API tokens, dual-write through repos.
+- 4-way detector fan-in (voice + chat heat + audio energy + visual signals).
+- Local vision pipeline (PySceneDetect + OpenCV motion + Haar Cascade face presence).
+- Smart 9:16 crop + auto-thumbnail per clip.
+- LLM router with vision capability (`complete_multimodal` + frame cache).
+- FastAPI REST API + HTMX dashboard (`uvicorn nexoclip.api.app:create_app`).
+- Buffer publisher (drained by `nexoclip publish` or the API lifespan task).
 
 ---
 
@@ -79,6 +87,31 @@ nexoclip variants    <clip_id>   --persona aldo_villanueva
 
 Every command supports `--json` (machine-readable output) and `--force` (ignore the on-disk cache).
 
+### Multi-tenant DB + dashboard (Phase 1)
+
+```bash
+# 1. Initialize SQLite + apply migrations
+nexoclip db init
+
+# 2. Create a tenant + issue an API token (the raw token is shown ONCE)
+nexoclip tenants add aldo "Aldo Villanueva"
+nexoclip tokens issue --tenant aldo --scope full
+# → tok_01H...
+
+# 3. Boot the API + HTMX dashboard
+uvicorn 'nexoclip.api.app:create_app' --factory \
+    --host 0.0.0.0 --port 8000
+
+# 4. Open http://localhost:8000/dashboard/login and paste your tok_...
+
+# 5. Drain pending publish_jobs manually (the API lifespan also kicks
+#    a drain every 60s when started in production mode):
+nexoclip publish --tenant aldo
+```
+
+The CLI keeps writing JSON manifests to disk and dual-writes through the
+DB when `NEXOCLIP_DB_PATH` is set; the dashboard reads from the DB.
+
 ### Output layout (Phase 0)
 
 ```
@@ -153,11 +186,11 @@ Env vars override YAML, YAML overrides defaults (see CLAUDE.md).
 
 ---
 
-## Status of Phase 0 (today)
+## Status (today)
 
-Tasks 0-8 are complete. `pytest` runs 134 tests in ~1.3 s, `ruff` and `mypy --strict` are clean. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and downloaded a Whisper model on the first run (faster-whisper pulls the `medium` model, ~770 MB, on demand).
+Phase 0 + Phase 1 complete (Tasks 0-12). `pytest` runs 374 tests in ~18s, `ruff` and `mypy --strict` are clean across 72 source files. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and downloaded a Whisper model on the first run (faster-whisper pulls the `medium` model, ~770 MB, on demand).
 
-Phase 1 (multi-tenant core, FastAPI, local vision, Buffer publisher) is next.
+Phase 2 backlog: vision-LLM scoring (cheap-heuristic → premium-vision two-stage funnel), real face emotion classifier, native TikTok / YT Shorts publishers, MCP server, webhook subscribers, OAuth flows, scipy/librosa-driven audio classifiers. See [PHASE_2.md](PHASE_2.md).
 
 ---
 

@@ -2,15 +2,29 @@
 
 Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips.
 
-**Status:** Phase 1 complete. The Phase 0 CLI (`nexoclip process …`) still works; on top of that the project now ships:
+**Status:** Phase 2 complete. The Phase 0 CLI (`nexoclip process …`) still works; on top of that the project now ships:
 
 - Multi-tenant core: SQLite + tenancy contract, API tokens, dual-write through repos.
 - 4-way detector fan-in (voice + chat heat + audio energy + visual signals).
 - Local vision pipeline (PySceneDetect + OpenCV motion + Haar Cascade face presence).
-- Smart 9:16 crop + auto-thumbnail per clip.
-- LLM router with vision capability (`complete_multimodal` + frame cache).
-- FastAPI REST API + HTMX dashboard (`uvicorn nexoclip.api.app:create_app`).
-- Buffer publisher (drained by `nexoclip publish` or the API lifespan task).
+- **Vision-LLM rescore** — promotes real on-screen reactions over loud-but-empty
+  heuristic hits, gated by the budget governor. Opt-in via `--vision-rescore`.
+- **Vision-LLM smart crop, thumbnail, and face emotion** with quiet fallback to
+  the Phase 1 heuristic on any LLM error.
+- **Hard budget governor** — daily LLM USD ceiling, per-platform publish quotas,
+  rescore concurrency caps, low-confidence cooldown. Wraps every external-cost
+  path; no fast-path bypass.
+- **Confidence-breakdown panel** on the clip review page (motion / face presence /
+  speaking intensity / reaction confidence / rescore delta) so "why did the
+  system pick THIS clip?" stops being a guessing game.
+- LLM router with vision capability (`complete_multimodal`) + `FrameStore`
+  protocol around the in-memory frame cache (S3 backend pluggable in Phase 3).
+- FastAPI REST API + HTMX dashboard with cookie-auth + cost projection cards.
+- Multi-platform publishers behind one `Publisher` protocol: Buffer, **TikTok
+  Content Posting API**, and **YouTube Data API (Shorts)**, with shared OAuth
+  refresh + auth-failed lifecycle.
+- **Webhook dispatch** — HMAC-signed delivery of event rows to subscriber URLs,
+  type-filter wildcards, automatic disable after consecutive failures.
 
 ---
 
@@ -87,10 +101,10 @@ nexoclip variants    <clip_id>   --persona aldo_villanueva
 
 Every command supports `--json` (machine-readable output) and `--force` (ignore the on-disk cache).
 
-### Multi-tenant DB + dashboard (Phase 1)
+### Multi-tenant DB + dashboard (Phase 1+)
 
 ```bash
-# 1. Initialize SQLite + apply migrations
+# 1. Initialize SQLite + apply migrations (current head: schema v2)
 nexoclip db init
 
 # 2. Create a tenant + issue an API token (the raw token is shown ONCE)
@@ -98,19 +112,50 @@ nexoclip tenants add aldo "Aldo Villanueva"
 nexoclip tokens issue --tenant aldo --scope full
 # → tok_01H...
 
-# 3. Boot the API + HTMX dashboard
+# 3. Set the budget governor knobs before flipping vision-rescore on
+nexoclip tenants set-budget aldo --daily-usd 5.00 --rescore-cap 8
+
+# 4. Boot the API + HTMX dashboard
 uvicorn 'nexoclip.api.app:create_app' --factory \
     --host 0.0.0.0 --port 8000
 
-# 4. Open http://localhost:8000/dashboard/login and paste your tok_...
+# 5. Open http://localhost:8000/dashboard/login and paste your tok_...
 
-# 5. Drain pending publish_jobs manually (the API lifespan also kicks
+# 6. Drain pending publish_jobs manually (the API lifespan also kicks
 #    a drain every 60s when started in production mode):
 nexoclip publish --tenant aldo
+
+# 7. Drain pending webhook subscriptions (every 30s in lifespan mode):
+nexoclip webhooks send --tenant aldo
 ```
 
 The CLI keeps writing JSON manifests to disk and dual-writes through the
 DB when `NEXOCLIP_DB_PATH` is set; the dashboard reads from the DB.
+
+### Vision-LLM rescore (Phase 2 opt-in)
+
+```bash
+# Run the pipeline with vision-rescore on:
+nexoclip process "<vod_url>" \
+    --persona aldo_villanueva --tenant aldo \
+    --vision-rescore
+# → top-K candidates resampled by Claude vision, re-ranked by reaction
+#   confidence; rescore_score / rescore_reason / rescore_model persisted.
+# → if today's budget hits the ceiling, rescoring halts cleanly and
+#   earlier verdicts stay; emits llm.budget_exhausted.
+```
+
+Subscribe a webhook to receive HMAC-signed event deliveries:
+
+```bash
+curl -X POST http://localhost:8000/webhooks \
+     -H "Authorization: Bearer tok_..." \
+     -d '{"url": "https://my-handler.example/", "types": ["clip.published", "clip.approved"]}'
+# → response includes `secret` ONCE; subsequent reads omit it.
+# → subscriber receives:
+#     X-Nexoclip-Signature: hex(hmac_sha256(secret, body))
+#     X-Nexoclip-Timestamp: 2026-...
+```
 
 ### Output layout (Phase 0)
 
@@ -188,9 +233,13 @@ Env vars override YAML, YAML overrides defaults (see CLAUDE.md).
 
 ## Status (today)
 
-Phase 0 + Phase 1 complete (Tasks 0-12). `pytest` runs 374 tests in ~18s, `ruff` and `mypy --strict` are clean across 72 source files. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and downloaded a Whisper model on the first run (faster-whisper pulls the `medium` model, ~770 MB, on demand).
+Phase 0 + Phase 1 + Phase 2 complete. `pytest` runs 470+ tests in ~20s; `ruff` and `mypy --strict` are clean across 89+ source files. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and downloaded a Whisper model on the first run (faster-whisper pulls the `medium` model, ~770 MB, on demand).
 
-Phase 2 backlog: vision-LLM scoring (cheap-heuristic → premium-vision two-stage funnel), real face emotion classifier, native TikTok / YT Shorts publishers, MCP server, webhook subscribers, OAuth flows, scipy/librosa-driven audio classifiers. See [PHASE_2.md](PHASE_2.md).
+Phase 3 backlog: cloud migration (Aurora/Postgres + ECS workers + S3 frame
+storage + Cognito + Stripe billing), MCP server, SSE live progress, OCR text-
+changed detector, scipy/librosa audio classifier, persona-prompt iteration UI
+in-place editing, and — *only after* engagement metrics + brand safety guardrails
+land — auto-publish from learned scores. See [PHASE_3.md](PHASE_3.md).
 
 ---
 

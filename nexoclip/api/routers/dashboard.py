@@ -56,6 +56,34 @@ def _split_csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+async def _merged_personas(db: Database) -> list[object]:
+    """Return personas the user can pick from: DB rows union YAML defaults.
+
+    The pipeline only persists a persona to the DB during the variants step
+    (so a freshly-uploaded stream whose pipeline hasn't reached step 5 yet
+    will see an empty PersonasRepo, even though `config/personas.yaml`
+    defines them). Surface both sources here so the dashboard never shows
+    an empty dropdown when the YAML file has options. DB rows win on id
+    conflict — they reflect any in-dashboard edits.
+    """
+    from nexoclip.variants import load_personas
+
+    db_personas = await PersonasRepo(db).list_for_tenant()
+    seen_ids = {p.id for p in db_personas}
+    out: list[object] = list(db_personas)
+    try:
+        yaml_personas = load_personas()
+    except Exception:
+        yaml_personas = {}
+    for pid, p in yaml_personas.items():
+        if pid in seen_ids:
+            continue
+        # Pico's <select> just needs `.id`, `.name`, `.primary_language`. The
+        # YAML Persona has all three with the same names — pass-through is fine.
+        out.append(p)
+    return out
+
+
 # ---------- Login / logout (public; auth is via this form) ----------
 
 
@@ -111,7 +139,7 @@ async def streams_list(
     from nexoclip.ingest import is_ffmpeg_available
 
     streams = await StreamsRepo(db).list_for_tenant()
-    personas = await PersonasRepo(db).list_for_tenant()
+    personas = await _merged_personas(db)
     return templates.TemplateResponse(
         request,
         "streams_list.html",
@@ -312,7 +340,7 @@ async def stream_detail(
         raise HTTPException(status_code=404, detail="stream not found")
     candidates = await CandidatesRepo(db).list_for_stream(stream_id)
     clips = await ClipsRepo(db).list_for_stream(stream_id)
-    personas = await PersonasRepo(db).list_for_tenant()
+    personas = await _merged_personas(db)
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
@@ -346,11 +374,40 @@ async def streams_rerun(
     """
     from nexoclip.ingest import load_stream
     from nexoclip.settings import get_settings
+    from nexoclip.variants import load_personas
 
     output_dir = Path(get_settings().default_output_dir)
     stream_row = await StreamsRepo(db).get(stream_id)
     if stream_row is None:
         raise HTTPException(status_code=404, detail="stream not found")
+
+    # If the picked persona is YAML-only, upsert it into the DB now so the
+    # variants step's FK constraint to `personas` holds. (The pipeline does
+    # this itself at step 5, but we want the persona row to exist before
+    # then so the dashboard's persona pages see it consistently.)
+    db_personas = {p.id: p for p in await PersonasRepo(db).list_for_tenant()}
+    if persona_id not in db_personas:
+        try:
+            yaml_personas = load_personas()
+        except Exception:
+            yaml_personas = {}
+        if persona_id not in yaml_personas:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown persona {persona_id!r}; not in DB or "
+                    f"config/personas.yaml"
+                ),
+            )
+        p = yaml_personas[persona_id]
+        await PersonasRepo(db).upsert(
+            persona_id=p.id,
+            name=p.name,
+            primary_language=p.primary_language,
+            target_languages=p.target_languages,
+            voice_prompt=p.voice_prompt,
+            routing_tags=p.routing_tags,
+        )
     # Load the on-disk Stream model so PipelineKickoff can carry its full
     # metadata (the in-DB row is a different shape).
     try:

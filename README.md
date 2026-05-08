@@ -21,8 +21,8 @@ Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips.
   protocol around the in-memory frame cache (S3 backend pluggable in Phase 3).
 - FastAPI REST API + HTMX dashboard with cookie-auth + cost projection cards.
 - Multi-platform publishers behind one `Publisher` protocol: Buffer, **TikTok
-  Content Posting API**, and **YouTube Data API (Shorts)**, with shared OAuth
-  refresh + auth-failed lifecycle.
+  Content Posting API**, **YouTube Data API (Shorts)**, and **Instagram Reels
+  (Graph API)**, with shared OAuth refresh + auth-failed lifecycle.
 - **Webhook dispatch** — HMAC-signed delivery of event rows to subscriber URLs,
   type-filter wildcards, automatic disable after consecutive failures.
 

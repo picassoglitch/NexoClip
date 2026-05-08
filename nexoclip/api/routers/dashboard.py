@@ -237,7 +237,7 @@ async def calibration_view(
     from nexoclip.metrics import compute_calibration
 
     reports = []
-    for platform in ("youtube", "tiktok", "buffer"):
+    for platform in ("youtube", "tiktok", "instagram", "buffer"):
         reports.append(await compute_calibration(db, platform=platform))
     return templates.TemplateResponse(
         request,

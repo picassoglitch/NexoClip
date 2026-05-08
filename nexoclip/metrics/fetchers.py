@@ -179,6 +179,82 @@ async def fetch_tiktok_metric(
 
 
 # ---------------------------------------------------------------------------
+# Instagram
+# ---------------------------------------------------------------------------
+
+
+_IG_GRAPH_BASE = "https://graph.facebook.com/v22.0"
+_IG_INSIGHTS_METRICS = "plays,likes,comments,shares,reach"
+
+
+async def fetch_instagram_metric(
+    job: PublishJob,
+    account: ConnectedAccount,
+    http: httpx.AsyncClient,
+    access_token: str,
+) -> NormalizedMetric:
+    """Pull stats for one IG Reels post via the Graph Insights API.
+
+    `external_id` on the publish_job is the IG media id - that's what
+    `nexoclip.publish.instagram.InstagramClient.publish` records.
+    Sandbox apps return 200 with an empty `data` array; we record the
+    audit row regardless.
+    """
+    if not job.external_id:
+        return NormalizedMetric(raw_metadata={"skipped": "no external_id"})
+
+    resp = await http.get(
+        f"{_IG_GRAPH_BASE}/{job.external_id}/insights",
+        params={
+            "metric": _IG_INSIGHTS_METRICS,
+            "access_token": access_token,
+        },
+    )
+    if resp.status_code >= 400:
+        _log.warning(
+            "instagram_stats_http_error",
+            media_id=job.external_id,
+            status=resp.status_code,
+            body=resp.text[:200],
+        )
+        return NormalizedMetric(
+            raw_metadata={
+                "error": f"instagram {resp.status_code}",
+                "body": resp.text[:500],
+            }
+        )
+
+    body = resp.json()
+    items = body.get("data") if isinstance(body, dict) else None
+    if not items or not isinstance(items, list):
+        return NormalizedMetric(raw_metadata={"empty_response": True})
+
+    # Insights API returns one row per metric: each row has `name` + `values`
+    # (a list of {value, end_time}). We take the latest value per metric.
+    pulled: dict[str, int | None] = {}
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        values = row.get("values")
+        if not isinstance(name, str) or not isinstance(values, list) or not values:
+            continue
+        latest = values[-1]
+        if isinstance(latest, dict):
+            pulled[name] = _to_int(latest.get("value"))
+
+    return NormalizedMetric(
+        views=pulled.get("plays"),
+        likes=pulled.get("likes"),
+        comments=pulled.get("comments"),
+        shares=pulled.get("shares"),
+        retention_pct=None,  # IG doesn't expose retention on this scope
+        ctr=None,
+        raw_metadata={"insights": items},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Buffer
 # ---------------------------------------------------------------------------
 

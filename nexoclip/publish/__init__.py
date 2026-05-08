@@ -13,6 +13,7 @@ Phase 2 adds native TikTok / YT Shorts publishers behind the same
 """
 
 from .buffer import BufferClient, BufferError
+from .instagram import InstagramClient, InstagramError
 from .oauth import RefreshedToken, refresh_if_expiring
 from .protocol import PublisherError
 from .service import PublishOutcome, run_publish_jobs
@@ -22,6 +23,8 @@ from .youtube import YouTubeClient, YouTubeError
 __all__ = [
     "BufferClient",
     "BufferError",
+    "InstagramClient",
+    "InstagramError",
     "PublishOutcome",
     "PublisherError",
     "RefreshedToken",

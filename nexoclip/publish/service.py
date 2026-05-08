@@ -149,10 +149,24 @@ def _default_youtube_publisher(
     return YouTubeClient(access_token=token, client=http)
 
 
+def _default_instagram_publisher(
+    account: ConnectedAccount, http: httpx.AsyncClient
+) -> Any:
+    from .instagram import InstagramClient
+
+    token = _access_token_for(account)
+    if not token:
+        raise PublisherError(
+            f"instagram account {account.id} has no access_token", transient=False
+        )
+    return InstagramClient(access_token=token, client=http)
+
+
 _DEFAULT_PUBLISHERS: dict[str, PublisherFactory] = {
     "buffer": _default_buffer_publisher,
     "tiktok": _default_tiktok_publisher,
     "youtube": _default_youtube_publisher,
+    "instagram": _default_instagram_publisher,
 }
 
 
@@ -369,7 +383,8 @@ async def _refresh_and_index_accounts(
     accounts: list[ConnectedAccount],
     db: Database,
 ) -> dict[str, ConnectedAccount]:
-    """Refresh each TikTok / YT account whose token is near expiry; index by id."""
+    """Refresh each TikTok / YT / IG account whose token is near expiry; index by id."""
+    from .instagram import refresh_instagram_token
     from .oauth import refresh_if_expiring
     from .tiktok import refresh_tiktok_token
     from .youtube import refresh_youtube_token
@@ -408,6 +423,22 @@ async def _refresh_and_index_accounts(
                 )
             except Exception as e:
                 _log.warning("youtube_refresh_failed", account_id=acct.id, error=str(e))
+        elif acct.platform == "instagram":
+            try:
+                acct = await refresh_if_expiring(
+                    acct,
+                    db=db,
+                    http=http,
+                    refresh_impl=lambda rt, http_, acct=acct: refresh_instagram_token(  # type: ignore[misc]
+                        rt, http_,
+                        app_id=str((acct.oauth_blob or {}).get("app_id", "")),
+                        app_secret=str((acct.oauth_blob or {}).get("app_secret", "")),
+                    ),
+                )
+            except Exception as e:
+                _log.warning(
+                    "instagram_refresh_failed", account_id=acct.id, error=str(e)
+                )
         out[acct.id] = acct
     return out
 

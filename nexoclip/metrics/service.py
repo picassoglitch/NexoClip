@@ -37,6 +37,7 @@ from nexoclip.tenancy import bound_tenant
 from .fetchers import (
     FetcherProtocol,
     fetch_buffer_metric,
+    fetch_instagram_metric,
     fetch_tiktok_metric,
     fetch_youtube_metric,
 )
@@ -46,6 +47,7 @@ _log = structlog.get_logger(__name__)
 _DEFAULT_FETCHERS: dict[str, FetcherProtocol] = {
     "youtube": fetch_youtube_metric,
     "tiktok": fetch_tiktok_metric,
+    "instagram": fetch_instagram_metric,
     "buffer": fetch_buffer_metric,
 }
 

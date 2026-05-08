@@ -17,6 +17,7 @@ from .fetchers import (
     FetcherProtocol,
     NormalizedMetric,
     fetch_buffer_metric,
+    fetch_instagram_metric,
     fetch_tiktok_metric,
     fetch_youtube_metric,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "NormalizedMetric",
     "compute_calibration",
     "fetch_buffer_metric",
+    "fetch_instagram_metric",
     "fetch_tiktok_metric",
     "fetch_youtube_metric",
     "run_metrics_ingest",

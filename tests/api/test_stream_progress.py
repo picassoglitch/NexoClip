@@ -166,6 +166,95 @@ async def test_progress_failed_step_surfaces_error(
     assert 'hx-trigger="every 3s"' not in body
 
 
+async def test_rerun_kicks_off_pipeline_for_existing_stream(
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """POST /dashboard/streams/{id}/rerun reschedules the pipeline runner
+    using the on-disk stream.json — useful when the original background
+    task died with a server restart."""
+    import httpx as _httpx
+    import pytest as _pytest
+
+    from nexoclip.api import PipelineKickoff, create_app
+    from nexoclip.ingest.models import Stream
+
+    _ = _pytest  # silence unused-import warning
+
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id=tenant_id, stream_id="str_rr1")
+
+    # Persist a stream.json on disk for load_stream() to read.
+    stream_dir = tmp_path / "out" / "str_rr1"
+    stream_dir.mkdir(parents=True)
+    Stream(
+        id="str_rr1",
+        tenant_id=tenant_id,
+        vod_url="upload://x.mp4",
+        platform="upload",
+        title="x",
+        duration_s=120.0,
+        source_video_path=stream_dir / "source" / "video.mp4",
+        source_audio_path=stream_dir / "source" / "audio.wav",
+    ).model_dump_json(indent=2)
+    (stream_dir / "stream.json").write_text(
+        Stream(
+            id="str_rr1",
+            tenant_id=tenant_id,
+            vod_url="upload://x.mp4",
+            platform="upload",
+            title="x",
+            duration_s=120.0,
+            source_video_path=stream_dir / "source" / "video.mp4",
+            source_audio_path=stream_dir / "source" / "audio.wav",
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "nexoclip.settings.get_settings",
+        lambda: type("S", (), {"default_output_dir": str(tmp_path / "out")})(),
+    )
+
+    captured: list[PipelineKickoff] = []
+
+    async def fake_runner(kickoff: PipelineKickoff) -> None:
+        captured.append(kickoff)
+
+    # Add a persona — the rerun form requires one.
+    from nexoclip.db import PersonasRepo
+    from nexoclip.tenancy import bound_tenant as _bound
+
+    with _bound(tenant_id):
+        await PersonasRepo(db).create(
+            persona_id="p1",
+            name="P",
+            primary_language="es",
+            target_languages=["es"],
+            voice_prompt="v",
+        )
+
+    app = create_app(db=db, pipeline_runner=fake_runner)
+    transport = _httpx.ASGITransport(app=app)
+    async with _httpx.AsyncClient(
+        transport=transport, base_url="http://api.test"
+    ) as c:
+        await c.post(
+            "/dashboard/login", data={"token": tenants["alice"]["token"]}
+        )
+        r = await c.post(
+            "/dashboard/streams/str_rr1/rerun",
+            data={"persona_id": "p1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dashboard/streams/str_rr1"
+    assert len(captured) == 1
+    assert captured[0].stream.id == "str_rr1"
+    assert captured[0].persona_id == "p1"
+
+
 async def test_progress_isolates_events_per_stream(
     client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
 ) -> None:

@@ -312,11 +312,72 @@ async def stream_detail(
         raise HTTPException(status_code=404, detail="stream not found")
     candidates = await CandidatesRepo(db).list_for_stream(stream_id)
     clips = await ClipsRepo(db).list_for_stream(stream_id)
+    personas = await PersonasRepo(db).list_for_tenant()
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
-        {"stream": stream, "candidates": candidates, "clips": clips},
+        {
+            "stream": stream,
+            "candidates": candidates,
+            "clips": clips,
+            "personas": personas,
+        },
     )
+
+
+@router.post(
+    "/streams/{stream_id}/rerun",
+    dependencies=[Depends(require_full_scope)],
+)
+async def streams_rerun(
+    request: Request,
+    stream_id: str,
+    background_tasks: BackgroundTasks,
+    persona_id: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Re-trigger the pipeline for an already-ingested stream.
+
+    Useful when (a) the original background task died with a server restart,
+    (b) the user uploaded before the step-event tracking landed, or (c) they
+    just want to rebuild clips after editing config. Each pipeline step is
+    idempotent on its own output, so this is safe to call repeatedly.
+    """
+    from nexoclip.ingest import load_stream
+    from nexoclip.settings import get_settings
+
+    output_dir = Path(get_settings().default_output_dir)
+    stream_row = await StreamsRepo(db).get(stream_id)
+    if stream_row is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    # Load the on-disk Stream model so PipelineKickoff can carry its full
+    # metadata (the in-DB row is a different shape).
+    try:
+        stream = load_stream(output_dir / stream_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Stream {stream_id!r} has no on-disk artifacts at "
+                f"{output_dir / stream_id} — can't resume. Re-upload the file."
+            ),
+        ) from e
+
+    runner = request.app.state.pipeline_runner
+    background_tasks.add_task(
+        runner,
+        PipelineKickoff(
+            tenant_id=tenant_id,
+            stream=stream,
+            persona_id=persona_id,
+            output_dir=output_dir,
+        ),
+    )
+    await EventsRepo(db).emit(
+        type="stream.rerun_requested", payload={"stream_id": stream_id}
+    )
+    return RedirectResponse(url=f"/dashboard/streams/{stream_id}", status_code=303)
 
 
 # ---------- Clips ----------

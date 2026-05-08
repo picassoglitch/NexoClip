@@ -70,14 +70,15 @@ def test_pipeline_emits_canonical_events(
     finally:
         asyncio.run(db.close())
 
-    types = [e.type for e in events]
-    # 1 stream + 1 clip + 1 stream-processed = 3 events. Order is reverse
-    # chronological from `list_for_tenant`.
-    assert sorted(types) == sorted(
+    # Canonical lifecycle events: 1 stream + 1 clip + 1 stream-processed.
+    # Filter out the auxiliary `pipeline.step.*` rows that the dashboard's
+    # progress poller reads — those are additive and tested elsewhere.
+    canonical = [e.type for e in events if not e.type.startswith("pipeline.step.")]
+    assert sorted(canonical) == sorted(
         [STREAM_CREATED, CLIP_READY_FOR_REVIEW, STREAM_PROCESSED]
     )
 
-    by_type = {e.type: e for e in events}
+    by_type = {e.type: e for e in events if not e.type.startswith("pipeline.step.")}
 
     assert by_type[STREAM_CREATED].payload["stream_id"] == manifest.stream.id
     assert by_type[STREAM_CREATED].payload["platform"] == "kick"

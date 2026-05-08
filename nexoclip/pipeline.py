@@ -74,16 +74,24 @@ _log = get_logger("nexoclip.pipeline")
 
 
 @contextmanager
-def _step(name: str, **fields: Any) -> Iterator[None]:
+def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[None]:
     """Time + log one pipeline step. Re-raises typed errors with the bound context.
 
     Each step is wrapped to:
         - emit `step.<name>.start` / `step.<name>.done` events with `duration_s`
         - on `NexoClipError`, append the bound contextvars to the message so
           the user sees the stream_id when the CLI prints the error
+
+    When `db` is provided, also writes `pipeline.step.start` / `.done` /
+    `.failed` rows to the events table so the dashboard can poll and show
+    live progress without scraping logs. The DB write is synchronous via
+    sqlite3 to keep the context manager sync — the dashboard doesn't need
+    millisecond freshness, just "this step is running" / "this step finished".
     """
     _log.info(f"step.{name}.start", **fields)
     t0 = time.perf_counter()
+    stream_id = structlog.contextvars.get_contextvars().get("stream_id")
+    _record_step_event(db, "pipeline.step.start", name, stream_id, fields)
     try:
         yield
     except NexoClipError as e:
@@ -95,6 +103,13 @@ def _step(name: str, **fields: Any) -> Iterator[None]:
             error_msg=str(e),
             **fields,
         )
+        _record_step_event(
+            db,
+            "pipeline.step.failed",
+            name,
+            stream_id,
+            {**fields, "duration_s": duration_s, "error": str(e)},
+        )
         # Append every contextvar (stream_id, tenant_id, persona_id) into the
         # error message so the CLI / log readers see it without inspection.
         ctx = structlog.contextvars.get_contextvars()
@@ -104,6 +119,54 @@ def _step(name: str, **fields: Any) -> Iterator[None]:
         raise
     duration_s = time.perf_counter() - t0
     _log.info(f"step.{name}.done", duration_s=duration_s, **fields)
+    _record_step_event(
+        db,
+        "pipeline.step.done",
+        name,
+        stream_id,
+        {**fields, "duration_s": duration_s},
+    )
+
+
+def _record_step_event(
+    db: Database | None,
+    event_type: str,
+    step_name: str,
+    stream_id: str | None,
+    fields: dict[str, Any],
+) -> None:
+    """Best-effort sync write to the events table.
+
+    Uses raw sqlite3 because the surrounding `_step` is a sync context
+    manager and the pipeline runs the same coro. We don't want a missing
+    DB or transient disk error to bring the whole step down — the dashboard
+    progress view degrades gracefully when an event row is missing.
+    """
+    if db is None:
+        return
+    tenant_id = structlog.contextvars.get_contextvars().get("tenant_id")
+    if not tenant_id:
+        return
+    try:
+        import sqlite3
+
+        payload = {"step": step_name, "stream_id": stream_id, **fields}
+        # Strip non-JSON-serializable values defensively.
+        clean = {k: v for k, v in payload.items() if isinstance(v, str | int | float | bool | type(None) | list | dict)}
+        with sqlite3.connect(db.path) as conn:
+            conn.execute(
+                "INSERT INTO events (id, tenant_id, type, payload_json, ts) VALUES (?, ?, ?, ?, ?)",
+                (
+                    f"evt_{step_name}_{int(time.time() * 1000)}",
+                    tenant_id,
+                    event_type,
+                    json.dumps(clean),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+    except Exception as e:  # noqa: BLE001 - intentional best-effort
+        _log.debug("pipeline.step.event_write_failed", error=str(e))
 
 
 class TranscriptSummary(BaseModel):
@@ -278,7 +341,7 @@ async def _run_pipeline(
     db: Database | None,
 ) -> StreamManifest:
     # 1) ingest
-    with _step("ingest", vod_url=vod_url):
+    with _step("ingest", db=db, vod_url=vod_url):
         stream = await ingest_vod(
             tenant_id=tenant_id,
             vod_url=vod_url,
@@ -307,7 +370,7 @@ async def _run_pipeline(
     # 2a) analyze video — local CV pipeline. Skip silently if the video
     # file isn't actually decodable (test stubs, corrupted downloads).
     # The signal lands in <stream_dir>/visual_signals.json regardless of DB.
-    with _step("analyze_video"):
+    with _step("analyze_video", db=db):
         try:
             await _analyze_video(
                 tenant_id=tenant_id,
@@ -321,7 +384,7 @@ async def _run_pipeline(
 
     # 2) transcribe
     whisper_lang = language or "es"
-    with _step("transcribe", model=settings.whisper_model, device=settings.whisper_device):
+    with _step("transcribe", db=db, model=settings.whisper_model, device=settings.whisper_device):
         transcript = await transcribe(
             tenant_id=tenant_id,
             stream=stream,
@@ -335,7 +398,7 @@ async def _run_pipeline(
             await TranscriptsRepo(db).upsert(transcript_to_row(transcript))
 
     # 3) detect (also saves candidates.json)
-    with _step("detect"):
+    with _step("detect", db=db):
         chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=tenant_id)
         visual_track = load_visual_signals(stream_dir)
         candidates = detect_candidates(
@@ -358,7 +421,7 @@ async def _run_pipeline(
     _log.info("detect.candidates", count=len(candidates))
 
     # 4) cut clips
-    with _step("cut", candidate_count=len(candidates)):
+    with _step("cut", db=db, candidate_count=len(candidates)):
         clips = await cut_clips(
             tenant_id=tenant_id,
             stream=stream,
@@ -387,7 +450,7 @@ async def _run_pipeline(
             routing_tags=persona.routing_tags,
         )
     clip_entries: list[ClipEntry] = []
-    with _step("variants", clip_count=len(clips), n=n_variants):
+    with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
             variants = await generate_variants(
                 tenant_id=tenant_id,

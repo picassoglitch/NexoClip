@@ -222,6 +222,84 @@ async def streams_upload(
     return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
 
 
+@router.get("/streams/{stream_id}/progress", response_class=HTMLResponse)
+async def stream_progress(
+    request: Request,
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """HTMX poll target — renders the live pipeline-progress card.
+
+    Reads `pipeline.step.{start,done,failed}` events for this stream and
+    surfaces what's running right now plus what's already finished. The
+    parent stream-detail page polls this every 3s while the pipeline is
+    in flight.
+    """
+    from nexoclip.db import EventsRepo
+
+    stream = await StreamsRepo(db).get(stream_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+
+    candidates = await CandidatesRepo(db).list_for_stream(stream_id)
+    clips = await ClipsRepo(db).list_for_stream(stream_id)
+
+    # Pull every step event we've written for any stream in this tenant
+    # (the events table is per-tenant; we filter by stream_id in the
+    # payload). The volume is small — six steps × N streams.
+    all_events = await EventsRepo(db).list_for_tenant(limit=500)
+    step_events = [
+        e
+        for e in all_events
+        if e.type.startswith("pipeline.step.")
+        and e.payload.get("stream_id") == stream_id
+    ]
+
+    # Roll up by step name -> latest known status. Step order is fixed.
+    step_order = ["ingest", "analyze_video", "transcribe", "detect", "cut", "variants"]
+    step_state: dict[str, dict[str, object]] = {
+        name: {"name": name, "status": "pending", "duration_s": None, "error": None}
+        for name in step_order
+    }
+    # Walk events oldest -> newest so the latest status wins.
+    for ev in sorted(step_events, key=lambda e: e.ts):
+        step_name = str(ev.payload.get("step", ""))
+        if step_name not in step_state:
+            continue
+        if ev.type == "pipeline.step.start":
+            step_state[step_name]["status"] = "running"
+            step_state[step_name]["started_at"] = ev.ts
+        elif ev.type == "pipeline.step.done":
+            step_state[step_name]["status"] = "done"
+            step_state[step_name]["duration_s"] = ev.payload.get("duration_s")
+        elif ev.type == "pipeline.step.failed":
+            step_state[step_name]["status"] = "failed"
+            step_state[step_name]["error"] = ev.payload.get("error")
+            step_state[step_name]["duration_s"] = ev.payload.get("duration_s")
+
+    steps = [step_state[n] for n in step_order]
+    is_running = any(s["status"] == "running" for s in steps) or all(
+        s["status"] == "pending" for s in steps
+    )
+    is_done = all(s["status"] == "done" for s in steps)
+    has_failed = any(s["status"] == "failed" for s in steps)
+
+    return templates.TemplateResponse(
+        request,
+        "_stream_progress.html",
+        {
+            "stream": stream,
+            "steps": steps,
+            "is_running": is_running,
+            "is_done": is_done,
+            "has_failed": has_failed,
+            "candidate_count": len(candidates),
+            "clip_count": len(clips),
+        },
+    )
+
+
 @router.get("/streams/{stream_id}", response_class=HTMLResponse)
 async def stream_detail(
     request: Request,

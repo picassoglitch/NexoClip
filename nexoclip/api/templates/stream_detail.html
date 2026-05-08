@@ -9,6 +9,18 @@
   </p>
 </hgroup>
 
+{# Live pipeline-progress card. The fragment replaces this div on first
+   load and again every 3s until the pipeline finishes. #}
+<div id="stream-progress"
+     hx-get="/dashboard/streams/{{ stream.id }}/progress"
+     hx-trigger="load"
+     hx-swap="outerHTML">
+  <article>
+    <header><strong>Pipeline status</strong></header>
+    <p><em>Loading progress…</em></p>
+  </article>
+</div>
+
 <article>
   <header><strong>Run summary</strong></header>
   <ul>

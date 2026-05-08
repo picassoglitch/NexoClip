@@ -1,0 +1,72 @@
+{# Live pipeline-progress card. Loaded via HTMX from
+   GET /dashboard/streams/{id}/progress and polled every 3s while the
+   pipeline is running. The outer #stream-progress div on the parent page
+   gets swapped in place with this fragment. #}
+<div id="stream-progress"
+     {% if is_running and not is_done and not has_failed %}
+     hx-get="/dashboard/streams/{{ stream.id }}/progress"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML"
+     {% endif %}>
+  <article{% if has_failed %} style="border-left: 4px solid #b00;"{% endif %}>
+    <header>
+      <strong>
+        {% if is_done %}
+          Pipeline complete
+        {% elif has_failed %}
+          Pipeline failed
+        {% else %}
+          Pipeline running
+          <span class="pulse-dot" aria-hidden="true">●</span>
+        {% endif %}
+      </strong>
+      <small style="float: right;">
+        {{ candidate_count }} candidate{{ "s" if candidate_count != 1 else "" }} &middot;
+        {{ clip_count }} clip{{ "s" if clip_count != 1 else "" }}
+      </small>
+    </header>
+
+    <ol style="list-style: none; padding-left: 0; margin: 0;">
+      {% for s in steps %}
+      <li style="padding: 0.35rem 0; border-bottom: 1px solid var(--pico-muted-border-color); display: flex; align-items: center; gap: 0.6rem;">
+        {% if s.status == "done" %}
+          <span style="color: #0a8043; font-weight: bold; min-width: 1.2rem;">&check;</span>
+          <span>{{ s.name }}</span>
+          {% if s.duration_s %}
+          <small style="color: var(--pico-muted-color); margin-left: auto;">
+            {% if s.duration_s < 60 %}{{ "%.1f"|format(s.duration_s) }}s
+            {% else %}{{ "%.1f"|format(s.duration_s / 60.0) }}m{% endif %}
+          </small>
+          {% endif %}
+        {% elif s.status == "running" %}
+          <span class="pulse-dot" aria-hidden="true" style="color: #1e6fd9; min-width: 1.2rem;">●</span>
+          <span><strong>{{ s.name }}</strong> <em>(running…)</em></span>
+        {% elif s.status == "failed" %}
+          <span style="color: #b00; font-weight: bold; min-width: 1.2rem;">&times;</span>
+          <span><strong>{{ s.name }}</strong> &mdash; {{ s.error or "failed" }}</span>
+        {% else %}
+          <span style="color: var(--pico-muted-color); min-width: 1.2rem;">○</span>
+          <span style="color: var(--pico-muted-color);">{{ s.name }}</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    {% if is_running and not is_done %}
+    <small style="display: block; margin-top: 0.5rem; color: var(--pico-muted-color);">
+      Auto-refreshes every 3 seconds. Whisper transcription is the slow step on a long VOD &mdash; expect minutes for hour-long videos.
+    </small>
+    {% endif %}
+  </article>
+
+  <style>
+    .pulse-dot {
+      animation: pulse 1.4s ease-in-out infinite;
+      display: inline-block;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</div>

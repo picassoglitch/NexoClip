@@ -63,7 +63,13 @@ async def _boot() -> None:
 
 def main() -> None:
     _resolve_python_check()
-    asyncio.run(_boot())
+    try:
+        asyncio.run(_boot())
+    except KeyboardInterrupt:
+        # Ctrl+C is the documented way to stop the dev server; exit
+        # cleanly so the user doesn't see a scary-looking traceback.
+        print("\nNexoClip dashboard stopped.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

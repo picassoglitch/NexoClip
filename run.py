@@ -62,6 +62,49 @@ def _ensure_ffmpeg_on_path() -> None:
                 return
 
 
+def _ensure_cuda_libs_on_path() -> None:
+    """Best-effort: add bundled nvidia-* pip packages' DLL dirs to the search path.
+
+    faster-whisper / CTranslate2 dynamically link cublas64_12.dll and the
+    cuDNN libraries. The CUDA Toolkit installer adds them to PATH, but most
+    users just `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` — which
+    drops the DLLs at .venv/Lib/site-packages/nvidia/*/bin/* but DOESN'T
+    register them with Windows' DLL loader. Result: a confusing
+    'Library cublas64_12.dll is not found or cannot be loaded' the first
+    time transcribe runs, even though `pip list` shows the package.
+
+    Walk site-packages/nvidia/<lib>/bin once at startup and register each
+    via os.add_dll_directory + PATH so faster-whisper's load-time link
+    resolves cleanly. No-op on Linux / macOS — they use rpath / DYLD.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import sysconfig
+
+        site_packages = Path(sysconfig.get_paths()["purelib"])
+    except Exception:
+        return
+    nvidia_root = site_packages / "nvidia"
+    if not nvidia_root.exists():
+        return
+    added: list[str] = []
+    for lib_dir in nvidia_root.iterdir():
+        bin_dir = lib_dir / "bin"
+        if not bin_dir.is_dir():
+            continue
+        try:
+            os.add_dll_directory(str(bin_dir))
+        except (OSError, AttributeError):
+            pass
+        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        added.append(lib_dir.name)
+    if added:
+        print(
+            f"Registered CUDA pip libs for the DLL loader: {', '.join(sorted(added))}"
+        )
+
+
 def _resolve_python_check() -> None:
     """Hard-stop if you launched via system Python 3.14 instead of the venv.
 
@@ -98,6 +141,7 @@ async def _boot() -> None:
 def main() -> None:
     _resolve_python_check()
     _ensure_ffmpeg_on_path()
+    _ensure_cuda_libs_on_path()
     try:
         asyncio.run(_boot())
     except KeyboardInterrupt:

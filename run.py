@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -26,6 +27,39 @@ import uvicorn
 
 from nexoclip.api import create_app
 from nexoclip.db import Database, apply_migrations
+
+
+def _ensure_ffmpeg_on_path() -> None:
+    """Best-effort: if ffmpeg isn't on PATH but winget installed it under
+    %LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg*, prepend that
+    bin dir to PATH for this process.
+
+    The winget ffmpeg packages install the binary under a versioned dir
+    inside the package — they DON'T add it to the user PATH automatically,
+    which leaves the user with `ffmpeg : not recognized` after a successful
+    install. Fix that here so `python run.py` works on a fresh box without
+    a PATH-editing step.
+    """
+    if shutil.which("ffmpeg"):
+        return
+    if os.name != "nt":
+        return
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if not local_appdata:
+        return
+    winget_packages = Path(local_appdata) / "Microsoft" / "WinGet" / "Packages"
+    if not winget_packages.exists():
+        return
+    # Both Gyan.FFmpeg and Gyan.FFmpeg.Essentials nest a versioned
+    # ffmpeg-*-build/bin/ffmpeg.exe inside their package dir.
+    for pkg in winget_packages.glob("Gyan.FFmpeg*"):
+        for bin_dir in pkg.glob("ffmpeg-*/bin"):
+            if (bin_dir / "ffmpeg.exe").exists():
+                os.environ["PATH"] = (
+                    f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+                )
+                print(f"Located ffmpeg at {bin_dir} (added to PATH for this run)")
+                return
 
 
 def _resolve_python_check() -> None:
@@ -63,6 +97,7 @@ async def _boot() -> None:
 
 def main() -> None:
     _resolve_python_check()
+    _ensure_ffmpeg_on_path()
     try:
         asyncio.run(_boot())
     except KeyboardInterrupt:

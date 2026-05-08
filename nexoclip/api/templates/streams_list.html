@@ -25,7 +25,7 @@
 
 <article>
   <header><strong>Upload a video</strong> <small>— easiest path, no auth required</small></header>
-  <form action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
+  <form id="upload-form" action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
     <label>
       Video file
       <input type="file" name="file" accept="video/*,.mp4,.mkv,.webm,.mov" required>
@@ -38,7 +38,7 @@
         {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
       </select>
     </label>
-    <button type="submit" {% if not personas or not ffmpeg_ok %}disabled{% endif %}>Upload &amp; process</button>
+    <button id="upload-submit" type="submit" {% if not personas or not ffmpeg_ok %}disabled{% endif %}>Upload &amp; process</button>
     {% if not personas %}
     <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
     {% endif %}
@@ -47,6 +47,111 @@
     {% endif %}
   </form>
 </article>
+
+<dialog id="upload-progress-dialog">
+  <article style="min-width: 380px;">
+    <header><strong id="upload-headline">Uploading video</strong></header>
+    <progress id="upload-bar" value="0" max="100" style="width: 100%;"></progress>
+    <p id="upload-status" style="margin: 0.5rem 0;">Preparing&hellip;</p>
+    <small id="upload-hint">Don't close this tab. Large videos can take a while.</small>
+    <p id="upload-error" style="display:none; color: #b00; margin-top: 0.75rem;"></p>
+    <footer id="upload-footer" style="display:none; margin-top: 0.75rem;">
+      <button id="upload-close" type="button">Close</button>
+    </footer>
+  </article>
+</dialog>
+
+<script>
+(function () {
+  const form = document.getElementById("upload-form");
+  if (!form) return;
+  const dialog = document.getElementById("upload-progress-dialog");
+  const bar = document.getElementById("upload-bar");
+  const status = document.getElementById("upload-status");
+  const headline = document.getElementById("upload-headline");
+  const hint = document.getElementById("upload-hint");
+  const errorBox = document.getElementById("upload-error");
+  const footer = document.getElementById("upload-footer");
+  const closeBtn = document.getElementById("upload-close");
+
+  function fmt(b) {
+    if (!isFinite(b)) return "?";
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + " MB";
+    return (b / 1073741824).toFixed(2) + " GB";
+  }
+
+  closeBtn.addEventListener("click", function () {
+    dialog.close();
+  });
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    headline.textContent = "Uploading video";
+    status.textContent = "Preparing…";
+    bar.value = 0;
+    bar.max = 100;
+    bar.removeAttribute("style");
+    bar.style.width = "100%";
+    errorBox.style.display = "none";
+    errorBox.textContent = "";
+    footer.style.display = "none";
+    hint.style.display = "";
+
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", form.action);
+    xhr.upload.addEventListener("progress", function (ev) {
+      if (ev.lengthComputable) {
+        const pct = Math.round((ev.loaded / ev.total) * 100);
+        bar.value = pct;
+        status.textContent =
+          "Uploading… " + pct + "% (" + fmt(ev.loaded) + " / " + fmt(ev.total) + ")";
+      } else {
+        status.textContent = "Uploading… " + fmt(ev.loaded);
+      }
+    });
+    xhr.upload.addEventListener("loadend", function () {
+      // Bytes are on the server; now ffmpeg + DB write run in the handler.
+      bar.removeAttribute("value");
+      status.textContent = "Upload complete. Extracting audio + queuing pipeline…";
+    });
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 400) {
+        headline.textContent = "Pipeline kicked off";
+        status.textContent = "Redirecting to the stream view…";
+        // Server returned 303 -> /dashboard/streams/{id}; XHR followed it,
+        // so xhr.responseURL is the final stream-detail URL.
+        window.location.href = xhr.responseURL || "/dashboard/streams";
+      } else {
+        let detail = xhr.status + " " + xhr.statusText;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body && body.detail) detail = body.detail;
+        } catch (_) {}
+        headline.textContent = "Upload failed";
+        status.textContent = "";
+        hint.style.display = "none";
+        errorBox.textContent = detail;
+        errorBox.style.display = "";
+        footer.style.display = "";
+      }
+    };
+    xhr.onerror = function () {
+      headline.textContent = "Upload failed";
+      status.textContent = "";
+      hint.style.display = "none";
+      errorBox.textContent = "Network error. Check that the dashboard is still running.";
+      errorBox.style.display = "";
+      footer.style.display = "";
+    };
+    xhr.send(new FormData(form));
+  });
+})();
+</script>
 
 <details>
   <summary><strong>Advanced: process from a VOD URL</strong></summary>

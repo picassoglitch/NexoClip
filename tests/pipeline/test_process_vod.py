@@ -37,6 +37,7 @@ def _stub_ingest(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
         vod_url: str,
         target_path: Path,
         cookies_from_browser: str | None = None,
+        cookies_file: str | None = None,
         platform: str = "unknown",
     ) -> dict[str, Any]:
         download_calls.append(target_path)

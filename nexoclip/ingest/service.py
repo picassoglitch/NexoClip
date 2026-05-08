@@ -51,6 +51,7 @@ async def ingest_vod(
     force: bool = False,
     chat_replay_source: Path | None = None,
     cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
 ) -> Stream:
     """Download a VOD and extract its audio. Returns a Stream.
 
@@ -66,7 +67,12 @@ async def ingest_vod(
         cookies_from_browser: Pass cookies from a logged-in browser session
             ("chrome" / "edge" / "firefox" / "brave" / "chromium") through to
             yt-dlp. Required for Kick. Falls back to `Settings.cookies_from_browser`
-            when omitted.
+            when omitted. Conflicts with `cookies_file`; if both are set,
+            `cookies_file` wins.
+        cookies_file: Alternative to `cookies_from_browser` — absolute path
+            to a Netscape-format cookies.txt file (exported via a browser
+            extension). Browser can stay open. Falls back to
+            `Settings.cookies_file` when omitted.
     """
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -98,19 +104,25 @@ async def ingest_vod(
 
     platform = detect_platform(vod_url)
 
-    # Resolve the cookies-from-browser source: explicit kwarg wins; otherwise
-    # fall back to NEXOCLIP_COOKIES_FROM_BROWSER from Settings. This is what
-    # makes Kick work for unauthenticated yt-dlp.
-    if cookies_from_browser is None:
+    # Resolve cookie auth: explicit kwargs win; otherwise fall back to
+    # Settings (env vars / .env). cookies_file takes precedence over
+    # cookies_from_browser when both are set, since the file path is the
+    # workaround for the "Chrome holds the cookie DB lock" failure mode.
+    if cookies_file is None or cookies_from_browser is None:
         from nexoclip.settings import get_settings
 
-        cookies_from_browser = get_settings().cookies_from_browser or None
+        settings = get_settings()
+        if cookies_file is None:
+            cookies_file = settings.cookies_file or None
+        if cookies_from_browser is None:
+            cookies_from_browser = settings.cookies_from_browser or None
 
     info = await asyncio.to_thread(
         _download_vod,
         vod_url=vod_url,
         target_path=video_path,
         cookies_from_browser=cookies_from_browser,
+        cookies_file=cookies_file,
         platform=platform,
     )
 
@@ -154,6 +166,7 @@ def _download_vod(
     vod_url: str,
     target_path: Path,
     cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
     platform: Platform = "unknown",
 ) -> dict[str, Any]:
     """Run yt-dlp; ensure the resulting file lives at exactly `target_path`.
@@ -163,9 +176,12 @@ def _download_vod(
     path. `merge_output_format=mp4` keeps the container consistent for
     downstream ffmpeg work.
 
-    `cookies_from_browser` injects yt-dlp's browser-cookie auth flow.
-    Required for Kick (Cloudflare blocks anonymous scraping); useful for
-    age-gated YouTube too.
+    Cookie auth (used by Kick + age-gated YouTube):
+      * `cookies_file` — Netscape-format cookies.txt (browser stays open;
+        most reliable on Windows where Chrome locks its cookie DB).
+      * `cookies_from_browser` — pull cookies live from a browser profile.
+        Faster setup but breaks if Chrome is running.
+    When both are set, `cookies_file` wins.
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     outtmpl = str(target_path.with_suffix("")) + ".%(ext)s"
@@ -181,7 +197,9 @@ def _download_vod(
         "writethumbnail": False,
         "overwrites": True,
     }
-    if cookies_from_browser:
+    if cookies_file:
+        ydl_opts["cookiefile"] = str(cookies_file)
+    elif cookies_from_browser:
         # yt-dlp's option is a tuple: (BROWSER, [PROFILE, [KEYRING, [CONTAINER]]]).
         # We only ever pass the browser name; users with multiple profiles can
         # extend this later.
@@ -194,6 +212,7 @@ def _download_vod(
         raise _explain_download_failure(
             err=e, vod_url=vod_url, platform=platform,
             cookies_from_browser=cookies_from_browser,
+            cookies_file=cookies_file,
         ) from e
 
     actual = _resolve_downloaded_path(info, fallback=target_path)
@@ -210,16 +229,37 @@ def _explain_download_failure(
     vod_url: str,
     platform: Platform,
     cookies_from_browser: str | None,
+    cookies_file: str | None = None,
 ) -> IngestError:
     """Wrap yt-dlp's raw error with an actionable hint when we recognize the
-    pattern. Kick 403-with-no-cookies is by far the most common new-user
-    foot-gun; recognize it explicitly.
+    pattern. The two most common Windows foot-guns:
+      * Kick 403 because no cookies were configured at all.
+      * "Could not copy Chrome cookie database" because Chrome is running
+        and holds an exclusive lock on its cookies SQLite file.
     """
     raw = str(err)
+    # Chrome cookie-DB lock — yt-dlp issue #7271.
+    if "Could not copy" in raw and "cookie" in raw.lower() and not cookies_file:
+        return IngestError(
+            f"yt-dlp can't read your browser's cookie database while the "
+            f"browser is running (yt-dlp #7271). Three fixes, in order of "
+            f"least friction:\n"
+            f"  1. Switch to a browser that doesn't lock its cookie DB: "
+            f"set NEXOCLIP_COOKIES_FROM_BROWSER=edge (or firefox) in .env, "
+            f"visit kick.com once in that browser, restart the server.\n"
+            f"  2. Close Chrome completely (every chrome.exe process), then "
+            f"retry. Chrome must stay closed during the run.\n"
+            f"  3. Export cookies to a Netscape cookies.txt file (browser "
+            f"extension 'Get cookies.txt LOCALLY'), set "
+            f"NEXOCLIP_COOKIES_FILE=C:/path/to/cookies.txt, restart the "
+            f"server. Chrome can stay open.\n"
+            f"Raw error: {raw}"
+        )
     if (
         platform == "kick"
         and "403" in raw
         and not cookies_from_browser
+        and not cookies_file
     ):
         return IngestError(
             f"yt-dlp 403'd on Kick for {vod_url}. Kick blocks unauthenticated "

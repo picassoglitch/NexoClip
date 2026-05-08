@@ -164,6 +164,7 @@ async def test_ingest_vod_picks_cookies_from_settings_env(
         vod_url: str,
         target_path: Path,
         cookies_from_browser: str | None = None,
+        cookies_file: str | None = None,
         platform: Any = "unknown",
     ) -> dict[str, Any]:
         captured.append(cookies_from_browser)

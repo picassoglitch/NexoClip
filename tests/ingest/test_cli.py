@@ -30,6 +30,7 @@ def test_ingest_command_json_output(
         vod_url: str,
         target_path: Path,
         cookies_from_browser: str | None = None,
+        cookies_file: str | None = None,
         platform: str = "unknown",
     ) -> dict[str, Any]:
         target_path.parent.mkdir(parents=True, exist_ok=True)

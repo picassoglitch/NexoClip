@@ -31,7 +31,12 @@ def _stub_everything(
 ) -> None:
     # Ingest
     def fake_download(
-        *, vod_url, target_path, cookies_from_browser=None, platform="unknown"
+        *,
+        vod_url,
+        target_path,
+        cookies_from_browser=None,
+        cookies_file=None,
+        platform="unknown",
     ):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(b"v")

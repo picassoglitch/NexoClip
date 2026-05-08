@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # visited the platform at least once.
     cookies_from_browser: str | None = None
 
+    # Alternative to cookies_from_browser: an absolute path to a Netscape-
+    # format cookies.txt file (export with a "Get cookies.txt" browser
+    # extension). yt-dlp reads the file directly so the browser can stay
+    # open. When both this and cookies_from_browser are set, the file wins.
+    cookies_file: str | None = None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

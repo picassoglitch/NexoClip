@@ -36,8 +36,17 @@ PipelineRunner = Callable[[PipelineKickoff], Awaitable[None]]
 async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
     """Real `process_vod` invocation, lazily imported so tests that don't
     kick off the pipeline don't pay for Whisper / CV / yt-dlp module-load
-    cost."""
+    cost.
+
+    Forwards the configured `db_path` so `_step()` can write
+    pipeline.step.{start,done,failed} rows to the events table — without
+    this, the dashboard's progress card has no events to read and stays
+    permanently stuck on 'all six steps pending'.
+    """
     from nexoclip.pipeline import process_vod
+    from nexoclip.settings import get_settings
+
+    db_path = get_settings().db_path
 
     await process_vod(
         tenant_id=kickoff.tenant_id,
@@ -46,4 +55,5 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
         persona_id=kickoff.persona_id,
         stream_id=kickoff.stream.id,
         language=kickoff.language,
+        db_path=db_path,
     )

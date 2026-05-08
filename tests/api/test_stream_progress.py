@@ -286,6 +286,56 @@ async def test_rerun_kicks_off_pipeline_for_existing_stream(
     assert captured[0].persona_id == "p1"
 
 
+async def test_default_pipeline_runner_passes_db_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: the dashboard's pipeline runner must forward db_path so
+    the pipeline's _step() can write events the progress card reads back.
+
+    Earlier this was broken — process_vod was called without db_path, so
+    every step ran with db=None, _record_step_event short-circuited, and
+    the progress endpoint had no events to surface (the panel stayed on
+    'all pending' forever even while the real pipeline was running).
+    """
+    from nexoclip.api import PipelineKickoff
+    from nexoclip.api._pipeline import default_pipeline_runner
+    from nexoclip.ingest.models import Stream
+
+    captured: dict[str, object] = {}
+
+    async def fake_process_vod(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("nexoclip.pipeline.process_vod", fake_process_vod)
+    monkeypatch.setattr(
+        "nexoclip.settings.get_settings",
+        lambda: type("S", (), {"db_path": str(tmp_path / "fake.db")})(),
+    )
+
+    stream = Stream(
+        id="str_x1",
+        tenant_id="t1",
+        vod_url="upload://x.mp4",
+        platform="upload",
+        title="x",
+        duration_s=60.0,
+        source_video_path=tmp_path / "v.mp4",
+        source_audio_path=tmp_path / "a.wav",
+    )
+    await default_pipeline_runner(
+        PipelineKickoff(
+            tenant_id="t1",
+            stream=stream,
+            persona_id="p1",
+            output_dir=tmp_path,
+        )
+    )
+
+    assert captured["db_path"] == str(tmp_path / "fake.db")
+    assert captured["stream_id"] == "str_x1"
+    assert captured["persona_id"] == "p1"
+
+
 async def test_progress_isolates_events_per_stream(
     client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
 ) -> None:

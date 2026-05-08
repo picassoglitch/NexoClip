@@ -16,12 +16,12 @@ def test_db_init_help() -> None:
 
 
 def test_db_init_brings_schema_to_current_version(tmp_path: Path) -> None:
-    """`db init` runs every migration; current head is version 2 (Phase 2)."""
+    """`db init` runs every migration; current head is version 3 (Phase 3)."""
     runner = CliRunner()
     db_path = tmp_path / "x.db"
     result = runner.invoke(app, ["db", "init", "--db-path", str(db_path)])
     assert result.exit_code == 0, result.output
-    assert "schema_version = 2" in result.output
+    assert "schema_version = 3" in result.output
 
 
 def test_tenants_add_and_list(tmp_path: Path) -> None:

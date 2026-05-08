@@ -227,3 +227,28 @@ class WebhookSubscription(BaseModel):
     created_at: str
     last_dispatch_ts: str | None = None
     failure_count: int = 0
+
+
+class PublishMetric(BaseModel):
+    """Phase 3: one engagement-stats snapshot for a published clip.
+
+    Each `(publish_job_id, fetched_at)` pair is one row; the dashboard's
+    outcome card reads the latest row per job, and the calibration loop
+    reads the time series. Some platforms won't expose every column - we
+    leave the missing ones NULL rather than fabricating zeros.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    tenant_id: str
+    publish_job_id: str
+    platform: str
+    fetched_at: str
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    retention_pct: float | None = None  # 0.0-1.0
+    ctr: float | None = None  # 0.0-1.0
+    raw_metadata: dict[str, object] | None = None
+    created_at: str

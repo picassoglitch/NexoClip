@@ -37,6 +37,7 @@ from .models import (
     LLMCallRow,
     PersonaRow,
     PublishJob,
+    PublishMetric,
     StreamRow,
     Tenant,
     TranscriptRow,
@@ -1271,3 +1272,138 @@ def _webhook_from_row(row: aiosqlite.Row) -> WebhookSubscription:
     d = dict(row)
     d["types"] = json.loads(d.pop("types_json") or "[]")
     return WebhookSubscription.model_validate(d)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: publish_metrics — engagement-stats snapshots per (job, fetch).
+# ---------------------------------------------------------------------------
+
+
+_METRIC_COLS = (
+    "id, tenant_id, publish_job_id, platform, fetched_at, "
+    "views, likes, comments, shares, retention_pct, ctr, "
+    "raw_metadata_json, created_at"
+)
+
+
+class PublishMetricsRepo:
+    """Append-only snapshots of platform engagement stats per publish_job.
+
+    The dashboard's outcome card reads the latest row per job; the
+    calibration loop reads the time series. UPDATEs are never used -
+    each fetch writes a new row.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def record(
+        self,
+        *,
+        publish_job_id: str,
+        platform: str,
+        fetched_at: str,
+        views: int | None = None,
+        likes: int | None = None,
+        comments: int | None = None,
+        shares: int | None = None,
+        retention_pct: float | None = None,
+        ctr: float | None = None,
+        raw_metadata: dict[str, object] | None = None,
+    ) -> PublishMetric:
+        tenant_id = current_tenant_id()
+        metric_id = new_id("met")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO publish_metrics "
+            "(id, tenant_id, publish_job_id, platform, fetched_at, "
+            "views, likes, comments, shares, retention_pct, ctr, "
+            "raw_metadata_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                metric_id,
+                tenant_id,
+                publish_job_id,
+                platform,
+                fetched_at,
+                views,
+                likes,
+                comments,
+                shares,
+                retention_pct,
+                ctr,
+                json.dumps(raw_metadata) if raw_metadata is not None else None,
+                _now(),
+            ),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            f"SELECT {_METRIC_COLS} FROM publish_metrics WHERE id = ? AND tenant_id = ?",
+            (metric_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        return _metric_from_row(row)
+
+    async def latest_for_job(self, publish_job_id: str) -> PublishMetric | None:
+        """The most recent metric reading for one publish_job."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_METRIC_COLS} FROM publish_metrics "
+            "WHERE tenant_id = ? AND publish_job_id = ? "
+            "ORDER BY fetched_at DESC LIMIT 1",
+            (tenant_id, publish_job_id),
+        )
+        row = await cur.fetchone()
+        return _metric_from_row(row) if row else None
+
+    async def list_for_job(
+        self, publish_job_id: str, *, limit: int = 50
+    ) -> list[PublishMetric]:
+        """Time series for one publish_job, oldest first (chronological)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_METRIC_COLS} FROM publish_metrics "
+            "WHERE tenant_id = ? AND publish_job_id = ? "
+            "ORDER BY fetched_at ASC LIMIT ?",
+            (tenant_id, publish_job_id, limit),
+        )
+        return [_metric_from_row(r) for r in await cur.fetchall()]
+
+    async def latest_per_job_since(
+        self, *, platform: str, since: str, limit: int = 1000
+    ) -> list[PublishMetric]:
+        """Latest metric reading per publish_job for a platform since `since`.
+
+        Used by the calibration loop: pair the rescore_score on the source
+        candidate with the platform's eventual view count.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        # Fetch every reading since `since` and let the caller take the
+        # latest per job (SQLite's lack of DISTINCT ON makes the row-level
+        # version of this awkward; the DB is small enough that pulling all
+        # rows + dict-collapse here is fine).
+        cur = await conn.execute(
+            f"SELECT {_METRIC_COLS} FROM publish_metrics "
+            "WHERE tenant_id = ? AND platform = ? AND fetched_at >= ? "
+            "ORDER BY fetched_at DESC LIMIT ?",
+            (tenant_id, platform, since, limit),
+        )
+        rows = await cur.fetchall()
+        # Collapse to the latest row per publish_job_id.
+        latest: dict[str, PublishMetric] = {}
+        for r in rows:
+            metric = _metric_from_row(r)
+            if metric.publish_job_id not in latest:
+                latest[metric.publish_job_id] = metric
+        return list(latest.values())
+
+
+def _metric_from_row(row: aiosqlite.Row) -> PublishMetric:
+    d = dict(row)
+    raw = d.pop("raw_metadata_json", None)
+    d["raw_metadata"] = json.loads(raw) if raw else None
+    return PublishMetric.model_validate(d)

@@ -131,4 +131,45 @@
     {% endif %}
   </table>
 </article>
+
+{% if outcomes %}
+<article>
+  <header>
+    <strong>Engagement outcomes</strong>
+    <small>(see <a href="/dashboard/calibration">calibration table</a>)</small>
+  </header>
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th>
+        <th>External</th>
+        <th>Status</th>
+        <th>Views</th>
+        <th>Likes</th>
+        <th>Comments</th>
+        <th>Last fetched</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in outcomes %}
+      <tr>
+        <td><code>{{ o.job.platform }}</code></td>
+        <td>
+          {% if o.job.external_url %}
+            <a href="{{ o.job.external_url }}" target="_blank"><small>{{ o.job.external_url[:40] }}...</small></a>
+          {% else %}
+            <small><em>{{ o.job.external_id or "—" }}</em></small>
+          {% endif %}
+        </td>
+        <td><span class="status-badge status-{{ o.job.status }}">{{ o.job.status }}</span></td>
+        <td>{% if o.metric and o.metric.views is not none %}{{ "{:,}".format(o.metric.views) }}{% else %}—{% endif %}</td>
+        <td>{% if o.metric and o.metric.likes is not none %}{{ "{:,}".format(o.metric.likes) }}{% else %}—{% endif %}</td>
+        <td>{% if o.metric and o.metric.comments is not none %}{{ "{:,}".format(o.metric.comments) }}{% else %}—{% endif %}</td>
+        <td><small>{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>not yet measured</em>{% endif %}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endif %}
 {% endblock %}

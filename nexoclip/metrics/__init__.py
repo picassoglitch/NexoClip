@@ -12,6 +12,7 @@ Two callers:
       (Phase 3 worker pool will move this to ECS).
 """
 
+from .calibration import CalibrationReport, CalibrationRow, compute_calibration
 from .fetchers import (
     FetcherProtocol,
     NormalizedMetric,
@@ -22,9 +23,12 @@ from .fetchers import (
 from .service import IngestOutcome, run_metrics_ingest
 
 __all__ = [
+    "CalibrationReport",
+    "CalibrationRow",
     "FetcherProtocol",
     "IngestOutcome",
     "NormalizedMetric",
+    "compute_calibration",
     "fetch_buffer_metric",
     "fetch_tiktok_metric",
     "fetch_youtube_metric",

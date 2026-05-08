@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Calibration - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Vision-rescore calibration</h2>
+  <p>
+    <small>
+      Pearson r over (rescore_score, views) for the last 30 days, per platform.
+      The auto-publish toggle stays off until r is high enough on real engagement.
+    </small>
+  </p>
+</hgroup>
+
+<div hx-get="/dashboard/calibration" hx-trigger="every 5m" hx-swap="none"></div>
+
+<div class="grid">
+  {% for r in reports %}
+  <article>
+    <header>
+      <strong>{{ r.platform }}</strong>
+      <small>n_paired = {{ r.n_paired }}</small>
+    </header>
+    {% if r.pearson_r is not none %}
+      <h3>r = {{ "%+.3f"|format(r.pearson_r) }}</h3>
+      {% if r.pearson_r >= 0.6 %}
+        <small style="color: #065f46;">strong - the rescore is predictive</small>
+      {% elif r.pearson_r >= 0.3 %}
+        <small style="color: #92400e;">moderate - more data needed</small>
+      {% else %}
+        <small style="color: #991b1b;">weak - rescore is not yet predictive</small>
+      {% endif %}
+    {% else %}
+      <p><em>not enough paired samples (need ≥ 3)</em></p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+{% for r in reports %}
+{% if r.rows %}
+<h3>{{ r.platform }} — per-clip outcomes</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Clip</th>
+      <th>Rescore</th>
+      <th>Views</th>
+      <th>Likes</th>
+      <th>Last fetched</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in r.rows %}
+    <tr>
+      <td><a href="/dashboard/clips/{{ row.clip_id }}"><code>{{ row.clip_id }}</code></a></td>
+      <td>{% if row.rescore_score is not none %}{{ "%.3f"|format(row.rescore_score) }}{% else %}—{% endif %}</td>
+      <td>{% if row.views is not none %}{{ "{:,}".format(row.views) }}{% else %}—{% endif %}</td>
+      <td>{% if row.likes is not none %}{{ "{:,}".format(row.likes) }}{% else %}—{% endif %}</td>
+      <td><small>{% if row.fetched_at %}{{ row.fetched_at[:19] }}{% else %}—{% endif %}</small></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endfor %}
+{% endblock %}

@@ -181,6 +181,7 @@ async def clip_detail(
     db: Database = Depends(get_db),
 ) -> Response:
     from nexoclip.clip import clip_breakdown
+    from nexoclip.db import PublishJobsRepo, PublishMetricsRepo
 
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
@@ -189,6 +190,23 @@ async def clip_detail(
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
     breakdown = await clip_breakdown(db, clip_id)
+
+    # Phase 3: surface engagement outcomes per published job. One row per
+    # publish_job with the latest metric reading next to the platform +
+    # external URL. Dashboard shows "not yet measured" rows for jobs that
+    # the metrics worker hasn't touched yet.
+    publish_jobs = await PublishJobsRepo(db).list_for_clip(clip_id)
+    metrics_repo = PublishMetricsRepo(db)
+    outcomes: list[dict[str, object]] = []
+    for job in publish_jobs:
+        latest = await metrics_repo.latest_for_job(job.id)
+        outcomes.append(
+            {
+                "job": job,
+                "metric": latest,
+            }
+        )
+
     return templates.TemplateResponse(
         request,
         "clip_detail.html",
@@ -198,7 +216,33 @@ async def clip_detail(
             "accounts": accounts,
             "valid_transitions": valid_transitions,
             "breakdown": breakdown,
+            "outcomes": outcomes,
         },
+    )
+
+
+@router.get("/calibration", response_class=HTMLResponse)
+async def calibration_view(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Per-platform rescore-vs-views calibration table.
+
+    Pearson r over the paired (rescore_score, views) values for each
+    platform's last 30 days. Surfaces the data the operator needs to
+    decide whether the scoring system has earned the right to auto-
+    publish (see PHASE_3.md hard rules).
+    """
+    from nexoclip.metrics import compute_calibration
+
+    reports = []
+    for platform in ("youtube", "tiktok", "buffer"):
+        reports.append(await compute_calibration(db, platform=platform))
+    return templates.TemplateResponse(
+        request,
+        "calibration.html",
+        {"reports": reports},
     )
 
 

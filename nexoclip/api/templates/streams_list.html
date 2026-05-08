@@ -23,56 +23,59 @@
 </article>
 {% endif %}
 
-<article>
+<article id="upload-card">
   <header><strong>Upload a video</strong> <small>— easiest path, no auth required</small></header>
-  <form id="upload-form" action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
-    <label>
-      Video file
-      <input type="file" name="file" accept="video/*,.mp4,.mkv,.webm,.mov" required>
-      <small>MP4 / MKV / WebM / MOV. Already-recorded VODs work best — record once with OBS or download from your platform's creator dashboard.</small>
-    </label>
-    <label>
-      Persona
-      <select name="persona_id" required>
-        {% if not personas %}<option value="" disabled selected>No personas yet — create one in the Personas tab</option>{% endif %}
-        {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
-      </select>
-    </label>
-    <button id="upload-submit" type="submit" {% if not personas or not ffmpeg_ok %}disabled{% endif %}>Upload &amp; process</button>
-    {% if not personas %}
-    <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
-    {% endif %}
-    {% if not ffmpeg_ok %}
-    <small><em>Install ffmpeg first (see banner above).</em></small>
-    {% endif %}
-  </form>
-</article>
 
-<dialog id="upload-progress-dialog">
-  <article style="min-width: 380px;">
-    <header><strong id="upload-headline">Uploading video</strong></header>
-    <progress id="upload-bar" value="0" max="100" style="width: 100%;"></progress>
-    <p id="upload-status" style="margin: 0.5rem 0;">Preparing&hellip;</p>
-    <small id="upload-hint">Don't close this tab. Large videos can take a while.</small>
-    <p id="upload-error" style="display:none; color: #b00; margin-top: 0.75rem;"></p>
-    <footer id="upload-footer" style="display:none; margin-top: 0.75rem;">
-      <button id="upload-close" type="button">Close</button>
-    </footer>
-  </article>
-</dialog>
+  <!-- Default state: the form. -->
+  <div id="upload-idle">
+    <form id="upload-form" action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
+      <label>
+        Video file
+        <input type="file" name="file" accept="video/*,.mp4,.mkv,.webm,.mov" required>
+        <small>MP4 / MKV / WebM / MOV. Already-recorded VODs work best — record once with OBS or download from your platform's creator dashboard.</small>
+      </label>
+      <label>
+        Persona
+        <select name="persona_id" required>
+          {% if not personas %}<option value="" disabled selected>No personas yet — create one in the Personas tab</option>{% endif %}
+          {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
+        </select>
+      </label>
+      <button id="upload-submit" type="submit" {% if not personas or not ffmpeg_ok %}disabled{% endif %}>Upload &amp; process</button>
+      {% if not personas %}
+      <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
+      {% endif %}
+      {% if not ffmpeg_ok %}
+      <small><em>Install ffmpeg first (see banner above).</em></small>
+      {% endif %}
+    </form>
+  </div>
+
+  <!-- Active state: shown while the upload is in flight. Replaces the form
+       body inline so the user CAN'T miss it (no dialog API, no overlays). -->
+  <div id="upload-busy" style="display:none; padding: 0.5rem 0;">
+    <p style="margin: 0 0 0.25rem 0;"><strong id="upload-headline">Uploading…</strong></p>
+    <progress id="upload-bar" value="0" max="100" style="width: 100%; height: 1.5rem;"></progress>
+    <p id="upload-status" style="margin: 0.5rem 0; font-variant-numeric: tabular-nums;">Preparing…</p>
+    <small id="upload-hint" style="display:block; color: var(--pico-muted-color);">Don't close this tab. Audio extraction + DB write happen after the bytes finish uploading; they only take a second.</small>
+    <p id="upload-error" style="display:none; color: #b00; margin-top: 0.75rem; white-space: pre-wrap;"></p>
+    <button id="upload-retry" type="button" style="display:none; margin-top: 0.5rem;">Try another file</button>
+  </div>
+</article>
 
 <script>
 (function () {
   const form = document.getElementById("upload-form");
   if (!form) return;
-  const dialog = document.getElementById("upload-progress-dialog");
+
+  const idle = document.getElementById("upload-idle");
+  const busy = document.getElementById("upload-busy");
   const bar = document.getElementById("upload-bar");
-  const status = document.getElementById("upload-status");
+  const statusEl = document.getElementById("upload-status");
   const headline = document.getElementById("upload-headline");
   const hint = document.getElementById("upload-hint");
   const errorBox = document.getElementById("upload-error");
-  const footer = document.getElementById("upload-footer");
-  const closeBtn = document.getElementById("upload-close");
+  const retry = document.getElementById("upload-retry");
 
   function fmt(b) {
     if (!isFinite(b)) return "?";
@@ -82,25 +85,37 @@
     return (b / 1073741824).toFixed(2) + " GB";
   }
 
-  closeBtn.addEventListener("click", function () {
-    dialog.close();
+  function showBusy() {
+    idle.style.display = "none";
+    busy.style.display = "";
+  }
+  function showIdle() {
+    idle.style.display = "";
+    busy.style.display = "none";
+  }
+
+  retry.addEventListener("click", function () {
+    headline.textContent = "Uploading…";
+    statusEl.textContent = "Preparing…";
+    bar.value = 0;
+    errorBox.style.display = "none";
+    errorBox.textContent = "";
+    retry.style.display = "none";
+    hint.style.display = "";
+    showIdle();
   });
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
-    headline.textContent = "Uploading video";
-    status.textContent = "Preparing…";
+    showBusy();
+    headline.textContent = "Uploading…";
+    statusEl.textContent = "Preparing…";
     bar.value = 0;
     bar.max = 100;
-    bar.removeAttribute("style");
-    bar.style.width = "100%";
     errorBox.style.display = "none";
     errorBox.textContent = "";
-    footer.style.display = "none";
+    retry.style.display = "none";
     hint.style.display = "";
-
-    if (typeof dialog.showModal === "function") dialog.showModal();
-    else dialog.setAttribute("open", "");
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", form.action);
@@ -108,23 +123,22 @@
       if (ev.lengthComputable) {
         const pct = Math.round((ev.loaded / ev.total) * 100);
         bar.value = pct;
-        status.textContent =
+        statusEl.textContent =
           "Uploading… " + pct + "% (" + fmt(ev.loaded) + " / " + fmt(ev.total) + ")";
       } else {
-        status.textContent = "Uploading… " + fmt(ev.loaded);
+        statusEl.textContent = "Uploading… " + fmt(ev.loaded);
       }
     });
     xhr.upload.addEventListener("loadend", function () {
-      // Bytes are on the server; now ffmpeg + DB write run in the handler.
-      bar.removeAttribute("value");
-      status.textContent = "Upload complete. Extracting audio + queuing pipeline…";
+      bar.removeAttribute("value"); // indeterminate spinner
+      statusEl.textContent = "Upload complete. Extracting audio + queuing pipeline…";
     });
     xhr.onload = function () {
       if (xhr.status >= 200 && xhr.status < 400) {
         headline.textContent = "Pipeline kicked off";
-        status.textContent = "Redirecting to the stream view…";
-        // Server returned 303 -> /dashboard/streams/{id}; XHR followed it,
-        // so xhr.responseURL is the final stream-detail URL.
+        statusEl.textContent = "Redirecting to the stream view…";
+        // Server returned 303 -> /dashboard/streams/{id}; XHR followed it
+        // transparently, so xhr.responseURL is the final stream-detail URL.
         window.location.href = xhr.responseURL || "/dashboard/streams";
       } else {
         let detail = xhr.status + " " + xhr.statusText;
@@ -133,20 +147,21 @@
           if (body && body.detail) detail = body.detail;
         } catch (_) {}
         headline.textContent = "Upload failed";
-        status.textContent = "";
+        statusEl.textContent = "";
         hint.style.display = "none";
         errorBox.textContent = detail;
         errorBox.style.display = "";
-        footer.style.display = "";
+        retry.style.display = "";
       }
     };
     xhr.onerror = function () {
       headline.textContent = "Upload failed";
-      status.textContent = "";
+      statusEl.textContent = "";
       hint.style.display = "none";
-      errorBox.textContent = "Network error. Check that the dashboard is still running.";
+      errorBox.textContent =
+        "Network error. The dashboard may have been stopped — check your terminal.";
       errorBox.style.display = "";
-      footer.style.display = "";
+      retry.style.display = "";
     };
     xhr.send(new FormData(form));
   });

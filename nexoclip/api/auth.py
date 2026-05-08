@@ -25,7 +25,9 @@ from nexoclip.tenancy import hash_token
 # Anything matching `_PUBLIC_PREFIXES` (path startswith) skips auth.
 # `/dashboard/login` is public so the login form can render and POST without
 # a token; everything under `/dashboard` past login still needs auth via cookie.
-_PUBLIC_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/openapi.json", "/docs", "/redoc"})
+_PUBLIC_PATHS: frozenset[str] = frozenset(
+    {"/", "/healthz", "/readyz", "/openapi.json", "/docs", "/redoc"}
+)
 _PUBLIC_PREFIXES: tuple[str, ...] = ("/dashboard/login", "/static/")
 _COOKIE_NAME = "nexoclip_token"
 

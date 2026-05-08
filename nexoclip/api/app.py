@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 
 from nexoclip.db import Database
 
@@ -75,6 +76,11 @@ def create_app(
     app.state.pipeline_runner = pipeline_runner or default_pipeline_runner
 
     app.add_middleware(BearerAuthMiddleware, db=db)
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        # Friendly bounce for first-time browsers that hit the bare host.
+        return RedirectResponse(url="/dashboard/login", status_code=303)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

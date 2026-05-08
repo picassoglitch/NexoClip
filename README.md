@@ -155,7 +155,34 @@ curl -X POST http://localhost:8000/webhooks \
 # → subscriber receives:
 #     X-Nexoclip-Signature: hex(hmac_sha256(secret, body))
 #     X-Nexoclip-Timestamp: 2026-...
+
+# Rotate the secret without dropping in-flight deliveries (24h grace by default):
+curl -X POST http://localhost:8000/webhooks/<sub_id>/rotate-secret \
+     -H "Authorization: Bearer tok_..." \
+     -d '{"grace_s": 86400}'
+# → response includes the NEW secret once; the prior secret stays valid
+#   until `prior_secret_expires_at`. List active prior secrets via
+#   GET /webhooks/<sub_id>/secrets.
 ```
+
+### MCP server (Phase 3 opt-in)
+
+Run a local MCP server so external agents (Claude Code, Cursor, ...) can
+drive the same tenant the dashboard does:
+
+```bash
+NEXOCLIP_API_TOKEN=tok_... nexoclip mcp serve
+# Or pass the token explicitly:
+nexoclip mcp serve --token tok_...
+```
+
+The server is a thin translation layer over the REST surface — it adds no
+new business logic. Tools include reads (`list_streams`, `get_stream`,
+`list_candidates`, `list_clips`, `get_clip` with breakdown,
+`list_personas`, `list_llm_calls`, `get_cost_projection`,
+`get_calibration`) and state transitions (`update_clip_status`,
+`publish_clip`). Tenant is resolved from the API token at boot; no
+cross-tenant access. State-transition tools require `scope=full`.
 
 ### Output layout (Phase 0)
 

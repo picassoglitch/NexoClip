@@ -43,11 +43,42 @@ webhooks_app = typer.Typer(
 metrics_app = typer.Typer(
     name="metrics", help="Engagement-metric ingestion.", no_args_is_help=True
 )
+mcp_app = typer.Typer(
+    name="mcp", help="MCP server (stdio) for external agents.", no_args_is_help=True
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
 app.add_typer(webhooks_app)
 app.add_typer(metrics_app)
+app.add_typer(mcp_app)
+
+
+@mcp_app.command("serve")
+def mcp_serve_cmd(
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Raw API token (tok_...). Falls back to NEXOCLIP_API_TOKEN env var.",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Boot the MCP server (stdio transport).
+
+    The token resolves to a tenant id via api_tokens.lookup_by_hash; every
+    tool call binds that tenant via bound_tenant(). No cross-tenant access;
+    rejected tokens fail fast at boot.
+    """
+    from nexoclip.mcp_server import run_stdio_server
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    resolved_db_path = db_path or Path(settings.db_path)
+    try:
+        run_stdio_server(db_path=resolved_db_path, raw_token=token)
+    except Exception as e:
+        typer.echo(f"mcp server failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
 
 @metrics_app.command("ingest")

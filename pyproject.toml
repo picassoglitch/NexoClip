@@ -57,6 +57,10 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
+
+    # MCP server — translation layer over the REST surface for external agents
+    # (Claude Code / Cursor / etc.). Phase 3 #3.
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]

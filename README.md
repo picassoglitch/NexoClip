@@ -184,6 +184,37 @@ new business logic. Tools include reads (`list_streams`, `get_stream`,
 `publish_clip`). Tenant is resolved from the API token at boot; no
 cross-tenant access. State-transition tools require `scope=full`.
 
+See [docs/mcp_integration.md](docs/mcp_integration.md) for sample
+config snippets to register the server with Claude Code, Cursor, and
+Claude Desktop.
+
+### Inspecting the publish queue
+
+```bash
+nexoclip queue list --tenant aldo
+# →  Pending (3): per-platform rows, attempts, created_at
+#    Recently sent (5): with external_id
+#    Failed (1): with last_error
+```
+
+Read-only — no drain happens. The lifespan auto-drain runs every 60s
+when the API server is up; this command is just for "did the worker
+pick up the new job yet?" while iterating locally.
+
+### Auto-drains (when the API is up)
+
+`uvicorn 'nexoclip.api.app:create_app' --factory` boots with three
+background loops by default:
+
+| Loop | Cadence | What it does |
+|---|---|---|
+| publish | 60s | drains `publish_jobs` for every tenant via `run_publish_jobs` |
+| webhook | 30s | delivers new events for active subscriptions via `run_webhook_dispatch` |
+| metrics | 1h | pulls engagement stats per `sent` job via `run_metrics_ingest` |
+
+Tests pass `enable_background_drains=False` so loops never spin during
+test runs.
+
 ### Output layout (Phase 0)
 
 ```

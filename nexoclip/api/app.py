@@ -7,25 +7,23 @@ up at boot before calling `create_app`.
 A `pipeline_runner` callable is stored on `app.state` so tests can swap
 the heavy `process_vod` for a stub. Default points at the real pipeline.
 
-When `publisher_interval_s > 0`, the lifespan starts a background task
-that wakes every `publisher_interval_s` seconds and drains pending
-publish_jobs for every tenant. Tests pass `publisher_interval_s=0` so
-the loop never fires.
+When `enable_background_drains=True` the lifespan starts three loops:
+publish_jobs (60s), webhook dispatch (30s), and metrics ingest (1h).
+Tests leave the flag off so loops never spin during test runs.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
-import structlog
 from fastapi import FastAPI, Request
 
 from nexoclip.db import Database
 
 from ._pipeline import PipelineKickoff, PipelineRunner, default_pipeline_runner
 from .auth import BearerAuthMiddleware
+from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
 from .routers import llm_calls as llm_calls_router
@@ -35,41 +33,42 @@ from .routers import webhooks as webhooks_router
 
 __all__ = ["PipelineKickoff", "PipelineRunner", "create_app"]
 
-_log = structlog.get_logger(__name__)
-_DEFAULT_PUBLISHER_INTERVAL_S = 60.0
-
 
 def create_app(
     *,
     db: Database,
     pipeline_runner: PipelineRunner | None = None,
-    publisher_interval_s: float = 0.0,
+    enable_background_drains: bool = False,
+    publish_interval_s: float = 60.0,
+    webhook_interval_s: float = 30.0,
+    metrics_interval_s: float = 3600.0,
 ) -> FastAPI:
     """Build a FastAPI app wired to `db`.
 
     Args:
         db: Pre-opened DB.
         pipeline_runner: Override `process_vod` for tests.
-        publisher_interval_s: When > 0, the lifespan starts a background
-            task that drains publish_jobs for every tenant every N seconds.
-            Defaults to 0 so tests don't spin a loop. Production should
-            pass 60 (or whatever cadence makes sense).
+        enable_background_drains: When True, the lifespan starts three
+            drain loops (publish_jobs, webhook dispatch, metrics ingest)
+            for every active tenant. Tests leave this off so the loops
+            never spin during the test run.
+        publish_interval_s / webhook_interval_s / metrics_interval_s:
+            Per-loop cadences. Production typically leaves these at the
+            documented defaults (60s / 30s / 1h).
     """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        task: asyncio.Task[None] | None = None
-        if publisher_interval_s > 0:
-            task = asyncio.create_task(
-                _publisher_loop(db, interval_s=publisher_interval_s)
-            )
-        try:
+        if enable_background_drains:
+            async with background_drains_lifespan(
+                _app,
+                publish_interval_s=publish_interval_s,
+                webhook_interval_s=webhook_interval_s,
+                metrics_interval_s=metrics_interval_s,
+            ):
+                yield
+        else:
             yield
-        finally:
-            if task is not None:
-                task.cancel()
-                with suppress(BaseException):
-                    await task
 
     app = FastAPI(title="NexoClip API", version="0.1.0", lifespan=lifespan)
     app.state.db = db
@@ -95,29 +94,3 @@ def create_app(
     app.include_router(webhooks_router.router)
 
     return app
-
-
-async def _publisher_loop(db: Database, *, interval_s: float) -> None:
-    """Background drain: every `interval_s` seconds, run `run_publish_jobs`
-    for every tenant. Errors are logged and swallowed so one bad tenant
-    doesn't break the loop for the rest."""
-    from nexoclip.db import TenantsRepo
-    from nexoclip.publish import run_publish_jobs
-
-    while True:
-        try:
-            tenants = await TenantsRepo(db).list_all()
-            for tenant in tenants:
-                try:
-                    await run_publish_jobs(tenant.id, db)
-                except Exception as e:  # per-tenant isolation
-                    _log.warning(
-                        "publisher_loop_error",
-                        tenant_id=tenant.id,
-                        error=str(e),
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # keep the loop alive
-            _log.warning("publisher_loop_top_level_error", error=str(e))
-        await asyncio.sleep(interval_s)

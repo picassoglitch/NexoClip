@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -46,12 +46,90 @@ metrics_app = typer.Typer(
 mcp_app = typer.Typer(
     name="mcp", help="MCP server (stdio) for external agents.", no_args_is_help=True
 )
+queue_app = typer.Typer(
+    name="queue",
+    help="Read-only views over the publish queue.",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
 app.add_typer(webhooks_app)
 app.add_typer(metrics_app)
 app.add_typer(mcp_app)
+app.add_typer(queue_app)
+
+
+@queue_app.command("list")
+def queue_list_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant id to inspect."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Show pending / recent-sent / failed publish_jobs for a tenant.
+
+    Read-only — no drain, no state change. Useful while iterating locally
+    on the publish loop ("did the worker pick up the new job yet?").
+    """
+    from nexoclip.db import (
+        PublishJobsRepo,
+        TenantsRepo,
+        apply_migrations,
+    )
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            if await TenantsRepo(db).get(tenant_id) is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(tenant_id):
+                repo = PublishJobsRepo(db)
+                pending = await repo.list_recent_for_tenant(
+                    status="pending", limit=limit
+                )
+                sent = await repo.list_recent_for_tenant(status="sent", limit=limit)
+                failed = await repo.list_recent_for_tenant(status="failed", limit=limit)
+        finally:
+            await db.close()
+
+        _render_section("Pending", pending, show_attempts=True)
+        _render_section("Recently sent", sent, show_external=True)
+        _render_section("Failed", failed, show_error=True)
+
+    asyncio.run(_run())
+
+
+def _render_section(
+    label: str,
+    jobs: list[Any],  # list[PublishJob]; Any keeps cli.py free of db.models
+    *,
+    show_attempts: bool = False,
+    show_external: bool = False,
+    show_error: bool = False,
+) -> None:
+    typer.echo(f"\n{label} ({len(jobs)}):")
+    if not jobs:
+        typer.echo("  (none)")
+        return
+    for j in jobs:
+        bits = [
+            f"  {j.id}",
+            f"{j.platform:<10}",
+            f"clip={j.clip_id}",
+            f"variant={j.variant_id}",
+            f"created={j.created_at[:19]}",
+        ]
+        if show_attempts:
+            bits.append(f"attempts={j.attempts}")
+        if show_external and j.external_id:
+            bits.append(f"external={j.external_id}")
+        if show_error and j.last_error:
+            err = j.last_error[:80]
+            bits.append(f'error="{err}"')
+        typer.echo("  ".join(bits))
 
 
 @mcp_app.command("serve")

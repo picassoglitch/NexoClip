@@ -1040,6 +1040,30 @@ class PublishJobsRepo:
         )
         return [_publish_job_from_row(r) for r in await cur.fetchall()]
 
+    async def list_recent_for_tenant(
+        self, *, status: str | None = None, limit: int = 50
+    ) -> list[PublishJob]:
+        """Recent jobs for the bound tenant, newest first.
+
+        `status=None` returns every status; pass "pending" / "sent" /
+        "failed" to scope. Used by the `nexoclip queue list` CLI view.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        if status is None:
+            cur = await conn.execute(
+                "SELECT * FROM publish_jobs WHERE tenant_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, limit),
+            )
+        else:
+            cur = await conn.execute(
+                "SELECT * FROM publish_jobs WHERE tenant_id = ? AND status = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, status, limit),
+            )
+        return [_publish_job_from_row(r) for r in await cur.fetchall()]
+
     async def count_for_tenant_today(self, *, platform: str | None = None) -> int:
         """Today's (UTC) publish_jobs count for the bound tenant.
 

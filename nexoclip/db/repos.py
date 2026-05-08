@@ -43,6 +43,7 @@ from .models import (
     TranscriptRow,
     User,
     VariantRow,
+    WebhookSecretVersion,
     WebhookSubscription,
 )
 
@@ -1272,6 +1273,99 @@ def _webhook_from_row(row: aiosqlite.Row) -> WebhookSubscription:
     d = dict(row)
     d["types"] = json.loads(d.pop("types_json") or "[]")
     return WebhookSubscription.model_validate(d)
+
+
+class WebhookSecretsRepo:
+    """Phase 3: secret-rotation history for one subscription.
+
+    Each `rotate(...)` writes the current secret to `webhook_secret_versions`
+    with an `expires_at` grace deadline, then mints a new one and stamps it
+    onto `webhook_subscriptions.secret`. Subscribers can list active
+    (unexpired) secrets to verify HMAC signatures against either the
+    current or a prior secret during the rotation window.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def rotate(
+        self, subscription_id: str, *, new_secret: str, ttl_s: float
+    ) -> str:
+        """Rotate the subscription's secret. Returns the *new* secret.
+
+        Saves the previous secret to `webhook_secret_versions` with
+        `expires_at = now + ttl_s`. Caller is responsible for mint quality
+        (use `secrets.token_hex(32)`).
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT secret FROM webhook_subscriptions "
+            "WHERE id = ? AND tenant_id = ?",
+            (subscription_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise NexoClipError(f"webhook subscription not found: {subscription_id}")
+        prior_secret = str(row["secret"])
+        if not prior_secret:
+            raise NexoClipError(
+                f"webhook subscription {subscription_id} has no current secret"
+            )
+
+        version_id = new_id("whk")
+        expires_at = (
+            _dt.datetime.now(_dt.UTC) + _dt.timedelta(seconds=ttl_s)
+        ).isoformat()
+        await conn.execute(
+            "INSERT INTO webhook_secret_versions "
+            "(id, subscription_id, tenant_id, secret, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (version_id, subscription_id, tenant_id, prior_secret, expires_at, _now()),
+        )
+        await conn.execute(
+            "UPDATE webhook_subscriptions SET secret = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (new_secret, subscription_id, tenant_id),
+        )
+        await conn.commit()
+        return new_secret
+
+    async def list_active_for_subscription(
+        self, subscription_id: str
+    ) -> list[WebhookSecretVersion]:
+        """Past secrets whose grace window has not elapsed (newest first)."""
+        tenant_id = current_tenant_id()
+        now_iso = _now()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id, subscription_id, tenant_id, secret, expires_at, created_at "
+            "FROM webhook_secret_versions "
+            "WHERE tenant_id = ? AND subscription_id = ? AND expires_at >= ? "
+            "ORDER BY created_at DESC",
+            (tenant_id, subscription_id, now_iso),
+        )
+        return [
+            WebhookSecretVersion.model_validate(dict(r)) for r in await cur.fetchall()
+        ]
+
+    async def purge_expired(self) -> int:
+        """Delete past-grace secrets. Returns the row count deleted.
+
+        Phase 3 polish: a periodic worker can call this hourly. For now,
+        the dashboard's "list active secrets" call ignores expired rows
+        anyway, so the table just grows linearly with rotations.
+        """
+        tenant_id = current_tenant_id()
+        now_iso = _now()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "DELETE FROM webhook_secret_versions "
+            "WHERE tenant_id = ? AND expires_at < ?",
+            (tenant_id, now_iso),
+        )
+        await conn.commit()
+        return cur.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from .repos import (
     UsersRepo,
     VariantsRepo,
     VisualSignalsRepo,
+    WebhookSecretsRepo,
     WebhookSubscriptionsRepo,
 )
 from .session import db_session
@@ -46,6 +47,7 @@ __all__ = [
     "UsersRepo",
     "VariantsRepo",
     "VisualSignalsRepo",
+    "WebhookSecretsRepo",
     "WebhookSubscriptionsRepo",
     "apply_migrations",
     "db_session",

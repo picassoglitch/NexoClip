@@ -229,6 +229,23 @@ class WebhookSubscription(BaseModel):
     failure_count: int = 0
 
 
+class WebhookSecretVersion(BaseModel):
+    """Phase 3: a prior webhook secret kept alive for a rotation grace window.
+
+    Subscribers may verify HMAC signatures against any unexpired secret in
+    `webhook_secret_versions` for the subscription, in addition to the
+    current secret on the `webhook_subscriptions` row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    subscription_id: str
+    tenant_id: str
+    secret: str
+    expires_at: str
+    created_at: str
+
+
 class PublishMetric(BaseModel):
     """Phase 3: one engagement-stats snapshot for a published clip.
 

@@ -12,11 +12,19 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from nexoclip.db import Database, WebhookSubscriptionsRepo
+from nexoclip.db import (
+    Database,
+    WebhookSecretsRepo,
+    WebhookSubscriptionsRepo,
+)
 
 from ..deps import get_db, require_full_scope, tenant_binder
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+# Default grace window for a rotated-out secret. Subscribers should re-fetch
+# the active secret list before this elapses.
+_DEFAULT_ROTATION_GRACE_S = 86400.0  # 24h
 
 
 class WebhookCreateRequest(BaseModel):
@@ -109,3 +117,117 @@ async def delete_webhook(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="webhook not found"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 #2: secret rotation
+# ---------------------------------------------------------------------------
+
+
+class RotateSecretRequest(BaseModel):
+    """Optional override of the rotation grace window."""
+
+    model_config = ConfigDict(extra="forbid")
+    grace_s: float | None = Field(
+        default=None,
+        gt=0,
+        description="Seconds the prior secret stays valid. Default: 24h.",
+    )
+
+
+class RotateSecretResponse(BaseModel):
+    """Response from `POST /webhooks/{id}/rotate-secret`.
+
+    `secret` is the new value (returned ONCE; mirrors api_tokens / create).
+    `prior_secret_expires_at` is the deadline subscribers have to update
+    their config before the previous secret stops being honored.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    secret: str
+    prior_secret_expires_at: str
+
+
+class ActiveSecretResponse(BaseModel):
+    """One past secret still inside its grace window."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    expires_at: str
+    created_at: str
+    # The secret value is included because the dashboard's primary use case
+    # is "show me what to update my subscriber to" - and these are by
+    # design rotated-out secrets, not keys.
+    secret: str
+
+
+@router.post(
+    "/{sub_id}/rotate-secret",
+    response_model=RotateSecretResponse,
+    dependencies=[Depends(require_full_scope)],
+)
+async def rotate_secret(
+    sub_id: str,
+    payload: RotateSecretRequest,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> RotateSecretResponse:
+    """Rotate the subscription's HMAC secret.
+
+    The prior secret stays honored for `grace_s` (default 24h) so
+    subscribers can update without missing deliveries. The new secret is
+    returned ONCE; subsequent reads only show its existence, not the value.
+    """
+    grace_s = payload.grace_s if payload.grace_s is not None else _DEFAULT_ROTATION_GRACE_S
+    new_secret = secrets.token_hex(32)
+    try:
+        await WebhookSecretsRepo(db).rotate(
+            sub_id, new_secret=new_secret, ttl_s=grace_s
+        )
+    except Exception:
+        # `rotate()` raises NexoClipError on missing subscription; tenancy
+        # enforcement happens inside the SQL.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="webhook not found"
+        ) from None
+
+    # Compute the prior_secret_expires_at by reading the freshest version row.
+    versions = await WebhookSecretsRepo(db).list_active_for_subscription(sub_id)
+    prior_expires_at = versions[0].expires_at if versions else ""
+    return RotateSecretResponse(
+        id=sub_id,
+        secret=new_secret,
+        prior_secret_expires_at=prior_expires_at,
+    )
+
+
+@router.get(
+    "/{sub_id}/secrets",
+    response_model=list[ActiveSecretResponse],
+)
+async def list_active_secrets(
+    sub_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> list[ActiveSecretResponse]:
+    """Past secrets still inside the rotation grace window.
+
+    The *current* secret is on the subscription itself and is shown only
+    at create / rotate time; this endpoint specifically lists rotated-out
+    secrets that subscribers may still see in the wild during the window.
+    """
+    if await WebhookSubscriptionsRepo(db).get(sub_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="webhook not found"
+        )
+    versions = await WebhookSecretsRepo(db).list_active_for_subscription(sub_id)
+    return [
+        ActiveSecretResponse(
+            id=v.id,
+            expires_at=v.expires_at,
+            created_at=v.created_at,
+            secret=v.secret,
+        )
+        for v in versions
+    ]

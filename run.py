@@ -62,6 +62,50 @@ def _ensure_ffmpeg_on_path() -> None:
                 return
 
 
+def _verify_or_fallback_to_cpu() -> None:
+    """If `NEXOCLIP_WHISPER_DEVICE=cuda` (the default) but cuBLAS isn't actually
+    loadable, override to CPU for this process.
+
+    Without this, the dashboard happily accepts uploads, runs analyze_video,
+    and only blows up at the transcribe step with a cryptic
+    'Library cublas64_12.dll is not found' — burning 30+ seconds of user time
+    per attempt. We try to load cublas64_12.dll up front; if it fails, we
+    print a loud warning and switch to CPU + int8 + base model so the rest
+    of the pipeline still works.
+    """
+    if os.name != "nt":
+        return
+    device = os.environ.get("NEXOCLIP_WHISPER_DEVICE", "cuda").strip().lower()
+    if device != "cuda":
+        return  # User already opted into cpu — nothing to verify.
+    import ctypes
+
+    try:
+        ctypes.WinDLL("cublas64_12.dll")
+        return  # Loaded fine — CUDA path is genuinely available.
+    except OSError:
+        pass
+
+    print(
+        "\n[CUDA fallback] cublas64_12.dll could not be loaded — falling back "
+        "to CPU transcription for this run. Install the full CUDA Toolkit from "
+        "NVIDIA if you want GPU speed; for now, CPU + base + int8 will work.\n"
+    )
+    os.environ["NEXOCLIP_WHISPER_DEVICE"] = "cpu"
+    os.environ["NEXOCLIP_WHISPER_COMPUTE_TYPE"] = "int8"
+    # Only downgrade the model size if the user hasn't picked one explicitly.
+    # `medium` on CPU is bearable but slow; `base` is the better default.
+    if not os.environ.get("NEXOCLIP_WHISPER_MODEL"):
+        os.environ["NEXOCLIP_WHISPER_MODEL"] = "base"
+    # Bust the settings cache so the override takes effect.
+    try:
+        from nexoclip.settings import get_settings
+
+        get_settings.cache_clear()
+    except Exception:
+        pass
+
+
 def _ensure_cuda_libs_on_path() -> None:
     """Best-effort: add bundled nvidia-* pip packages' DLL dirs to the search path.
 
@@ -113,6 +157,25 @@ def _ensure_cuda_libs_on_path() -> None:
         )
 
 
+def _print_whisper_config() -> None:
+    """Echo the resolved Whisper settings at boot.
+
+    Helps the user catch a stale .env (or one that's not being loaded) before
+    the first upload. If they see `device: cuda` but expected `cpu`, the
+    settings file isn't where pydantic-settings is looking.
+    """
+    try:
+        from nexoclip.settings import get_settings
+
+        s = get_settings()
+        print(
+            f"Whisper config: device={s.whisper_device} model={s.whisper_model} "
+            f"compute={s.whisper_compute_type}"
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] couldn't read settings: {e}")
+
+
 def _resolve_python_check() -> None:
     """Hard-stop if you launched via system Python 3.14 instead of the venv.
 
@@ -150,6 +213,8 @@ def main() -> None:
     _resolve_python_check()
     _ensure_ffmpeg_on_path()
     _ensure_cuda_libs_on_path()
+    _verify_or_fallback_to_cpu()
+    _print_whisper_config()
     try:
         asyncio.run(_boot())
     except KeyboardInterrupt:

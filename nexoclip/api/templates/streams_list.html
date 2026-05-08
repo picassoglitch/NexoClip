@@ -7,11 +7,12 @@
 </hgroup>
 
 <article>
-  <header><strong>Process new VOD</strong></header>
-  <form action="/dashboard/streams" method="post">
+  <header><strong>Upload a video</strong> <small>— easiest path, no auth required</small></header>
+  <form action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
     <label>
-      VOD URL
-      <input type="url" name="vod_url" placeholder="https://kick.com/..." required>
+      Video file
+      <input type="file" name="file" accept="video/*,.mp4,.mkv,.webm,.mov" required>
+      <small>MP4 / MKV / WebM / MOV. Already-recorded VODs work best — record once with OBS or download from your platform's creator dashboard.</small>
     </label>
     <label>
       Persona
@@ -20,17 +21,40 @@
         {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
       </select>
     </label>
-    <button type="submit" {% if not personas %}disabled{% endif %}>Kick off pipeline</button>
+    <button type="submit" {% if not personas %}disabled{% endif %}>Upload &amp; process</button>
     {% if not personas %}
     <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
     {% endif %}
-    <small>
-      <strong>Kick VODs:</strong> requires <code>NEXOCLIP_COOKIES_FROM_BROWSER=chrome</code>
-      (or edge / firefox / brave) in <code>.env</code>. Kick blocks anonymous
-      yt-dlp scraping. The chosen browser must have visited Kick at least once.
-    </small>
   </form>
 </article>
+
+<details>
+  <summary><strong>Advanced: process from a VOD URL</strong></summary>
+  <article>
+    <form action="/dashboard/streams" method="post">
+      <label>
+        VOD URL
+        <input type="url" name="vod_url" placeholder="https://kick.com/..." required>
+      </label>
+      <label>
+        Persona
+        <select name="persona_id" required>
+          {% if not personas %}<option value="" disabled selected>No personas yet — create one in the Personas tab</option>{% endif %}
+          {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit" {% if not personas %}disabled{% endif %} class="secondary">Kick off pipeline</button>
+      <small>
+        <strong>Kick / age-gated YouTube:</strong> requires
+        <code>NEXOCLIP_COOKIES_FROM_BROWSER=edge</code> (or firefox / brave) or
+        <code>NEXOCLIP_COOKIES_FILE=/path/to/cookies.txt</code> in <code>.env</code>.
+        Kick blocks anonymous yt-dlp scraping. If you hit a 403 or
+        "Could not copy Chrome cookie database" error, the upload form above
+        is the easier path.
+      </small>
+    </form>
+  </article>
+</details>
 
 <table>
   <thead>

@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Platform = Literal["kick", "twitch", "youtube", "unknown"]
+Platform = Literal["kick", "twitch", "youtube", "upload", "unknown"]
 
 
 class ChatMessage(BaseModel):

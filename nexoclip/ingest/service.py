@@ -161,6 +161,133 @@ async def ingest_vod(
     return stream
 
 
+async def ingest_uploaded(
+    tenant_id: str,
+    source_path: Path,
+    output_dir: Path,
+    *,
+    stream_id: str | None = None,
+    title: str | None = None,
+    chat_replay_source: Path | None = None,
+) -> Stream:
+    """Ingest a video the operator uploaded (no yt-dlp involved).
+
+    Mirrors `ingest_vod` but skips the download step entirely. The on-disk
+    layout is identical so every downstream step (transcribe, detect, cut,
+    variants) finds its inputs in the usual places:
+
+        <output_dir>/<stream_id>/
+            stream.json
+            source/
+                video.mp4
+                audio.wav
+
+    `source_path` may be any container ffmpeg understands. We do NOT remux —
+    just copy/move the file to `source/video.mp4`. ffmpeg reads it for the
+    audio extract and ffprobe reads it for duration; both work on whatever
+    actual container is inside.
+
+    Args:
+        tenant_id: Tenant owning the stream.
+        source_path: An on-disk file the user just uploaded. The caller is
+            responsible for streaming the upload to a tempfile first; this
+            function moves it into place.
+        output_dir: Root directory; a `<stream_id>/` subdirectory is created.
+        stream_id: Optional existing stream ID for resumes. New ULID otherwise.
+        title: Display title — usually the original filename.
+        chat_replay_source: Same semantics as `ingest_vod`. Most uploads
+            won't have one and this stays None.
+
+    Returns:
+        The persisted Stream. Idempotent on `stream_id`: a re-call with the
+        same id and an existing stream.json returns the cached row.
+    """
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    source_path = Path(source_path).resolve()
+    if not source_path.exists():
+        raise IngestError(f"upload source not found: {source_path}")
+
+    sid = stream_id or new_id("str")
+    stream_dir = output_dir / sid
+    source_dir = stream_dir / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    stream_json = stream_dir / "stream.json"
+    video_path = source_dir / "video.mp4"
+    audio_path = source_dir / "audio.wav"
+
+    if stream_json.exists():
+        cached = Stream.model_validate_json(stream_json.read_text("utf-8"))
+        if chat_replay_source is not None:
+            from .chat_replay import chat_replay_path, import_chat_replay
+
+            import_chat_replay(
+                source=chat_replay_source,
+                stream_dir=stream_dir,
+                stream_id=cached.id,
+                tenant_id=cached.tenant_id,
+            )
+            cached = cached.model_copy(
+                update={"source_chat_path": chat_replay_path(stream_dir)}
+            )
+            stream_json.write_text(cached.model_dump_json(indent=2), encoding="utf-8")
+        return cached
+
+    # Move the uploaded tempfile into place. Move beats copy because the
+    # uploaded file is in a temp dir we own and it's likely 100s of MB.
+    if video_path.exists():
+        video_path.unlink()
+    try:
+        source_path.replace(video_path)
+    except OSError as e:
+        # Cross-device move on Windows — fall back to copy.
+        import shutil
+
+        shutil.copy2(source_path, video_path)
+        try:
+            source_path.unlink()
+        except OSError:
+            pass
+        del e
+
+    await asyncio.to_thread(_extract_audio, video_path, audio_path)
+    duration_s = await asyncio.to_thread(_ffprobe_duration, video_path)
+
+    chat_path: Path | None = None
+    if chat_replay_source is not None:
+        from .chat_replay import chat_replay_path, import_chat_replay
+
+        import_chat_replay(
+            source=chat_replay_source,
+            stream_dir=stream_dir,
+            stream_id=sid,
+            tenant_id=tenant_id,
+        )
+        chat_path = chat_replay_path(stream_dir)
+
+    # `vod_url` is required by the Stream schema but uploads have no canonical
+    # URL. Stash an `upload://` pseudo-URL so logs / dashboards don't show an
+    # empty string and downstream `ingest_vod(stream_id=...)` cache-resume
+    # calls have something stable to dedupe on.
+    pseudo_url = f"upload://{title or video_path.name}"
+
+    stream = Stream(
+        id=sid,
+        tenant_id=tenant_id,
+        vod_url=pseudo_url,
+        platform="upload",
+        title=title,
+        channel=None,
+        duration_s=duration_s,
+        source_video_path=video_path,
+        source_audio_path=audio_path,
+        source_chat_path=chat_path,
+    )
+    stream_json.write_text(stream.model_dump_json(indent=2), encoding="utf-8")
+    return stream
+
+
 def _download_vod(
     *,
     vod_url: str,

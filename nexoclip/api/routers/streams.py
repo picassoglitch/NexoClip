@@ -11,7 +11,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 
 from nexoclip.db import (
     CandidatesRepo,
@@ -82,6 +92,109 @@ async def create_stream(
     )
     background_tasks.add_task(runner, kickoff)
     return StreamResponse.model_validate(row.model_dump())
+
+
+@router.post(
+    "/upload",
+    response_model=StreamResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_full_scope)],
+)
+async def upload_stream(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    file: UploadFile = File(...),
+    persona_id: str = Form(...),
+    language: str | None = Form(None),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> StreamResponse:
+    """Ingest an uploaded video file (no yt-dlp). Streams the upload to a
+    tempfile chunk-by-chunk so a 1 GB VOD doesn't get pinned in RAM.
+
+    Same downstream contract as `POST /streams`: the response carries the
+    new Stream id and the rest of the pipeline (transcribe, detect, cut,
+    variants) runs as a BackgroundTask.
+    """
+    from nexoclip.db.adapters import stream_to_row
+    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.settings import get_settings
+
+    output_dir = Path(get_settings().default_output_dir)
+    tmp_path = await _stash_upload_to_tmp(file, output_dir)
+    try:
+        try:
+            stream = await ingest_uploaded(
+                tenant_id=tenant_id,
+                source_path=tmp_path,
+                output_dir=output_dir,
+                title=file.filename,
+            )
+        except NexoClipError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+            ) from e
+    finally:
+        # ingest_uploaded moves the file out; if it didn't (cache hit, error),
+        # don't leave a multi-hundred-MB orphan in the temp dir.
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    row = await StreamsRepo(db).upsert(stream_to_row(stream))
+    await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
+
+    runner = request.app.state.pipeline_runner
+    kickoff = PipelineKickoff(
+        tenant_id=tenant_id,
+        stream=stream,
+        persona_id=persona_id,
+        output_dir=output_dir,
+        language=language,
+    )
+    background_tasks.add_task(runner, kickoff)
+    return StreamResponse.model_validate(row.model_dump())
+
+
+async def _stash_upload_to_tmp(file: UploadFile, output_dir: Path) -> Path:
+    """Stream `file` to a tempfile under `output_dir/.uploads/`. Returns the path.
+
+    We write into the same root as the eventual stream dir (not /tmp) to avoid
+    cross-device moves on Windows. Chunk size is 1 MB — plenty fast on local
+    SSD, won't pin a 500 MB upload in RAM.
+    """
+    import uuid
+
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="upload missing filename",
+        )
+
+    uploads_dir = output_dir / ".uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename).suffix or ".mp4"
+    tmp_path = uploads_dir / f"upl_{uuid.uuid4().hex}{suffix}"
+
+    chunk_size = 1024 * 1024
+    bytes_written = 0
+    with tmp_path.open("wb") as out:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            out.write(chunk)
+            bytes_written += len(chunk)
+
+    if bytes_written == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="empty upload",
+        )
+    return tmp_path
 
 
 @router.get("", response_model=list[StreamResponse])

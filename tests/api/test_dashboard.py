@@ -82,8 +82,9 @@ async def test_streams_page_renders_with_cookie_auth(
     r = await client.get("/dashboard/streams")
     assert r.status_code == 200
     assert "Live show" in r.text
-    # Persona dropdown is empty -> "process new VOD" form still renders.
-    assert "Process new VOD" in r.text
+    # Both ingest paths render: upload (primary) and URL (advanced).
+    assert "Upload a video" in r.text
+    assert "Advanced: process from a VOD URL" in r.text
 
 
 async def test_personas_page_renders_and_creates(

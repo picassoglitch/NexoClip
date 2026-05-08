@@ -14,10 +14,12 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
     Form,
     HTTPException,
     Request,
     Response,
+    UploadFile,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -135,6 +137,58 @@ async def streams_create(
         )
     except NexoClipError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    row = await StreamsRepo(db).upsert(stream_to_row(stream))
+    await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
+    runner = request.app.state.pipeline_runner
+    background_tasks.add_task(
+        runner,
+        PipelineKickoff(
+            tenant_id=tenant_id,
+            stream=stream,
+            persona_id=persona_id,
+            output_dir=output_dir,
+        ),
+    )
+    return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
+
+
+@router.post("/streams/upload", dependencies=[Depends(require_full_scope)])
+async def streams_upload(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    persona_id: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Ingest an operator-uploaded video file. The simpler path that sidesteps
+    yt-dlp / Kick auth entirely — the operator drops a recorded VOD on the
+    page and the pipeline runs against it.
+    """
+    from nexoclip.api.routers.streams import _stash_upload_to_tmp
+    from nexoclip.db.adapters import stream_to_row
+    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.settings import get_settings
+
+    output_dir = Path(get_settings().default_output_dir)
+    tmp_path = await _stash_upload_to_tmp(file, output_dir)
+    try:
+        try:
+            stream = await ingest_uploaded(
+                tenant_id=tenant_id,
+                source_path=tmp_path,
+                output_dir=output_dir,
+                title=file.filename,
+            )
+        except NexoClipError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
     row = await StreamsRepo(db).upsert(stream_to_row(stream))
     await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})

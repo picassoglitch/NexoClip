@@ -7,7 +7,7 @@ from .chat_replay import (
     save_chat_replay,
 )
 from .models import ChatMessage, ChatReplay, Platform, Stream
-from .service import detect_platform, ingest_vod, load_stream
+from .service import detect_platform, ingest_uploaded, ingest_vod, load_stream
 
 __all__ = [
     "ChatMessage",
@@ -17,6 +17,7 @@ __all__ = [
     "chat_replay_path",
     "detect_platform",
     "import_chat_replay",
+    "ingest_uploaded",
     "ingest_vod",
     "load_chat_replay",
     "load_stream",

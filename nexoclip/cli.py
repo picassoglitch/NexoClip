@@ -40,10 +40,45 @@ tokens_app = typer.Typer(name="tokens", help="API token management.", no_args_is
 webhooks_app = typer.Typer(
     name="webhooks", help="Webhook subscription dispatch.", no_args_is_help=True
 )
+metrics_app = typer.Typer(
+    name="metrics", help="Engagement-metric ingestion.", no_args_is_help=True
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
 app.add_typer(webhooks_app)
+app.add_typer(metrics_app)
+
+
+@metrics_app.command("ingest")
+def metrics_ingest_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant id to drain."),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """One-shot drain over all sent publish_jobs for the tenant.
+
+    Pulls fresh engagement stats from each platform's API and writes one
+    row per fetch into `publish_metrics`. The dashboard's outcome card
+    + the calibration loop both read from there.
+    """
+    from nexoclip.db import apply_migrations
+    from nexoclip.metrics import run_metrics_ingest
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            outcome = await run_metrics_ingest(tenant_id, db)
+            typer.echo(
+                f"metrics fetched={outcome.fetched} "
+                f"skipped_recent={outcome.skipped_recent} "
+                f"skipped_no_account={outcome.skipped_no_account} "
+                f"failed={outcome.failed}"
+            )
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
 
 
 @webhooks_app.command("send")

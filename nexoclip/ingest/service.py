@@ -50,6 +50,7 @@ async def ingest_vod(
     stream_id: str | None = None,
     force: bool = False,
     chat_replay_source: Path | None = None,
+    cookies_from_browser: str | None = None,
 ) -> Stream:
     """Download a VOD and extract its audio. Returns a Stream.
 
@@ -61,7 +62,11 @@ async def ingest_vod(
         force: If true, overwrite existing files even when `stream.json` exists.
         chat_replay_source: Optional path to a JSONL of chat messages
             (one `ChatMessage` per line). Phase 1 doesn't fetch chat replay
-            from platforms automatically — pass a pre-fetched file or skip.
+            from platforms automatically - pass a pre-fetched file or skip.
+        cookies_from_browser: Pass cookies from a logged-in browser session
+            ("chrome" / "edge" / "firefox" / "brave" / "chromium") through to
+            yt-dlp. Required for Kick. Falls back to `Settings.cookies_from_browser`
+            when omitted.
     """
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +98,21 @@ async def ingest_vod(
 
     platform = detect_platform(vod_url)
 
-    info = await asyncio.to_thread(_download_vod, vod_url=vod_url, target_path=video_path)
+    # Resolve the cookies-from-browser source: explicit kwarg wins; otherwise
+    # fall back to NEXOCLIP_COOKIES_FROM_BROWSER from Settings. This is what
+    # makes Kick work for unauthenticated yt-dlp.
+    if cookies_from_browser is None:
+        from nexoclip.settings import get_settings
+
+        cookies_from_browser = get_settings().cookies_from_browser or None
+
+    info = await asyncio.to_thread(
+        _download_vod,
+        vod_url=vod_url,
+        target_path=video_path,
+        cookies_from_browser=cookies_from_browser,
+        platform=platform,
+    )
 
     if force or not audio_path.exists():
         await asyncio.to_thread(_extract_audio, video_path, audio_path)
@@ -130,13 +149,23 @@ async def ingest_vod(
     return stream
 
 
-def _download_vod(*, vod_url: str, target_path: Path) -> dict[str, Any]:
+def _download_vod(
+    *,
+    vod_url: str,
+    target_path: Path,
+    cookies_from_browser: str | None = None,
+    platform: Platform = "unknown",
+) -> dict[str, Any]:
     """Run yt-dlp; ensure the resulting file lives at exactly `target_path`.
 
     yt-dlp picks the file extension from the chosen format, so we let it
     write `video.<ext>` and rename to `video.mp4` once we know the actual
     path. `merge_output_format=mp4` keeps the container consistent for
     downstream ffmpeg work.
+
+    `cookies_from_browser` injects yt-dlp's browser-cookie auth flow.
+    Required for Kick (Cloudflare blocks anonymous scraping); useful for
+    age-gated YouTube too.
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     outtmpl = str(target_path.with_suffix("")) + ".%(ext)s"
@@ -152,12 +181,20 @@ def _download_vod(*, vod_url: str, target_path: Path) -> dict[str, Any]:
         "writethumbnail": False,
         "overwrites": True,
     }
+    if cookies_from_browser:
+        # yt-dlp's option is a tuple: (BROWSER, [PROFILE, [KEYRING, [CONTAINER]]]).
+        # We only ever pass the browser name; users with multiple profiles can
+        # extend this later.
+        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser.strip().lower(),)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info: dict[str, Any] = ydl.extract_info(vod_url, download=True) or {}
     except yt_dlp.utils.DownloadError as e:
-        raise IngestError(f"yt-dlp failed for {vod_url}: {e}") from e
+        raise _explain_download_failure(
+            err=e, vod_url=vod_url, platform=platform,
+            cookies_from_browser=cookies_from_browser,
+        ) from e
 
     actual = _resolve_downloaded_path(info, fallback=target_path)
     if actual.resolve() != target_path.resolve():
@@ -165,6 +202,34 @@ def _download_vod(*, vod_url: str, target_path: Path) -> dict[str, Any]:
             target_path.unlink()
         actual.replace(target_path)
     return info
+
+
+def _explain_download_failure(
+    *,
+    err: Exception,
+    vod_url: str,
+    platform: Platform,
+    cookies_from_browser: str | None,
+) -> IngestError:
+    """Wrap yt-dlp's raw error with an actionable hint when we recognize the
+    pattern. Kick 403-with-no-cookies is by far the most common new-user
+    foot-gun; recognize it explicitly.
+    """
+    raw = str(err)
+    if (
+        platform == "kick"
+        and "403" in raw
+        and not cookies_from_browser
+    ):
+        return IngestError(
+            f"yt-dlp 403'd on Kick for {vod_url}. Kick blocks unauthenticated "
+            f"scraping; pass logged-in browser cookies through. Set "
+            f"NEXOCLIP_COOKIES_FROM_BROWSER=chrome (or edge / firefox / brave / "
+            f"chromium) in your .env or shell, then retry. The browser must "
+            f"have visited Kick at least once. "
+            f"Raw error: {raw}"
+        )
+    return IngestError(f"yt-dlp failed for {vod_url}: {raw}")
 
 
 def _resolve_downloaded_path(info: dict[str, Any], *, fallback: Path) -> Path:

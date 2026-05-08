@@ -16,7 +16,6 @@ from nexoclip.llm import config as llm_config_module
 from nexoclip.llm import router as router_module
 from nexoclip.transcribe import service as transcribe_service
 from nexoclip.variants import personas as personas_module
-
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
 from tests.transcribe._fakes import (  # type: ignore[import]
@@ -31,7 +30,9 @@ def _stub_everything(
     monkeypatch: pytest.MonkeyPatch, *, fake_provider: FakeProvider
 ) -> None:
     # Ingest
-    def fake_download(*, vod_url, target_path):
+    def fake_download(
+        *, vod_url, target_path, cookies_from_browser=None, platform="unknown"
+    ):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(b"v")
         return {"duration": 600.0, "title": "t", "uploader": "u"}

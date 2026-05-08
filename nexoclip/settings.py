@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     llm_default_provider: str = "anthropic"
     llm_default_quality: str = "standard"
 
+    # yt-dlp browser-cookie pass-through. Set to "chrome" / "edge" / "firefox"
+    # / "brave" / "chromium" to authenticate yt-dlp using cookies from a
+    # logged-in browser session. Required for Kick (which 403s anonymous
+    # scraping) and useful for age-gated YouTube. The browser must have
+    # visited the platform at least once.
+    cookies_from_browser: str | None = None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

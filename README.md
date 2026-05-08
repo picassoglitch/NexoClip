@@ -77,6 +77,28 @@ pytest                                                  # smoke + unit tests
 
 > The faster-whisper CUDA check uses **CTranslate2**, not PyTorch — `import torch` won't work because PyTorch isn't a dependency.
 
+### First-run gotchas
+
+- **Kick VODs need browser cookies.** Kick blocks anonymous `yt-dlp` with
+  HTTP 403 / Cloudflare. Add this to your `.env`:
+  ```
+  NEXOCLIP_COOKIES_FROM_BROWSER=chrome
+  ```
+  (or `edge` / `firefox` / `brave` / `chromium` — pick the browser
+  you're already logged into Kick on). yt-dlp pulls cookies from that
+  profile so the request authenticates. The browser must have visited
+  Kick at least once. Twitch and YouTube generally work without this.
+- **Use the venv's Python.** Activate `.venv` before running `nexoclip`
+  or `python run.py` — system Python 3.13/3.14 doesn't work with
+  faster-whisper. The activated prompt should look like
+  `(.venv) PS C:\...\QuantorClipAI>`.
+- **Whisper model downloads on first transcribe.** First `nexoclip
+  transcribe` (or first dashboard pipeline run) pulls the `medium`
+  model (~770 MB). Don't kill the process while it's downloading.
+- **Set the LLM budget governor before flipping vision-rescore on.**
+  `nexoclip tenants set-budget aldo --daily-usd 5.00` keeps a runaway
+  loop from burning premium tokens.
+
 ---
 
 ## Run

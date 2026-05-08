@@ -18,7 +18,6 @@ from nexoclip.llm.config import ProviderConfig
 from nexoclip.pipeline import PipelineDeps, StreamManifest, load_manifest, process_vod
 from nexoclip.transcribe import service as transcribe_service
 from nexoclip.variants import Persona
-
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
 from tests.transcribe._fakes import (  # type: ignore[import]
@@ -33,7 +32,13 @@ def _stub_ingest(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Replace yt-dlp + ffmpeg-audio-extract with file-creating no-ops."""
     download_calls: list[Path] = []
 
-    def fake_download(*, vod_url: str, target_path: Path) -> dict[str, Any]:
+    def fake_download(
+        *,
+        vod_url: str,
+        target_path: Path,
+        cookies_from_browser: str | None = None,
+        platform: str = "unknown",
+    ) -> dict[str, Any]:
         download_calls.append(target_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(b"\x00fakevideo")

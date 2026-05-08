@@ -16,10 +16,19 @@
     <label>
       Persona
       <select name="persona_id" required>
+        {% if not personas %}<option value="" disabled selected>No personas yet — create one in the Personas tab</option>{% endif %}
         {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
       </select>
     </label>
-    <button type="submit">Kick off pipeline</button>
+    <button type="submit" {% if not personas %}disabled{% endif %}>Kick off pipeline</button>
+    {% if not personas %}
+    <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
+    {% endif %}
+    <small>
+      <strong>Kick VODs:</strong> requires <code>NEXOCLIP_COOKIES_FROM_BROWSER=chrome</code>
+      (or edge / firefox / brave) in <code>.env</code>. Kick blocks anonymous
+      yt-dlp scraping. The chosen browser must have visited Kick at least once.
+    </small>
   </form>
 </article>
 

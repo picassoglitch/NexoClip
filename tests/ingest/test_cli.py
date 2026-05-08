@@ -25,7 +25,13 @@ def test_ingest_command_json_output(
 ) -> None:
     info = {"duration": 120.0, "title": "t", "uploader": "u"}
 
-    def fake_download(*, vod_url: str, target_path: Path) -> dict[str, Any]:
+    def fake_download(
+        *,
+        vod_url: str,
+        target_path: Path,
+        cookies_from_browser: str | None = None,
+        platform: str = "unknown",
+    ) -> dict[str, Any]:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(b"v")
         return info

@@ -6,6 +6,23 @@
   <p>Tenant: <code>{{ tenant_id }}</code></p>
 </hgroup>
 
+{% if not ffmpeg_ok %}
+<article style="border-left: 4px solid #b00; padding-left: 1em;">
+  <strong>ffmpeg is not installed.</strong> The pipeline needs ffmpeg to extract
+  audio from your video before transcription. Upload is disabled until you
+  install it.
+  <details>
+    <summary>Install ffmpeg</summary>
+    <ul>
+      <li><strong>Windows:</strong> <code>winget install --id=Gyan.FFmpeg -e</code> — then close and reopen PowerShell so PATH refreshes, then restart the dashboard.</li>
+      <li><strong>macOS:</strong> <code>brew install ffmpeg</code></li>
+      <li><strong>Debian / Ubuntu:</strong> <code>sudo apt install ffmpeg</code></li>
+    </ul>
+    Verify with <code>ffmpeg -version</code> in the same shell you use to run <code>python run.py</code>.
+  </details>
+</article>
+{% endif %}
+
 <article>
   <header><strong>Upload a video</strong> <small>— easiest path, no auth required</small></header>
   <form action="/dashboard/streams/upload" method="post" enctype="multipart/form-data">
@@ -21,9 +38,12 @@
         {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
       </select>
     </label>
-    <button type="submit" {% if not personas %}disabled{% endif %}>Upload &amp; process</button>
+    <button type="submit" {% if not personas or not ffmpeg_ok %}disabled{% endif %}>Upload &amp; process</button>
     {% if not personas %}
     <small><em>Create a persona first — head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
+    {% endif %}
+    {% if not ffmpeg_ok %}
+    <small><em>Install ffmpeg first (see banner above).</em></small>
     {% endif %}
   </form>
 </article>

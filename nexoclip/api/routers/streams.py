@@ -117,8 +117,19 @@ async def upload_stream(
     variants) runs as a BackgroundTask.
     """
     from nexoclip.db.adapters import stream_to_row
-    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.ingest import ingest_uploaded, is_ffmpeg_available
     from nexoclip.settings import get_settings
+
+    if not is_ffmpeg_available():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "ffmpeg is not installed on the server. Install it first: "
+                "Windows -> 'winget install --id=Gyan.FFmpeg -e' (then reopen "
+                "your shell so PATH refreshes); macOS -> 'brew install ffmpeg'; "
+                "Debian/Ubuntu -> 'sudo apt install ffmpeg'."
+            ),
+        )
 
     output_dir = Path(get_settings().default_output_dir)
     tmp_path = await _stash_upload_to_tmp(file, output_dir)

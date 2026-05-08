@@ -108,12 +108,19 @@ async def streams_list(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.ingest import is_ffmpeg_available
+
     streams = await StreamsRepo(db).list_for_tenant()
     personas = await PersonasRepo(db).list_for_tenant()
     return templates.TemplateResponse(
         request,
         "streams_list.html",
-        {"tenant_id": tenant_id, "streams": streams, "personas": personas},
+        {
+            "tenant_id": tenant_id,
+            "streams": streams,
+            "personas": personas,
+            "ffmpeg_ok": is_ffmpeg_available(),
+        },
     )
 
 
@@ -168,8 +175,18 @@ async def streams_upload(
     """
     from nexoclip.api.routers.streams import _stash_upload_to_tmp
     from nexoclip.db.adapters import stream_to_row
-    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.ingest import ingest_uploaded, is_ffmpeg_available
     from nexoclip.settings import get_settings
+
+    if not is_ffmpeg_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ffmpeg is not installed on the server. On Windows: "
+                "`winget install --id=Gyan.FFmpeg -e` then reopen PowerShell "
+                "and restart the dashboard."
+            ),
+        )
 
     output_dir = Path(get_settings().default_output_dir)
     tmp_path = await _stash_upload_to_tmp(file, output_dir)

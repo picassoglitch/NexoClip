@@ -15,7 +15,8 @@ from .conftest import auth
 
 
 def _stub_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No real ffmpeg/ffprobe in CI — short-circuit both shell-outs."""
+    """No real ffmpeg/ffprobe in CI — short-circuit both shell-outs and the
+    PATH-availability check that gates the upload endpoints."""
 
     def fake_extract_audio(_video: Path, audio: Path) -> None:
         audio.parent.mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,10 @@ def _stub_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("nexoclip.ingest.service._extract_audio", fake_extract_audio)
     monkeypatch.setattr("nexoclip.ingest.service._ffprobe_duration", fake_ffprobe)
+    # The handlers call `is_ffmpeg_available()` to gate the upload — stub
+    # it in both modules where it's looked up so the fast-path returns True.
+    monkeypatch.setattr("nexoclip.ingest.service.is_ffmpeg_available", lambda: True)
+    monkeypatch.setattr("nexoclip.ingest.is_ffmpeg_available", lambda: True)
 
 
 async def test_upload_creates_stream_and_kicks_off_pipeline(
@@ -140,6 +145,39 @@ async def test_dashboard_upload_redirects_to_stream_detail(
         )
     assert r.status_code == 303
     assert r.headers["location"].startswith("/dashboard/streams/str_")
+
+
+async def test_upload_503s_when_ffmpeg_missing(
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When ffmpeg isn't on PATH, the upload endpoint refuses up front with a
+    503 + install hint, so a multi-GB upload doesn't fail mid-pipeline."""
+    monkeypatch.setattr(
+        "nexoclip.settings.get_settings",
+        lambda: type("S", (), {"default_output_dir": str(tmp_path / "out")})(),
+    )
+    monkeypatch.setattr("nexoclip.ingest.service.is_ffmpeg_available", lambda: False)
+    monkeypatch.setattr("nexoclip.ingest.is_ffmpeg_available", lambda: False)
+
+    app = create_app(db=db)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://api.test"
+    ) as c:
+        files = {"file": ("v.mp4", b"\x00fakevideo", "video/mp4")}
+        r = await c.post(
+            "/streams/upload",
+            files=files,
+            data={"persona_id": "aldo"},
+            headers=auth(tenants["alice"]["token"]),
+        )
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "ffmpeg" in detail
+    assert "winget" in detail or "brew" in detail
 
 
 async def test_upload_requires_full_scope(

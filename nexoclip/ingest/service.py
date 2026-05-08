@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,17 @@ def detect_platform(vod_url: str) -> Platform:
         if pattern.search(vod_url):
             return platform
     return "unknown"
+
+
+def is_ffmpeg_available() -> bool:
+    """True iff `ffmpeg` is resolvable on PATH.
+
+    Used by the upload endpoints to fail fast: a 6 GB upload that 400s on
+    audio extraction is a bad first impression. The dashboard reads this at
+    page-render time too, so the upload form can disable itself with a clear
+    install hint instead of accepting a doomed POST.
+    """
+    return shutil.which("ffmpeg") is not None
 
 
 async def ingest_vod(

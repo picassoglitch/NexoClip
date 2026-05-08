@@ -87,6 +87,14 @@ def _ensure_cuda_libs_on_path() -> None:
         return
     nvidia_root = site_packages / "nvidia"
     if not nvidia_root.exists():
+        # Helpful breadcrumb when the user thinks they pip-installed but
+        # didn't, or installed into a different interpreter.
+        print(
+            f"No nvidia/* CUDA pip packages found under {site_packages}. "
+            f"If you intended GPU transcription, set NEXOCLIP_WHISPER_DEVICE=cpu "
+            f"in .env (CPU works without CUDA libs) or install the full "
+            f"CUDA Toolkit from NVIDIA's website."
+        )
         return
     added: list[str] = []
     for lib_dir in nvidia_root.iterdir():

@@ -50,13 +50,15 @@
         {% elif s.status == "failed" %}
           <span style="color: #b00; font-weight: bold; min-width: 1.2rem;">&times;</span>
           <span><strong>{{ s.name }}</strong> &mdash; {{ s.error or "failed" }}</span>
-          {% if s.error and "cublas" in s.error|lower %}
+          {% if s.error and ("cublas" in s.error|lower or "cudnn" in s.error|lower or "cudart" in s.error|lower) %}
           <small style="display: block; margin-top: 0.4rem; color: var(--pico-muted-color); flex-basis: 100%;">
-            <strong>Fix:</strong> CUDA's cuBLAS library isn't installed on this machine.
-            Run <code>pip install nvidia-cublas-cu12 nvidia-cudnn-cu12</code> in the venv,
-            restart the dashboard, then click <em>Run pipeline</em> above.
-            Alternatively, set <code>NEXOCLIP_WHISPER_DEVICE=cpu</code> and
-            <code>NEXOCLIP_WHISPER_COMPUTE_TYPE=int8</code> in <code>.env</code> to skip the GPU.
+            <strong>Fix (recommended):</strong> switch Whisper to CPU. Edit <code>.env</code> in the project root, set:<br>
+            <code>NEXOCLIP_WHISPER_DEVICE=cpu</code><br>
+            <code>NEXOCLIP_WHISPER_COMPUTE_TYPE=int8</code><br>
+            <code>NEXOCLIP_WHISPER_MODEL=base</code><br>
+            Restart the dashboard, then click <em>Run pipeline</em>. CPU + base + int8 transcribes a few-minute clip in about a minute &mdash; plenty fast for iteration.<br>
+            <br>
+            <strong>Or fix CUDA</strong> (Windows is fussy): full <a href="https://developer.nvidia.com/cuda-downloads" target="_blank">CUDA Toolkit 12.x</a> install from NVIDIA. The pure-pip path (<code>pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-runtime-cu12</code>) sometimes works but DLL load order on Windows often defeats it.
           </small>
           {% endif %}
         {% else %}

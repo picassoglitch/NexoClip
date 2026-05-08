@@ -87,6 +87,37 @@ async def test_progress_pending_when_no_events_yet(
     assert "(running…)" not in body
 
 
+async def test_progress_running_step_shows_elapsed_time(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """The running step row shows 'X s elapsed' / 'X m elapsed' so the user
+    can see something is actively happening, not just a frozen spinner."""
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id=tenant_id, stream_id="str_pE")
+    # Backdate the start event so elapsed > 0.
+    payload = {"step": "transcribe", "stream_id": "str_pE"}
+    started_at = (
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=42)
+    ).isoformat()
+    conn = await db.connect()
+    await conn.execute(
+        "INSERT INTO events (id, tenant_id, type, payload_json, ts) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "evt_elapsed_test",
+            tenant_id,
+            "pipeline.step.start",
+            json.dumps(payload),
+            started_at,
+        ),
+    )
+    await conn.commit()
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.get("/dashboard/streams/str_pE/progress")
+    assert r.status_code == 200
+    assert "elapsed" in r.text
+
+
 async def test_progress_running_step_polls_every_3s(
     client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
 ) -> None:

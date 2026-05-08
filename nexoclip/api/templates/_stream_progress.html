@@ -41,6 +41,12 @@
         {% elif s.status == "running" %}
           <span class="pulse-dot" aria-hidden="true" style="color: #1e6fd9; min-width: 1.2rem;">●</span>
           <span><strong>{{ s.name }}</strong> <em>(running…)</em></span>
+          {% if s.elapsed_s is not none %}
+          <small style="color: var(--pico-muted-color); margin-left: auto;">
+            {% if s.elapsed_s < 60 %}{{ "%.0f"|format(s.elapsed_s) }}s elapsed
+            {% else %}{{ "%.1f"|format(s.elapsed_s / 60.0) }}m elapsed{% endif %}
+          </small>
+          {% endif %}
         {% elif s.status == "failed" %}
           <span style="color: #b00; font-weight: bold; min-width: 1.2rem;">&times;</span>
           <span><strong>{{ s.name }}</strong> &mdash; {{ s.error or "failed" }}</span>

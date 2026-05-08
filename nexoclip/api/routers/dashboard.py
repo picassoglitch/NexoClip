@@ -287,7 +287,13 @@ async def stream_progress(
     # Roll up by step name -> latest known status. Step order is fixed.
     step_order = ["ingest", "analyze_video", "transcribe", "detect", "cut", "variants"]
     step_state: dict[str, dict[str, object]] = {
-        name: {"name": name, "status": "pending", "duration_s": None, "error": None}
+        name: {
+            "name": name,
+            "status": "pending",
+            "duration_s": None,
+            "elapsed_s": None,
+            "error": None,
+        }
         for name in step_order
     }
     # Walk events oldest -> newest so the latest status wins.
@@ -305,6 +311,20 @@ async def stream_progress(
             step_state[step_name]["status"] = "failed"
             step_state[step_name]["error"] = ev.payload.get("error")
             step_state[step_name]["duration_s"] = ev.payload.get("duration_s")
+
+    # Compute elapsed-time-so-far for the currently-running step. Gives the
+    # user a "yes, this is taking a while" signal instead of an indeterminate
+    # spinner that says nothing about progress.
+    import datetime as _dt
+
+    now = _dt.datetime.now(_dt.UTC)
+    for s in step_state.values():
+        if s["status"] == "running" and "started_at" in s:
+            try:
+                started = _dt.datetime.fromisoformat(str(s["started_at"]))
+                s["elapsed_s"] = (now - started).total_seconds()
+            except ValueError:
+                pass
 
     steps = [step_state[n] for n in step_order]
     is_running = any(s["status"] == "running" for s in steps) or all(

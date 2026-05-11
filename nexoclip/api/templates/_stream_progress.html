@@ -86,4 +86,21 @@
       50% { opacity: 0.3; }
     }
   </style>
+
+  {% if is_done or has_failed %}
+  {# When the poll first returns 'done' (or 'failed'), the rest of the page —
+     Run summary, Clips grid, Candidates table — is still rendered from
+     stale template vars set at page-load time. Trigger exactly one full
+     reload so those sections pick up the fresh DB state. sessionStorage
+     guards against the obvious infinite-refresh loop. #}
+  <script>
+    (function () {
+      const key = "nexoclip-refresh-{{ stream.id }}";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        window.location.reload();
+      }
+    })();
+  </script>
+  {% endif %}
 </div>

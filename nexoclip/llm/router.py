@@ -204,11 +204,26 @@ class LLMRouter:
 
         provider_chain = [rule.primary, *rule.fallbacks]
         last_error: Exception | None = None
+        # Collect every provider's failure reason so the final error message
+        # surfaces the real first failure (e.g. anthropic key missing) instead
+        # of just the last provider's "not available" — that bit me at 11am.
+        chain_errors: list[str] = []
 
         for provider_name in provider_chain:
             provider = self._get_provider(provider_name)
             if provider is None:
-                last_error = LLMError(f"provider not available: {provider_name}")
+                api_key_env = (self._config.providers.get(provider_name)
+                               and self._config.providers[provider_name].api_key_env) or "?"
+                has_key = bool(self._api_keys.get(provider_name))
+                has_cfg = self._config.providers.get(provider_name) is not None
+                if not has_cfg:
+                    reason = "no config block"
+                elif not has_key:
+                    reason = f"{api_key_env} env var missing/empty"
+                else:
+                    reason = "factory returned None (provider not implemented)"
+                last_error = LLMError(f"provider not available: {provider_name} ({reason})")
+                chain_errors.append(f"{provider_name}: {reason}")
                 continue
             model = self._config.model_for(provider_name, effective_quality)
 
@@ -229,6 +244,7 @@ class LLMRouter:
                     attempts=getattr(e, "attempts", 1),
                 )
                 last_error = e
+                chain_errors.append(f"{provider_name}: {type(e).__name__}: {e}")
                 # If there's another provider in the chain to try, emit
                 # llm.fallback so dashboards can flag flaky primaries.
                 if provider_name != provider_chain[-1]:
@@ -273,8 +289,9 @@ class LLMRouter:
                 else None,
             },
         )
+        chain_summary = " | ".join(chain_errors) if chain_errors else str(last_error)
         raise LLMError(
-            f"all providers failed for purpose={purpose!r}: {last_error}"
+            f"all providers failed for purpose={purpose!r}: {chain_summary}"
         ) from last_error
 
     async def _call_with_retries(

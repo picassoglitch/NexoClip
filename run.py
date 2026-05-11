@@ -29,6 +29,38 @@ from nexoclip.api import create_app
 from nexoclip.db import Database, apply_migrations
 
 
+def _load_dotenv() -> None:
+    """Read `.env` into os.environ before anything else imports settings.
+
+    Without this, ANTHROPIC_API_KEY (and friends) never make it into the
+    process environment. The LLM router then caches every provider as
+    None at init time and runs report the misleading
+    "all providers failed for purpose=X: provider not available: openai"
+    error — even though the user has a real Anthropic key in .env.
+
+    We import dotenv lazily because it's optional: if the user has env vars
+    set globally (CI, docker, manual export), we don't want to require the
+    package.
+    """
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+
+        # `override=True` because Windows can leak empty-string values into
+        # the environment from user/system profiles. Without override, an
+        # ANTHROPIC_API_KEY="" set globally silently shadows the real value
+        # in .env — and the LLM router then reports "provider not available"
+        # for every Claude call. The .env file is the source of truth.
+        load_dotenv(env_path, override=True)
+    except ImportError:
+        print(
+            "[warn] python-dotenv not installed — .env file ignored. "
+            "Run: pip install python-dotenv"
+        )
+
+
 def _ensure_ffmpeg_on_path() -> None:
     """Best-effort: if ffmpeg isn't on PATH but winget installed it under
     %LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg*, prepend that
@@ -277,6 +309,7 @@ async def _boot() -> None:
 
 def main() -> None:
     _resolve_python_check()
+    _load_dotenv()
     _ensure_ffmpeg_on_path()
     _ensure_system_cuda_on_path()
     _ensure_cuda_libs_on_path()

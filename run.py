@@ -86,11 +86,26 @@ def _verify_or_fallback_to_cpu() -> None:
     except OSError:
         pass
 
-    print(
-        "\n[CUDA fallback] cublas64_12.dll could not be loaded — falling back "
-        "to CPU transcription for this run. Install the full CUDA Toolkit from "
-        "NVIDIA if you want GPU speed; for now, CPU + base + int8 will work.\n"
-    )
+    # CUDA 13.x installs ship cublas64_13.dll, not cublas64_12.dll —
+    # CTranslate2 / faster-whisper hard-code the v12 filename. If we see
+    # nvcc on PATH but cuBLAS v12 still fails, surface that specific mismatch.
+    cuda_path = os.environ.get("CUDA_PATH", "")
+    if cuda_path and "v13" in cuda_path.lower():
+        print(
+            f"\n[CUDA fallback] CUDA 13.x is installed at {cuda_path} but "
+            f"faster-whisper / CTranslate2 needs the v12 cuBLAS library "
+            f"(cublas64_12.dll). Fix: 'pip install nvidia-cublas-cu12 "
+            f"nvidia-cudnn-cu12' inside the venv — the pip packages provide "
+            f"the v12 DLLs alongside your existing v13 install. Falling back "
+            f"to CPU for this run.\n"
+        )
+    else:
+        print(
+            "\n[CUDA fallback] cublas64_12.dll could not be loaded — falling "
+            "back to CPU transcription for this run. Install the full CUDA "
+            "Toolkit from NVIDIA if you want GPU speed; for now, CPU + base "
+            "+ int8 will work.\n"
+        )
     os.environ["NEXOCLIP_WHISPER_DEVICE"] = "cpu"
     os.environ["NEXOCLIP_WHISPER_COMPUTE_TYPE"] = "int8"
     # Only downgrade the model size if the user hasn't picked one explicitly.

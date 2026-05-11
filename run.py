@@ -106,6 +106,57 @@ def _verify_or_fallback_to_cpu() -> None:
         pass
 
 
+def _ensure_system_cuda_on_path() -> None:
+    """Add the NVIDIA CUDA Toolkit `bin\\` dir to PATH if installed system-wide.
+
+    The Toolkit installer adds its bin dir to the *system* PATH at install
+    time, but already-open shells don't pick up the change. Result: the
+    user installs CUDA, restarts python run.py from the same shell, and
+    still hits 'cublas64_12.dll not found' until they reopen PowerShell.
+
+    Walk `C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v*` and add
+    every versioned bin dir we find. No-op on Linux / macOS.
+    """
+    if os.name != "nt":
+        return
+    roots = [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "NVIDIA GPU Computing Toolkit"
+        / "CUDA",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "NVIDIA GPU Computing Toolkit"
+        / "CUDA",
+    ]
+    # CUDA_PATH is the canonical env var the installer sets when it succeeds.
+    cuda_path_env = os.environ.get("CUDA_PATH")
+    if cuda_path_env:
+        roots.insert(0, Path(cuda_path_env).parent)
+
+    added: list[str] = []
+    for cuda_root in roots:
+        if not cuda_root.exists():
+            continue
+        for version_dir in sorted(cuda_root.iterdir(), reverse=True):
+            bin_dir = version_dir / "bin"
+            if not bin_dir.is_dir():
+                continue
+            # Only add if cuBLAS is actually there (filters out half-installed
+            # versions / non-bin subdirs).
+            if not any(bin_dir.glob("cublas64_*.dll")):
+                continue
+            try:
+                os.add_dll_directory(str(bin_dir))
+            except (OSError, AttributeError):
+                pass
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            added.append(f"{cuda_root.name}/{version_dir.name}")
+    if added:
+        print(
+            f"Registered system CUDA Toolkit bin dirs for the DLL loader: "
+            f"{', '.join(added)}"
+        )
+
+
 def _ensure_cuda_libs_on_path() -> None:
     """Best-effort: add bundled nvidia-* pip packages' DLL dirs to the search path.
 
@@ -212,6 +263,7 @@ async def _boot() -> None:
 def main() -> None:
     _resolve_python_check()
     _ensure_ffmpeg_on_path()
+    _ensure_system_cuda_on_path()
     _ensure_cuda_libs_on_path()
     _verify_or_fallback_to_cpu()
     _print_whisper_config()

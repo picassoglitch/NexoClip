@@ -375,20 +375,31 @@ async def _run_pipeline(
     stream_dir = output_dir / stream.id
     call_log_path = stream_dir / "llm_calls.jsonl"
 
-    # 2a) analyze video — local CV pipeline. Skip silently if the video
-    # file isn't actually decodable (test stubs, corrupted downloads).
-    # The signal lands in <stream_dir>/visual_signals.json regardless of DB.
+    # 2a) analyze video — local CV pipeline. Skip silently if:
+    #   (a) the visual signals it produces aren't consumed by anything
+    #       (visual detector disabled + no vision_rescore in the default
+    #       pipeline) — pure wasted CPU per stream, and PySceneDetect on
+    #       a multi-hour VOD on CPU can take longer than every other
+    #       step combined.
+    #   (b) the video file isn't decodable (test stubs, corrupted
+    #       downloads — DetectionError) — log and continue.
     with _step("analyze_video", db=db):
-        try:
-            await _analyze_video(
-                tenant_id=tenant_id,
-                stream=stream,
-                output_dir=output_dir,
-                db=db,
-                force=force,
+        if not config.detection.visual.enabled:
+            _log.info(
+                "analyze_video.skipped",
+                reason="visual detector disabled; nothing downstream consumes the output",
             )
-        except DetectionError as e:
-            _log.warning("analyze_video.skipped", reason=str(e))
+        else:
+            try:
+                await _analyze_video(
+                    tenant_id=tenant_id,
+                    stream=stream,
+                    output_dir=output_dir,
+                    db=db,
+                    force=force,
+                )
+            except DetectionError as e:
+                _log.warning("analyze_video.skipped", reason=str(e))
 
     # 2) transcribe
     whisper_lang = language or "es"

@@ -32,11 +32,11 @@ from nexoclip.db import Database, apply_migrations
 def _load_dotenv() -> None:
     """Read `.env` into os.environ before anything else imports settings.
 
-    Without this, ANTHROPIC_API_KEY (and friends) never make it into the
-    process environment. The LLM router then caches every provider as
-    None at init time and runs report the misleading
-    "all providers failed for purpose=X: provider not available: openai"
-    error — even though the user has a real Anthropic key in .env.
+    Without this, ANTHROPIC_API_KEY never makes it into the process
+    environment. The LLM router then caches the provider as None at init
+    time and runs report the misleading "all providers failed for
+    purpose=X: provider not available: anthropic" error — even though
+    the user has a real Anthropic key in .env.
 
     We import dotenv lazily because it's optional: if the user has env vars
     set globally (CI, docker, manual export), we don't want to require the

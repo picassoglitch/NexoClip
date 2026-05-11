@@ -1,14 +1,16 @@
 """Provider abstraction shared by all LLM backends.
 
-The router doesn't know about Anthropic vs OpenAI specifics - it just calls
+The router doesn't know about vendor specifics — it just calls
 `provider.complete(...)` (or `complete_multimodal(...)`) and gets back a
 `ProviderResult`. New providers implement the `LLMProvider` protocol and the
 router calls them via the `provider_factory` injected into its constructor.
+Anthropic is the only built-in provider; the protocol exists so a future
+addition (or a swap to a different vendor) doesn't touch router code.
 
 Phase 1 adds the multimodal surface; Phase 0 only used `complete`. Providers
-that don't support vision (e.g. a future text-only fallback) should raise
-`LLMError` from `complete_multimodal`; the router treats that like any other
-provider failure and falls through to the next entry in the chain.
+that don't support vision should raise `LLMError` from `complete_multimodal`;
+the router treats that like any other provider failure and falls through to
+the next entry in the chain.
 """
 
 from __future__ import annotations

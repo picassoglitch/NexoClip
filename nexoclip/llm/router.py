@@ -8,7 +8,10 @@ Why a router (per CLAUDE.md hard rule #3):
     - Structured output validation: callers get a typed Pydantic model back,
       never raw JSON.
 
-Phase 0 only ships the Anthropic provider; OpenAI fallback is reserved.
+Anthropic is the only configured provider. The router still supports an
+arbitrary fallback chain; if a future config introduces a second provider,
+this code doesn't need to change — just register a factory entry below
+and reference it in `routing.<purpose>.fallbacks`.
 """
 
 from __future__ import annotations
@@ -59,12 +62,15 @@ class CallLogRow(BaseModel):
 def _default_provider_factory(
     name: str, config: ProviderConfig, api_key: str
 ) -> LLMProvider | None:
-    """Construct providers we ship in Phase 0; return None for unimplemented ones."""
+    """Construct configured providers; return None for unimplemented ones.
+
+    Anthropic is the only built-in provider. If `llm.yaml` ever references
+    another, register its constructor here.
+    """
     if name == "anthropic":
         from .anthropic_provider import AnthropicProvider
 
         return AnthropicProvider(api_key=api_key, config=config)
-    # OpenAI fallback is stubbed in Phase 0 — see PHASE_0.md.
     return None
 
 

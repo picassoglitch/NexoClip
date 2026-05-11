@@ -18,8 +18,10 @@ Hosted SaaS that turns any streamer's VOD into a multi-platform clip pipeline.
 **Updated principle (multimodal version):** Use the best signal for each job.
 - **Whisper (local GPU)** — transcription
 - **Heuristics (CPU)** — chat heat, audio energy, scene cuts, motion bursts, face/expression
-- **Cloud text LLMs (Claude / OpenAI)** — variant captions, hooks, hashtags, agent decisions
-- **Cloud multimodal LLMs (Claude vision / GPT-4o vision)** — clip-worthiness scoring, visual context for captions, smart cropping, thumbnail selection
+- **Cloud text LLM (Anthropic Claude)** — variant captions, hooks, hashtags, viral-moment selection, agent decisions
+- **Cloud multimodal LLM (Claude vision)** — clip-worthiness scoring, visual context for captions, smart cropping, thumbnail selection
+
+Single-vendor by design (Anthropic only). The LLM router still supports an arbitrary fallback chain, so a future provider can be added later without code changes — just register a factory entry and reference it in the routing rules.
 
 Multi-tenant SaaS from day 1. Public launch on free tier; paid tier designed and deferred. Aldo is user #1.
 
@@ -255,8 +257,7 @@ nexoclip/
 │   ├── llm/                       # Now handles vision too
 │   │   ├── router.py
 │   │   ├── providers/
-│   │   │   ├── anthropic.py       # supports text + vision
-│   │   │   ├── openai.py          # supports text + vision
+│   │   │   ├── anthropic.py       # supports text + vision (only vendor)
 │   │   ├── frame_cache.py         # NEW
 │   │   └── ...
 │   ├── vision/                    # NEW
@@ -361,7 +362,7 @@ Vision tokens are tracked separately from text tokens in `llm_calls` — costs a
 
 ## 13. Open Decisions (revised)
 
-1. **Vision provider default** — Anthropic Claude (Haiku for standard, Opus for premium) primary, OpenAI GPT-4o(-mini) fallback. Same as text. Keeps the surface simple.
+1. **Vision provider default** — Anthropic Claude only (Haiku for standard, Opus for premium). Earlier drafts kept an OpenAI fallback; removed for a single-vendor surface. The router still supports adding another provider later without code changes.
 2. **OCR worth it?** OCR adds another local-CV dependency and slows the pipeline. Useful for catching donation alerts and on-screen text moments. My take: skip in Phase 1, add in Phase 2 if real streams show signal we're missing.
 3. **Frame sampling rate** — 2 fps for emotion detection, 5 frames per candidate for LLM scoring. Sane defaults; tune from data.
 4. **Free tier basic smart crop** — face-detect only, no LLM. Confirms that free tier still feels good even without vision LLM.

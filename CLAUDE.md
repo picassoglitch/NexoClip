@@ -2,7 +2,7 @@
 
 ## What this is
 
-NexoClip is a multi-tenant SaaS that turns a streamer's VOD into a multi-platform short-form clip pipeline. Voice cues + chat heat + audio peaks + visual signals detect clip-worthy moments; cloud LLMs (Anthropic + OpenAI) generate persona-flavored captions and hooks; local Whisper handles transcription on the user's GPU.
+NexoClip is a multi-tenant SaaS that turns a streamer's VOD into a multi-platform short-form clip pipeline. Voice cues + chat heat + audio peaks + visual signals detect clip-worthy moments; Anthropic (Claude) generates persona-flavored captions, hooks, and viral-moment selections; local Whisper handles transcription on the user's GPU.
 
 **Read these first, in this order:**
 1. `docs/nexoclip_spec.md` — full architectural spec (v0.5)
@@ -19,7 +19,7 @@ The spec is the source of truth for *what* to build. PHASE_0.md is the source of
 
 2. **No business logic in route handlers.** FastAPI routes and MCP tool handlers both delegate to the same service functions in `nexoclip/<module>/service.py`. Routes are thin: parse inputs, call service, return response.
 
-3. **All LLM calls go through `LLMRouter`.** Never call `anthropic.Anthropic()` or `openai.OpenAI()` directly outside `nexoclip/llm/`. The router handles cost tracking, retries, fallback, structured output validation. Bypassing it breaks billing and reliability.
+3. **All LLM calls go through `LLMRouter`.** Never call `anthropic.Anthropic()` directly outside `nexoclip/llm/`. The router handles cost tracking, retries, fallback, structured output validation. Bypassing it breaks billing and reliability. Anthropic is the only configured provider; the router still supports adding more later without code changes.
 
 4. **Idempotent pipeline steps.** Every step in the VOD pipeline must be safely re-runnable. If `transcribe` is run twice on the same stream, the second run is a no-op (or produces identical output). State is in DB + filesystem, not in memory.
 
@@ -57,7 +57,7 @@ nexoclip/
 ├── transcribe/    # Whisper STT
 ├── detect/        # voice/chat/audio/visual triggers
 ├── clip/          # ffmpeg cut, reformat, captions
-├── llm/           # LLMRouter + provider clients (anthropic, openai)
+├── llm/           # LLMRouter + Anthropic provider client
 ├── variants/      # variant generator (uses llm.router)
 ├── vision/        # local CV (PySceneDetect, MediaPipe, OpenCV) — Phase 1+
 ├── score/         # multimodal scoring — Phase 2
@@ -85,8 +85,7 @@ Phase 0 only needs `ingest`, `transcribe`, `detect`, `clip`, `llm`, `variants`. 
 ## Stack pin
 
 - Python **3.11+** (match faster-whisper requirements)
-- `anthropic` Python SDK for Claude
-- `openai` SDK for OpenAI fallback
+- `anthropic` Python SDK for Claude (the only LLM vendor)
 - `faster-whisper` (CUDA build) for STT
 - `yt-dlp` for VOD download
 - `ffmpeg` (system binary) called via `subprocess.run` or `ffmpeg-python`

@@ -38,7 +38,7 @@ class RateLimitsConfig(BaseModel):
 
 
 class ProviderConfig(BaseModel):
-    """One LLM provider (Anthropic, OpenAI, ...)."""
+    """One LLM provider. Anthropic is the only configured backend."""
 
     api_key_env: str
     base_url: str = ""

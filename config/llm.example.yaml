@@ -3,6 +3,12 @@
 #
 # API keys are loaded from environment variables (see .env.example).
 # This file controls model selection, routing, and rate limits — not credentials.
+#
+# Anthropic is the only configured provider. The router supports an
+# arbitrary fallback chain, so a second provider can be added later by
+# defining it under `providers:` and listing it in a routing rule's
+# `fallbacks:`. Earlier versions of this file shipped an OpenAI fallback
+# block; it was removed to keep the live surface single-vendor.
 
 providers:
   anthropic:
@@ -17,48 +23,40 @@ providers:
       output_tokens_per_minute: 80000
     timeout_s: 30
 
-  openai:
-    api_key_env: OPENAI_API_KEY
-    base_url: https://api.openai.com/v1
-    models:
-      standard: gpt-4o-mini
-      premium: gpt-4o
-    rate_limits:
-      requests_per_minute: 500
-    timeout_s: 30
-
 # Routing rules per "purpose" (the use case of the call).
 # The router resolves: purpose -> quality -> provider -> model.
+# `fallbacks: []` means no fallback: if Anthropic is down, the call fails
+# loudly rather than silently degrading.
 routing:
   variant_generation:
     default_quality: standard
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
   variant_generation_visual:                    # Phase 2+, multimodal
     default_quality: premium
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
   clip_scoring:                                 # Phase 2+, multimodal scoring
     default_quality: premium
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
   vision_rescore:                               # Phase 2 Task 3, vision-LLM rescore of top-K candidates
     default_quality: standard                   # premium = opt-in via --quality flag
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
   agent_decision:                               # alter-ego auto-approval reasoning
     default_quality: premium
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
   viral_detection:                              # LLM scan of transcript for viral moments
     default_quality: standard
     primary: anthropic
-    fallbacks: [openai]
+    fallbacks: []
 
 # Reliability
 retry:
@@ -73,7 +71,8 @@ circuit_breaker:
   recovery_s: 300
 
 # Cost tracking — used to compute cost_usd_micros per call.
-# These rates are illustrative; verify against current provider pricing before launch.
+# These rates are illustrative; verify against current Anthropic pricing
+# before launch.
 pricing:
   anthropic:
     claude-haiku-4-5-20251001:
@@ -82,10 +81,3 @@ pricing:
     claude-opus-4-7:
       input_per_mtok_usd: 15.00
       output_per_mtok_usd: 75.00
-  openai:
-    gpt-4o-mini:
-      input_per_mtok_usd: 0.15
-      output_per_mtok_usd: 0.60
-    gpt-4o:
-      input_per_mtok_usd: 2.50
-      output_per_mtok_usd: 10.00

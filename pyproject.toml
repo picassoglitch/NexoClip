@@ -8,9 +8,10 @@ license = { text = "Proprietary" }
 authors = [{ name = "Aldo Villanueva" }]
 
 dependencies = [
-    # LLM providers
+    # LLM provider — Anthropic only. OpenAI was kept as a fallback option
+    # in earlier phases but removed in favor of a single-vendor surface;
+    # the router still supports N providers if a future config re-adds one.
     "anthropic>=0.40.0",
-    "openai>=1.50.0",                   # fallback path; not strictly required for Phase 0
 
     # VOD ingest
     "yt-dlp>=2024.10.0",

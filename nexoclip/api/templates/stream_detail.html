@@ -22,6 +22,14 @@
 </div>
 
 <article>
+  <header><strong>Source video</strong> <small>— what was uploaded / downloaded</small></header>
+  <video controls preload="metadata" style="width: 100%; max-width: 640px; background: #000;">
+    <source src="/dashboard/streams/{{ stream.id }}/source">
+    Your browser doesn&rsquo;t support inline HTML5 video. Open the file at <code>{{ stream.source_video_path }}</code>.
+  </video>
+</article>
+
+<article>
   <header><strong>Re-run pipeline</strong> <small>— resumes from the on-disk video; each step is idempotent</small></header>
   <form action="/dashboard/streams/{{ stream.id }}/rerun" method="post" style="display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap;">
     <label style="flex: 1; min-width: 200px; margin: 0;">

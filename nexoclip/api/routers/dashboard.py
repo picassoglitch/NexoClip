@@ -21,7 +21,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import (
@@ -505,6 +505,58 @@ async def clip_detail(
             "breakdown": breakdown,
             "outcomes": outcomes,
         },
+    )
+
+
+@router.get("/clips/{clip_id}/media")
+async def clip_media(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """Stream the cut MP4 for inline <video> playback on the clip detail page.
+
+    Returns 404 if the clip row is missing or the on-disk file disappeared
+    (e.g., out/ was nuked between runs). Tenant-bound so one tenant can't
+    fetch another's clip even by guessing the id.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    clip_path = Path(clip.path)
+    if not clip_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"clip file missing from disk: {clip_path}",
+        )
+    return FileResponse(
+        path=clip_path,
+        media_type="video/mp4",
+        # Don't set Content-Disposition: attachment — we want inline playback.
+        filename=clip_path.name,
+    )
+
+
+@router.get("/streams/{stream_id}/source")
+async def stream_source(
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """Serve the original uploaded/downloaded source video for preview."""
+    stream = await StreamsRepo(db).get(stream_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    src = Path(stream.source_video_path)
+    if not src.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"source video missing from disk: {src}",
+        )
+    return FileResponse(
+        path=src,
+        media_type="video/mp4",
+        filename=src.name,
     )
 
 

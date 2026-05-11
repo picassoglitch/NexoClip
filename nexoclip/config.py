@@ -72,6 +72,36 @@ class VisualConfig(BaseModel):
     )
 
 
+class ViralConfig(BaseModel):
+    """Viral-moment detector — feeds the transcript to an LLM and asks it to
+    identify the 5-15 most clip-worthy moments based on controversy, emotion,
+    quotability, and shock value.
+
+    Off by default (it costs an LLM call per stream). Turn on when the
+    voice-trigger-only detector returns nothing useful — the common case
+    when the streamer doesn't actually say 'clip this'.
+    """
+
+    enabled: bool = False
+    weight: float = Field(default=1.0, ge=0.0)
+    quality: str = Field(
+        default="standard",
+        description="LLM quality tier (standard | premium).",
+    )
+    max_moments: int = Field(
+        default=15,
+        ge=1,
+        le=50,
+        description="Hard cap on how many moments the LLM can return.",
+    )
+    min_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Drop moments below this LLM score before fusing.",
+    )
+
+
 class DetectionConfig(BaseModel):
     """All detector configuration."""
 
@@ -79,6 +109,7 @@ class DetectionConfig(BaseModel):
     chat_heat: ChatHeatConfig = Field(default_factory=ChatHeatConfig)
     audio_energy: AudioEnergyConfig = Field(default_factory=AudioEnergyConfig)
     visual: VisualConfig = Field(default_factory=VisualConfig)
+    viral: ViralConfig = Field(default_factory=ViralConfig)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 

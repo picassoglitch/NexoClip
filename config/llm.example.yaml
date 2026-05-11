@@ -55,6 +55,11 @@ routing:
     primary: anthropic
     fallbacks: [openai]
 
+  viral_detection:                              # LLM scan of transcript for viral moments
+    default_quality: standard
+    primary: anthropic
+    fallbacks: [openai]
+
 # Reliability
 retry:
   max_attempts: 3

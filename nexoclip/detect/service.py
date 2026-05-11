@@ -34,6 +34,7 @@ from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
 from .levenshtein import levenshtein
 from .models import Candidate, CandidateBatch
+from .viral import detect_viral_moments
 from .visual_signals import detect_visual_candidates
 
 
@@ -182,21 +183,25 @@ def detect_candidates(
     *,
     chat_replay: ChatReplay | None = None,
     visual_track: VisualSignalTrack | None = None,
+    viral_candidates: list[Candidate] | None = None,
 ) -> list[Candidate]:
     """Run every available detector and return the fused candidate stream.
 
-    Phase 1 detectors:
-        * voice triggers (always available — uses the transcript)
-        * chat heat (skipped silently when `chat_replay is None`)
-        * audio energy (skipped silently when `audio_energy.enabled is
-          False`; otherwise reads `stream.source_audio_path`)
-        * visual signals (skipped silently when `visual_track is None`,
-          e.g. when `analyze-video` hasn't run on this stream)
+    Detectors:
+        * voice triggers — fuzzy phrase match on the transcript
+        * chat heat — rolling-baseline spike on msg/sec (when chat_replay set)
+        * audio energy — RMS spike on the source audio (when enabled)
+        * visual signals — scene cuts / faces / motion (when visual_track set)
+        * viral — pass-through; the caller runs `detect_viral_moments()`
+          (async, needs an LLMRouter) and forwards the result here. This
+          keeps the sync vs async boundary clean — `detect_candidates` stays
+          sync and pure; the pipeline awaits the LLM call once and threads
+          the candidates in.
 
-    Each detector emits its own Candidates; this function concatenates
-    them and re-runs `_merge_candidates(window_s=config.merge_window_s)`
-    so hits from different signals within the same window collapse into
-    one cluster with `evidence["matches"]` listing each source.
+    Each detector emits its own Candidates; this function concatenates them
+    and runs `_merge_candidates` so hits from different signals within the
+    same window collapse into one cluster with `evidence["matches"]`
+    listing each source.
     """
     voice = detect_voice_triggers(
         tenant_id=tenant_id, stream=stream, transcript=transcript, config=config
@@ -220,10 +225,13 @@ def detect_candidates(
             track=visual_track,
             config=config.visual,
         )
-    if not chat and not audio and not visual:
+    viral = viral_candidates or []
+    if not chat and not audio and not visual and not viral:
         # Voice-only — already merged by detect_voice_triggers.
         return voice
-    return _merge_candidates(voice + chat + audio + visual, window_s=config.merge_window_s)
+    return _merge_candidates(
+        voice + chat + audio + visual + viral, window_s=config.merge_window_s
+    )
 
 
 def save_candidates(stream_dir: Path, batch: CandidateBatch) -> Path:

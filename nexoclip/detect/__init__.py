@@ -13,6 +13,7 @@ from .service import (
     load_candidates,
     save_candidates,
 )
+from .viral import ViralMoment, ViralMomentList, detect_viral_moments
 from .vision_rescore import RescoreOutcome, rescore_candidates
 from .visual_signals import detect_visual_candidates
 
@@ -21,9 +22,12 @@ __all__ = [
     "CandidateBatch",
     "CandidateReason",
     "RescoreOutcome",
+    "ViralMoment",
+    "ViralMomentList",
     "detect_audio_energy",
     "detect_candidates",
     "detect_chat_heat",
+    "detect_viral_moments",
     "detect_visual_candidates",
     "detect_voice_triggers",
     "load_candidates",

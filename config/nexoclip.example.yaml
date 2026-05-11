@@ -52,6 +52,17 @@ detection:
     enabled: false                  # turn on in Phase 1
     weight: 0.6
 
+  # Viral / controversy detector — sends the transcript to an LLM and asks it
+  # to identify the moments most likely to go viral on short-form platforms.
+  # Works on any content (doesn't require the streamer to say "clip this").
+  # Costs one LLM call per stream.
+  viral:
+    enabled: false                  # opt-in; costs one LLM call per stream
+    weight: 1.0
+    quality: standard               # standard (Haiku) | premium (Opus)
+    max_moments: 15                 # hard cap on returned candidates
+    min_score: 0.5                  # drop low-confidence moments
+
   # Candidate merging
   merge_window_s: 30                # candidates within this window collapse to one
 

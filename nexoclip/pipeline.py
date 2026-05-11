@@ -50,6 +50,7 @@ from nexoclip.detect import (
     Candidate,
     CandidateBatch,
     detect_candidates,
+    detect_viral_moments,
     save_candidates,
 )
 from nexoclip.errors import DetectionError, NexoClipError, VariantError
@@ -340,6 +341,13 @@ async def _run_pipeline(
     deps: PipelineDeps,
     db: Database | None,
 ) -> StreamManifest:
+    # Bind stream_id BEFORE the ingest step so its events carry stream_id
+    # in the payload and the dashboard's progress card can find them. (For
+    # the URL path where stream_id is None up-front, we re-bind below
+    # using the id ingest_vod minted.)
+    if stream_id:
+        structlog.contextvars.bind_contextvars(stream_id=stream_id)
+
     # 1) ingest
     with _step("ingest", db=db, vod_url=vod_url):
         stream = await ingest_vod(
@@ -397,10 +405,31 @@ async def _run_pipeline(
         if db is not None:
             await TranscriptsRepo(db).upsert(transcript_to_row(transcript))
 
-    # 3) detect (also saves candidates.json)
+    # 3) detect (also saves candidates.json). Build the router up-front so the
+    # viral detector (LLM-based, runs inside this step when enabled) can use
+    # it; the variants step at the bottom reuses the same router.
+    router = (
+        deps.router_factory(stream_dir)
+        if deps.router_factory
+        else LLMRouter(config=llm_config, call_log_path=call_log_path, db=db)
+    )
     with _step("detect", db=db):
         chat_replay = load_chat_replay(stream_dir, stream_id=stream.id, tenant_id=tenant_id)
         visual_track = load_visual_signals(stream_dir)
+        viral_cands: list[Candidate] = []
+        if config.detection.viral.enabled:
+            try:
+                viral_cands = await detect_viral_moments(
+                    tenant_id=tenant_id,
+                    stream=stream,
+                    transcript=transcript,
+                    router=router,
+                    config=config.detection.viral,
+                )
+            except Exception as e:  # noqa: BLE001 - belt-and-suspenders
+                # detect_viral_moments already swallows expected errors;
+                # this catches anything we missed so the pipeline keeps moving.
+                _log.warning("viral.skipped", reason=str(e), stream_id=stream.id)
         candidates = detect_candidates(
             tenant_id=tenant_id,
             stream=stream,
@@ -408,6 +437,7 @@ async def _run_pipeline(
             config=config.detection,
             chat_replay=chat_replay,
             visual_track=visual_track,
+            viral_candidates=viral_cands,
         )
         save_candidates(
             stream_dir,
@@ -433,12 +463,7 @@ async def _run_pipeline(
         if db is not None:
             await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])
 
-    # 5) variants per clip — build the router AFTER stream_dir exists.
-    router = (
-        deps.router_factory(stream_dir)
-        if deps.router_factory
-        else LLMRouter(config=llm_config, call_log_path=call_log_path, db=db)
-    )
+    # 5) variants per clip — reuse the router built above for detect+viral.
     if db is not None:
         # Persona must exist in DB so variants can FK to it.
         await PersonasRepo(db).upsert(

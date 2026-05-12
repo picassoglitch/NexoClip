@@ -338,11 +338,108 @@ def _silence_connection_reset(loop: asyncio.AbstractEventLoop) -> None:
     loop.set_exception_handler(handler)
 
 
+def _free_stale_port(host: str, port: int) -> None:
+    """If `host:port` is already bound, try to kill the owning process.
+
+    Otherwise uvicorn fails with WinError 10048 ('only one usage of each
+    socket address ... is normally permitted') and exits — leaving the
+    user to manually hunt for the stale python.exe. Almost always the
+    stale process is a previous `python run.py` that the user Ctrl+C'd
+    in a way that orphaned it (closed terminal, OS suspend, etc.) so
+    auto-cleanup is the right default.
+
+    Only operates on 127.0.0.1 / localhost. If host is something else
+    (LAN bind, container), bail — we don't want to kill a real shared
+    service by accident.
+    """
+    import socket
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return
+
+    # Cheap probe — try to bind ourselves; if we succeed, port is free.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    try:
+        probe.bind((host, port))
+    except OSError:
+        pass
+    else:
+        probe.close()
+        return
+    finally:
+        try:
+            probe.close()
+        except OSError:
+            pass
+
+    print(f"[port-cleanup] {host}:{port} is in use — trying to free it.")
+
+    if os.name != "nt":
+        print(
+            f"[port-cleanup] Auto-cleanup is Windows-only; on Linux/macOS run: "
+            f"  lsof -t -i:{port} | xargs kill -9"
+        )
+        return
+
+    # Resolve PID(s) holding the port via PowerShell. Get-NetTCPConnection
+    # is the cleanest API; netstat -ano is the universal fallback.
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-NetTCPConnection -LocalPort {port} -State Listen "
+                f"-ErrorAction SilentlyContinue).OwningProcess",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        pids = {
+            int(line) for line in result.stdout.split() if line.strip().isdigit()
+        }
+    except Exception as e:  # noqa: BLE001
+        print(f"[port-cleanup] could not enumerate listeners: {e}")
+        return
+
+    if not pids:
+        print(f"[port-cleanup] No listener PID found — port may free up on its own.")
+        return
+
+    me = os.getpid()
+    for pid in pids:
+        if pid == me:
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            print(f"[port-cleanup] killed stale process pid={pid}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[port-cleanup] failed to kill pid={pid}: {e}")
+
+    # Brief breather so Windows fully releases the socket before we bind.
+    import time as _time
+
+    _time.sleep(0.5)
+
+
 async def _boot() -> None:
     _silence_connection_reset(asyncio.get_running_loop())
     db_path = Path(os.environ.get("NEXOCLIP_DB_PATH", "./nexoclip.db"))
     host = os.environ.get("NEXOCLIP_HOST", "127.0.0.1")
     port = int(os.environ.get("NEXOCLIP_PORT", "8000"))
+
+    _free_stale_port(host, port)
 
     db = Database(db_path)
     await apply_migrations(db)

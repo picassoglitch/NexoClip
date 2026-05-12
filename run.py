@@ -18,6 +18,7 @@ Usage (after activating the venv):
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import os
 import shutil
 import sys
@@ -25,6 +26,13 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+
+# Dump a Python traceback on hard crashes (segfaults, abort signals, CUDA
+# OOMs). Without this, Whisper on long videos can SIGABRT mid-batch and the
+# only signal the user sees is 'PS prompt comes back' — no error, no
+# traceback, just a silently exited python.exe. faulthandler hooks SIGSEGV /
+# SIGABRT / SIGBUS / SIGFPE / SIGILL so we get at least a partial stack.
+faulthandler.enable()
 
 from nexoclip.api import create_app
 from nexoclip.db import Database, apply_migrations

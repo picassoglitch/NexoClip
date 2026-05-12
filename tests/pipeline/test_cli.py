@@ -60,6 +60,7 @@ def _stub_everything(
             words=[FakeWord(start=120.0, end=121.0, word="clipéalo", probability=0.93)],
         )
     ]
+    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
     monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
 
     # ffmpeg

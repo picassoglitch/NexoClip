@@ -17,6 +17,7 @@ from ._fakes import FakeInfo, FakeSegment, FakeWhisperModel, FakeWord
 
 @pytest.fixture(autouse=True)
 def _patch_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
     FakeWhisperModel.reset()
     monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=5.0)

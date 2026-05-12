@@ -40,6 +40,10 @@ def _make_stream(tmp_path: Path, *, tenant_id: str = "default") -> Stream:
 
 @pytest.fixture(autouse=True)
 def _patch_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Force in-process Whisper so the FakeWhisperModel monkeypatch below
+    # actually intercepts the call. Production default is subprocess-
+    # isolated; tests need to bypass that to inject the fake.
+    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
     FakeWhisperModel.reset()
     monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=10.5)
@@ -97,7 +101,16 @@ def test_transcribe_runs_and_writes_json(tmp_path: Path) -> None:
     assert ctor_kwargs == {"device": "cuda", "compute_type": "float16"}
     transcribe_args, transcribe_kwargs = FakeWhisperModel.transcribe_calls[0]
     assert transcribe_args == (str(stream.source_audio_path),)
-    assert transcribe_kwargs == {"language": "es", "word_timestamps": True}
+    # The three tuning params below are the long-VOD survival kit
+    # (VAD filter, no context accumulation, greedy decode). See
+    # nexoclip.transcribe.service._run_whisper for the rationale.
+    assert transcribe_kwargs == {
+        "language": "es",
+        "word_timestamps": True,
+        "vad_filter": True,
+        "condition_on_previous_text": False,
+        "beam_size": 1,
+    }
 
 
 def test_transcribe_is_idempotent(tmp_path: Path) -> None:

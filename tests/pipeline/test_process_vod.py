@@ -55,6 +55,13 @@ def _stub_ingest(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 
 
 def _stub_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Force the in-process Whisper path so the WhisperModel monkeypatch
+    # below actually intercepts the call. The default production path
+    # spawns a subprocess that wouldn't see our patched fake.
+    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_INPROCESS", "1")
+    import nexoclip.transcribe.service as _ts
+
+    monkeypatch.setattr(_ts, "_USE_SUBPROCESS", False)
     FakeWhisperModel.reset()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=600.0)
     # One trigger phrase ("clipéalo") at t=120, plus filler.
@@ -372,6 +379,7 @@ def test_pipeline_handles_zero_candidates(
     _stub_ffmpeg(monkeypatch)
 
     # Reset whisper to a transcript with no trigger words.
+    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
     FakeWhisperModel.reset()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=60.0)
     FakeWhisperModel.canned_segments = [

@@ -99,7 +99,45 @@ def detect_voice_triggers(
         return []
 
     raw: list[Candidate] = []
-    for language, phrases in voice_cfg.phrases.items():
+    # Forward triggers — clip extends forward from the timestamp.
+    _scan_phrase_family(
+        flat=flat,
+        phrases_by_lang=voice_cfg.phrases,
+        fuzzy_distance=voice_cfg.fuzzy_distance,
+        weight=voice_cfg.weight,
+        kind="forward",
+        out=raw,
+    )
+    # Retroactive triggers — clip extends BACKWARD from the timestamp.
+    _scan_phrase_family(
+        flat=flat,
+        phrases_by_lang=voice_cfg.retroactive_phrases,
+        fuzzy_distance=voice_cfg.fuzzy_distance,
+        weight=voice_cfg.weight,
+        kind="retroactive",
+        out=raw,
+        retroactive_lookback_s=voice_cfg.retroactive_lookback_s,
+    )
+    return _merge_candidates(raw, window_s=config.merge_window_s)
+
+
+def _scan_phrase_family(
+    *,
+    flat: list[_FlatWord],
+    phrases_by_lang: dict[str, list[str]],
+    fuzzy_distance: int,
+    weight: float,
+    kind: str,
+    out: list[Candidate],
+    retroactive_lookback_s: float | None = None,
+) -> None:
+    """Append candidates for one phrase family (forward OR retroactive) to `out`.
+
+    The two families share the entire matching algorithm; only the
+    `evidence['trigger_kind']` flag and the optional retroactive metadata
+    differ. Cut step reads `trigger_kind` to decide the window direction.
+    """
+    for language, phrases in phrases_by_lang.items():
         for phrase in phrases:
             phrase_norm = _normalize(phrase)
             if not phrase_norm:
@@ -113,29 +151,31 @@ def detect_voice_triggers(
                 joined = " ".join(_normalize(w.text) for w in window).strip()
                 if not joined:
                     continue
-                dist = levenshtein(phrase_norm, joined, max_dist=voice_cfg.fuzzy_distance)
-                if dist > voice_cfg.fuzzy_distance:
+                dist = levenshtein(phrase_norm, joined, max_dist=fuzzy_distance)
+                if dist > fuzzy_distance:
                     continue
                 confidence = sum(w.prob for w in window) / len(window)
-                score = voice_cfg.weight * confidence
+                score = weight * confidence
                 snippet = " ".join(w.text.strip() for w in window)
-                raw.append(
+                evidence: dict[str, object] = {
+                    "phrase": phrase,
+                    "language": language,
+                    "transcript_snippet": snippet,
+                    "distance": dist,
+                    "confidence": confidence,
+                    "end_ts": window[-1].end_ts,
+                    "trigger_kind": kind,
+                }
+                if kind == "retroactive" and retroactive_lookback_s is not None:
+                    evidence["retroactive_lookback_s"] = retroactive_lookback_s
+                out.append(
                     Candidate(
                         timestamp=window[0].ts,
                         score=score,
                         reason="voice",
-                        evidence={
-                            "phrase": phrase,
-                            "language": language,
-                            "transcript_snippet": snippet,
-                            "distance": dist,
-                            "confidence": confidence,
-                            "end_ts": window[-1].end_ts,
-                        },
+                        evidence=evidence,
                     )
                 )
-
-    return _merge_candidates(raw, window_s=config.merge_window_s)
 
 
 def _merge_candidates(candidates: list[Candidate], *, window_s: float) -> list[Candidate]:

@@ -60,14 +60,24 @@ def es_only_config(
     fuzzy_distance: int = 2,
     weight: float = 1.0,
     merge_window_s: float = 30.0,
+    retroactive_phrases: list[str] | None = None,
+    retroactive_lookback_s: float = 60.0,
 ) -> DetectionConfig:
-    """Voice detector config with a single Spanish phrase list."""
+    """Voice detector config with a single Spanish phrase list.
+
+    `retroactive_phrases` is optional — when set, the second phrase family
+    (e.g. 'clipeaste eso') triggers a backward-looking clip window.
+    """
     return DetectionConfig(
         voice=VoiceDetectorConfig(
             enabled=True,
             weight=weight,
             fuzzy_distance=fuzzy_distance,
             phrases={"es": phrases or ["clipéalo", "saca un clip"]},
+            retroactive_phrases=(
+                {"es": retroactive_phrases} if retroactive_phrases else {}
+            ),
+            retroactive_lookback_s=retroactive_lookback_s,
         ),
         merge_window_s=merge_window_s,
     )

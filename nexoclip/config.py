@@ -20,14 +20,43 @@ from nexoclip.errors import NexoClipError
 
 
 class VoiceDetectorConfig(BaseModel):
-    """Voice trigger phrase list + fuzzy match params."""
+    """Voice trigger phrase list + fuzzy match params.
+
+    Two phrase families with different clip-window semantics:
+
+    * `phrases` — forward triggers. The streamer says the phrase BEFORE the
+      moment ('watch this — clipea esto'). The cut step extends forward
+      from the trigger timestamp by `clip.pre_roll_s + post_roll_s`.
+
+    * `retroactive_phrases` — retroactive triggers. The streamer says the
+      phrase AFTER the moment ('that was insane — clipeaste eso'). The
+      cut step uses `retroactive_lookback_s` of audio BEFORE the trigger
+      timestamp and ignores pre/post roll. This is the more natural case
+      in live streaming.
+    """
 
     enabled: bool = True
     weight: float = Field(default=1.0, ge=0.0)
     fuzzy_distance: int = Field(default=2, ge=0)
     phrases: dict[str, list[str]] = Field(
         default_factory=dict,
-        description="ISO 639-1 → list of trigger phrases.",
+        description="ISO 639-1 → list of forward trigger phrases.",
+    )
+    retroactive_phrases: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="ISO 639-1 → list of retroactive trigger phrases.",
+    )
+    retroactive_lookback_s: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="When a retroactive phrase fires, the clip covers this "
+        "many seconds BEFORE the timestamp.",
+    )
+    cooldown_s: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="Minimum gap between two triggers of the same kind to "
+        "prevent dupes from rapid speech.",
     )
 
 

@@ -181,3 +181,74 @@ def test_punctuation_does_not_break_match() -> None:
         config=es_only_config(["clipéalo"], fuzzy_distance=0),
     )
     assert len(candidates) == 1
+
+
+# ---- retroactive trigger family ('clipeaste eso' → backward clip) ----
+
+
+def test_retroactive_phrase_tags_evidence() -> None:
+    """A retroactive phrase emits a candidate with trigger_kind=retroactive
+    and the lookback duration in evidence, so the cut step knows to
+    extend backward rather than around the timestamp."""
+    transcript = make_transcript(
+        words=[
+            (10.0, 10.3, " no", 0.9),
+            (10.4, 10.8, " manches", 0.9),
+            (10.9, 11.3, " clipeaste", 0.92),
+            (11.4, 11.7, " eso", 0.91),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config(
+            [],  # no forward phrases
+            retroactive_phrases=["clipeaste eso"],
+            retroactive_lookback_s=60.0,
+        ),
+    )
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c.evidence["trigger_kind"] == "retroactive"
+    assert c.evidence["retroactive_lookback_s"] == 60.0
+    assert c.evidence["phrase"] == "clipeaste eso"
+
+
+def test_forward_and_retroactive_coexist() -> None:
+    """Same VOD with both phrase families fires distinct candidates."""
+    transcript = make_transcript(
+        words=[
+            (5.0, 5.5, " clipéalo", 0.9),   # forward
+            (60.0, 60.4, " clipeaste", 0.9),  # retroactive
+            (60.5, 60.8, " eso", 0.9),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config(
+            ["clipéalo"],
+            retroactive_phrases=["clipeaste eso"],
+        ),
+    )
+    kinds = sorted(c.evidence["trigger_kind"] for c in candidates)
+    assert kinds == ["forward", "retroactive"]
+
+
+def test_forward_phrase_carries_forward_kind() -> None:
+    """Backward-compatible: existing forward triggers still emit
+    trigger_kind=forward (defaults exercised, no retroactive list)."""
+    transcript = make_transcript(
+        words=[
+            (10.0, 11.0, " clipéalo", 0.92),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config(["clipéalo"]),
+    )
+    assert candidates[0].evidence["trigger_kind"] == "forward"

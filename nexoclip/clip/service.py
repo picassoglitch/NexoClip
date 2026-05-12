@@ -44,10 +44,29 @@ def cut_window(
     pre_roll_s: float,
     post_roll_s: float,
     stream_duration_s: float,
+    trigger_kind: str = "forward",
+    retroactive_lookback_s: float | None = None,
 ) -> tuple[float, float, float]:
-    """Compute (start, end, duration) for one candidate, clamped to the VOD bounds."""
+    """Compute (start, end, duration) for one candidate, clamped to VOD bounds.
+
+    Two modes:
+      * `trigger_kind="forward"` (default) — symmetric window centered loosely
+        around the timestamp: [ts - pre_roll, ts + post_roll]. Matches the
+        original behavior. Use for audio spikes, viral picks, forward voice
+        triggers ('clipea esto').
+      * `trigger_kind="retroactive"` — clip extends BACKWARD from the
+        timestamp: [ts - retroactive_lookback, ts]. The natural shape for
+        post-hoc voice markers ('clipeaste eso' — the moment ended, then
+        the streamer flagged it). Falls back to forward semantics if
+        `retroactive_lookback_s` isn't provided.
+    """
     if stream_duration_s <= 0:
         raise ClipError(f"non-positive stream duration: {stream_duration_s}")
+    if trigger_kind == "retroactive" and retroactive_lookback_s is not None:
+        start = max(0.0, timestamp - retroactive_lookback_s)
+        end = min(stream_duration_s, timestamp)
+        duration = max(0.0, end - start)
+        return start, end, duration
     start = max(0.0, timestamp - pre_roll_s)
     naive_end = min(stream_duration_s, timestamp + post_roll_s)
     duration = max(0.0, naive_end - start)
@@ -114,11 +133,17 @@ def _cut_all(
     """Synchronous helper kept off the event loop via `asyncio.to_thread`."""
     clips: list[Clip] = []
     for candidate in candidates:
+        ev = candidate.evidence or {}
+        trigger_kind = str(ev.get("trigger_kind", "forward"))
+        retro_lookback = ev.get("retroactive_lookback_s")
+        retro_lookback_f = float(retro_lookback) if isinstance(retro_lookback, int | float) else None
         start, end, duration = cut_window(
             timestamp=candidate.timestamp,
             pre_roll_s=cfg.pre_roll_s,
             post_roll_s=cfg.post_roll_s,
             stream_duration_s=stream.duration_s,
+            trigger_kind=trigger_kind,
+            retroactive_lookback_s=retro_lookback_f,
         )
         if duration <= 0.0:
             continue

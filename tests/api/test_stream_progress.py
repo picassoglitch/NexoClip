@@ -174,6 +174,47 @@ async def test_progress_done_when_every_step_finished(
     assert 'hx-trigger="every 3s"' not in body
 
 
+async def test_progress_running_step_flips_to_abandoned_after_an_hour(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """A step.start that's >1h old with no matching done/failed is treated as
+    abandoned — the original pipeline process died with a dashboard restart
+    or Ctrl+C, and the dashboard should say so explicitly instead of
+    showing a fake 'running' state forever."""
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id=tenant_id, stream_id="str_aban")
+
+    # Backdate the start event by 2 hours so it crosses the abandonment
+    # threshold (1h) regardless of test machine clock skew.
+    started_at = (
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=2)
+    ).isoformat()
+    conn = await db.connect()
+    await conn.execute(
+        "INSERT INTO events (id, tenant_id, type, payload_json, ts) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "evt_abandoned_test",
+            tenant_id,
+            "pipeline.step.start",
+            json.dumps({"step": "transcribe", "stream_id": "str_aban"}),
+            started_at,
+        ),
+    )
+    await conn.commit()
+
+    await client.post("/dashboard/login", data={"token": tenants["alice"]["token"]})
+    r = await client.get("/dashboard/streams/str_aban/progress")
+    assert r.status_code == 200
+    body = r.text
+    # Banner reflects abandonment, not 'Pipeline running'.
+    assert "Pipeline abandoned" in body
+    assert "Pipeline running" not in body
+    # And we stop polling — no point hitting the server every 3s when
+    # nothing can change without user action.
+    assert 'hx-trigger="every 3s"' not in body
+
+
 async def test_progress_failed_step_surfaces_error(
     client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
 ) -> None:

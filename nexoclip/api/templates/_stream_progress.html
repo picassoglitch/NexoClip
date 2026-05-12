@@ -3,18 +3,20 @@
    pipeline is running. The outer #stream-progress div on the parent page
    gets swapped in place with this fragment. #}
 <div id="stream-progress"
-     {% if is_running and not is_done and not has_failed %}
+     {% if is_running and not is_done and not has_failed and not is_abandoned %}
      hx-get="/dashboard/streams/{{ stream.id }}/progress"
      hx-trigger="every 3s"
      hx-swap="outerHTML"
      {% endif %}>
-  <article{% if has_failed %} style="border-left: 4px solid #b00;"{% endif %}>
+  <article{% if has_failed %} style="border-left: 4px solid #b00;"{% elif is_abandoned %} style="border-left: 4px solid #d97706;"{% endif %}>
     <header>
       <strong>
         {% if is_done %}
           Pipeline complete
         {% elif has_failed %}
           Pipeline failed
+        {% elif is_abandoned %}
+          Pipeline abandoned
         {% else %}
           Pipeline running
           <span class="pulse-dot" aria-hidden="true">●</span>
@@ -47,6 +49,15 @@
             {% else %}{{ "%.1f"|format(s.elapsed_s / 60.0) }}m elapsed{% endif %}
           </small>
           {% endif %}
+        {% elif s.status == "abandoned" %}
+          <span style="color: #d97706; font-weight: bold; min-width: 1.2rem;" aria-label="abandoned">!</span>
+          <span>
+            <strong>{{ s.name }}</strong> &mdash;
+            <em>abandoned after {{ "%.0f"|format(s.elapsed_s / 60.0) }}m</em>
+            <small style="display: block; color: var(--pico-muted-color); margin-top: 0.2rem;">
+              The dashboard was probably restarted while this step was running. The original pipeline thread is gone. Click <strong>Run pipeline</strong> below to start fresh &mdash; ingest / analyze_video / transcribe are all idempotent, so finished steps stay finished.
+            </small>
+          </span>
         {% elif s.status == "failed" %}
           <span style="color: #b00; font-weight: bold; min-width: 1.2rem;">&times;</span>
           <span><strong>{{ s.name }}</strong> &mdash; {{ s.error or "failed" }}</span>

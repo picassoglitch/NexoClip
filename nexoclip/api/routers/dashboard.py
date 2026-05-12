@@ -315,14 +315,25 @@ async def stream_progress(
     # Compute elapsed-time-so-far for the currently-running step. Gives the
     # user a "yes, this is taking a while" signal instead of an indeterminate
     # spinner that says nothing about progress.
+    #
+    # If elapsed exceeds ABANDONED_THRESHOLD_S the step is reclassified as
+    # 'abandoned' — almost always means the dashboard was restarted while
+    # the background task was in-flight (Ctrl+C'd, crashed, etc.). The
+    # actual pipeline thread is dead and the run will never finish on its
+    # own. Show that explicitly so the user knows to click 'Run pipeline'
+    # rather than wait forever on a fake 'running' state.
     import datetime as _dt
 
+    ABANDONED_THRESHOLD_S = 60 * 60  # 1 hour — generous even for hour+ VODs
     now = _dt.datetime.now(_dt.UTC)
     for s in step_state.values():
         if s["status"] == "running" and "started_at" in s:
             try:
                 started = _dt.datetime.fromisoformat(str(s["started_at"]))
-                s["elapsed_s"] = (now - started).total_seconds()
+                elapsed = (now - started).total_seconds()
+                s["elapsed_s"] = elapsed
+                if elapsed > ABANDONED_THRESHOLD_S:
+                    s["status"] = "abandoned"
             except ValueError:
                 pass
 
@@ -332,6 +343,7 @@ async def stream_progress(
     )
     is_done = all(s["status"] == "done" for s in steps)
     has_failed = any(s["status"] == "failed" for s in steps)
+    is_abandoned = any(s["status"] == "abandoned" for s in steps)
 
     return templates.TemplateResponse(
         request,
@@ -342,6 +354,7 @@ async def stream_progress(
             "is_running": is_running,
             "is_done": is_done,
             "has_failed": has_failed,
+            "is_abandoned": is_abandoned,
             "candidate_count": len(candidates),
             "clip_count": len(clips),
         },

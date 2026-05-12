@@ -4,6 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}NexoClip{% endblock %}</title>
+
+  {# Apply the saved theme BEFORE Pico's stylesheet kicks in so we don't
+     flash light-mode for a frame on dark-mode preloads. localStorage stores
+     "light" / "dark" / "auto"; "auto" defers to prefers-color-scheme. #}
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("nexoclip-theme") || "auto";
+        var theme = saved;
+        if (saved === "auto") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
+        document.documentElement.dataset.themePref = saved;
+      } catch (_) { /* private mode etc. — default to Pico auto */ }
+    })();
+  </script>
+
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   <style>
@@ -15,6 +33,28 @@
     .status-approved { background: #d1fae5; color: #065f46; }
     .status-rejected { background: #fee2e2; color: #991b1b; }
     .status-published { background: #dbeafe; color: #1e40af; }
+
+    /* Tighter status pill contrast on dark backgrounds — the pastel light-mode
+       colors above wash out against Pico's dark-mode surface. */
+    [data-theme="dark"] .status-ready_for_review { background: #78350f; color: #fde68a; }
+    [data-theme="dark"] .status-approved         { background: #064e3b; color: #a7f3d0; }
+    [data-theme="dark"] .status-rejected         { background: #7f1d1d; color: #fecaca; }
+    [data-theme="dark"] .status-published        { background: #1e3a8a; color: #bfdbfe; }
+
+    /* Theme toggle button — borderless icon button, neutral on both themes. */
+    .theme-toggle {
+      background: transparent;
+      border: 1px solid var(--pico-muted-border-color);
+      color: var(--pico-color);
+      padding: 0.25rem 0.55rem;
+      border-radius: 0.35rem;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+    }
+    .theme-toggle:hover { background: var(--pico-muted-background-color); }
+    .theme-toggle .label { display: none; }
+    @media (min-width: 768px) { .theme-toggle .label { display: inline; margin-left: 0.35rem; font-size: 0.8rem; } }
   </style>
 </head>
 <body>
@@ -29,6 +69,15 @@
         <li><a href="/dashboard/connected-accounts">Accounts</a></li>
         <li><a href="/dashboard/llm-calls">LLM Spend</a></li>
         <li><a href="/dashboard/settings/llm">LLM Settings</a></li>
+        <li>
+          <button id="theme-toggle"
+                  type="button"
+                  class="theme-toggle"
+                  aria-label="Toggle theme"
+                  title="Cycle theme: light / dark / auto">
+            <span id="theme-toggle-icon" aria-hidden="true">●</span><span class="label" id="theme-toggle-label">auto</span>
+          </button>
+        </li>
         <li><form action="/dashboard/logout" method="post" style="display:inline"><button class="secondary outline">Logout</button></form></li>
       </ul>
     </nav>
@@ -36,5 +85,52 @@
   <main class="container">
     {% block content %}{% endblock %}
   </main>
+
+  {# Theme toggle: cycles light -> dark -> auto. Stored in localStorage so
+     the early-init script picks the right mode on the next page load. #}
+  <script>
+    (function () {
+      var ORDER = ["light", "dark", "auto"];
+      var ICONS = { light: "☀", dark: "☾", auto: "●" };
+
+      function applyTheme(pref) {
+        var theme = pref;
+        if (pref === "auto") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
+        document.documentElement.dataset.themePref = pref;
+        var icon = document.getElementById("theme-toggle-icon");
+        var label = document.getElementById("theme-toggle-label");
+        if (icon) icon.textContent = ICONS[pref] || "●";
+        if (label) label.textContent = pref;
+      }
+
+      // Initial paint — element exists now, so update icon to match what
+      // the head script already applied.
+      var initial = (document.documentElement.dataset.themePref) || "auto";
+      applyTheme(initial);
+
+      var btn = document.getElementById("theme-toggle");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          var current = (document.documentElement.dataset.themePref) || "auto";
+          var next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
+          try { localStorage.setItem("nexoclip-theme", next); } catch (_) {}
+          applyTheme(next);
+        });
+      }
+
+      // Follow OS changes while in auto mode.
+      var mq = window.matchMedia("(prefers-color-scheme: dark)");
+      if (mq.addEventListener) {
+        mq.addEventListener("change", function () {
+          if ((document.documentElement.dataset.themePref || "auto") === "auto") {
+            applyTheme("auto");
+          }
+        });
+      }
+    })();
+  </script>
 </body>
 </html>

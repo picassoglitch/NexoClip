@@ -22,6 +22,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -293,7 +294,44 @@ def _resolve_python_check() -> None:
         sys.exit(1)
 
 
+def _silence_connection_reset(loop: asyncio.AbstractEventLoop) -> None:
+    """Filter the Windows-only 'WinError 10054' spam out of the asyncio log.
+
+    The dashboard serves the source video and clip MP4s as streaming
+    FileResponses. Every time the browser closes a Range request mid-flight
+    (user seeks the player, navigates away, etc.) the Proactor event loop's
+    transport shutdown trips `ConnectionResetError(WinError 10054)`, and
+    asyncio's default handler logs a full multi-line traceback for each
+    one. They're harmless and pollute the terminal — a single page-load
+    can produce 5+ of them.
+
+    Install a custom exception handler that swallows just this specific
+    case and lets every other unhandled exception through to the default.
+    """
+    if os.name != "nt":
+        return
+    prev = loop.get_exception_handler()
+
+    def handler(loop_: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exc = context.get("exception")
+        winerror = getattr(exc, "winerror", None)
+        is_reset = isinstance(exc, ConnectionResetError) and winerror == 10054
+        # Some failure modes don't expose .winerror — pattern-match the
+        # message as a fallback.
+        msg = context.get("message", "")
+        is_reset_msg = "10054" in str(exc) or "10054" in str(msg)
+        if is_reset or is_reset_msg:
+            return
+        if prev is not None:
+            prev(loop_, context)
+        else:
+            loop_.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 async def _boot() -> None:
+    _silence_connection_reset(asyncio.get_running_loop())
     db_path = Path(os.environ.get("NEXOCLIP_DB_PATH", "./nexoclip.db"))
     host = os.environ.get("NEXOCLIP_HOST", "127.0.0.1")
     port = int(os.environ.get("NEXOCLIP_PORT", "8000"))

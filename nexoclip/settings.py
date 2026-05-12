@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     whisper_device: str = "cuda"
     whisper_model: str = "medium"
     whisper_compute_type: str = "float16"
+    # Hard cap on the transcribe step. faster-whisper occasionally hangs on
+    # CUDA — silent stall, no exception, the asyncio.to_thread call never
+    # returns. Without a timeout the whole pipeline waits forever and the
+    # dashboard's progress card stays stuck on the pulsing dot. 30 min is
+    # generous even for hour-long VODs on a slow GPU.
+    whisper_timeout_s: float = 1800.0
 
     log_level: str = "INFO"
     log_format: str = "console"

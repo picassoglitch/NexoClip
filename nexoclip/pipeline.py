@@ -422,17 +422,40 @@ async def _run_pipeline(
                 )
 
     # 2) transcribe
+    # Wrapped in asyncio.wait_for: faster-whisper occasionally stalls on
+    # CUDA without raising — silent hang inside the worker thread. The
+    # timeout (NEXOCLIP_WHISPER_TIMEOUT_S, default 30 min) raises a
+    # TranscriptionError so the dashboard's progress card flips to
+    # "Pipeline failed" with an actionable message instead of staring at
+    # a pulsing dot forever.
     whisper_lang = language or "es"
     with _step("transcribe", db=db, model=settings.whisper_model, device=settings.whisper_device):
-        transcript = await transcribe(
-            tenant_id=tenant_id,
-            stream=stream,
-            model_size=settings.whisper_model,
-            device=settings.whisper_device,
-            compute_type=settings.whisper_compute_type,
-            language=whisper_lang,
-            force=force,
-        )
+        try:
+            transcript = await asyncio.wait_for(
+                transcribe(
+                    tenant_id=tenant_id,
+                    stream=stream,
+                    model_size=settings.whisper_model,
+                    device=settings.whisper_device,
+                    compute_type=settings.whisper_compute_type,
+                    language=whisper_lang,
+                    force=force,
+                ),
+                timeout=settings.whisper_timeout_s,
+            )
+        except asyncio.TimeoutError as e:
+            from nexoclip.errors import TranscriptionError
+
+            raise TranscriptionError(
+                f"Whisper transcribe exceeded {settings.whisper_timeout_s:.0f}s "
+                f"and was abandoned. Common causes on Windows: CUDA OOM (run "
+                f"`nvidia-smi` — if VRAM is full, restart the dashboard); a "
+                f"corrupted audio extract; or a stuck CTranslate2 worker. "
+                f"Fix: restart `python run.py`, click 'Run pipeline' on the "
+                f"stream again. If it hangs twice in a row, set "
+                f"NEXOCLIP_WHISPER_MODEL=base in .env (smaller model, faster, "
+                f"less VRAM)."
+            ) from e
         if db is not None:
             await TranscriptsRepo(db).upsert(transcript_to_row(transcript))
 

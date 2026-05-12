@@ -70,6 +70,17 @@ class VisualConfig(BaseModel):
         default_factory=lambda: ["smile", "laugh", "shock"],
         description="Which face_emotion values count as 'strong' (worth firing on).",
     )
+    timeout_s: float = Field(
+        default=120.0,
+        gt=0.0,
+        description=(
+            "Hard cap on analyze_video runtime. PySceneDetect on CPU scales "
+            "with video length and can take 10+ minutes on a long VOD — the "
+            "rest of the pipeline shouldn't wait. On timeout the step is "
+            "logged as 'analyze_video.timeout' and the pipeline continues "
+            "without visual signals."
+        ),
+    )
 
 
 class ViralConfig(BaseModel):

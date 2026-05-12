@@ -48,9 +48,15 @@ detection:
     sustain_s: 1.5
 
   # Visual signals (Phase 1)
+  # Off by default — PySceneDetect on CPU can take 10+ minutes on a long
+  # VOD, and the LLM viral detector below already covers "find clip-worthy
+  # moments". Turn on only if you want scene-cut + face/motion signals to
+  # vote alongside the LLM. timeout_s is the hard cap on analyze_video
+  # runtime; on timeout the pipeline continues without visual signals.
   visual:
-    enabled: false                  # turn on in Phase 1
+    enabled: false
     weight: 0.6
+    timeout_s: 120.0
 
   # Viral / controversy detector — sends the transcript to an LLM and asks it
   # to identify the moments most likely to go viral on short-form platforms.

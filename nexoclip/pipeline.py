@@ -15,6 +15,7 @@ its variants, and a roll-up of LLM spend (read from `llm_calls.jsonl`).
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 import time
@@ -383,6 +384,10 @@ async def _run_pipeline(
     #       step combined.
     #   (b) the video file isn't decodable (test stubs, corrupted
     #       downloads — DetectionError) — log and continue.
+    #   (c) the OpenCV work blows past the configured timeout — see
+    #       VisualConfig.timeout_s. The pipeline moves on with no visual
+    #       signals; downstream merges happen with whatever voice / audio
+    #       / viral candidates were already found.
     with _step("analyze_video", db=db):
         if not config.detection.visual.enabled:
             _log.info(
@@ -390,16 +395,31 @@ async def _run_pipeline(
                 reason="visual detector disabled; nothing downstream consumes the output",
             )
         else:
+            timeout_s = config.detection.visual.timeout_s
             try:
-                await _analyze_video(
-                    tenant_id=tenant_id,
-                    stream=stream,
-                    output_dir=output_dir,
-                    db=db,
-                    force=force,
+                await asyncio.wait_for(
+                    _analyze_video(
+                        tenant_id=tenant_id,
+                        stream=stream,
+                        output_dir=output_dir,
+                        db=db,
+                        force=force,
+                    ),
+                    timeout=timeout_s,
                 )
             except DetectionError as e:
                 _log.warning("analyze_video.skipped", reason=str(e))
+            except asyncio.TimeoutError:
+                _log.warning(
+                    "analyze_video.timeout",
+                    timeout_s=timeout_s,
+                    reason=(
+                        f"PySceneDetect exceeded {timeout_s:.0f}s on this VOD. "
+                        f"Continuing without visual signals. Raise "
+                        f"detection.visual.timeout_s in nexoclip.yaml or set "
+                        f"detection.visual.enabled=false to skip the step entirely."
+                    ),
+                )
 
     # 2) transcribe
     whisper_lang = language or "es"

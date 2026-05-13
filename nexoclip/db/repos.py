@@ -99,7 +99,8 @@ class TenantsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
-            "daily_publish_limit, rescore_concurrency_cap "
+            "daily_publish_limit, rescore_concurrency_cap, "
+            "retention_vod_days, retention_clip_days, retention_transcript_days "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
@@ -115,10 +116,47 @@ class TenantsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
-            "daily_publish_limit, rescore_concurrency_cap "
+            "daily_publish_limit, rescore_concurrency_cap, "
+            "retention_vod_days, retention_clip_days, retention_transcript_days "
             "FROM tenants ORDER BY created_at"
         )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]
+
+    async def set_retention(
+        self,
+        tenant_id: str,
+        *,
+        retention_vod_days: int | None | _Unset = _UNSET,
+        retention_clip_days: int | None | _Unset = _UNSET,
+        retention_transcript_days: int | None | _Unset = _UNSET,
+    ) -> Tenant:
+        """Update retention windows for one tenant.
+
+        Same sentinel pattern as `set_budget`: a passed `None` clears the
+        column to NULL (i.e. the tenant inherits the system default).
+        Omitting a kwarg leaves the existing value untouched.
+        """
+        sets: list[str] = []
+        values: list[object] = []
+        if not isinstance(retention_vod_days, _Unset):
+            sets.append("retention_vod_days = ?")
+            values.append(retention_vod_days)
+        if not isinstance(retention_clip_days, _Unset):
+            sets.append("retention_clip_days = ?")
+            values.append(retention_clip_days)
+        if not isinstance(retention_transcript_days, _Unset):
+            sets.append("retention_transcript_days = ?")
+            values.append(retention_transcript_days)
+        if not sets:
+            return await self.get_or_raise(tenant_id)
+        values.append(tenant_id)
+        conn = await self._db.connect()
+        await conn.execute(
+            f"UPDATE tenants SET {', '.join(sets)} WHERE id = ?",
+            tuple(values),
+        )
+        await conn.commit()
+        return await self.get_or_raise(tenant_id)
 
     async def set_budget(
         self,

@@ -1,0 +1,297 @@
+"""Retention sweeper — hard-deletes artifacts past their tenant windows.
+
+Three retention scopes:
+
+  * **VOD** (source video + audio): the heaviest artifact. ~5-50 GB per
+    4hr stream. Default 30 days.
+  * **Clip** (rendered vertical clip + thumbnails): ~50-500 MB per clip.
+    Default 90 days.
+  * **Transcript** (Whisper JSON segments): KBs per stream. Default 365
+    days — cheap to keep, useful for re-running detection later with a
+    new ruleset.
+
+Each scope is independent. A stream whose VOD aged out can still have
+its transcript on disk if the transcript window hasn't passed.
+
+Sweeper algorithm:
+
+    1. For each tenant, resolve the three windows (col → system default).
+    2. Compute three cutoff timestamps (now - window_days, UTC).
+    3. SELECT streams older than VOD cutoff → unlink source files.
+    4. SELECT clips older than clip cutoff → unlink clip + thumbnail files,
+       DELETE the clip rows.
+    5. SELECT transcripts older than transcript cutoff → DELETE rows
+       (no on-disk file — transcripts live in the DB).
+    6. After VOD-side artifacts are unlinked, DELETE the stream rows.
+       The FK cascade nukes orphan candidates / events / etc. that
+       wouldn't have been useful anyway.
+
+`dry_run=True` walks the same scan but logs the plan instead of acting.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import datetime as _dt
+from pathlib import Path
+from typing import NamedTuple
+
+import structlog
+
+from nexoclip.db import Database, TenantsRepo
+from nexoclip.tenancy import bound_tenant
+
+_log = structlog.get_logger(__name__)
+
+DEFAULT_RETENTION_VOD_DAYS = 30
+DEFAULT_RETENTION_CLIP_DAYS = 90
+DEFAULT_RETENTION_TRANSCRIPT_DAYS = 365
+
+
+class RetentionPolicy(NamedTuple):
+    """Resolved per-tenant window. NULL columns folded into system defaults."""
+
+    vod_days: int
+    clip_days: int
+    transcript_days: int
+
+    @classmethod
+    def from_tenant(
+        cls,
+        *,
+        vod_days: int | None,
+        clip_days: int | None,
+        transcript_days: int | None,
+    ) -> RetentionPolicy:
+        return cls(
+            vod_days=(
+                vod_days if vod_days is not None else DEFAULT_RETENTION_VOD_DAYS
+            ),
+            clip_days=(
+                clip_days if clip_days is not None else DEFAULT_RETENTION_CLIP_DAYS
+            ),
+            transcript_days=(
+                transcript_days
+                if transcript_days is not None
+                else DEFAULT_RETENTION_TRANSCRIPT_DAYS
+            ),
+        )
+
+
+class RetentionReport(NamedTuple):
+    """Per-tenant outcome — what was deleted (or would be, if dry-run)."""
+
+    tenant_id: str
+    policy: RetentionPolicy
+    vods_deleted: int
+    clips_deleted: int
+    transcripts_deleted: int
+    bytes_freed: int
+    dry_run: bool
+
+
+# ---- helpers ----
+
+
+def _utc_now() -> _dt.datetime:
+    return _dt.datetime.now(_dt.UTC)
+
+
+def _iso_cutoff(days_back: int) -> str:
+    """ISO 8601 UTC timestamp `days_back` ago. Matches the format
+    stored in `created_at` columns so SQLite string comparison works."""
+    return (_utc_now() - _dt.timedelta(days=days_back)).isoformat()
+
+
+def _safe_unlink(path: Path) -> int:
+    """Delete `path` if it exists. Returns bytes freed (0 when missing).
+
+    Idempotent — a re-run after a partial sweep doesn't trip on already-
+    removed files. We track bytes freed for the report so operators can
+    see how much disk the sweep recovered."""
+    try:
+        if path.is_file():
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            return size
+        # Directory: walk + sum. Used for `<stream_dir>` and `<clip_dir>`.
+        if path.is_dir():
+            total = 0
+            for child in path.rglob("*"):
+                if child.is_file():
+                    with contextlib.suppress(OSError):
+                        total += child.stat().st_size
+            # rmtree-ish, but tolerant of missing children racing concurrent
+            # processes (e.g. operator manually deleting clips mid-sweep).
+            for child in sorted(path.rglob("*"), reverse=True):
+                with contextlib.suppress(OSError):
+                    if child.is_file():
+                        child.unlink(missing_ok=True)
+                    elif child.is_dir():
+                        child.rmdir()
+            with contextlib.suppress(OSError):
+                path.rmdir()
+            return total
+    except OSError as e:
+        _log.warning("retention.unlink_failed", path=str(path), error=str(e))
+    return 0
+
+
+# ---- public entry ----
+
+
+async def sweep_retention(
+    db: Database,
+    *,
+    output_dir: Path,
+    tenant_id: str | None = None,
+    dry_run: bool = False,
+) -> list[RetentionReport]:
+    """Sweep retention windows for every tenant (or one, when filtered).
+
+    Args:
+        db: Database handle. Migrations must already be applied.
+        output_dir: Project output root (`./out`). Per-stream dirs live
+            at `<output_dir>/<stream_id>/`.
+        tenant_id: When set, restricts the sweep to that tenant. None
+            (default) sweeps every tenant in the system.
+        dry_run: When True, the report records what would be deleted but
+            no DB rows or files are touched.
+
+    Returns:
+        One RetentionReport per tenant scanned. Empty list iff there are
+        no tenants matching the filter.
+    """
+    output_dir = Path(output_dir).resolve()
+    tenants_repo = TenantsRepo(db)
+    if tenant_id is not None:
+        t = await tenants_repo.get(tenant_id)
+        tenants = [t] if t is not None else []
+    else:
+        tenants = await tenants_repo.list_all()
+
+    reports: list[RetentionReport] = []
+    for t in tenants:
+        policy = RetentionPolicy.from_tenant(
+            vod_days=t.retention_vod_days,
+            clip_days=t.retention_clip_days,
+            transcript_days=t.retention_transcript_days,
+        )
+        with bound_tenant(t.id):
+            report = await _sweep_one_tenant(
+                db=db,
+                tenant_id=t.id,
+                output_dir=output_dir,
+                policy=policy,
+                dry_run=dry_run,
+            )
+        reports.append(report)
+        _log.info(
+            "retention.sweep_done",
+            tenant_id=t.id,
+            vods_deleted=report.vods_deleted,
+            clips_deleted=report.clips_deleted,
+            transcripts_deleted=report.transcripts_deleted,
+            bytes_freed=report.bytes_freed,
+            dry_run=dry_run,
+        )
+    return reports
+
+
+async def _sweep_one_tenant(
+    *,
+    db: Database,
+    tenant_id: str,
+    output_dir: Path,
+    policy: RetentionPolicy,
+    dry_run: bool,
+) -> RetentionReport:
+    """The per-tenant body of `sweep_retention`. Tenant is already bound."""
+    vod_cutoff = _iso_cutoff(policy.vod_days)
+    clip_cutoff = _iso_cutoff(policy.clip_days)
+    transcript_cutoff = _iso_cutoff(policy.transcript_days)
+    conn = await db.connect()
+
+    bytes_freed = 0
+    vods_deleted = 0
+    clips_deleted = 0
+    transcripts_deleted = 0
+
+    # --- Clips first (FK depends on streams; deleting streams cascades).
+    cur = await conn.execute(
+        "SELECT id, stream_id, path, thumbnail_frame_path FROM clips "
+        "WHERE tenant_id = ? AND created_at < ?",
+        (tenant_id, clip_cutoff),
+    )
+    clip_rows = await cur.fetchall()
+    for row in clip_rows:
+        clip_id = row["id"]
+        clip_path = Path(row["path"]) if row["path"] else None
+        clips_deleted += 1
+        # Unlink the whole clip dir — that captures the mp4, thumbnail,
+        # branded variants, metadata.json in one shot.
+        if clip_path and not dry_run:
+            bytes_freed += _safe_unlink(clip_path.parent)
+        if not dry_run:
+            await conn.execute(
+                "DELETE FROM clips WHERE id = ? AND tenant_id = ?",
+                (clip_id, tenant_id),
+            )
+
+    # --- Transcripts (row-only — no on-disk file lives here).
+    cur = await conn.execute(
+        "SELECT stream_id FROM transcripts "
+        "WHERE tenant_id = ? AND created_at < ?",
+        (tenant_id, transcript_cutoff),
+    )
+    transcript_rows = list(await cur.fetchall())
+    transcripts_deleted = len(transcript_rows)
+    if not dry_run and transcripts_deleted:
+        await conn.execute(
+            "DELETE FROM transcripts "
+            "WHERE tenant_id = ? AND created_at < ?",
+            (tenant_id, transcript_cutoff),
+        )
+
+    # --- Streams: unlink VOD + audio, then cascade-delete the row.
+    cur = await conn.execute(
+        "SELECT id, source_video_path, source_audio_path FROM streams "
+        "WHERE tenant_id = ? AND created_at < ?",
+        (tenant_id, vod_cutoff),
+    )
+    stream_rows = await cur.fetchall()
+    for row in stream_rows:
+        stream_id = row["id"]
+        video = Path(row["source_video_path"]) if row["source_video_path"] else None
+        audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
+        vods_deleted += 1
+        if not dry_run:
+            # The per-stream directory holds source/ + clips/ + manifests
+            # + chat replay + visual signals + diarization.json + ...
+            # Take the whole thing — anything still inside is past retention
+            # too (clips already had their on-disk files unlinked above).
+            stream_dir = output_dir / stream_id
+            bytes_freed += _safe_unlink(stream_dir)
+            # Defensive — if the source files lived OUTSIDE the per-stream
+            # dir (legacy layout), unlink them explicitly too.
+            if video is not None and stream_dir not in video.parents:
+                bytes_freed += _safe_unlink(video)
+            if audio is not None and stream_dir not in audio.parents:
+                bytes_freed += _safe_unlink(audio)
+            await conn.execute(
+                "DELETE FROM streams WHERE id = ? AND tenant_id = ?",
+                (stream_id, tenant_id),
+            )
+
+    if not dry_run:
+        await conn.commit()
+
+    return RetentionReport(
+        tenant_id=tenant_id,
+        policy=policy,
+        vods_deleted=vods_deleted,
+        clips_deleted=clips_deleted,
+        transcripts_deleted=transcripts_deleted,
+        bytes_freed=bytes_freed,
+        dry_run=dry_run,
+    )

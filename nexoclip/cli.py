@@ -51,6 +51,11 @@ queue_app = typer.Typer(
     help="Read-only views over the publish queue.",
     no_args_is_help=True,
 )
+retention_app = typer.Typer(
+    name="retention",
+    help="Per-tenant retention sweeper (voice-markers spec slice E.1).",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
@@ -58,6 +63,7 @@ app.add_typer(webhooks_app)
 app.add_typer(metrics_app)
 app.add_typer(mcp_app)
 app.add_typer(queue_app)
+app.add_typer(retention_app)
 
 
 @queue_app.command("list")
@@ -897,6 +903,144 @@ def tenants_set_budget_cmd(
         f"  budget={budget}  publish/d={publish_cap}  "
         f"rescore_cap={updated.rescore_concurrency_cap}"
     )
+
+
+@tenants_app.command("set-retention")
+def tenants_set_retention_cmd(
+    tenant_id: str = typer.Argument(..., help="Tenant id."),
+    vod_days: int | None = typer.Option(
+        None,
+        "--vod-days",
+        help="Days to keep raw VODs. Pass 0 to clear back to the system default (30).",
+        min=0,
+    ),
+    clip_days: int | None = typer.Option(
+        None,
+        "--clip-days",
+        help="Days to keep rendered clips. Pass 0 to clear back to the default (90).",
+        min=0,
+    ),
+    transcript_days: int | None = typer.Option(
+        None,
+        "--transcript-days",
+        help="Days to keep Whisper transcripts. Pass 0 to clear back to the default (365).",
+        min=0,
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Configure per-tenant retention windows (slice E.1)."""
+    from nexoclip.db import TenantsRepo, apply_migrations
+
+    if vod_days is None and clip_days is None and transcript_days is None:
+        typer.echo(
+            "nothing to update; pass --vod-days, --clip-days, or --transcript-days",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    async def _run() -> Tenant:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            repo = TenantsRepo(db)
+            kw: dict[str, int | None] = {}
+            # 0 means "clear to NULL" = inherit system default. Anything
+            # else is the literal day count.
+            if vod_days is not None:
+                kw["retention_vod_days"] = None if vod_days == 0 else vod_days
+            if clip_days is not None:
+                kw["retention_clip_days"] = None if clip_days == 0 else clip_days
+            if transcript_days is not None:
+                kw["retention_transcript_days"] = (
+                    None if transcript_days == 0 else transcript_days
+                )
+            return await repo.set_retention(tenant_id, **kw)
+        finally:
+            await db.close()
+
+    updated = asyncio.run(_run())
+    typer.echo(
+        f"  vod_days={updated.retention_vod_days or 'default(30)'}  "
+        f"clip_days={updated.retention_clip_days or 'default(90)'}  "
+        f"transcript_days={updated.retention_transcript_days or 'default(365)'}"
+    )
+
+
+@retention_app.command("sweep")
+def retention_sweep_cmd(
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Restrict the sweep to one tenant id. Default: all."
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Project output root. Defaults to NEXOCLIP_DEFAULT_OUTPUT_DIR (./out).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what would be deleted without touching anything.",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit one JSON object per report instead of text."
+    ),
+) -> None:
+    """Sweep per-tenant retention windows. Hard-deletes past-cutoff artifacts.
+
+    Wire as a daily cron in production (`docs/production_deploy.md` §6).
+    """
+    import json as _json
+
+    from nexoclip.db import apply_migrations
+    from nexoclip.retention import sweep_retention
+    from nexoclip.settings import get_settings
+
+    out_dir = output_dir or Path(get_settings().default_output_dir)
+
+    async def _run() -> list[dict[str, object]]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            reports = await sweep_retention(
+                db,
+                output_dir=out_dir,
+                tenant_id=tenant,
+                dry_run=dry_run,
+            )
+            return [
+                {
+                    "tenant_id": r.tenant_id,
+                    "vod_days": r.policy.vod_days,
+                    "clip_days": r.policy.clip_days,
+                    "transcript_days": r.policy.transcript_days,
+                    "vods_deleted": r.vods_deleted,
+                    "clips_deleted": r.clips_deleted,
+                    "transcripts_deleted": r.transcripts_deleted,
+                    "bytes_freed": r.bytes_freed,
+                    "dry_run": r.dry_run,
+                }
+                for r in reports
+            ]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for row in rows:
+            typer.echo(_json.dumps(row))
+        return
+    if not rows:
+        typer.echo("(no tenants matched the sweep)")
+        return
+    label = "DRY RUN" if dry_run else "swept"
+    for r in rows:
+        mb_freed = r["bytes_freed"] / (1024 * 1024) if r["bytes_freed"] else 0  # type: ignore[operator]
+        typer.echo(
+            f"  [{label}] {r['tenant_id']}  "
+            f"vods={r['vods_deleted']}  clips={r['clips_deleted']}  "
+            f"transcripts={r['transcripts_deleted']}  freed={mb_freed:.1f} MB"
+        )
 
 
 @tokens_app.command("issue")

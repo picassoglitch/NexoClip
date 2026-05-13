@@ -38,6 +38,7 @@ from nexoclip.db import (
     StreamsRepo,
     TranscriptsRepo,
     VariantsRepo,
+    VodSpeakersRepo,
     db_session,
 )
 from nexoclip.db.adapters import (
@@ -533,6 +534,33 @@ async def _run_pipeline(
                 # detect_viral_moments already swallows expected errors;
                 # this catches anything we missed so the pipeline keeps moving.
                 _log.warning("viral.skipped", reason=str(e), stream_id=stream.id)
+
+        # Build the per-speaker extra-phrases map for this VOD (slice C.2).
+        # For each within-VOD speaker with a resolved persistent identity,
+        # look up their brand kit's custom_trigger_phrases. Empty when
+        # diarization was skipped, no kits exist, or no speakers have a
+        # preferred kit — detect_candidates falls back to the tenant base.
+        extra_phrases_by_speaker: dict[str, object] = {}
+        if db is not None and not diarization.skipped:
+            from nexoclip.branding import resolve_brand_kit_for_speaker
+
+            for vs in await VodSpeakersRepo(db).list_for_stream(stream.id):
+                kit = await resolve_brand_kit_for_speaker(
+                    db, speaker_id=vs.resolved_speaker_id
+                )
+                if kit is None:
+                    continue
+                if kit.custom_trigger_phrases.forward or kit.custom_trigger_phrases.retroactive:
+                    extra_phrases_by_speaker[vs.speaker_label] = (
+                        kit.custom_trigger_phrases
+                    )
+            if extra_phrases_by_speaker:
+                _log.info(
+                    "detect.per_kit_phrases",
+                    stream_id=stream.id,
+                    speakers_with_extras=len(extra_phrases_by_speaker),
+                )
+
         candidates = detect_candidates(
             tenant_id=tenant_id,
             stream=stream,
@@ -542,6 +570,7 @@ async def _run_pipeline(
             visual_track=visual_track,
             viral_candidates=viral_cands,
             diarization=diarization,
+            extra_phrases_by_speaker=extra_phrases_by_speaker or None,
         )
         save_candidates(
             stream_dir,

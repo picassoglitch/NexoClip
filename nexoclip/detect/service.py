@@ -76,6 +76,7 @@ def detect_voice_triggers(
     config: DetectionConfig,
     *,
     diarization: object | None = None,
+    extra_phrases_by_speaker: dict[str, object] | None = None,
 ) -> list[Candidate]:
     """Return merged voice-trigger candidates for `stream`.
 
@@ -88,6 +89,17 @@ def detect_voice_triggers(
     host still produces a separate clip. The argument is typed as `object`
     here to avoid importing nexoclip.diarize at module top (would create a
     cycle: pipeline → detect → diarize → db, all already touched).
+
+    `extra_phrases_by_speaker` lets each speaker contribute their brand-kit's
+    custom trigger phrases on top of the tenant base list. Map shape:
+        {speaker_label: CustomTriggerPhrases(forward=[...], retroactive=[...])}
+    Typed as `dict[str, object]` here for the same reason as `diarization` —
+    the nexoclip.db.models import would form a back-edge through the db
+    package. The values must duck-type to `.forward` + `.retroactive`
+    (list[str] each); the resolver in `nexoclip.branding.service` produces
+    them. Extra-phrase hits are restricted to candidates whose attributed
+    speaker matches the map key — a co-host's kit can't accidentally
+    create candidates for words the host said.
     """
     if tenant_id != stream.tenant_id:
         raise DetectionError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -130,6 +142,44 @@ def detect_voice_triggers(
         retroactive_lookback_s=voice_cfg.retroactive_lookback_s,
         diarization=diarization,
     )
+    # Per-kit additions — each speaker's brand kit contributes additional
+    # forward/retroactive phrases. Each scan is restricted to candidates
+    # whose attributed speaker matches the map key, so a co-host's kit
+    # can't fire on words the host said. The detector cooldown step
+    # below then dedupes anything that also matched a base phrase.
+    if extra_phrases_by_speaker:
+        for speaker_label, phrases in extra_phrases_by_speaker.items():
+            kit_forward = list(getattr(phrases, "forward", []) or [])
+            kit_retroactive = list(getattr(phrases, "retroactive", []) or [])
+            if not kit_forward and not kit_retroactive:
+                continue
+            # Language is unknown for kit-added phrases; treat them as
+            # "any language" by routing all of them through the 'es' bucket,
+            # which is the only language the detector currently scans
+            # word-for-word. Future i18n: kit phrases gain an explicit lang.
+            if kit_forward:
+                _scan_phrase_family(
+                    flat=flat,
+                    phrases_by_lang={"es": kit_forward},
+                    fuzzy_distance=voice_cfg.fuzzy_distance,
+                    weight=voice_cfg.weight,
+                    kind="forward",
+                    out=raw,
+                    diarization=diarization,
+                    restrict_to_speaker=speaker_label,
+                )
+            if kit_retroactive:
+                _scan_phrase_family(
+                    flat=flat,
+                    phrases_by_lang={"es": kit_retroactive},
+                    fuzzy_distance=voice_cfg.fuzzy_distance,
+                    weight=voice_cfg.weight,
+                    kind="retroactive",
+                    out=raw,
+                    retroactive_lookback_s=voice_cfg.retroactive_lookback_s,
+                    diarization=diarization,
+                    restrict_to_speaker=speaker_label,
+                )
     # Per-speaker cooldown — keeps the first trigger of each
     # (speaker, kind) within `cooldown_s`. Falls back to a global
     # cooldown when no diarization was attached.
@@ -147,6 +197,7 @@ def _scan_phrase_family(
     out: list[Candidate],
     retroactive_lookback_s: float | None = None,
     diarization: object | None = None,
+    restrict_to_speaker: str | None = None,
 ) -> None:
     """Append candidates for one phrase family (forward OR retroactive) to `out`.
 
@@ -158,6 +209,11 @@ def _scan_phrase_family(
     label, the candidate carries `evidence['speaker_label']` so the
     per-speaker cooldown + downstream brand-kit-by-speaker resolution
     can use it.
+
+    `restrict_to_speaker` is the per-kit-phrases filter (slice C.2). When
+    set, ONLY emissions whose attributed speaker_label matches the
+    argument survive — a co-host's kit can't add candidates on the host's
+    words.
     """
     for language, phrases in phrases_by_lang.items():
         for phrase in phrases:
@@ -195,6 +251,9 @@ def _scan_phrase_family(
                 speaker_label = _attribute_speaker(
                     diarization, window[0].ts, window[-1].end_ts
                 )
+                if restrict_to_speaker is not None and speaker_label != restrict_to_speaker:
+                    # Kit-added phrase fired on the wrong speaker — drop it.
+                    continue
                 if speaker_label is not None:
                     evidence["speaker_label"] = speaker_label
                 out.append(
@@ -310,6 +369,7 @@ def detect_candidates(
     visual_track: VisualSignalTrack | None = None,
     viral_candidates: list[Candidate] | None = None,
     diarization: object | None = None,
+    extra_phrases_by_speaker: dict[str, object] | None = None,
 ) -> list[Candidate]:
     """Run every available detector and return the fused candidate stream.
 
@@ -335,6 +395,7 @@ def detect_candidates(
         transcript=transcript,
         config=config,
         diarization=diarization,
+        extra_phrases_by_speaker=extra_phrases_by_speaker,
     )
     chat: list[Candidate] = []
     if chat_replay is not None:

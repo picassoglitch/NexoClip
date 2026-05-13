@@ -373,3 +373,89 @@ def test_no_diarization_applies_global_cooldown() -> None:
         diarization=skipped,
     )
     assert len(candidates) == 1
+
+
+# ---- per-kit custom_trigger_phrases (slice C.2) ----
+
+
+from nexoclip.db.models import CustomTriggerPhrases  # noqa: E402
+
+
+def test_kit_phrase_fires_only_for_assigned_speaker() -> None:
+    """A kit-added phrase for SPEAKER_00 must NOT fire on SPEAKER_01's
+    words, even when both speakers say the exact phrase."""
+    transcript = make_transcript(
+        words=[
+            # Speaker A @ 15s says 'monchi eso' (Aldo's kit phrase).
+            (15.0, 15.4, " monchi", 0.9),
+            (15.5, 16.0, " eso", 0.9),
+            # Speaker B @ 35s says 'monchi eso' too — should NOT fire,
+            # because B's kit doesn't include this phrase.
+            (35.0, 35.4, " monchi", 0.9),
+            (35.5, 36.0, " eso", 0.9),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config([]),  # no base forward phrases
+        diarization=_diar_with_two_speakers(),
+        extra_phrases_by_speaker={
+            "SPEAKER_00": CustomTriggerPhrases(forward=["monchi eso"]),
+        },
+    )
+    assert len(candidates) == 1
+    assert candidates[0].evidence["speaker_label"] == "SPEAKER_00"
+    assert candidates[0].evidence["phrase"] == "monchi eso"
+
+
+def test_kit_phrase_layers_on_top_of_base_phrases() -> None:
+    """Base phrases still fire for everyone; kit phrases ADDITIVELY extend
+    that for the assigned speaker. merge_window_s=0 here so the
+    same-speaker merge doesn't collapse the two distinct candidates."""
+    transcript = make_transcript(
+        words=[
+            (5.0, 5.5, " clipéalo", 0.92),       # base phrase, Speaker A
+            (35.0, 35.4, " monchi", 0.9),         # kit phrase, Speaker B
+            (35.5, 36.0, " eso", 0.9),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config(["clipéalo"], merge_window_s=0.0),
+        diarization=_diar_with_two_speakers(),
+        extra_phrases_by_speaker={
+            "SPEAKER_01": CustomTriggerPhrases(forward=["monchi eso"]),
+        },
+    )
+    assert len(candidates) == 2
+    phrases = sorted(c.evidence["phrase"] for c in candidates)
+    assert phrases == ["clipéalo", "monchi eso"]
+    labels = sorted(c.evidence["speaker_label"] for c in candidates)
+    assert labels == ["SPEAKER_00", "SPEAKER_01"]
+
+
+def test_kit_retroactive_phrase_carries_retroactive_kind() -> None:
+    """Per-kit retroactive phrases get the retroactive trigger_kind so
+    the cut step uses the backward window."""
+    transcript = make_transcript(
+        words=[
+            (15.0, 15.4, " córtalo", 0.9),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config([], retroactive_lookback_s=45.0),
+        diarization=_diar_with_two_speakers(),
+        extra_phrases_by_speaker={
+            "SPEAKER_00": CustomTriggerPhrases(retroactive=["córtalo"]),
+        },
+    )
+    assert len(candidates) == 1
+    assert candidates[0].evidence["trigger_kind"] == "retroactive"
+    assert candidates[0].evidence["retroactive_lookback_s"] == 45.0

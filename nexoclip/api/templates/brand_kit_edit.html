@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}{% if kit %}{{ kit.name }} - Brand Kit{% else %}New Brand Kit{% endif %} - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>{% if kit %}Edit brand kit: {{ kit.name }}{% else %}New brand kit{% endif %}</h2>
+  <p>
+    <a href="/dashboard/brand-kits">← Back to all kits</a>
+    {% if kit %}&middot; <code>{{ kit.id }}</code>{% endif %}
+  </p>
+</hgroup>
+
+<form action="{% if kit %}/dashboard/brand-kits/{{ kit.id }}{% else %}/dashboard/brand-kits{% endif %}" method="post">
+  <div class="grid">
+
+    <article>
+      <header><strong>Identity</strong></header>
+
+      <label>Name
+        <input type="text" name="name" required
+               value="{{ kit.name if kit else '' }}"
+               placeholder="e.g. AARA, Aldo Villanueva, Nexo Academy">
+      </label>
+
+      <label>Primary color
+        <input type="color" name="primary_color"
+               value="{{ kit.primary_color if kit else '#FF3366' }}">
+      </label>
+
+      <label>Accent color
+        <input type="color" name="accent_color"
+               value="{{ kit.accent_color if kit else '#FFD700' }}">
+      </label>
+
+      <label>Text color
+        <input type="color" name="text_color"
+               value="{{ kit.text_color if kit else '#FFFFFF' }}">
+      </label>
+
+      <label>Font family
+        <input type="text" name="font_family"
+               value="{{ kit.font_family if kit else 'Inter' }}"
+               placeholder="Inter / Roboto / Montserrat / ...">
+      </label>
+
+      <label>Font weight
+        <select name="font_weight">
+          {% for w in [400, 500, 600, 700, 800, 900] %}
+          <option value="{{ w }}" {% if kit and kit.font_weight == w %}selected{% elif not kit and w == 800 %}selected{% endif %}>
+            {{ w }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>Default layout
+        <select name="default_layout">
+          {% for layout in ['pip', 'split_stack', 'blurred_bg'] %}
+          <option value="{{ layout }}" {% if kit and kit.default_layout == layout %}selected{% elif not kit and layout == 'pip' %}selected{% endif %}>
+            {{ layout }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {% if not kit %}
+      <label>
+        <input type="checkbox" name="is_default" value="1">
+        Make this the tenant default
+      </label>
+      {% endif %}
+    </article>
+
+    <article>
+      <header><strong>Live preview</strong></header>
+      <div id="preview" style="background: {{ kit.primary_color if kit else '#FF3366' }}; color: {{ kit.text_color if kit else '#FFFFFF' }}; font-family: {{ kit.font_family if kit else 'Inter' }}; font-weight: {{ kit.font_weight if kit else 800 }}; padding: 1.5rem; border-radius: 0.5rem; min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
+        <div style="font-size: 0.8rem; opacity: 0.85;">@yourhandle</div>
+        <div style="font-size: 1.6rem; text-align: center;">EPIC PLAY</div>
+        <div style="font-size: 0.7rem; text-align: right; color: {{ kit.accent_color if kit else '#FFD700' }};">▲ NexoClip</div>
+      </div>
+      <small style="display: block; margin-top: 0.5rem; color: var(--pico-muted-color);">Preview updates on save. Live preview without reload is a slice D upgrade.</small>
+    </article>
+
+  </div>
+
+  <article>
+    <header><strong>Social handles</strong></header>
+    <div class="grid">
+      <label>TikTok
+        <input type="text" name="handle_tiktok"
+               value="{{ kit.handle_tiktok if kit else '' }}" placeholder="@yourhandle">
+      </label>
+      <label>YouTube
+        <input type="text" name="handle_youtube"
+               value="{{ kit.handle_youtube if kit else '' }}" placeholder="@yourhandle">
+      </label>
+      <label>Instagram
+        <input type="text" name="handle_instagram"
+               value="{{ kit.handle_instagram if kit else '' }}" placeholder="@yourhandle">
+      </label>
+      <label>Kick
+        <input type="text" name="handle_kick"
+               value="{{ kit.handle_kick if kit else '' }}" placeholder="username">
+      </label>
+    </div>
+  </article>
+
+  <article>
+    <header>
+      <strong>Custom trigger phrases</strong>
+      <small> — added on top of the tenant base list when this kit's speaker is detected. One phrase per line.</small>
+    </header>
+    <div class="grid">
+      <label>Forward phrases <small>(clip extends FORWARD from the timestamp)</small>
+        <textarea name="forward_phrases" rows="6" placeholder="córtalo&#10;saca eso&#10;clip this">{{ kit.custom_trigger_phrases.forward|join('\n') if kit else '' }}</textarea>
+      </label>
+      <label>Retroactive phrases <small>(clip extends BACKWARD from the timestamp)</small>
+        <textarea name="retroactive_phrases" rows="6" placeholder="lo clipeaste&#10;monchi eso&#10;you clipped that">{{ kit.custom_trigger_phrases.retroactive|join('\n') if kit else '' }}</textarea>
+      </label>
+    </div>
+  </article>
+
+  <article>
+    <header>
+      <strong>Auto-publish</strong>
+      <small> — review-first stays the default. Flip per-kit when you trust this brand's pipeline.</small>
+    </header>
+    <label>
+      <input type="checkbox" name="auto_publish_enabled" value="1"
+             {% if kit and kit.auto_publish_enabled %}checked{% endif %}>
+      Enable auto-publish for this kit
+    </label>
+    <label>Platforms <small>(comma-separated: tiktok, shorts, reels)</small>
+      <input type="text" name="auto_publish_platforms"
+             value="{{ kit.auto_publish_platforms|join(', ') if kit else '' }}"
+             placeholder="tiktok, shorts">
+    </label>
+    <label>Undo window (minutes)
+      <input type="number" name="auto_publish_delay_min" min="0" max="1440"
+             value="{{ kit.auto_publish_delay_min if kit else 60 }}">
+    </label>
+  </article>
+
+  <div style="display: flex; gap: 1rem; align-items: center;">
+    <button type="submit">{% if kit %}Save changes{% else %}Create brand kit{% endif %}</button>
+    {% if kit and not kit.is_default %}
+    <form action="/dashboard/brand-kits/{{ kit.id }}/default" method="post" style="display:inline;">
+      <button type="submit" class="secondary">Make tenant default</button>
+    </form>
+    {% endif %}
+    {% if kit %}
+    <form action="/dashboard/brand-kits/{{ kit.id }}/delete" method="post" style="display:inline; margin-left: auto;"
+          onsubmit="return confirm('Delete this brand kit? Speakers using it will fall back to tenant default.');">
+      <button type="submit" class="contrast outline">Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

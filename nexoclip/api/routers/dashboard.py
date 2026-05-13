@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import (
     ApiTokensRepo,
+    BrandKitsRepo,
     CandidatesRepo,
     ClipsRepo,
     ConnectedAccountsRepo,
@@ -37,6 +38,7 @@ from nexoclip.db import (
     StreamsRepo,
     VariantsRepo,
 )
+from nexoclip.db.models import CustomTriggerPhrases
 from nexoclip.errors import NexoClipError
 from nexoclip.tenancy import hash_token
 
@@ -827,3 +829,181 @@ async def llm_settings_view(
         "llm_settings.html",
         {"providers": cfg.providers, "routing": cfg.routing},
     )
+
+
+# ---------- Brand kits (voice-markers spec slice C.3) ----------
+
+
+def _parse_phrase_list(value: str) -> list[str]:
+    """Split a textarea value into a phrase list (one per line, trimmed)."""
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+@router.get("/brand-kits", response_class=HTMLResponse)
+async def brand_kits_list(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    kits = await BrandKitsRepo(db).list_for_tenant()
+    return templates.TemplateResponse(
+        request,
+        "brand_kits.html",
+        {"kits": kits},
+    )
+
+
+@router.get("/brand-kits/new", response_class=HTMLResponse)
+async def brand_kits_new_form(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "brand_kit_edit.html",
+        {"kit": None},
+    )
+
+
+@router.post("/brand-kits", dependencies=[Depends(require_full_scope)])
+async def brand_kits_create(
+    request: Request,
+    name: str = Form(...),
+    primary_color: str = Form(...),
+    accent_color: str = Form(...),
+    text_color: str = Form("#FFFFFF"),
+    font_family: str = Form("Inter"),
+    font_weight: int = Form(800),
+    default_layout: str = Form("pip"),
+    is_default: str = Form(""),
+    handle_tiktok: str = Form(""),
+    handle_youtube: str = Form(""),
+    handle_instagram: str = Form(""),
+    handle_kick: str = Form(""),
+    auto_publish_enabled: str = Form(""),
+    auto_publish_platforms: str = Form(""),
+    auto_publish_delay_min: int = Form(60),
+    forward_phrases: str = Form(""),
+    retroactive_phrases: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create a brand kit. Phrases come in as newline-separated textareas;
+    color pickers and checkboxes ride the standard HTML form contract."""
+    kit = await BrandKitsRepo(db).create(
+        name=name,
+        primary_color=primary_color,
+        accent_color=accent_color,
+        text_color=text_color or "#FFFFFF",
+        font_family=font_family or "Inter",
+        font_weight=int(font_weight) if font_weight else 800,
+        default_layout=default_layout or "pip",
+        is_default=bool(is_default),
+        handle_tiktok=handle_tiktok or None,
+        handle_youtube=handle_youtube or None,
+        handle_instagram=handle_instagram or None,
+        handle_kick=handle_kick or None,
+        auto_publish_enabled=bool(auto_publish_enabled),
+        auto_publish_platforms=_split_csv(auto_publish_platforms),
+        auto_publish_delay_min=int(auto_publish_delay_min) if auto_publish_delay_min else 60,
+        custom_trigger_phrases=CustomTriggerPhrases(
+            forward=_parse_phrase_list(forward_phrases),
+            retroactive=_parse_phrase_list(retroactive_phrases),
+        ),
+    )
+    return RedirectResponse(url=f"/dashboard/brand-kits/{kit.id}", status_code=303)
+
+
+@router.get("/brand-kits/{kit_id}", response_class=HTMLResponse)
+async def brand_kits_edit_form(
+    request: Request,
+    kit_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    kit = await BrandKitsRepo(db).get(kit_id)
+    if kit is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+    return templates.TemplateResponse(
+        request,
+        "brand_kit_edit.html",
+        {"kit": kit},
+    )
+
+
+@router.post(
+    "/brand-kits/{kit_id}",
+    dependencies=[Depends(require_full_scope)],
+)
+async def brand_kits_edit_submit(
+    request: Request,
+    kit_id: str,
+    name: str = Form(...),
+    primary_color: str = Form(...),
+    accent_color: str = Form(...),
+    text_color: str = Form("#FFFFFF"),
+    font_family: str = Form("Inter"),
+    font_weight: int = Form(800),
+    default_layout: str = Form("pip"),
+    auto_publish_enabled: str = Form(""),
+    auto_publish_platforms: str = Form(""),
+    auto_publish_delay_min: int = Form(60),
+    forward_phrases: str = Form(""),
+    retroactive_phrases: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    repo = BrandKitsRepo(db)
+    if await repo.get(kit_id) is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+    await repo.update(
+        kit_id,
+        name=name,
+        primary_color=primary_color,
+        accent_color=accent_color,
+        text_color=text_color,
+        font_family=font_family,
+        font_weight=int(font_weight),
+        default_layout=default_layout,
+        auto_publish_enabled=bool(auto_publish_enabled),
+        auto_publish_platforms=_split_csv(auto_publish_platforms),
+        auto_publish_delay_min=int(auto_publish_delay_min),
+        custom_trigger_phrases=CustomTriggerPhrases(
+            forward=_parse_phrase_list(forward_phrases),
+            retroactive=_parse_phrase_list(retroactive_phrases),
+        ),
+    )
+    return RedirectResponse(url=f"/dashboard/brand-kits/{kit_id}", status_code=303)
+
+
+@router.post(
+    "/brand-kits/{kit_id}/default",
+    dependencies=[Depends(require_full_scope)],
+)
+async def brand_kits_set_default(
+    request: Request,
+    kit_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    try:
+        await BrandKitsRepo(db).set_default(kit_id)
+    except NexoClipError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return RedirectResponse(url="/dashboard/brand-kits", status_code=303)
+
+
+@router.post(
+    "/brand-kits/{kit_id}/delete",
+    dependencies=[Depends(require_full_scope)],
+)
+async def brand_kits_delete(
+    request: Request,
+    kit_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    if await BrandKitsRepo(db).get(kit_id) is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+    await BrandKitsRepo(db).delete(kit_id)
+    return RedirectResponse(url="/dashboard/brand-kits", status_code=303)

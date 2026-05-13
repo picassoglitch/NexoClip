@@ -74,10 +74,20 @@ def detect_voice_triggers(
     stream: Stream,
     transcript: Transcript,
     config: DetectionConfig,
+    *,
+    diarization: object | None = None,
 ) -> list[Candidate]:
     """Return merged voice-trigger candidates for `stream`.
 
     All inputs must agree on `tenant_id` (CLAUDE.md hard rule #1).
+
+    `diarization` is optional. When supplied (a `nexoclip.diarize.Diarization`
+    with `skipped=False`), each emitted candidate carries a `speaker_label`
+    in evidence, and the cooldown is applied per (speaker, trigger_kind)
+    instead of globally — so a co-host firing 'clipea esto' 1s after the
+    host still produces a separate clip. The argument is typed as `object`
+    here to avoid importing nexoclip.diarize at module top (would create a
+    cycle: pipeline → detect → diarize → db, all already touched).
     """
     if tenant_id != stream.tenant_id:
         raise DetectionError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -107,6 +117,7 @@ def detect_voice_triggers(
         weight=voice_cfg.weight,
         kind="forward",
         out=raw,
+        diarization=diarization,
     )
     # Retroactive triggers — clip extends BACKWARD from the timestamp.
     _scan_phrase_family(
@@ -117,8 +128,13 @@ def detect_voice_triggers(
         kind="retroactive",
         out=raw,
         retroactive_lookback_s=voice_cfg.retroactive_lookback_s,
+        diarization=diarization,
     )
-    return _merge_candidates(raw, window_s=config.merge_window_s)
+    # Per-speaker cooldown — keeps the first trigger of each
+    # (speaker, kind) within `cooldown_s`. Falls back to a global
+    # cooldown when no diarization was attached.
+    pruned = _apply_per_speaker_cooldown(raw, cooldown_s=voice_cfg.cooldown_s)
+    return _merge_candidates(pruned, window_s=config.merge_window_s)
 
 
 def _scan_phrase_family(
@@ -130,12 +146,18 @@ def _scan_phrase_family(
     kind: str,
     out: list[Candidate],
     retroactive_lookback_s: float | None = None,
+    diarization: object | None = None,
 ) -> None:
     """Append candidates for one phrase family (forward OR retroactive) to `out`.
 
     The two families share the entire matching algorithm; only the
     `evidence['trigger_kind']` flag and the optional retroactive metadata
     differ. Cut step reads `trigger_kind` to decide the window direction.
+
+    When `diarization` is provided and `.overlap_speaker(...)` returns a
+    label, the candidate carries `evidence['speaker_label']` so the
+    per-speaker cooldown + downstream brand-kit-by-speaker resolution
+    can use it.
     """
     for language, phrases in phrases_by_lang.items():
         for phrase in phrases:
@@ -168,6 +190,13 @@ def _scan_phrase_family(
                 }
                 if kind == "retroactive" and retroactive_lookback_s is not None:
                     evidence["retroactive_lookback_s"] = retroactive_lookback_s
+                # Attribute to a speaker if diarization is available and the
+                # turn covers (or mostly overlaps) the phrase span.
+                speaker_label = _attribute_speaker(
+                    diarization, window[0].ts, window[-1].end_ts
+                )
+                if speaker_label is not None:
+                    evidence["speaker_label"] = speaker_label
                 out.append(
                     Candidate(
                         timestamp=window[0].ts,
@@ -176,6 +205,62 @@ def _scan_phrase_family(
                         evidence=evidence,
                     )
                 )
+
+
+def _attribute_speaker(
+    diarization: object | None, ts: float, end_ts: float
+) -> str | None:
+    """Best-effort speaker attribution; returns None when diarization is absent
+    or doesn't cover this phrase span.
+
+    Typed loosely as `object` to keep the diarize package decoupled from
+    detect at module-load time. Falls back to None if the dynamic call
+    fails for any reason — never raises into the detector."""
+    if diarization is None:
+        return None
+    overlap = getattr(diarization, "overlap_speaker", None)
+    skipped = getattr(diarization, "skipped", True)
+    if not callable(overlap) or skipped:
+        return None
+    try:
+        label = overlap(ts, end_ts)
+    except Exception:  # noqa: BLE001
+        return None
+    return label if isinstance(label, str) else None
+
+
+def _apply_per_speaker_cooldown(
+    candidates: list[Candidate], *, cooldown_s: float
+) -> list[Candidate]:
+    """Drop later candidates within `cooldown_s` of an earlier same-kind hit.
+
+    Cooldown key is (speaker_label, trigger_kind). When speaker_label is
+    absent (no diarization, or speaker unattributable on a given hit), all
+    no-speaker candidates of the same kind share one key — equivalent to
+    the global cooldown the spec describes when diarization is off.
+
+    Stable order: candidates are walked in ascending-timestamp order, the
+    first wins per cooldown bucket. Always preserves at least the first
+    hit per (speaker, kind).
+    """
+    if cooldown_s <= 0.0 or not candidates:
+        return list(candidates)
+    sorted_c = sorted(candidates, key=lambda c: c.timestamp)
+    kept: list[Candidate] = []
+    last_ts_by_key: dict[tuple[str | None, str], float] = {}
+    for c in sorted_c:
+        ev = c.evidence or {}
+        speaker = ev.get("speaker_label")
+        speaker_key: str | None = speaker if isinstance(speaker, str) else None
+        kind_raw = ev.get("trigger_kind", "forward")
+        kind = str(kind_raw) if kind_raw is not None else "forward"
+        key = (speaker_key, kind)
+        last_ts = last_ts_by_key.get(key)
+        if last_ts is not None and c.timestamp - last_ts < cooldown_s:
+            continue
+        kept.append(c)
+        last_ts_by_key[key] = c.timestamp
+    return kept
 
 
 def _merge_candidates(candidates: list[Candidate], *, window_s: float) -> list[Candidate]:
@@ -224,6 +309,7 @@ def detect_candidates(
     chat_replay: ChatReplay | None = None,
     visual_track: VisualSignalTrack | None = None,
     viral_candidates: list[Candidate] | None = None,
+    diarization: object | None = None,
 ) -> list[Candidate]:
     """Run every available detector and return the fused candidate stream.
 
@@ -244,7 +330,11 @@ def detect_candidates(
     listing each source.
     """
     voice = detect_voice_triggers(
-        tenant_id=tenant_id, stream=stream, transcript=transcript, config=config
+        tenant_id=tenant_id,
+        stream=stream,
+        transcript=transcript,
+        config=config,
+        diarization=diarization,
     )
     chat: list[Candidate] = []
     if chat_replay is not None:

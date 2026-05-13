@@ -105,6 +105,13 @@ def test_score_is_weight_times_confidence() -> None:
 
 
 def test_merges_close_candidates_with_evidence_union() -> None:
+    """Two phrase hits within `merge_window_s` collapse to one cluster.
+
+    The per-speaker cooldown (added in slice B.3) would otherwise drop the
+    second hit before merging — explicitly disable cooldown here so the
+    merge code path gets exercised. The cooldown's own behavior is
+    covered by the slice-B.3 tests below.
+    """
     transcript = make_transcript(
         words=[
             (10.0, 11.0, " clipéalo", 0.95),
@@ -112,11 +119,13 @@ def test_merges_close_candidates_with_evidence_union() -> None:
             (60.0, 61.0, " clipéalo", 0.99),
         ]
     )
+    cfg = es_only_config(["clipéalo"], merge_window_s=30.0)
+    cfg.voice.cooldown_s = 0.0  # disable cooldown for this test
     candidates = detect_voice_triggers(
         tenant_id="default",
         stream=make_stream(),
         transcript=transcript,
-        config=es_only_config(["clipéalo"], merge_window_s=30.0),
+        config=cfg,
     )
     # First two merge (both within 30s), third is its own cluster
     assert len(candidates) == 2
@@ -252,3 +261,115 @@ def test_forward_phrase_carries_forward_kind() -> None:
         config=es_only_config(["clipéalo"]),
     )
     assert candidates[0].evidence["trigger_kind"] == "forward"
+
+
+# ---- per-speaker trigger attribution + cooldown (slice B.3) ----
+
+
+from nexoclip.diarize.models import (  # noqa: E402
+    Diarization,
+    DiarizationSegment,
+)
+
+
+def _diar_with_two_speakers() -> Diarization:
+    """Speaker A holds the floor 0-30s; Speaker B holds 30-60s."""
+    return Diarization(
+        stream_id="str_01TEST",
+        tenant_id="default",
+        segments=[
+            DiarizationSegment(ts=0.0, end_ts=30.0, speaker_label="SPEAKER_00"),
+            DiarizationSegment(ts=30.0, end_ts=60.0, speaker_label="SPEAKER_01"),
+        ],
+    )
+
+
+def test_candidate_carries_speaker_label_from_diarization() -> None:
+    """A trigger inside SPEAKER_00's turn gets the SPEAKER_00 label."""
+    transcript = make_transcript(
+        words=[
+            (10.0, 10.4, " no", 0.9),
+            (10.5, 11.0, " manches", 0.9),
+            (11.1, 12.0, " clipéalo", 0.93),
+        ]
+    )
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=es_only_config(["clipéalo"]),
+        diarization=_diar_with_two_speakers(),
+    )
+    assert len(candidates) == 1
+    assert candidates[0].evidence["speaker_label"] == "SPEAKER_00"
+
+
+def test_two_speakers_firing_same_phrase_both_emit_in_cooldown_window() -> None:
+    """When two different speakers say the same trigger within the global
+    cooldown window, both candidates survive — cooldown is per-speaker."""
+    transcript = make_transcript(
+        words=[
+            # Speaker A @ 15s
+            (15.0, 16.0, " clipéalo", 0.92),
+            # Speaker B @ 35s — within 30s cooldown but a different speaker
+            (35.0, 36.0, " clipéalo", 0.90),
+        ]
+    )
+    cfg = es_only_config(["clipéalo"], merge_window_s=0.0)
+    cfg.voice.cooldown_s = 30.0
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=cfg,
+        diarization=_diar_with_two_speakers(),
+    )
+    assert len(candidates) == 2
+    labels = sorted(c.evidence["speaker_label"] for c in candidates)
+    assert labels == ["SPEAKER_00", "SPEAKER_01"]
+
+
+def test_same_speaker_repeated_phrase_within_cooldown_drops_second() -> None:
+    """One speaker firing the same trigger twice within the cooldown only
+    emits the first hit."""
+    transcript = make_transcript(
+        words=[
+            (5.0, 6.0, " clipéalo", 0.92),
+            (10.0, 11.0, " clipéalo", 0.92),  # 5s later, within 30s cooldown
+        ]
+    )
+    cfg = es_only_config(["clipéalo"], merge_window_s=0.0)
+    cfg.voice.cooldown_s = 30.0
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=cfg,
+        diarization=_diar_with_two_speakers(),
+    )
+    assert len(candidates) == 1
+    assert candidates[0].timestamp == pytest.approx(5.0)
+
+
+def test_no_diarization_applies_global_cooldown() -> None:
+    """Without diarization (None or skipped=True), all candidates share
+    one cooldown bucket — equivalent to the spec's pre-diarization
+    behavior."""
+    transcript = make_transcript(
+        words=[
+            (5.0, 6.0, " clipéalo", 0.92),
+            (10.0, 11.0, " clipéalo", 0.92),
+        ]
+    )
+    cfg = es_only_config(["clipéalo"], merge_window_s=0.0)
+    cfg.voice.cooldown_s = 30.0
+    # Skipped diarization: same effect as None.
+    skipped = Diarization(stream_id="str_01TEST", tenant_id="default", skipped=True)
+    candidates = detect_voice_triggers(
+        tenant_id="default",
+        stream=make_stream(),
+        transcript=transcript,
+        config=cfg,
+        diarization=skipped,
+    )
+    assert len(candidates) == 1

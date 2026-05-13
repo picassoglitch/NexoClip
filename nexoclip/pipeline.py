@@ -541,6 +541,7 @@ async def _run_pipeline(
             chat_replay=chat_replay,
             visual_track=visual_track,
             viral_candidates=viral_cands,
+            diarization=diarization,
         )
         save_candidates(
             stream_dir,

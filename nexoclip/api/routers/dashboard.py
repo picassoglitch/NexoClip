@@ -858,10 +858,16 @@ async def brand_kits_new_form(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
 ) -> Response:
+    from nexoclip.branding import builtin_presets, preset_choices
+
     return templates.TemplateResponse(
         request,
         "brand_kit_edit.html",
-        {"kit": None},
+        {
+            "kit": None,
+            "caption_style": builtin_presets()["karaoke_pop"],
+            "caption_preset_choices": preset_choices(),
+        },
     )
 
 
@@ -880,6 +886,7 @@ async def brand_kits_create(
     handle_youtube: str = Form(""),
     handle_instagram: str = Form(""),
     handle_kick: str = Form(""),
+    caption_preset: str = Form("karaoke_pop"),
     auto_publish_enabled: str = Form(""),
     auto_publish_platforms: str = Form(""),
     auto_publish_delay_min: int = Form(60),
@@ -890,6 +897,9 @@ async def brand_kits_create(
 ) -> Response:
     """Create a brand kit. Phrases come in as newline-separated textareas;
     color pickers and checkboxes ride the standard HTML form contract."""
+    from nexoclip.branding.captions import _preset_by_id
+
+    caption_style = _preset_by_id(caption_preset).model_dump()
     kit = await BrandKitsRepo(db).create(
         name=name,
         primary_color=primary_color,
@@ -903,6 +913,7 @@ async def brand_kits_create(
         handle_youtube=handle_youtube or None,
         handle_instagram=handle_instagram or None,
         handle_kick=handle_kick or None,
+        caption_style=caption_style,
         auto_publish_enabled=bool(auto_publish_enabled),
         auto_publish_platforms=_split_csv(auto_publish_platforms),
         auto_publish_delay_min=int(auto_publish_delay_min) if auto_publish_delay_min else 60,
@@ -921,13 +932,20 @@ async def brand_kits_edit_form(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.branding import caption_style_or_default, preset_choices
+
     kit = await BrandKitsRepo(db).get(kit_id)
     if kit is None:
         raise HTTPException(status_code=404, detail="brand kit not found")
+    caption_style = caption_style_or_default(kit.caption_style)
     return templates.TemplateResponse(
         request,
         "brand_kit_edit.html",
-        {"kit": kit},
+        {
+            "kit": kit,
+            "caption_style": caption_style,
+            "caption_preset_choices": preset_choices(),
+        },
     )
 
 
@@ -945,6 +963,11 @@ async def brand_kits_edit_submit(
     font_family: str = Form("Inter"),
     font_weight: int = Form(800),
     default_layout: str = Form("pip"),
+    caption_preset: str = Form("karaoke_pop"),
+    handle_tiktok: str = Form(""),
+    handle_youtube: str = Form(""),
+    handle_instagram: str = Form(""),
+    handle_kick: str = Form(""),
     auto_publish_enabled: str = Form(""),
     auto_publish_platforms: str = Form(""),
     auto_publish_delay_min: int = Form(60),
@@ -953,9 +976,12 @@ async def brand_kits_edit_submit(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.branding.captions import _preset_by_id
+
     repo = BrandKitsRepo(db)
     if await repo.get(kit_id) is None:
         raise HTTPException(status_code=404, detail="brand kit not found")
+    caption_style = _preset_by_id(caption_preset).model_dump()
     await repo.update(
         kit_id,
         name=name,
@@ -965,6 +991,11 @@ async def brand_kits_edit_submit(
         font_family=font_family,
         font_weight=int(font_weight),
         default_layout=default_layout,
+        caption_style=caption_style,
+        handle_tiktok=handle_tiktok,
+        handle_youtube=handle_youtube,
+        handle_instagram=handle_instagram,
+        handle_kick=handle_kick,
         auto_publish_enabled=bool(auto_publish_enabled),
         auto_publish_platforms=_split_csv(auto_publish_platforms),
         auto_publish_delay_min=int(auto_publish_delay_min),

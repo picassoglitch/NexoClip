@@ -216,3 +216,80 @@ async def test_set_default_unknown_kit_404(
         "/dashboard/brand-kits/brk_nonexistent/default", follow_redirects=False
     )
     assert r.status_code == 404
+
+
+async def test_caption_preset_persists_through_form(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Slice D.2: picking a preset in the form persists the full
+    CaptionStyle dict to brand_kits.caption_style_json, so the renderer
+    has every field it needs without re-resolving from the preset id."""
+    await _login(client, tenants["alice"]["token"])
+    with bound_tenant(tenants["alice"]["id"]):
+        kit = await BrandKitsRepo(db).create(
+            name="K", primary_color="#000", accent_color="#FFF"
+        )
+    r = await client.post(
+        f"/dashboard/brand-kits/{kit.id}",
+        data={
+            "name": "K",
+            "primary_color": "#000000",
+            "accent_color": "#FFFFFF",
+            "text_color": "#FFFFFF",
+            "font_family": "Inter",
+            "font_weight": "800",
+            "default_layout": "pip",
+            "caption_preset": "typewriter",
+            "auto_publish_enabled": "",
+            "auto_publish_platforms": "",
+            "auto_publish_delay_min": "60",
+            "forward_phrases": "",
+            "retroactive_phrases": "",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with bound_tenant(tenants["alice"]["id"]):
+        updated = await BrandKitsRepo(db).get(kit.id)
+    assert updated is not None
+    assert updated.caption_style is not None
+    assert updated.caption_style["preset"] == "typewriter"
+    # Field that's distinctive to the typewriter preset:
+    assert updated.caption_style["font_family"] == "JetBrains Mono"
+
+
+async def test_create_form_uses_default_preset_when_unspecified(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """If the user doesn't pick a preset, the create endpoint falls back
+    to karaoke_pop (the spec default)."""
+    await _login(client, tenants["alice"]["token"])
+    r = await client.post(
+        "/dashboard/brand-kits",
+        data={
+            "name": "Defaults",
+            "primary_color": "#FF0000",
+            "accent_color": "#00FF00",
+            "text_color": "#FFFFFF",
+            "font_family": "Inter",
+            "font_weight": "800",
+            "default_layout": "pip",
+            "auto_publish_enabled": "",
+            "auto_publish_platforms": "",
+            "auto_publish_delay_min": "60",
+            "forward_phrases": "",
+            "retroactive_phrases": "",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    kit_id = r.headers["location"].rsplit("/", 1)[1]
+    with bound_tenant(tenants["alice"]["id"]):
+        kit = await BrandKitsRepo(db).get(kit_id)
+    assert kit is not None
+    assert kit.caption_style is not None
+    assert kit.caption_style["preset"] == "karaoke_pop"

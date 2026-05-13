@@ -16,6 +16,14 @@ this module.
 
 from __future__ import annotations
 
+from .captions import (
+    CaptionPresetId,
+    CaptionShadow,
+    CaptionStyle,
+    builtin_presets,
+    caption_style_or_default,
+    preset_choices,
+)
 from .service import (
     merged_trigger_phrases_for_speaker,
     resolve_brand_kit_for_candidate,
@@ -23,7 +31,13 @@ from .service import (
 )
 
 __all__ = [
+    "CaptionPresetId",
+    "CaptionShadow",
+    "CaptionStyle",
+    "builtin_presets",
+    "caption_style_or_default",
     "merged_trigger_phrases_for_speaker",
+    "preset_choices",
     "resolve_brand_kit_for_candidate",
     "resolve_brand_kit_for_speaker",
 ]

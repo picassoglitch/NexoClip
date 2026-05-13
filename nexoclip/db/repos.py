@@ -1933,6 +1933,11 @@ class BrandKitsRepo:
         font_family: str | None = None,
         font_weight: int | None = None,
         default_layout: str | None = None,
+        caption_style: dict[str, object] | None = None,
+        handle_tiktok: str | None = None,
+        handle_youtube: str | None = None,
+        handle_instagram: str | None = None,
+        handle_kick: str | None = None,
         auto_publish_enabled: bool | None = None,
         auto_publish_platforms: list[str] | None = None,
         auto_publish_delay_min: int | None = None,
@@ -1965,6 +1970,18 @@ class BrandKitsRepo:
         if default_layout is not None:
             sets.append("default_layout = ?")
             values.append(default_layout)
+        if caption_style is not None:
+            sets.append("caption_style_json = ?")
+            values.append(json.dumps(caption_style))
+        for col, val in (
+            ("handle_tiktok", handle_tiktok),
+            ("handle_youtube", handle_youtube),
+            ("handle_instagram", handle_instagram),
+            ("handle_kick", handle_kick),
+        ):
+            if val is not None:
+                sets.append(f"{col} = ?")
+                values.append(val if val else None)
         if auto_publish_enabled is not None:
             sets.append("auto_publish_enabled = ?")
             values.append(1 if auto_publish_enabled else 0)

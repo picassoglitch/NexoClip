@@ -106,6 +106,30 @@
 
   <article>
     <header>
+      <strong>Captions</strong>
+      <small> — burned into every clip rendered with this kit. Pick a preset; full preset details are in the docs.</small>
+    </header>
+    <label>Caption preset
+      <select name="caption_preset">
+        {% for choice_id, choice_label in caption_preset_choices %}
+        <option value="{{ choice_id }}"
+                {% if caption_style.preset == choice_id %}selected{% endif %}>
+          {{ choice_label }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <small>
+      <strong>Current preset summary:</strong>
+      {{ caption_style.font_family }} {{ caption_style.font_weight }},
+      {{ caption_style.font_size_px }}px,
+      {{ caption_style.position }}, animation: {{ caption_style.animation }}.
+      {% if caption_style.censor_swears %}Swear-words censored.{% endif %}
+    </small>
+  </article>
+
+  <article>
+    <header>
       <strong>Custom trigger phrases</strong>
       <small> — added on top of the tenant base list when this kit's speaker is detected. One phrase per line.</small>
     </header>

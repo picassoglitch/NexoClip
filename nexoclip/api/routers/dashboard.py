@@ -8,6 +8,7 @@ in addition to the `Authorization` header. The bearer middleware in
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from fastapi import (
@@ -706,6 +707,109 @@ async def publish_jobs_cancel(
         payload={"publish_job_id": job_id},
     )
     return RedirectResponse(url=redirect_to or "/dashboard", status_code=303)
+
+
+# ---------- Inbox (slice E.3) ----------
+
+
+@router.get("/inbox", response_class=HTMLResponse)
+async def inbox(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Operator inbox: clips grouped by VOD → speaker, plus a strip of
+    in-window auto-publish jobs that can still be undone.
+
+    Designed to be the one page an operator opens each morning. The strip
+    at the top is time-sensitive (auto-publish about to fire); the lists
+    below are the regular review queue."""
+    from nexoclip.db import CandidatesRepo, VodSpeakersRepo
+
+    streams = await StreamsRepo(db).list_for_tenant()
+    jobs_repo = PublishJobsRepo(db)
+
+    # ---- The undo strip: every pending job whose scheduled_for hasn't
+    # elapsed yet. Surface across all clips so the operator doesn't have
+    # to dig through individual stream pages.
+    scheduled_jobs = await jobs_repo.list_scheduled(limit=20)
+
+    # Map clip_id -> friendly label for the strip ("Stream X · @aldo · 12:34").
+    # Pull names lazily — we only need clip rows that show up in
+    # `scheduled_jobs`.
+    scheduled_clip_ids = list({j.clip_id for j in scheduled_jobs})
+    clips_by_id: dict[str, object] = {}
+    if scheduled_clip_ids:
+        for cid in scheduled_clip_ids:
+            row = await ClipsRepo(db).get(cid)
+            if row is not None:
+                clips_by_id[cid] = row
+
+    # ---- VOD-grouped review queue.
+    streams_payload: list[dict[str, object]] = []
+    for s in streams:
+        stream_clips = await ClipsRepo(db).list_for_stream(s.id)
+        if not stream_clips:
+            continue
+        vod_speakers = await VodSpeakersRepo(db).list_for_stream(s.id)
+        speakers_by_label = {vs.speaker_label: vs for vs in vod_speakers}
+        candidates_by_id = {
+            c.id: c for c in await CandidatesRepo(db).list_for_stream(s.id)
+        }
+        # Bucket clips by their evidence.speaker_label (None bucket
+        # catches non-diarized triggers).
+        buckets: dict[str | None, list[object]] = {}
+        for c in stream_clips:
+            label = _speaker_label_for_clip(c, candidates_by_id)
+            buckets.setdefault(label, []).append(c)
+        groups = []
+        # Stable order: known labels alphabetically, None last.
+        for label in sorted(
+            (lbl for lbl in buckets if lbl is not None)
+        ) + ([None] if None in buckets else []):
+            vs = speakers_by_label.get(label) if label is not None else None
+            groups.append(
+                {
+                    "speaker_label": label or "(unassigned)",
+                    "vod_speaker": vs,
+                    "clips": buckets[label],
+                }
+            )
+        streams_payload.append(
+            {
+                "stream": s,
+                "groups": groups,
+                "n_clips": len(stream_clips),
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "inbox.html",
+        {
+            "streams_payload": streams_payload,
+            "scheduled_jobs": scheduled_jobs,
+            "clips_by_id": clips_by_id,
+        },
+    )
+
+
+def _speaker_label_for_clip(
+    clip: object, candidates_by_id: Mapping[str, object]
+) -> str | None:
+    """Same logic as `nexoclip.publish.auto._speaker_label_for_clip`,
+    inlined here to avoid an api -> publish dependency edge. (Both modules
+    are tiny consumers of the same convention: candidate.evidence carries
+    the speaker_label.)"""
+    candidate_id = getattr(clip, "candidate_id", None)
+    if not candidate_id:
+        return None
+    cand = candidates_by_id.get(candidate_id)
+    if cand is None:
+        return None
+    evidence = getattr(cand, "evidence", None) or {}
+    label = evidence.get("speaker_label") if isinstance(evidence, dict) else None
+    return label if isinstance(label, str) else None
 
 
 # ---------- Personas ----------

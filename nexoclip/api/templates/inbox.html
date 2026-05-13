@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Inbox - NexoClip{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>Inbox</h2>
+  <p>
+    Fresh clips grouped by VOD &rarr; speaker. Auto-publish jobs in the
+    undo window are listed at the top — click <strong>Undo</strong> to
+    cancel before they fire.
+  </p>
+</hgroup>
+
+{% if scheduled_jobs %}
+<article>
+  <header>
+    <strong>{{ scheduled_jobs|length }} job{% if scheduled_jobs|length != 1 %}s{% endif %} scheduled to publish</strong>
+    <small>&nbsp;— still inside the undo window, hasn't fired yet</small>
+  </header>
+  <table>
+    <thead>
+      <tr>
+        <th>Clip</th>
+        <th>Platform</th>
+        <th>Fires at (UTC)</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in scheduled_jobs %}
+      {% set clip = clips_by_id.get(job.clip_id) %}
+      <tr>
+        <td>
+          {% if clip %}
+          <a href="/dashboard/clips/{{ clip.id }}">
+            <strong>{{ clip.id }}</strong>
+          </a>
+          {% else %}
+          <code>{{ job.clip_id }}</code>
+          {% endif %}
+        </td>
+        <td><code>{{ job.platform }}</code></td>
+        <td><small>{{ job.scheduled_for or "—" }}</small></td>
+        <td>
+          <form action="/dashboard/publish-jobs/{{ job.id }}/cancel" method="post" style="display:inline;">
+            <input type="hidden" name="redirect_to" value="/dashboard/inbox">
+            <button type="submit" class="contrast outline" style="padding: 0.2rem 0.7rem;">Undo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endif %}
+
+{% if streams_payload %}
+{% for entry in streams_payload %}
+<article>
+  <header>
+    <strong>
+      <a href="/dashboard/streams/{{ entry.stream.id }}">{{ entry.stream.title or entry.stream.id }}</a>
+    </strong>
+    <small>&nbsp;— {{ entry.n_clips }} clip{% if entry.n_clips != 1 %}s{% endif %} · {{ entry.stream.channel or entry.stream.platform }}</small>
+  </header>
+
+  {% for group in entry.groups %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary>
+      <strong>{{ group.speaker_label }}</strong>
+      <small>&nbsp;— {{ group.clips|length }} clip{% if group.clips|length != 1 %}s{% endif %}</small>
+      {% if group.vod_speaker and group.vod_speaker.resolved_speaker_id %}
+      <small><code>{{ group.vod_speaker.resolved_speaker_id }}</code></small>
+      {% endif %}
+    </summary>
+
+    <div class="grid">
+      {% for clip in group.clips %}
+      <article style="margin-bottom: 0.5rem;">
+        <header>
+          <strong>
+            <a href="/dashboard/clips/{{ clip.id }}">
+              {{ '%.0f' % clip.start_s }}s &rarr; {{ '%.0f' % clip.end_s }}s
+            </a>
+          </strong>
+          <span class="status-badge status-{{ clip.status }}" style="float: right;">{{ clip.status }}</span>
+        </header>
+        <small style="display: block; color: var(--pico-muted-color);">
+          {{ '%.1f' % clip.duration_s }}s &middot; {{ clip.width }}x{{ clip.height }}
+        </small>
+        {% if clip.thumbnail_frame_path %}
+        <small><em>thumbnail ready</em></small>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </details>
+  {% endfor %}
+</article>
+{% endfor %}
+{% else %}
+<article>
+  <p><em>No clips yet. <a href="/dashboard/streams">Drop a VOD on the streams page</a> to get started.</em></p>
+</article>
+{% endif %}
+{% endblock %}

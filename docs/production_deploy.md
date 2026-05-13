@@ -19,7 +19,7 @@ This file is the contract every intermediate commit gets evaluated against.
 | Auth | Dashboard cookie + bearer tokens | Same + (eventually) email/password + OAuth | ✅ token model is already multi-tenant |
 | LLM | Anthropic direct, cost-tracked | Same — Anthropic only | ✅ done |
 | Whisper | faster-whisper, subprocess-isolated | Same on a GPU worker pool | ✅ subprocess isolation already in place |
-| Diarization | not yet | pyannote-3.1, subprocess-isolated | ⏳ slice B |
+| Diarization | pyannote-3.1, subprocess-isolated, skippable when absent | Same on a GPU worker pool | ✅ done (slice B) |
 | Multi-tenancy | One tenant ("aldo") in single SQLite DB | N tenants in shared Postgres, row-level isolation | ✅ every query already filters on tenant_id |
 | Job queue | FastAPI BackgroundTasks (in-process) | Redis + RQ (out-of-process workers) | ❌ in-process today; needs queue abstraction |
 | Secrets | `.env` file | Environment vars from secret store (AWS SM / Doppler / 1Password) | ✅ all secrets already read from env |
@@ -154,8 +154,9 @@ voice-markers feature work.
 - [x] Auto-free stale port on boot (commit `ef069ed`)
 - [x] Data export tool for migrations / offboarding (commit `1d99971`)
 - [x] Retroactive trigger window (commit `a60a7b6`)
-- [ ] Diarization subprocess worker (slice B)
-- [ ] Speaker identity persistence (slice B)
+- [x] Diarization subprocess worker, gracefully skippable (commit `a4b9c67`)
+- [x] Speaker identity persistence + cosine-sim resolution (commit `4567927`)
+- [x] Per-speaker trigger attribution + cooldown (commit `c8fc7fb`)
 - [ ] Brand kits + per-speaker resolution (slice C)
 - [ ] AI logo generation (slice D)
 - [ ] Google Drive watcher (slice E)

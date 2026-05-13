@@ -12,6 +12,7 @@ Phase 2 adds native TikTok / YT Shorts publishers behind the same
 `Publisher` protocol; the orchestration here doesn't change.
 """
 
+from .auto import AutoPublishReport, dispatch_auto_publish
 from .buffer import BufferClient, BufferError
 from .instagram import InstagramClient, InstagramError
 from .oauth import RefreshedToken, refresh_if_expiring
@@ -21,6 +22,7 @@ from .tiktok import TikTokClient, TikTokError
 from .youtube import YouTubeClient, YouTubeError
 
 __all__ = [
+    "AutoPublishReport",
     "BufferClient",
     "BufferError",
     "InstagramClient",
@@ -32,6 +34,7 @@ __all__ = [
     "TikTokError",
     "YouTubeClient",
     "YouTubeError",
+    "dispatch_auto_publish",
     "refresh_if_expiring",
     "run_publish_jobs",
 ]

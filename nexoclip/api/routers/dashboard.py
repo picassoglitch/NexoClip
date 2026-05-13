@@ -677,6 +677,37 @@ async def clip_publish(
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
+@router.post(
+    "/publish-jobs/{job_id}/cancel",
+    dependencies=[Depends(require_full_scope)],
+)
+async def publish_jobs_cancel(
+    request: Request,
+    job_id: str,
+    redirect_to: str = Form("/dashboard"),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Undo a pending auto-publish job (slice E.2).
+
+    Returns 404 when the job doesn't exist OR belongs to another tenant
+    OR is already past 'pending' (sent / failed). The dashboard hides
+    the Undo button in those cases so the 404 only fires on a stale page
+    or a racing request — both safe to fail loudly on.
+    """
+    ok = await PublishJobsRepo(db).cancel(job_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="publish job not found or not cancelable",
+        )
+    await EventsRepo(db).emit(
+        type="publish_job.canceled",
+        payload={"publish_job_id": job_id},
+    )
+    return RedirectResponse(url=redirect_to or "/dashboard", status_code=303)
+
+
 # ---------- Personas ----------
 
 

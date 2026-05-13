@@ -1043,6 +1043,76 @@ def retention_sweep_cmd(
         )
 
 
+@app.command("auto-publish")
+def auto_publish_cmd(
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Restrict dispatch to one tenant. Default: all."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what would be enqueued without writing publish_jobs rows.",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit one JSON object per report instead of text."
+    ),
+) -> None:
+    """Walk auto-publish brand kits and enqueue publish_jobs (slice E.2).
+
+    Wire as a cron — every 15 minutes is generous for the typical 60-min
+    undo window. Faster dispatch shortens "time-to-publish" on freshly
+    cut clips but doesn't change correctness; scheduled_for honors the
+    clip's created_at + delay_min so the cron's lag is invisible to ops.
+    """
+    import json as _json
+
+    from nexoclip.db import apply_migrations
+    from nexoclip.publish import dispatch_auto_publish
+
+    async def _run() -> list[dict[str, object]]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            reports = await dispatch_auto_publish(
+                db, tenant_id=tenant, dry_run=dry_run
+            )
+            return [
+                {
+                    "tenant_id": r.tenant_id,
+                    "jobs_enqueued": r.jobs_enqueued,
+                    "clips_considered": r.clips_considered,
+                    "clips_skipped_no_kit": r.clips_skipped_no_kit,
+                    "clips_skipped_no_variant": r.clips_skipped_no_variant,
+                    "clips_skipped_already_queued": r.clips_skipped_already_queued,
+                    "clips_skipped_no_account": r.clips_skipped_no_account,
+                    "dry_run": r.dry_run,
+                }
+                for r in reports
+            ]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for row in rows:
+            typer.echo(_json.dumps(row))
+        return
+    if not rows:
+        typer.echo("(no tenants matched the dispatch)")
+        return
+    label = "DRY RUN" if dry_run else "dispatched"
+    for r in rows:
+        typer.echo(
+            f"  [{label}] {r['tenant_id']}  "
+            f"enqueued={r['jobs_enqueued']}  considered={r['clips_considered']}  "
+            f"skip(no_kit={r['clips_skipped_no_kit']}, "
+            f"no_variant={r['clips_skipped_no_variant']}, "
+            f"queued={r['clips_skipped_already_queued']}, "
+            f"no_account={r['clips_skipped_no_account']})"
+        )
+
+
 @tokens_app.command("issue")
 def tokens_issue_cmd(
     tenant_id: str = typer.Option(..., "--tenant", help="Tenant the token authenticates."),

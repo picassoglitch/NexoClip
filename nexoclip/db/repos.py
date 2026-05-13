@@ -1073,14 +1073,53 @@ class PublishJobsRepo:
         return [_publish_job_from_row(r) for r in await cur.fetchall()]
 
     async def list_pending(self, *, limit: int = 50) -> list[PublishJob]:
+        """Pending jobs whose `scheduled_for` window has elapsed.
+
+        A job stays invisible to the worker while `scheduled_for` is in
+        the future — that's how the auto-publish undo window (slice E.2)
+        works: enqueue with `scheduled_for = now + delay_min`, then the
+        operator has that long to cancel before the worker picks it up.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT * FROM publish_jobs WHERE tenant_id = ? AND status = 'pending' "
+            "AND (scheduled_for IS NULL OR scheduled_for <= ?) "
             "ORDER BY created_at LIMIT ?",
-            (tenant_id, limit),
+            (tenant_id, _now(), limit),
         )
         return [_publish_job_from_row(r) for r in await cur.fetchall()]
+
+    async def list_scheduled(self, *, limit: int = 50) -> list[PublishJob]:
+        """Jobs sitting in the undo window — pending AND scheduled_for is
+        in the future. Surfaced on the dashboard so the operator can
+        cancel before the worker picks them up."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM publish_jobs WHERE tenant_id = ? AND status = 'pending' "
+            "AND scheduled_for IS NOT NULL AND scheduled_for > ? "
+            "ORDER BY scheduled_for LIMIT ?",
+            (tenant_id, _now(), limit),
+        )
+        return [_publish_job_from_row(r) for r in await cur.fetchall()]
+
+    async def cancel(self, job_id: str) -> bool:
+        """Mark a pending job as canceled (the 'undo' button).
+
+        Returns True iff the job was pending AND owned by the current
+        tenant. Sent/failed jobs are NOT cancelable — at that point the
+        platform call already fired.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "UPDATE publish_jobs SET status = 'canceled', last_error = NULL "
+            "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+            (job_id, tenant_id),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
 
     async def list_recent_for_tenant(
         self, *, status: str | None = None, limit: int = 50

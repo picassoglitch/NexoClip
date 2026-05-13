@@ -165,7 +165,7 @@ voice-markers feature work.
 - [x] AI logo generation (commit `f50d66a`)
 - [x] Brand-kit thumbnail compositing (commit `99cba4e`)
 - [x] Retention sweeper (slice E.1)
-- [ ] Auto-publish dispatcher with undo window (slice E.2)
+- [x] Auto-publish dispatcher with undo window (slice E.2)
 - [ ] Inbox UI grouped by VOD/speaker (slice E.3)
 - [ ] Google Drive watcher (slice E.4)
 - [ ] S3/R2 storage abstraction (deferred — needed before public launch)

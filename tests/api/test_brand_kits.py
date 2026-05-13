@@ -260,6 +260,123 @@ async def test_caption_preset_persists_through_form(
     assert updated.caption_style["font_family"] == "JetBrains Mono"
 
 
+async def test_generate_logo_persists_svg_and_ai_metadata(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slice D.3: POST /brand-kits/{id}/generate-logo round-trips an
+    LLM-returned SVG through the sanitizer, writes it under
+    `<output_dir>/brand_kits/<kit_id>/logo.svg`, and stamps the kit row
+    with ai_generated=True + ai_provider='anthropic'."""
+    from nexoclip.llm import router as router_module
+    from nexoclip.settings import get_settings
+
+    # Pin output dir to the per-test tmp so the SVG goes somewhere safe.
+    monkeypatch.setenv("NEXOCLIP_DEFAULT_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    # Stub the real Anthropic factory with a FakeProvider that replies
+    # with a clean SVG. The router used inside the route is constructed
+    # against this factory at module load time.
+    from tests.llm._fakes import FakeProvider  # type: ignore[import]
+
+    fake = FakeProvider("anthropic")
+    fake.queue_success(
+        {
+            "svg": (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+                '<circle cx="256" cy="256" r="200" fill="#FF3366"/>'
+                "</svg>"
+            ),
+            "style_hint": "Bold circle.",
+        }
+    )
+
+    def factory(name: str, _config: object, _api_key: str) -> object | None:
+        return fake if name == "anthropic" else None
+
+    monkeypatch.setattr(router_module, "_default_provider_factory", factory)
+
+    await _login(client, tenants["alice"]["token"])
+    with bound_tenant(tenants["alice"]["id"]):
+        kit = await BrandKitsRepo(db).create(
+            name="AARA", primary_color="#FF3366", accent_color="#FFD700"
+        )
+
+    r = await client.post(
+        f"/dashboard/brand-kits/{kit.id}/generate-logo",
+        data={"style_hint": "Bold geometric mark"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/dashboard/brand-kits/{kit.id}"
+
+    # File on disk where the route said it would be.
+    svg_path = tmp_path / "brand_kits" / kit.id / "logo.svg"
+    assert svg_path.exists()
+    body = svg_path.read_text("utf-8")
+    assert "<svg" in body
+    assert "#FF3366" in body
+
+    # Row stamped.
+    with bound_tenant(tenants["alice"]["id"]):
+        updated = await BrandKitsRepo(db).get(kit.id)
+    assert updated is not None
+    assert updated.ai_generated is True
+    assert updated.ai_provider == "anthropic"
+    assert updated.ai_prompt == "Bold geometric mark"
+    assert updated.logo_url == f"/dashboard/brand-kits/{kit.id}/logo.svg"
+
+    # File-serving endpoint returns the SVG content.
+    r = await client.get(f"/dashboard/brand-kits/{kit.id}/logo.svg")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/svg+xml")
+    assert "<svg" in r.text
+
+    get_settings.cache_clear()
+
+
+async def test_generate_logo_unknown_kit_404(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    await _login(client, tenants["alice"]["token"])
+    r = await client.post(
+        "/dashboard/brand-kits/brk_nonexistent/generate-logo",
+        data={"style_hint": "x"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 404
+
+
+async def test_logo_svg_endpoint_404_when_missing(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SVG file-serving endpoint returns 404 when the kit exists but no
+    logo was generated yet — the dashboard template guards on
+    `kit.logo_url` so this is the right shape."""
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_DEFAULT_OUTPUT_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    await _login(client, tenants["alice"]["token"])
+    with bound_tenant(tenants["alice"]["id"]):
+        kit = await BrandKitsRepo(db).create(
+            name="K", primary_color="#000", accent_color="#FFF"
+        )
+    r = await client.get(f"/dashboard/brand-kits/{kit.id}/logo.svg")
+    assert r.status_code == 404
+    get_settings.cache_clear()
+
+
 async def test_create_form_uses_default_preset_when_unspecified(
     client: httpx.AsyncClient,
     db: Database,

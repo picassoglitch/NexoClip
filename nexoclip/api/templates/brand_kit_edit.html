@@ -179,4 +179,43 @@
     {% endif %}
   </div>
 </form>
+
+{% if kit %}
+<article>
+  <header>
+    <strong>Logo</strong>
+    <small> — AI-generated SVG (Anthropic). Re-run regenerates a fresh variant; the existing logo stays in place if the call fails.</small>
+  </header>
+  <div class="grid">
+    <div>
+      {% if kit.logo_url %}
+      <img src="{{ kit.logo_url }}" alt="{{ kit.name }} logo"
+           style="width: 200px; height: 200px; background: var(--pico-card-background-color); padding: 0.5rem; border-radius: 0.5rem;">
+      <small style="display: block; margin-top: 0.25rem; color: var(--pico-muted-color);">
+        {% if kit.ai_generated %}
+        AI-generated{% if kit.ai_provider %} via {{ kit.ai_provider }}{% endif %}.
+        {% else %}
+        Manually uploaded.
+        {% endif %}
+      </small>
+      {% else %}
+      <div style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--pico-muted-border-color); border-radius: 0.5rem;">
+        <small style="color: var(--pico-muted-color);">No logo yet</small>
+      </div>
+      {% endif %}
+    </div>
+    <form action="/dashboard/brand-kits/{{ kit.id }}/generate-logo" method="post">
+      <label>Style hint
+        <input type="text" name="style_hint"
+               value="{{ kit.ai_prompt if kit.ai_prompt else 'Minimal mark / monogram' }}"
+               placeholder="Minimal mark / monogram">
+      </label>
+      <small style="display: block; margin-bottom: 0.5rem; color: var(--pico-muted-color);">
+        Uses your brand's primary + accent colors. Cost: one Anthropic call. Re-run for a different variant.
+      </small>
+      <button type="submit" class="secondary">{% if kit.logo_url %}Regenerate logo{% else %}Generate logo{% endif %}</button>
+    </form>
+  </div>
+</article>
+{% endif %}
 {% endblock %}

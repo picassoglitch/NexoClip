@@ -24,6 +24,13 @@ from .captions import (
     caption_style_or_default,
     preset_choices,
 )
+from .logo import (
+    LogoSVG,
+    generate_logo,
+    is_rasterization_available,
+    rasterize_svg_to_png,
+    sanitize_svg,
+)
 from .service import (
     merged_trigger_phrases_for_speaker,
     resolve_brand_kit_for_candidate,
@@ -34,10 +41,15 @@ __all__ = [
     "CaptionPresetId",
     "CaptionShadow",
     "CaptionStyle",
+    "LogoSVG",
     "builtin_presets",
     "caption_style_or_default",
+    "generate_logo",
+    "is_rasterization_available",
     "merged_trigger_phrases_for_speaker",
     "preset_choices",
+    "rasterize_svg_to_png",
     "resolve_brand_kit_for_candidate",
     "resolve_brand_kit_for_speaker",
+    "sanitize_svg",
 ]

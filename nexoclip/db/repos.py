@@ -1942,6 +1942,10 @@ class BrandKitsRepo:
         auto_publish_platforms: list[str] | None = None,
         auto_publish_delay_min: int | None = None,
         custom_trigger_phrases: CustomTriggerPhrases | None = None,
+        logo_url: str | None = None,
+        ai_generated: bool | None = None,
+        ai_prompt: str | None = None,
+        ai_provider: str | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -1994,6 +1998,18 @@ class BrandKitsRepo:
         if custom_trigger_phrases is not None:
             sets.append("custom_trigger_phrases_json = ?")
             values.append(json.dumps(custom_trigger_phrases.model_dump()))
+        if logo_url is not None:
+            sets.append("logo_url = ?")
+            values.append(logo_url if logo_url else None)
+        if ai_generated is not None:
+            sets.append("ai_generated = ?")
+            values.append(1 if ai_generated else 0)
+        if ai_prompt is not None:
+            sets.append("ai_prompt = ?")
+            values.append(ai_prompt if ai_prompt else None)
+        if ai_provider is not None:
+            sets.append("ai_provider = ?")
+            values.append(ai_provider if ai_provider else None)
         if not sets:
             return existing
         sets.append("updated_at = ?")

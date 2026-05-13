@@ -1038,3 +1038,134 @@ async def brand_kits_delete(
         raise HTTPException(status_code=404, detail="brand kit not found")
     await BrandKitsRepo(db).delete(kit_id)
     return RedirectResponse(url="/dashboard/brand-kits", status_code=303)
+
+
+def _brand_kit_asset_dir(output_dir: Path, kit_id: str) -> Path:
+    """`<output_dir>/brand_kits/<kit_id>/` — slice D.3 asset root.
+
+    Mirrors the per-stream layout so a future Storage abstraction
+    (docs/production_deploy.md §3) can swap to S3/R2 by remapping a
+    single prefix.
+    """
+    return output_dir / "brand_kits" / kit_id
+
+
+@router.post(
+    "/brand-kits/{kit_id}/generate-logo",
+    dependencies=[Depends(require_full_scope)],
+)
+async def brand_kits_generate_logo(
+    request: Request,
+    kit_id: str,
+    style_hint: str = Form("Minimal mark / monogram"),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Call Claude → sanitized SVG → save under brand_kits/<kit_id>/ →
+    persist the relative URL + ai_* metadata on the brand kit row.
+
+    Errors bubble up as a 500 with the provider message; the dashboard's
+    next render shows the previously-generated logo unchanged (best-effort
+    semantics — the kit isn't mutated until both the LLM call AND the disk
+    write succeed)."""
+    from nexoclip.branding import generate_logo, rasterize_svg_to_png
+    from nexoclip.llm import LLMRouter, load_llm_config
+    from nexoclip.settings import get_settings
+
+    repo = BrandKitsRepo(db)
+    kit = await repo.get(kit_id)
+    if kit is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+
+    output_dir = Path(get_settings().default_output_dir)
+    asset_dir = _brand_kit_asset_dir(output_dir, kit_id)
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    call_log_path = output_dir / "llm_calls_brand_kits.jsonl"
+    router_ = LLMRouter(
+        config=load_llm_config(),
+        call_log_path=call_log_path,
+        db=db,
+    )
+    try:
+        logo = await generate_logo(
+            tenant_id=tenant_id,
+            brand_name=kit.name,
+            primary_color=kit.primary_color,
+            accent_color=kit.accent_color,
+            style=style_hint or "Minimal mark / monogram",
+            router=router_,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"logo generation failed: {e}",
+        ) from e
+
+    svg_path = asset_dir / "logo.svg"
+    svg_path.write_text(logo.svg, encoding="utf-8")
+    # Rasterize best-effort — caller fallback is "SVG only", not failure.
+    rasterize_svg_to_png(
+        logo.svg, output_path=asset_dir / "logo.png", size_px=1024
+    )
+    # Use the file-serving endpoint as the canonical URL so the dashboard
+    # template doesn't need to know about the on-disk layout.
+    logo_url = f"/dashboard/brand-kits/{kit_id}/logo.svg"
+    await repo.update(
+        kit_id,
+        logo_url=logo_url,
+        ai_generated=True,
+        ai_prompt=style_hint or "Minimal mark / monogram",
+        ai_provider="anthropic",
+    )
+    return RedirectResponse(
+        url=f"/dashboard/brand-kits/{kit_id}", status_code=303
+    )
+
+
+@router.get("/brand-kits/{kit_id}/logo.svg")
+async def brand_kits_logo_svg(
+    request: Request,
+    kit_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Serve the saved SVG for the dashboard preview + downstream renderer."""
+    from nexoclip.settings import get_settings
+
+    if await BrandKitsRepo(db).get(kit_id) is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+    output_dir = Path(get_settings().default_output_dir)
+    svg_path = _brand_kit_asset_dir(output_dir, kit_id) / "logo.svg"
+    if not svg_path.exists():
+        raise HTTPException(status_code=404, detail="no logo for this kit")
+    return FileResponse(
+        path=str(svg_path),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/brand-kits/{kit_id}/logo.png")
+async def brand_kits_logo_png(
+    request: Request,
+    kit_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Serve the rasterized PNG (when cairosvg was installed at generate-time).
+
+    Falls through to 404 when the SVG was generated but rasterization was
+    skipped — the dashboard's `<img>` fallback covers that case."""
+    from nexoclip.settings import get_settings
+
+    if await BrandKitsRepo(db).get(kit_id) is None:
+        raise HTTPException(status_code=404, detail="brand kit not found")
+    output_dir = Path(get_settings().default_output_dir)
+    png_path = _brand_kit_asset_dir(output_dir, kit_id) / "logo.png"
+    if not png_path.exists():
+        raise HTTPException(status_code=404, detail="no logo png for this kit")
+    return FileResponse(
+        path=str(png_path),
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache"},
+    )

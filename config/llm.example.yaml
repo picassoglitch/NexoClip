@@ -58,6 +58,11 @@ routing:
     primary: anthropic
     fallbacks: []
 
+  logo_generation:                              # AI-generated SVG brand mark (voice-markers §3.3.a)
+    default_quality: premium
+    primary: anthropic
+    fallbacks: []
+
 # Reliability
 retry:
   max_attempts: 3

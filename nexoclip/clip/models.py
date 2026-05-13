@@ -38,6 +38,13 @@ class Clip(BaseModel):
     path: Path
     smart_crop_box: SmartCropBox | None = None
     thumbnail_path: Path | None = None
+    # Branded thumbnail variants — voice-markers spec slice D.4.
+    # Each is the absolute path to a JPEG sized for that aspect ratio.
+    # Missing entries (e.g. when Pillow couldn't decode the source frame)
+    # leave the field at None; publishers fall back to `thumbnail_path`.
+    thumbnail_16x9_path: Path | None = None
+    thumbnail_9x16_path: Path | None = None
+    thumbnail_1x1_path: Path | None = None
 
 
 class ClipManifest(BaseModel):

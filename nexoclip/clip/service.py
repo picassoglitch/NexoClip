@@ -34,6 +34,7 @@ from nexoclip.logging import get_logger
 from .models import Clip, ClipManifest, SmartCropBox
 from .smart_crop import compute_smart_crop_box, crop_box_to_ffmpeg_filter
 from .thumbnail import pick_thumbnail, save_thumbnail
+from .thumbnail_brand import pick_brand_kit_handle, render_branded_thumbnails
 
 _log = get_logger("nexoclip.clip")
 
@@ -171,11 +172,18 @@ def _cut_all(
         smart_box = _safe_smart_crop(
             video_path=stream.source_video_path, start_s=start, end_s=end
         )
-        thumbnail_path = _safe_thumbnail(
+        thumbnail_path, raw_jpeg = _safe_thumbnail(
             video_path=stream.source_video_path,
             start_s=start,
             end_s=end,
             clip_dir=clip_dir,
+        )
+        branded = (
+            _safe_branded_thumbnails(
+                source_jpeg=raw_jpeg, clip_dir=clip_dir, brand_kit=kit
+            )
+            if raw_jpeg is not None
+            else {}
         )
 
         try:
@@ -209,6 +217,9 @@ def _cut_all(
             path=final,
             smart_crop_box=smart_box,
             thumbnail_path=thumbnail_path,
+            thumbnail_16x9_path=branded.get("16x9"),
+            thumbnail_9x16_path=branded.get("9x16"),
+            thumbnail_1x1_path=branded.get("1x1"),
         )
         (clip_dir / "metadata.json").write_text(clip.model_dump_json(indent=2), encoding="utf-8")
         clips.append(clip)
@@ -228,14 +239,74 @@ def _safe_smart_crop(
 
 def _safe_thumbnail(
     *, video_path: Path, start_s: float, end_s: float, clip_dir: Path
-) -> Path | None:
-    """Run pick_thumbnail + save_thumbnail; log + skip on failure."""
+) -> tuple[Path | None, bytes | None]:
+    """Run pick_thumbnail + save_thumbnail; log + skip on failure.
+
+    Returns `(path, raw_jpeg_bytes)` so the branded compositor can reuse
+    the same decoded frame without another OpenCV pass over the source
+    video. On failure both values are None and the caller skips the
+    branded-variant step too."""
     try:
         jpeg, _ts, _bd = pick_thumbnail(video_path, start_s=start_s, end_s=end_s)
-        return save_thumbnail(clip_dir, jpeg)
+        return save_thumbnail(clip_dir, jpeg), jpeg
     except ClipError as e:
         _log.warning("thumbnail.skipped", reason=str(e))
-        return None
+        return None, None
+
+
+def _safe_branded_thumbnails(
+    *, source_jpeg: bytes, clip_dir: Path, brand_kit: object | None
+) -> dict[str, Path]:
+    """Composite the 16:9 / 9:16 / 1:1 brand-kit thumbnail variants.
+
+    `brand_kit` is loosely typed as `object | None` to keep the clip
+    module free of a hard dependency on `nexoclip.db` (same approach
+    `_brand_kit_drawtext_filter` uses for the slice D.1 handle overlay).
+    When `brand_kit` is None we fall back to a neutral grey scheme so
+    the variants still render — the publisher upload still benefits
+    from the aspect-correct thumbnails even without brand colors.
+
+    Returns a `{aspect: path}` dict keyed by `"16x9"` / `"9x16"` / `"1x1"`.
+    Missing keys mean that variant failed to render (per-variant try/
+    except in the compositor)."""
+    primary = (
+        str(getattr(brand_kit, "primary_color", None) or "#1F2937")
+        if brand_kit is not None
+        else "#1F2937"
+    )
+    accent = (
+        str(getattr(brand_kit, "accent_color", None) or "#F59E0B")
+        if brand_kit is not None
+        else "#F59E0B"
+    )
+    text = (
+        str(getattr(brand_kit, "text_color", None) or "#FFFFFF")
+        if brand_kit is not None
+        else "#FFFFFF"
+    )
+    handle = pick_brand_kit_handle(
+        handle_tiktok=getattr(brand_kit, "handle_tiktok", None),
+        handle_youtube=getattr(brand_kit, "handle_youtube", None),
+        handle_instagram=getattr(brand_kit, "handle_instagram", None),
+        handle_kick=getattr(brand_kit, "handle_kick", None),
+    )
+    paths = render_branded_thumbnails(
+        source_jpeg=source_jpeg,
+        clip_dir=clip_dir,
+        handle=handle,
+        primary_color=primary,
+        accent_color=accent,
+        text_color=text,
+    )
+    out: dict[str, Path] = {}
+    for p in paths:
+        # render_branded_thumbnails names files thumb_<aspect>.jpg — peel
+        # the aspect token out of the filename so we don't re-import the
+        # private VARIANTS tuple just to map back.
+        stem = p.stem  # 'thumb_16x9'
+        if stem.startswith("thumb_"):
+            out[stem.removeprefix("thumb_")] = p
+    return out
 
 
 def _ffmpeg_fast_cut(

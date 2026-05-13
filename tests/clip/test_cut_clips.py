@@ -40,7 +40,7 @@ def _stub_smart_crop_and_thumbnail(monkeypatch: pytest.MonkeyPatch) -> None:
     so tests can assert on ffmpeg args without coupling to vision deps.
     """
     monkeypatch.setattr(clip_service, "_safe_smart_crop", lambda **_kw: None)
-    monkeypatch.setattr(clip_service, "_safe_thumbnail", lambda **_kw: None)
+    monkeypatch.setattr(clip_service, "_safe_thumbnail", lambda **_kw: (None, None))
 
 
 def test_cuts_one_clip_per_candidate(
@@ -276,3 +276,118 @@ def test_load_clips_round_trips(
     manifest = load_clips(tmp_path / stream.id)
     assert manifest.stream_id == stream.id
     assert len(manifest.clips) == 1
+
+
+def test_branded_thumbnails_are_persisted_when_pickable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice D.4: when `_safe_thumbnail` returns real JPEG bytes, the
+    branded compositor runs and the variant paths are persisted on the
+    Clip + in manifest.json."""
+    import io
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    _stub_ffmpeg(monkeypatch)
+    monkeypatch.setattr(clip_service, "_safe_smart_crop", lambda **_kw: None)
+    # Hand back a real JPEG so the branded compositor has something
+    # decodable — but skip the raw save (Path=None).
+    src = Image.new("RGB", (1920, 1080), (40, 40, 40))
+    buf = io.BytesIO()
+    src.save(buf, format="JPEG", quality=85)
+    jpeg = buf.getvalue()
+    monkeypatch.setattr(
+        clip_service, "_safe_thumbnail", lambda **_kw: (None, jpeg)
+    )
+
+    # Minimal duck-typed brand kit — the compositor reads attributes
+    # via getattr, no DB row needed.
+    fake_kit = SimpleNamespace(
+        primary_color="#FF3366",
+        accent_color="#FFD700",
+        text_color="#FFFFFF",
+        handle_tiktok="@aara_art",
+        handle_youtube=None,
+        handle_instagram=None,
+        handle_kick=None,
+    )
+    stream = seed_stream(tmp_path)
+    candidate = make_candidate(timestamp=60.0)
+    clips = asyncio.run(
+        cut_clips(
+            tenant_id="default",
+            stream=stream,
+            candidates=[candidate],
+            output_dir=tmp_path,
+            brand_kits=[fake_kit],
+        )
+    )
+    assert len(clips) == 1
+    c = clips[0]
+    assert c.thumbnail_16x9_path is not None
+    assert c.thumbnail_9x16_path is not None
+    assert c.thumbnail_1x1_path is not None
+    assert c.thumbnail_16x9_path.exists()
+    assert c.thumbnail_16x9_path.name == "thumb_16x9.jpg"
+
+    # Manifest serialization includes the new paths.
+    manifest_path = tmp_path / stream.id / "clips_manifest.json"
+    payload = json.loads(manifest_path.read_text("utf-8"))
+    persisted = payload["clips"][0]
+    assert persisted["thumbnail_16x9_path"]
+    assert persisted["thumbnail_9x16_path"]
+    assert persisted["thumbnail_1x1_path"]
+
+
+def test_no_brand_kit_still_renders_neutral_branded_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `brand_kits=None`, the compositor uses neutral grey defaults
+    so the publisher still has aspect-correct thumbnails."""
+    import io
+
+    from PIL import Image
+
+    _stub_ffmpeg(monkeypatch)
+    monkeypatch.setattr(clip_service, "_safe_smart_crop", lambda **_kw: None)
+    src = Image.new("RGB", (1920, 1080), (200, 200, 200))
+    buf = io.BytesIO()
+    src.save(buf, format="JPEG", quality=85)
+    jpeg = buf.getvalue()
+    monkeypatch.setattr(
+        clip_service, "_safe_thumbnail", lambda **_kw: (None, jpeg)
+    )
+
+    stream = seed_stream(tmp_path)
+    clips = asyncio.run(
+        cut_clips(
+            tenant_id="default",
+            stream=stream,
+            candidates=[make_candidate(timestamp=60.0)],
+            output_dir=tmp_path,
+        )
+    )
+    assert clips[0].thumbnail_16x9_path is not None
+
+
+def test_branded_thumbnails_absent_when_raw_pick_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the raw frame pick fails (returns None bytes), the branded
+    step is skipped and the Clip fields stay None."""
+    _stub_ffmpeg(monkeypatch)
+    _stub_smart_crop_and_thumbnail(monkeypatch)
+    stream = seed_stream(tmp_path)
+    clips = asyncio.run(
+        cut_clips(
+            tenant_id="default",
+            stream=stream,
+            candidates=[make_candidate(timestamp=60.0)],
+            output_dir=tmp_path,
+        )
+    )
+    c = clips[0]
+    assert c.thumbnail_16x9_path is None
+    assert c.thumbnail_9x16_path is None
+    assert c.thumbnail_1x1_path is None

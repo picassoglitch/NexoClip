@@ -112,6 +112,35 @@ class VisualConfig(BaseModel):
     )
 
 
+class DiarizationConfig(BaseModel):
+    """Speaker diarization (pyannote-3.1) settings.
+
+    Disabled by default in the example config so a fresh install boots
+    without HF_TOKEN. Once the operator accepts the pyannote license and
+    sets HF_TOKEN, flip `enabled=true` and the pipeline will start
+    attaching speaker labels to candidates.
+
+    `match_threshold` is the cosine-sim cutoff for matching a new VOD's
+    speaker embedding against the tenant's persistent `speakers` table.
+    Lower values are more permissive (more likely to merge two recordings
+    of the same person into one identity); higher values demand cleaner
+    matches.
+    """
+
+    enabled: bool = False
+    model: str = Field(default="pyannote/speaker-diarization-3.1")
+    device: str = Field(default="cuda")
+    match_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    min_speech_for_id_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Speakers with less than this much total speech in a VOD "
+        "are not auto-matched against the persistent speakers table — too "
+        "little signal to risk a wrong merge. Still recorded as VOD-scoped "
+        "labels so the user can label them manually.",
+    )
+
+
 class ViralConfig(BaseModel):
     """Viral-moment detector — feeds the transcript to an LLM and asks it to
     identify the 5-15 most clip-worthy moments based on controversy, emotion,
@@ -150,6 +179,7 @@ class DetectionConfig(BaseModel):
     audio_energy: AudioEnergyConfig = Field(default_factory=AudioEnergyConfig)
     visual: VisualConfig = Field(default_factory=VisualConfig)
     viral: ViralConfig = Field(default_factory=ViralConfig)
+    diarization: DiarizationConfig = Field(default_factory=DiarizationConfig)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 

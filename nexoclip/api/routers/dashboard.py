@@ -285,7 +285,15 @@ async def stream_progress(
     ]
 
     # Roll up by step name -> latest known status. Step order is fixed.
-    step_order = ["ingest", "analyze_video", "transcribe", "detect", "cut", "variants"]
+    step_order = [
+        "ingest",
+        "analyze_video",
+        "diarize",
+        "transcribe",
+        "detect",
+        "cut",
+        "variants",
+    ]
     step_state: dict[str, dict[str, object]] = {
         name: {
             "name": name,

@@ -54,6 +54,7 @@ from nexoclip.detect import (
     detect_viral_moments,
     save_candidates,
 )
+from nexoclip.diarize import Diarization, diarize
 from nexoclip.errors import DetectionError, NexoClipError, VariantError
 from nexoclip.events import (
     CLIP_READY_FOR_REVIEW,
@@ -420,6 +421,36 @@ async def _run_pipeline(
                         f"detection.visual.enabled=false to skip the step entirely."
                     ),
                 )
+
+    # 2a-bis) diarize — pyannote-3.1 speaker turns + per-speaker embeddings.
+    # Skippable: returns Diarization(skipped=True) when disabled / HF_TOKEN
+    # missing / pyannote not installed / worker crashes. Downstream code
+    # reads candidate.evidence.get('speaker_label') defensively, so an
+    # empty diarization just means no speaker labels on this VOD.
+    diarization: Diarization = Diarization(
+        stream_id=stream.id, tenant_id=tenant_id, skipped=True
+    )
+    with _step("diarize", db=db, model=config.detection.diarization.model):
+        diarization = await diarize(
+            tenant_id=tenant_id,
+            stream=stream,
+            config=config.detection.diarization,
+            force=force,
+        )
+        if diarization.skipped:
+            _log.info(
+                "diarize.skipped",
+                reason=diarization.skip_reason,
+                stream_id=stream.id,
+            )
+        else:
+            _log.info(
+                "diarize.done",
+                segments=len(diarization.segments),
+                speakers=len({s.speaker_label for s in diarization.segments}),
+                embeddings=len(diarization.embeddings),
+                stream_id=stream.id,
+            )
 
     # 2) transcribe
     # Wrapped in asyncio.wait_for: faster-whisper occasionally stalls on

@@ -53,6 +53,14 @@ dependencies = [
     "scenedetect>=0.6.4",
     "opencv-python>=4.10",
 
+    # Speaker diarization (voice-markers spec slice B). pyannote-3.1 is a
+    # gated HuggingFace model — operator must accept the license and set
+    # HF_TOKEN in .env. The dashboard ships without pyannote installed too;
+    # nexoclip.diarize.service short-circuits when the import fails.
+    # Bring it in as an OPTIONAL extra (`pip install 'nexoclip[diarize]'`)
+    # so a fresh `pip install nexoclip` doesn't pull torch by default.
+    # (Listed in [project.optional-dependencies] below.)
+
     # REST API + HTMX dashboard (Phase 1 Tasks 9-10).
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -72,6 +80,12 @@ dev = [
     "mypy>=1.11",
     "pytest-cov>=5.0",
     "respx>=0.21",                      # httpx mock for LLM + Buffer tests
+]
+diarize = [
+    # pyannote-audio for speaker diarization (voice-markers spec slice B).
+    # Pulls torch via dep chain — ~2GB install on Windows. Skip if you
+    # don't need per-speaker labeling.
+    "pyannote.audio>=3.1,<4",
 ]
 
 [project.scripts]
@@ -105,7 +119,10 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.11"
 strict = true
-exclude = ["tests/"]
+# Worker entry points run as subprocesses; their dependencies (pyannote,
+# torch) are optional and stubs aren't shipped. Excluded from strict typing
+# so the dashboard can ship without those deps installed.
+exclude = ["tests/", "nexoclip/diarize/_worker.py"]
 
 [[tool.mypy.overrides]]
 module = [
@@ -115,6 +132,8 @@ module = [
     "yaml",
     "scenedetect.*",
     "cv2.*",
+    "pyannote.*",
+    "torch.*",
 ]
 ignore_missing_imports = true
 

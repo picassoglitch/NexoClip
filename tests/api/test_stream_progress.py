@@ -81,7 +81,7 @@ async def test_progress_pending_when_no_events_yet(
     assert r.status_code == 200
     body = r.text
     # All six steps appear by name.
-    for step in ("ingest", "analyze_video", "transcribe", "detect", "cut", "variants"):
+    for step in ("ingest", "analyze_video", "diarize", "transcribe", "detect", "cut", "variants"):
         assert step in body
     # No "running" / "done" badges yet.
     assert "(running…)" not in body
@@ -157,7 +157,7 @@ async def test_progress_done_when_every_step_finished(
     drops the HTMX polling attribute (no more refresh)."""
     tenant_id = tenants["alice"]["id"]
     await _seed_stream(db, tenant_id=tenant_id, stream_id="str_p3")
-    for step in ("ingest", "analyze_video", "transcribe", "detect", "cut", "variants"):
+    for step in ("ingest", "analyze_video", "diarize", "transcribe", "detect", "cut", "variants"):
         await _emit_step_event(
             db,
             tenant_id=tenant_id,

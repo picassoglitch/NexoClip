@@ -16,13 +16,16 @@ pipeline carries on without speaker labels. Downstream code reads
 
 from __future__ import annotations
 
+from .identity import ResolutionOutcome, resolve_speakers
 from .models import Diarization, DiarizationSegment, SpeakerEmbedding
 from .service import diarize, is_diarization_available
 
 __all__ = [
     "Diarization",
     "DiarizationSegment",
+    "ResolutionOutcome",
     "SpeakerEmbedding",
     "diarize",
     "is_diarization_available",
+    "resolve_speakers",
 ]

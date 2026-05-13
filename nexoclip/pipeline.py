@@ -54,7 +54,7 @@ from nexoclip.detect import (
     detect_viral_moments,
     save_candidates,
 )
-from nexoclip.diarize import Diarization, diarize
+from nexoclip.diarize import Diarization, diarize, resolve_speakers
 from nexoclip.errors import DetectionError, NexoClipError, VariantError
 from nexoclip.events import (
     CLIP_READY_FOR_REVIEW,
@@ -451,6 +451,24 @@ async def _run_pipeline(
                 embeddings=len(diarization.embeddings),
                 stream_id=stream.id,
             )
+            # Resolve diarization output against the tenant's persistent
+            # speakers table. Auto-create pending rows for unknown voices;
+            # fold matches' embeddings into the existing identity. Safe
+            # no-op when db=None (filesystem-only / test mode).
+            if db is not None:
+                outcome = await resolve_speakers(
+                    db=db,
+                    stream_id=stream.id,
+                    diarization=diarization,
+                    config=config.detection.diarization,
+                )
+                _log.info(
+                    "speakers.resolved",
+                    stream_id=stream.id,
+                    matched=outcome.matched,
+                    created=outcome.created,
+                    unresolved=outcome.unresolved,
+                )
 
     # 2) transcribe
     # Wrapped in asyncio.wait_for: faster-whisper occasionally stalls on

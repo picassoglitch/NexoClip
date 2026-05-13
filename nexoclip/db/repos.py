@@ -38,11 +38,13 @@ from .models import (
     PersonaRow,
     PublishJob,
     PublishMetric,
+    SpeakerRow,
     StreamRow,
     Tenant,
     TranscriptRow,
     User,
     VariantRow,
+    VodSpeakerRow,
     WebhookSecretVersion,
     WebhookSubscription,
 )
@@ -1525,3 +1527,206 @@ def _metric_from_row(row: aiosqlite.Row) -> PublishMetric:
     raw = d.pop("raw_metadata_json", None)
     d["raw_metadata"] = json.loads(raw) if raw else None
     return PublishMetric.model_validate(d)
+
+
+# ---------- Speakers (voice-markers spec slice B.2) ----------
+
+
+def _speaker_from_row(row: aiosqlite.Row) -> SpeakerRow:
+    d = dict(row)
+    raw = d.pop("embedding_json", None)
+    d["embedding"] = json.loads(raw) if raw else None
+    d["is_self"] = bool(d["is_self"])
+    return SpeakerRow.model_validate(d)
+
+
+def _vod_speaker_from_row(row: aiosqlite.Row) -> VodSpeakerRow:
+    d = dict(row)
+    raw = d.pop("embedding_json", None)
+    d["embedding"] = json.loads(raw) if raw else None
+    return VodSpeakerRow.model_validate(d)
+
+
+class SpeakersRepo:
+    """Persistent voice identities for a tenant.
+
+    Embedding vectors are stored as JSON list-of-floats (portable to
+    Postgres without pgvector — when scale demands it, swap in a real
+    vector column with no API change here).
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        display_name: str,
+        is_self: bool = False,
+        preferred_brand_kit_id: str | None = None,
+        embedding: list[float] | None = None,
+        total_speech_s: float = 0.0,
+        sample_audio_path: str | None = None,
+    ) -> SpeakerRow:
+        tenant_id = current_tenant_id()
+        speaker_id = new_id("spk")
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO speakers (id, tenant_id, display_name, is_self, "
+            "preferred_brand_kit_id, embedding_json, embedding_dim, "
+            "total_speech_s, sample_audio_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                speaker_id,
+                tenant_id,
+                display_name,
+                1 if is_self else 0,
+                preferred_brand_kit_id,
+                json.dumps(embedding) if embedding is not None else None,
+                len(embedding) if embedding is not None else None,
+                total_speech_s,
+                sample_audio_path,
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(speaker_id)
+        assert out is not None
+        return out
+
+    async def get(self, speaker_id: str) -> SpeakerRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM speakers WHERE id = ? AND tenant_id = ?",
+            (speaker_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _speaker_from_row(row) if row else None
+
+    async def list_for_tenant(self) -> list[SpeakerRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM speakers WHERE tenant_id = ? ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_speaker_from_row(r) for r in await cur.fetchall()]
+
+    async def update_embedding(
+        self,
+        *,
+        speaker_id: str,
+        embedding: list[float],
+        total_speech_s: float,
+    ) -> None:
+        """Fold a new VOD's embedding into the persistent identity.
+
+        Caller is responsible for the merge math (typically a duration-
+        weighted average). This method just persists the result.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE speakers SET embedding_json = ?, embedding_dim = ?, "
+            "total_speech_s = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                json.dumps(embedding),
+                len(embedding),
+                total_speech_s,
+                _now(),
+                speaker_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+
+    async def set_display_name(self, speaker_id: str, display_name: str) -> None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE speakers SET display_name = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (display_name, _now(), speaker_id, tenant_id),
+        )
+        await conn.commit()
+
+
+class VodSpeakersRepo:
+    """One row per (stream_id, within-VOD speaker_label).
+
+    Written after each diarization run. The resolved_speaker_id link is
+    filled in by the embedding-match step in the pipeline; until that
+    runs (or when the user merges/labels later), it stays None.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def upsert(
+        self,
+        *,
+        stream_id: str,
+        speaker_label: str,
+        resolved_speaker_id: str | None,
+        confidence: float | None,
+        total_speech_s: float,
+        embedding: list[float] | None,
+    ) -> VodSpeakerRow:
+        tenant_id = current_tenant_id()
+        row_id = new_id("vsp")
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO vod_speakers (id, stream_id, tenant_id, speaker_label, "
+            "resolved_speaker_id, confidence, total_speech_s, embedding_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(stream_id, speaker_label) DO UPDATE SET "
+            "resolved_speaker_id = excluded.resolved_speaker_id, "
+            "confidence = excluded.confidence, "
+            "total_speech_s = excluded.total_speech_s, "
+            "embedding_json = excluded.embedding_json",
+            (
+                row_id,
+                stream_id,
+                tenant_id,
+                speaker_label,
+                resolved_speaker_id,
+                confidence,
+                total_speech_s,
+                json.dumps(embedding) if embedding is not None else None,
+                now,
+            ),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT * FROM vod_speakers WHERE stream_id = ? AND speaker_label = ?",
+            (stream_id, speaker_label),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        return _vod_speaker_from_row(row)
+
+    async def list_for_stream(self, stream_id: str) -> list[VodSpeakerRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM vod_speakers WHERE stream_id = ? AND tenant_id = ? "
+            "ORDER BY total_speech_s DESC",
+            (stream_id, tenant_id),
+        )
+        return [_vod_speaker_from_row(r) for r in await cur.fetchall()]
+
+    async def list_unresolved_for_tenant(self) -> list[VodSpeakerRow]:
+        """Pending-labeling queue for the dashboard's /speakers admin UI."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM vod_speakers WHERE tenant_id = ? "
+            "AND resolved_speaker_id IS NULL ORDER BY total_speech_s DESC",
+            (tenant_id,),
+        )
+        return [_vod_speaker_from_row(r) for r in await cur.fetchall()]

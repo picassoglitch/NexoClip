@@ -269,3 +269,51 @@ class PublishMetric(BaseModel):
     ctr: float | None = None  # 0.0-1.0
     raw_metadata: dict[str, object] | None = None
     created_at: str
+
+
+# ---------- Speakers (voice-markers spec slice B.2) ----------
+
+
+class SpeakerRow(BaseModel):
+    """Persistent voice identity for one tenant.
+
+    Embedded vector is a 192-dim float list from pyannote/embedding,
+    averaged across all VODs we've matched this identity in (weighted
+    by total_speech_s). Stored as a JSON list in the embedding_json
+    column for portability across SQLite / Postgres without a vector
+    extension.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    tenant_id: str
+    display_name: str
+    is_self: bool = False
+    preferred_brand_kit_id: str | None = None
+    embedding: list[float] | None = None
+    embedding_dim: int | None = None
+    total_speech_s: float = 0.0
+    sample_audio_path: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class VodSpeakerRow(BaseModel):
+    """Per-VOD resolution of one within-VOD speaker label to a persistent identity.
+
+    `resolved_speaker_id=None` means the speaker is unknown — the user
+    can label them via the dashboard's /speakers page (slice E).
+    `confidence` is the cosine similarity to the matched speaker; below
+    `DiarizationConfig.match_threshold` we leave resolved_speaker_id=None.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    stream_id: str
+    tenant_id: str
+    speaker_label: str
+    resolved_speaker_id: str | None = None
+    confidence: float | None = None
+    total_speech_s: float = 0.0
+    embedding: list[float] | None = None
+    created_at: str

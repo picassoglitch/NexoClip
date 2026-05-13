@@ -317,3 +317,84 @@ class VodSpeakerRow(BaseModel):
     total_speech_s: float = 0.0
     embedding: list[float] | None = None
     created_at: str
+
+
+# ---------- Brand kits (voice-markers spec slice C.1) ----------
+
+
+class CustomTriggerPhrases(BaseModel):
+    """Per-kit additions to the tenant base trigger list.
+
+    Spec section 9 hard rule: these are ADDITIVE (set() dedup at scan
+    time), not overrides. Empty default = inherit tenant base unchanged.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    forward: list[str] = Field(default_factory=list)
+    retroactive: list[str] = Field(default_factory=list)
+
+
+class BrandKitRow(BaseModel):
+    """One visual identity (colors, fonts, logo, captions, auto-publish opt-in).
+
+    Each tenant has zero or more kits; exactly one CAN be flagged
+    `is_default=True` (enforced via a partial unique index in migration
+    006). Kits are assigned per-speaker via `speakers.preferred_brand_kit_id`.
+
+    Asset paths are storage-agnostic strings — local paths in dev,
+    eventually S3/R2 keys in production via the Storage abstraction
+    (see docs/production_deploy.md §3).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    tenant_id: str
+    name: str
+    is_default: bool = False
+
+    # Colors
+    primary_color: str
+    accent_color: str
+    text_color: str = "#FFFFFF"
+
+    # Typography
+    font_family: str = "Inter"
+    font_weight: int = 800
+
+    # Assets
+    logo_url: str | None = None
+    logo_dark_url: str | None = None
+    watermark_url: str | None = None
+    intro_sting_url: str | None = None
+    outro_sting_url: str | None = None
+
+    # Caption style — opaque JSON; the renderer reads keys it knows.
+    caption_style: dict[str, object] | None = None
+
+    # Layout
+    default_layout: str = "pip"  # pip | split_stack | blurred_bg
+
+    # Social handles
+    handle_tiktok: str | None = None
+    handle_youtube: str | None = None
+    handle_instagram: str | None = None
+    handle_kick: str | None = None
+
+    # AI generation metadata
+    ai_generated: bool = False
+    ai_prompt: str | None = None
+    ai_provider: str | None = None
+
+    # Per-kit auto-publish (default OFF — review-first per spec §9)
+    auto_publish_enabled: bool = False
+    auto_publish_platforms: list[str] = Field(default_factory=list)
+    auto_publish_delay_min: int = 60
+
+    # Per-kit custom trigger phrases — additively merged with the
+    # tenant base at scan time.
+    custom_trigger_phrases: CustomTriggerPhrases = Field(
+        default_factory=CustomTriggerPhrases
+    )
+
+    created_at: str
+    updated_at: str

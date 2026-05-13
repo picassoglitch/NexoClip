@@ -27,6 +27,7 @@ EntityKind = Literal[
     "met",  # publish_metrics (Phase 3)
     "spk",  # speakers — persistent voice identities (voice-markers spec slice B.2)
     "vsp",  # vod_speakers — per-VOD speaker resolution
+    "brk",  # brand_kits (voice-markers spec slice C.1)
 ]
 
 

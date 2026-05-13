@@ -30,9 +30,11 @@ from nexoclip.tenancy import current_tenant_id
 from .connection import Database
 from .models import (
     ApiTokenRow,
+    BrandKitRow,
     CandidateRow,
     ClipRow,
     ConnectedAccount,
+    CustomTriggerPhrases,
     Event,
     LLMCallRow,
     PersonaRow,
@@ -1654,6 +1656,25 @@ class SpeakersRepo:
         )
         await conn.commit()
 
+    async def set_preferred_brand_kit(
+        self, speaker_id: str, brand_kit_id: str | None
+    ) -> SpeakerRow | None:
+        """Assign a brand kit to a speaker. Pass `None` to clear.
+
+        With the FK landed by migration 006, an invalid kit_id raises
+        a foreign-key error from SQLite — caller should validate the
+        kit exists for the tenant before calling.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE speakers SET preferred_brand_kit_id = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (brand_kit_id, _now(), speaker_id, tenant_id),
+        )
+        await conn.commit()
+        return await self.get(speaker_id)
+
 
 class VodSpeakersRepo:
     """One row per (stream_id, within-VOD speaker_label).
@@ -1730,3 +1751,254 @@ class VodSpeakersRepo:
             (tenant_id,),
         )
         return [_vod_speaker_from_row(r) for r in await cur.fetchall()]
+
+
+# ---------- Brand kits (voice-markers spec slice C.1) ----------
+
+
+_BRAND_KIT_COLS = (
+    "id, tenant_id, name, is_default, "
+    "primary_color, accent_color, text_color, font_family, font_weight, "
+    "logo_url, logo_dark_url, watermark_url, intro_sting_url, outro_sting_url, "
+    "caption_style_json, default_layout, "
+    "handle_tiktok, handle_youtube, handle_instagram, handle_kick, "
+    "ai_generated, ai_prompt, ai_provider, "
+    "auto_publish_enabled, auto_publish_platforms_json, auto_publish_delay_min, "
+    "custom_trigger_phrases_json, created_at, updated_at"
+)
+
+
+def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
+    d = dict(row)
+    d["is_default"] = bool(d["is_default"])
+    d["ai_generated"] = bool(d["ai_generated"])
+    d["auto_publish_enabled"] = bool(d["auto_publish_enabled"])
+
+    raw_caption = d.pop("caption_style_json", None)
+    d["caption_style"] = json.loads(raw_caption) if raw_caption else None
+
+    raw_platforms = d.pop("auto_publish_platforms_json", None)
+    d["auto_publish_platforms"] = json.loads(raw_platforms) if raw_platforms else []
+
+    raw_phrases = d.pop("custom_trigger_phrases_json", None)
+    if raw_phrases:
+        d["custom_trigger_phrases"] = CustomTriggerPhrases.model_validate(
+            json.loads(raw_phrases)
+        )
+    else:
+        d["custom_trigger_phrases"] = CustomTriggerPhrases()
+
+    return BrandKitRow.model_validate(d)
+
+
+class BrandKitsRepo:
+    """CRUD for tenant brand kits.
+
+    `is_default=True` is enforced as at-most-one-per-tenant via a partial
+    unique index in migration 006 - `set_default(kit_id)` performs the
+    atomic swap by clearing other rows in the same transaction.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        name: str,
+        primary_color: str,
+        accent_color: str,
+        text_color: str = "#FFFFFF",
+        font_family: str = "Inter",
+        font_weight: int = 800,
+        default_layout: str = "pip",
+        is_default: bool = False,
+        logo_url: str | None = None,
+        logo_dark_url: str | None = None,
+        watermark_url: str | None = None,
+        intro_sting_url: str | None = None,
+        outro_sting_url: str | None = None,
+        caption_style: dict[str, object] | None = None,
+        handle_tiktok: str | None = None,
+        handle_youtube: str | None = None,
+        handle_instagram: str | None = None,
+        handle_kick: str | None = None,
+        ai_generated: bool = False,
+        ai_prompt: str | None = None,
+        ai_provider: str | None = None,
+        auto_publish_enabled: bool = False,
+        auto_publish_platforms: list[str] | None = None,
+        auto_publish_delay_min: int = 60,
+        custom_trigger_phrases: CustomTriggerPhrases | None = None,
+    ) -> BrandKitRow:
+        tenant_id = current_tenant_id()
+        kit_id = new_id("brk")
+        now = _now()
+        conn = await self._db.connect()
+        if is_default:
+            await conn.execute(
+                "UPDATE brand_kits SET is_default = 0, updated_at = ? "
+                "WHERE tenant_id = ? AND is_default = 1",
+                (now, tenant_id),
+            )
+        await conn.execute(
+            f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                kit_id, tenant_id, name, 1 if is_default else 0,
+                primary_color, accent_color, text_color, font_family, font_weight,
+                logo_url, logo_dark_url, watermark_url, intro_sting_url, outro_sting_url,
+                json.dumps(caption_style) if caption_style is not None else None,
+                default_layout,
+                handle_tiktok, handle_youtube, handle_instagram, handle_kick,
+                1 if ai_generated else 0, ai_prompt, ai_provider,
+                1 if auto_publish_enabled else 0,
+                json.dumps(auto_publish_platforms) if auto_publish_platforms else None,
+                auto_publish_delay_min,
+                json.dumps(
+                    (custom_trigger_phrases or CustomTriggerPhrases()).model_dump()
+                ),
+                now, now,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(kit_id)
+        assert out is not None
+        return out
+
+    async def get(self, kit_id: str) -> BrandKitRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_BRAND_KIT_COLS} FROM brand_kits "
+            "WHERE id = ? AND tenant_id = ?",
+            (kit_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _brand_kit_from_row(row) if row else None
+
+    async def list_for_tenant(self) -> list[BrandKitRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_BRAND_KIT_COLS} FROM brand_kits "
+            "WHERE tenant_id = ? ORDER BY is_default DESC, created_at",
+            (tenant_id,),
+        )
+        return [_brand_kit_from_row(r) for r in await cur.fetchall()]
+
+    async def get_default(self) -> BrandKitRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_BRAND_KIT_COLS} FROM brand_kits "
+            "WHERE tenant_id = ? AND is_default = 1 LIMIT 1",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        return _brand_kit_from_row(row) if row else None
+
+    async def set_default(self, kit_id: str) -> BrandKitRow:
+        """Atomically promote kit_id to the tenant default."""
+        existing = await self.get(kit_id)
+        if existing is None:
+            raise NexoClipError(f"brand kit {kit_id!r} not found")
+        tenant_id = current_tenant_id()
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE brand_kits SET is_default = 0, updated_at = ? "
+            "WHERE tenant_id = ? AND is_default = 1",
+            (now, tenant_id),
+        )
+        await conn.execute(
+            "UPDATE brand_kits SET is_default = 1, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (now, kit_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(kit_id)
+        assert out is not None
+        return out
+
+    async def update(
+        self,
+        kit_id: str,
+        *,
+        name: str | None = None,
+        primary_color: str | None = None,
+        accent_color: str | None = None,
+        text_color: str | None = None,
+        font_family: str | None = None,
+        font_weight: int | None = None,
+        default_layout: str | None = None,
+        auto_publish_enabled: bool | None = None,
+        auto_publish_platforms: list[str] | None = None,
+        auto_publish_delay_min: int | None = None,
+        custom_trigger_phrases: CustomTriggerPhrases | None = None,
+    ) -> BrandKitRow:
+        """Partial update - only non-None args are applied."""
+        existing = await self.get(kit_id)
+        if existing is None:
+            raise NexoClipError(f"brand kit {kit_id!r} not found")
+        sets: list[str] = []
+        values: list[object] = []
+        if name is not None:
+            sets.append("name = ?")
+            values.append(name)
+        if primary_color is not None:
+            sets.append("primary_color = ?")
+            values.append(primary_color)
+        if accent_color is not None:
+            sets.append("accent_color = ?")
+            values.append(accent_color)
+        if text_color is not None:
+            sets.append("text_color = ?")
+            values.append(text_color)
+        if font_family is not None:
+            sets.append("font_family = ?")
+            values.append(font_family)
+        if font_weight is not None:
+            sets.append("font_weight = ?")
+            values.append(font_weight)
+        if default_layout is not None:
+            sets.append("default_layout = ?")
+            values.append(default_layout)
+        if auto_publish_enabled is not None:
+            sets.append("auto_publish_enabled = ?")
+            values.append(1 if auto_publish_enabled else 0)
+        if auto_publish_platforms is not None:
+            sets.append("auto_publish_platforms_json = ?")
+            values.append(json.dumps(auto_publish_platforms))
+        if auto_publish_delay_min is not None:
+            sets.append("auto_publish_delay_min = ?")
+            values.append(auto_publish_delay_min)
+        if custom_trigger_phrases is not None:
+            sets.append("custom_trigger_phrases_json = ?")
+            values.append(json.dumps(custom_trigger_phrases.model_dump()))
+        if not sets:
+            return existing
+        sets.append("updated_at = ?")
+        values.append(_now())
+        tenant_id = current_tenant_id()
+        values.extend([kit_id, tenant_id])
+        conn = await self._db.connect()
+        await conn.execute(
+            f"UPDATE brand_kits SET {', '.join(sets)} "
+            "WHERE id = ? AND tenant_id = ?",
+            tuple(values),
+        )
+        await conn.commit()
+        out = await self.get(kit_id)
+        assert out is not None
+        return out
+
+    async def delete(self, kit_id: str) -> None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM brand_kits WHERE id = ? AND tenant_id = ?",
+            (kit_id, tenant_id),
+        )
+        await conn.commit()

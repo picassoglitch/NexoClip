@@ -583,7 +583,34 @@ async def _run_pipeline(
             await CandidatesRepo(db).upsert_many(candidate_rows)
     _log.info("detect.candidates", count=len(candidates))
 
-    # 4) cut clips
+    # 4) cut clips — slice D.1: pre-resolve a brand kit per candidate so
+    # the renderer can burn the right handle / colors into each clip.
+    # Speaker-attributed candidates resolve via vod_speakers → speaker.
+    # preferred_brand_kit_id → kit; un-attributed candidates fall back to
+    # the tenant default kit; tenants without any kits get None and the
+    # renderer skips the overlay.
+    candidate_kits: list[object] | None = None
+    if db is not None:
+        from nexoclip.branding import resolve_brand_kit_for_candidate
+
+        resolved: list[object] = []
+        for c in candidates:
+            ev = c.evidence or {}
+            label = ev.get("speaker_label")
+            label_str = label if isinstance(label, str) else None
+            kit = await resolve_brand_kit_for_candidate(
+                db, stream_id=stream.id, speaker_label=label_str
+            )
+            resolved.append(kit if kit is not None else None)
+        candidate_kits = resolved
+        used = sum(1 for k in resolved if k is not None)
+        _log.info(
+            "cut.brand_kits_resolved",
+            stream_id=stream.id,
+            with_kit=used,
+            without_kit=len(resolved) - used,
+        )
+
     with _step("cut", db=db, candidate_count=len(candidates)):
         clips = await cut_clips(
             tenant_id=tenant_id,
@@ -592,6 +619,7 @@ async def _run_pipeline(
             output_dir=output_dir,
             config=config.clip,
             force=force,
+            brand_kits=candidate_kits,
         )
         if db is not None:
             await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])

@@ -81,6 +81,7 @@ async def cut_clips(
     *,
     config: ClipConfig | None = None,
     force: bool = False,
+    brand_kits: list[object] | None = None,
 ) -> list[Clip]:
     """Cut + reformat one clip per candidate. Idempotent on `clips_manifest.json`.
 
@@ -91,6 +92,12 @@ async def cut_clips(
         output_dir: Root output dir (`./out`); clips go to `<output_dir>/<stream.id>/clips/`.
         config: Cut/reformat parameters. Defaults to `ClipConfig()`.
         force: Re-cut every clip even when the manifest exists.
+        brand_kits: Optional parallel-to-candidates list of resolved BrandKitRow
+            (or None per candidate). When set, the renderer burns the kit's
+            primary social handle into the top-left of each clip. Typed loosely
+            as `list[object] | None` to avoid a clip → db type cycle; the
+            renderer reads attributes via `getattr` and falls back to no overlay
+            on any missing field. Voice-markers spec slice D.1.
     """
     if tenant_id != stream.tenant_id:
         raise ClipError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -115,6 +122,7 @@ async def cut_clips(
         candidates=candidates,
         clips_dir=clips_dir,
         cfg=cfg,
+        brand_kits=brand_kits,
     )
 
     manifest = ClipManifest(stream_id=stream.id, tenant_id=tenant_id, clips=clips)
@@ -129,10 +137,12 @@ def _cut_all(
     candidates: list[Candidate],
     clips_dir: Path,
     cfg: ClipConfig,
+    brand_kits: list[object] | None = None,
 ) -> list[Clip]:
     """Synchronous helper kept off the event loop via `asyncio.to_thread`."""
     clips: list[Clip] = []
-    for candidate in candidates:
+    for idx, candidate in enumerate(candidates):
+        kit = brand_kits[idx] if brand_kits and idx < len(brand_kits) else None
         ev = candidate.evidence or {}
         trigger_kind = str(ev.get("trigger_kind", "forward"))
         retro_lookback = ev.get("retroactive_lookback_s")
@@ -180,6 +190,7 @@ def _cut_all(
                 out_path=final,
                 cfg=cfg,
                 smart_box=smart_box,
+                brand_kit=kit,
             )
         finally:
             if intermediate.exists():
@@ -255,14 +266,30 @@ def _ffmpeg_reformat_9_16(
     out_path: Path,
     cfg: ClipConfig,
     smart_box: SmartCropBox | None = None,
+    brand_kit: object | None = None,
 ) -> None:
-    """Crop to 9:16 (smart-box or center) and scale to the configured resolution."""
+    """Crop to 9:16 (smart-box or center) and scale to the configured resolution.
+
+    When `brand_kit` is provided and the kit carries a primary social handle
+    + we can resolve a font on this OS, append a `drawtext` filter that burns
+    the handle into the top-left corner using the kit's accent color. Slice
+    D.1 of the voice-markers spec. Logo burn-in lands in D.3 alongside the
+    AI logo generator.
+
+    Failures to resolve a font or read kit attributes are silent — the
+    clip still renders, just without the overlay.
+    """
     if smart_box is not None:
         vf = crop_box_to_ffmpeg_filter(
             smart_box, output_w=cfg.output_width, output_h=cfg.output_height
         )
     else:
         vf = f"crop=ih*9/16:ih,scale={cfg.output_width}:{cfg.output_height}"
+
+    overlay = _brand_kit_drawtext_filter(brand_kit, output_w=cfg.output_width)
+    if overlay:
+        vf = f"{vf},{overlay}"
+
     cmd = [
         "ffmpeg",
         "-y",
@@ -283,6 +310,94 @@ def _ffmpeg_reformat_9_16(
         str(out_path),
     ]
     _run_ffmpeg(cmd, what=f"9:16 reformat -> {out_path.name}")
+
+
+def _brand_kit_drawtext_filter(
+    brand_kit: object | None, *, output_w: int
+) -> str | None:
+    """Build the ffmpeg `drawtext` filter chunk for a brand kit's handle.
+
+    Returns the filter expression (without leading comma) or None when:
+      * no kit was supplied
+      * the kit has no primary handle on any platform
+      * we can't locate a system font (drawtext requires a file path on
+        most ffmpeg builds; bundling a font is a slice E upgrade)
+
+    Handle resolution priority (matches the renderer's spec §3.5):
+      tiktok > youtube > instagram > kick
+    """
+    if brand_kit is None:
+        return None
+    handle = (
+        getattr(brand_kit, "handle_tiktok", None)
+        or getattr(brand_kit, "handle_youtube", None)
+        or getattr(brand_kit, "handle_instagram", None)
+        or getattr(brand_kit, "handle_kick", None)
+    )
+    if not handle:
+        return None
+
+    fontfile = _find_system_font()
+    if fontfile is None:
+        _log.warning(
+            "brand_kit.drawtext_skipped",
+            reason="no system font found",
+            handle=handle,
+        )
+        return None
+
+    accent = getattr(brand_kit, "accent_color", "#FFD700") or "#FFD700"
+    # ffmpeg drawtext needs a path with forward slashes + escaped colons on
+    # Windows. The escape rules: literal colons in the filter graph value
+    # delimit filter options, so `C:` becomes `C\\:`. Forward slashes survive.
+    fontfile_ff = str(fontfile).replace("\\", "/").replace(":", "\\:")
+    # Single quotes inside the value need their own dance. Stripping them
+    # from the handle is fine — handles rarely have them.
+    safe_handle = (handle or "").replace("'", "")
+    fontsize = max(24, int(output_w * 0.028))
+    margin = max(12, int(output_w * 0.022))
+    return (
+        f"drawtext=fontfile='{fontfile_ff}'"
+        f":text='{safe_handle}'"
+        f":fontcolor={accent}"
+        f":fontsize={fontsize}"
+        f":x={margin}:y={margin}"
+        f":box=1:boxcolor=black@0.45:boxborderw=8"
+    )
+
+
+def _find_system_font() -> Path | None:
+    """Resolve a usable TTF/OTF for ffmpeg drawtext across OSes.
+
+    Cached after first hit. None when nothing matches — caller must
+    tolerate it. The bundled-font path (ship our own Inter.ttf) is a
+    slice E upgrade for cross-machine consistency.
+    """
+    global _CACHED_FONT
+    if not isinstance(_CACHED_FONT, _UnsetFont):
+        return _CACHED_FONT
+    candidates = [
+        Path(r"C:\Windows\Fonts\arial.ttf"),
+        Path(r"C:\Windows\Fonts\segoeui.ttf"),
+        Path("/System/Library/Fonts/Helvetica.ttc"),
+        Path("/System/Library/Fonts/HelveticaNeue.ttc"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    ]
+    for c in candidates:
+        if c.exists():
+            _CACHED_FONT = c
+            return c
+    _CACHED_FONT = None
+    return None
+
+
+class _UnsetFont:
+    pass
+
+
+_UNSET_FONT = _UnsetFont()
+_CACHED_FONT: Path | None | _UnsetFont = _UNSET_FONT
 
 
 def _run_ffmpeg(cmd: list[str], *, what: str) -> None:

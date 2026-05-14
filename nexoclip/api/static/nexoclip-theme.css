@@ -1,0 +1,945 @@
+/* NexoClip dashboard theme — cyberpunk navy + electric blue.
+ *
+ * Single source of truth for every page. Defines:
+ *   1. Design tokens on :root
+ *   2. Global resets (kill the white-bleed bugs)
+ *   3. Component classes (.nc-*) every page reuses
+ *
+ * No page-level color or layout values. If a page needs a one-off
+ * tweak, add a class here first.
+ */
+
+/* ---------- 1. Design tokens ---------- */
+
+:root {
+    /* Backgrounds */
+    --nc-bg-base:      #0a0e16;
+    --nc-bg-surface:   #0c1119;
+    --nc-bg-panel:     #0e1420;
+    --nc-bg-raised:    #121a28;
+
+    /* Blue accent — the NexoClip blue */
+    --nc-blue:         #42a5ff;
+    --nc-blue-bright:  #5fcfff;
+    --nc-blue-dim:     rgba(56, 138, 221, 0.25);
+    --nc-blue-faint:   rgba(56, 138, 221, 0.12);
+
+    /* Text */
+    --nc-text:         #e8edf4;
+    --nc-text-body:    #c4cdda;
+    --nc-text-muted:   #6b7689;
+
+    /* Semantic */
+    --nc-success:      #5dcaa5;
+    --nc-success-bg:   rgba(93, 202, 165, 0.10);
+    --nc-warn:         #ef9f27;
+    --nc-warn-bg:      rgba(186, 117, 23, 0.08);
+    --nc-warn-dim:     rgba(186, 117, 23, 0.35);
+    --nc-danger:       #e24b4a;
+    --nc-danger-bg:    rgba(226, 75, 74, 0.08);
+    --nc-danger-dim:   rgba(226, 75, 74, 0.35);
+
+    /* Borders / radius */
+    --nc-hairline:     0.5px solid var(--nc-blue-dim);
+    --nc-radius:       8px;
+    --nc-radius-lg:    12px;
+
+    /* Fonts */
+    --nc-font:         system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --nc-font-mono:    "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
+
+    /* Sizing scale */
+    --nc-pad-page:     20px;
+    --nc-gap:          16px;
+}
+
+
+/* ---------- 2. Global resets ---------- */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    background: var(--nc-bg-base);
+    color: var(--nc-text-body);
+    font-family: var(--nc-font);
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Dark scrollbars — kills the bright OS scrollbar bleed. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--nc-blue-dim) var(--nc-bg-surface);
+}
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+*::-webkit-scrollbar-track {
+    background: var(--nc-bg-surface);
+}
+*::-webkit-scrollbar-thumb {
+    background: var(--nc-blue-dim);
+    border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--nc-blue);
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--nc-text);
+    font-weight: 500;
+    line-height: 1.25;
+    margin: 0 0 0.5em 0;
+}
+
+h1 { font-size: 22px; }
+h2 { font-size: 18px; }
+h3 { font-size: 16px; }
+h4, h5, h6 { font-size: 14px; }
+
+p { margin: 0 0 0.75em 0; }
+
+a {
+    color: var(--nc-blue-bright);
+    text-decoration: none;
+}
+a:hover {
+    color: var(--nc-blue);
+    text-decoration: underline;
+}
+
+code {
+    font-family: var(--nc-font-mono);
+    font-size: 0.92em;
+    color: var(--nc-blue-bright);
+    background: var(--nc-blue-faint);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+small { font-size: 12px; color: var(--nc-text-muted); }
+strong { color: var(--nc-text); font-weight: 500; }
+em { color: var(--nc-text-body); font-style: normal; }
+
+hr {
+    border: 0;
+    border-top: var(--nc-hairline);
+    margin: 1rem 0;
+}
+
+::selection {
+    background: var(--nc-blue);
+    color: var(--nc-bg-base);
+}
+
+
+/* ---------- 3. Layout primitives ---------- */
+
+.nc-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--nc-pad-page);
+}
+
+.nc-page-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 1.25rem 0;
+    flex-wrap: wrap;
+}
+.nc-page-header h2 {
+    margin: 0;
+}
+.nc-page-header .nc-page-summary {
+    color: var(--nc-text-muted);
+    font-size: 12px;
+}
+
+.nc-stack { display: flex; flex-direction: column; gap: var(--nc-gap); }
+.nc-row   { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.nc-row--right { justify-content: flex-end; }
+.nc-spacer { flex: 1; }
+
+
+/* ---------- 4. Top nav (.nc-nav) ---------- */
+
+.nc-nav {
+    background: var(--nc-bg-surface);
+    border-bottom: var(--nc-hairline);
+    padding: 0 var(--nc-pad-page);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+}
+
+.nc-nav__inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    height: 50px;
+}
+
+.nc-nav__logo {
+    color: var(--nc-blue);
+    font-weight: 500;
+    font-size: 16px;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    flex-shrink: 0;
+}
+.nc-nav__logo:hover { color: var(--nc-blue-bright); text-decoration: none; }
+
+.nc-nav__links {
+    display: flex;
+    gap: 1.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.nc-nav__links::-webkit-scrollbar { display: none; }
+
+.nc-nav__link {
+    color: var(--nc-text-muted);
+    font-size: 13px;
+    text-decoration: none;
+    padding: 0 2px;
+    line-height: 50px;
+    border-bottom: 2px solid transparent;
+    transition: color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+}
+.nc-nav__link:hover {
+    color: var(--nc-text-body);
+    text-decoration: none;
+}
+.nc-nav__link.is-active {
+    color: var(--nc-blue-bright);
+    border-bottom-color: var(--nc-blue);
+}
+
+.nc-nav__right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+}
+
+
+/* ---------- 5. Chips (.nc-chip) ---------- */
+
+.nc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: var(--nc-hairline);
+    border-radius: 999px;
+    background: var(--nc-blue-faint);
+    color: var(--nc-blue-bright);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+    text-decoration: none;
+    font-variant-numeric: tabular-nums;
+}
+.nc-chip code,
+.nc-chip .nc-mono {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 11px;
+}
+.nc-chip--success {
+    color: var(--nc-success);
+    background: var(--nc-success-bg);
+    border-color: rgba(93, 202, 165, 0.35);
+}
+.nc-chip--warn {
+    color: var(--nc-warn);
+    background: var(--nc-warn-bg);
+    border-color: var(--nc-warn-dim);
+}
+.nc-chip--danger {
+    color: var(--nc-danger);
+    background: var(--nc-danger-bg);
+    border-color: var(--nc-danger-dim);
+}
+.nc-chip--muted {
+    color: var(--nc-text-muted);
+    background: var(--nc-bg-raised);
+    border-color: rgba(107, 118, 137, 0.30);
+}
+.nc-chip--code {
+    font-family: var(--nc-font-mono);
+}
+
+
+/* ---------- 6. Status dot (.nc-status-dot) ---------- */
+
+.nc-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--nc-text-muted);
+    flex-shrink: 0;
+}
+.nc-status-dot--success { background: var(--nc-success); box-shadow: 0 0 6px var(--nc-success); }
+.nc-status-dot--warn    { background: var(--nc-warn);    box-shadow: 0 0 6px var(--nc-warn); }
+.nc-status-dot--danger  { background: var(--nc-danger);  box-shadow: 0 0 6px var(--nc-danger); }
+
+.nc-status-dot--pulse {
+    animation: nc-pulse 1.4s ease-in-out infinite;
+}
+@keyframes nc-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+
+/* ---------- 7. Panels (.nc-panel) ---------- */
+
+.nc-panel {
+    background: var(--nc-bg-panel);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius-lg);
+    overflow: hidden;
+    margin-bottom: var(--nc-gap);
+}
+
+.nc-panel__header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 12px 16px;
+    border-bottom: var(--nc-hairline);
+    color: var(--nc-text);
+    font-weight: 500;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+.nc-panel__header .nc-panel__title {
+    flex: 1;
+    min-width: 0;
+}
+.nc-panel__header small {
+    color: var(--nc-text-muted);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.nc-panel__body {
+    padding: 16px;
+}
+
+.nc-panel--padless .nc-panel__body { padding: 0; }
+.nc-panel--collapsed .nc-panel__body { display: none; }
+.nc-panel__chevron {
+    color: var(--nc-text-muted);
+    cursor: pointer;
+    margin-left: auto;
+    background: transparent;
+    border: 0;
+    padding: 0 0.25rem;
+    font-size: 14px;
+    line-height: 1;
+}
+.nc-panel__chevron:hover { color: var(--nc-blue-bright); }
+
+
+/* ---------- 8. Cards (.nc-card) — raised item cards ---------- */
+
+.nc-card {
+    background: var(--nc-bg-raised);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.nc-card--hoverable {
+    cursor: pointer;
+    transition: border-color 120ms ease, transform 120ms ease;
+}
+.nc-card--hoverable:hover {
+    border-color: var(--nc-blue);
+    transform: translateY(-1px);
+}
+
+
+/* ---------- 9. Buttons (.nc-btn) ---------- */
+
+.nc-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    background: transparent;
+    color: var(--nc-text);
+    font-family: var(--nc-font);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.4;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 100ms ease, border-color 100ms ease, transform 60ms ease, color 100ms ease;
+    white-space: nowrap;
+}
+.nc-btn:hover {
+    background: var(--nc-bg-raised);
+    border-color: var(--nc-blue);
+    color: var(--nc-blue-bright);
+    text-decoration: none;
+}
+.nc-btn:active { transform: scale(0.98); }
+.nc-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--nc-blue-faint);
+    border-color: var(--nc-blue);
+}
+.nc-btn[disabled],
+.nc-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.nc-btn--primary {
+    background: var(--nc-blue);
+    border-color: var(--nc-blue);
+    color: var(--nc-bg-base);
+}
+.nc-btn--primary:hover {
+    background: var(--nc-blue-bright);
+    border-color: var(--nc-blue-bright);
+    color: var(--nc-bg-base);
+}
+
+.nc-btn--ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--nc-blue-bright);
+    padding: 7px 8px;
+}
+.nc-btn--ghost:hover {
+    background: var(--nc-blue-faint);
+    border-color: transparent;
+    color: var(--nc-blue-bright);
+}
+
+.nc-btn--danger {
+    color: var(--nc-danger);
+    border-color: var(--nc-danger-dim);
+}
+.nc-btn--danger:hover {
+    background: var(--nc-danger-bg);
+    border-color: var(--nc-danger);
+    color: var(--nc-danger);
+}
+
+.nc-btn--sm   { padding: 4px 10px; font-size: 12px; }
+.nc-btn--full { width: 100%; }
+
+
+/* ---------- 10. Forms (.nc-input / .nc-select / .nc-textarea / .nc-label) ---------- */
+
+.nc-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--nc-text-muted);
+}
+.nc-label small {
+    color: var(--nc-text-muted);
+    margin-top: 2px;
+}
+
+.nc-input,
+.nc-select,
+.nc-textarea {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--nc-bg-raised);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    color: var(--nc-text);
+    font-family: var(--nc-font);
+    font-size: 13px;
+    line-height: 1.4;
+    transition: border-color 100ms ease, box-shadow 100ms ease;
+}
+.nc-input:focus,
+.nc-select:focus,
+.nc-textarea:focus {
+    outline: none;
+    border-color: var(--nc-blue);
+    box-shadow: 0 0 0 3px var(--nc-blue-faint);
+}
+.nc-input::placeholder,
+.nc-textarea::placeholder {
+    color: var(--nc-text-muted);
+}
+.nc-textarea {
+    resize: vertical;
+    min-height: 70px;
+    font-family: var(--nc-font);
+}
+.nc-input--mono { font-family: var(--nc-font-mono); }
+
+/* Select indicator */
+.nc-select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--nc-text-muted) 50%),
+                      linear-gradient(135deg, var(--nc-text-muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 30px;
+}
+
+.nc-input[type="file"] {
+    padding: 6px 10px;
+    cursor: pointer;
+}
+.nc-input[type="file"]::file-selector-button {
+    background: var(--nc-bg-surface);
+    color: var(--nc-blue-bright);
+    border: var(--nc-hairline);
+    border-radius: 4px;
+    padding: 4px 10px;
+    margin-right: 10px;
+    cursor: pointer;
+    font-family: var(--nc-font);
+    font-size: 12px;
+}
+.nc-input[type="file"]::file-selector-button:hover {
+    border-color: var(--nc-blue);
+}
+
+.nc-input[type="color"] {
+    padding: 2px;
+    height: 32px;
+    cursor: pointer;
+}
+
+.nc-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--nc-text-body);
+    font-size: 13px;
+    cursor: pointer;
+    margin-bottom: 8px;
+}
+.nc-checkbox input[type="checkbox"] {
+    accent-color: var(--nc-blue);
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
+.nc-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0 14px;
+}
+
+
+/* ---------- 11. Tables (.nc-table) ---------- */
+
+.nc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.nc-table thead th {
+    color: var(--nc-text-muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: var(--nc-hairline);
+    background: transparent;
+}
+.nc-table tbody td {
+    padding: 10px 12px;
+    border-bottom: var(--nc-hairline);
+    color: var(--nc-text-body);
+    vertical-align: middle;
+}
+.nc-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+.nc-table tbody tr {
+    transition: background 100ms ease;
+}
+.nc-table tbody tr:hover {
+    background: var(--nc-blue-faint);
+}
+.nc-table .nc-mono,
+.nc-table code {
+    font-family: var(--nc-font-mono);
+    font-size: 12px;
+    background: transparent;
+    color: var(--nc-blue-bright);
+    padding: 0;
+}
+.nc-table td.nc-cell-actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+}
+.nc-table td.nc-num,
+.nc-table th.nc-num {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+
+/* ---------- 12. Alerts (.nc-alert) ---------- */
+
+.nc-alert {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--nc-warn-bg);
+    border: 1px solid var(--nc-warn-dim);
+    border-radius: var(--nc-radius);
+    color: var(--nc-text);
+    font-size: 13px;
+    margin-bottom: var(--nc-gap);
+}
+.nc-alert__icon {
+    color: var(--nc-warn);
+    flex-shrink: 0;
+    font-size: 18px;
+    line-height: 1;
+}
+.nc-alert__body { flex: 1; min-width: 0; }
+.nc-alert__title { color: var(--nc-text); font-weight: 500; }
+.nc-alert__detail { color: var(--nc-text-muted); font-size: 12px; margin-top: 2px; }
+.nc-alert__actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.nc-alert--danger {
+    background: var(--nc-danger-bg);
+    border-color: var(--nc-danger-dim);
+}
+.nc-alert--danger .nc-alert__icon { color: var(--nc-danger); }
+
+.nc-alert--info {
+    background: var(--nc-blue-faint);
+    border-color: var(--nc-blue-dim);
+}
+.nc-alert--info .nc-alert__icon { color: var(--nc-blue-bright); }
+
+
+/* ---------- 13. Empty state (.nc-empty) ---------- */
+
+.nc-empty {
+    text-align: center;
+    padding: 48px 16px;
+    color: var(--nc-text-muted);
+}
+.nc-empty__icon {
+    font-size: 36px;
+    color: var(--nc-blue-dim);
+    margin-bottom: 12px;
+    line-height: 1;
+}
+.nc-empty__title {
+    color: var(--nc-text);
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.nc-empty__body {
+    font-size: 12px;
+    color: var(--nc-text-muted);
+    max-width: 360px;
+    margin: 0 auto 16px auto;
+}
+
+
+/* ---------- 14. Metric cards (LLM spend) ---------- */
+
+.nc-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--nc-gap);
+    margin-bottom: var(--nc-gap);
+}
+.nc-metric {
+    background: var(--nc-bg-panel);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius-lg);
+    padding: 16px;
+}
+.nc-metric__label {
+    color: var(--nc-text-muted);
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+.nc-metric__value {
+    color: var(--nc-text);
+    font-size: 24px;
+    font-weight: 500;
+    font-family: var(--nc-font-mono);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+.nc-metric__sub {
+    color: var(--nc-text-muted);
+    font-size: 12px;
+    margin-top: 6px;
+}
+
+
+/* ---------- 15. Mono helper ---------- */
+
+.nc-mono {
+    font-family: var(--nc-font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--nc-blue-bright);
+    background: transparent;
+}
+.nc-mono--muted { color: var(--nc-text-muted); }
+.nc-mono--text  { color: var(--nc-text-body); }
+
+
+/* ---------- 16. Truncation utility (long UUID filenames) ---------- */
+
+.nc-trunc {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+/* Middle-ellipsis trick for filenames: <span class="nc-trunc-mid"
+   data-prefix="long-name-with-uuid" data-suffix=".mp4">long-name…ext.mp4</span>
+   The CSS keeps the visual narrow; full text shows on title hover. */
+
+
+/* ---------- 17. Inbox-specific micro-layouts ---------- */
+
+.nc-inbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+    padding: 12px;
+}
+.nc-clip-card {
+    background: var(--nc-bg-raised);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 120ms ease;
+}
+.nc-clip-card:hover {
+    border-color: var(--nc-blue);
+}
+.nc-clip-card__thumb {
+    background: var(--nc-bg-base);
+    border: var(--nc-hairline);
+    border-radius: 6px;
+    aspect-ratio: 9 / 16;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nc-blue-dim);
+    font-size: 28px;
+    overflow: hidden;
+}
+.nc-clip-card__thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.nc-clip-card__time {
+    color: var(--nc-blue-bright);
+    font-family: var(--nc-font-mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.nc-clip-card__meta {
+    color: var(--nc-text-muted);
+    font-size: 10px;
+    font-family: var(--nc-font-mono);
+}
+.nc-clip-card__actions {
+    display: flex;
+    gap: 6px;
+    margin-top: auto;
+}
+.nc-clip-card__actions .nc-btn { flex: 1; padding: 5px 8px; font-size: 11px; }
+
+
+/* ---------- 18. Pipeline steps (stream detail) ---------- */
+
+.nc-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.nc-steps li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: var(--nc-hairline);
+    color: var(--nc-text-body);
+}
+.nc-steps li:last-child { border-bottom: 0; }
+.nc-steps__icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nc-text-muted);
+    font-family: var(--nc-font-mono);
+}
+.nc-steps__icon--done    { color: var(--nc-success); }
+.nc-steps__icon--running { color: var(--nc-blue-bright); }
+.nc-steps__icon--failed  { color: var(--nc-danger); }
+.nc-steps__icon--warn    { color: var(--nc-warn); }
+.nc-steps__time {
+    margin-left: auto;
+    color: var(--nc-text-muted);
+    font-family: var(--nc-font-mono);
+    font-size: 11px;
+}
+
+
+/* ---------- 19. Misc utilities ---------- */
+
+.nc-hidden { display: none !important; }
+.nc-mt-0   { margin-top: 0 !important; }
+.nc-mt-2   { margin-top: 16px; }
+.nc-mb-0   { margin-bottom: 0 !important; }
+
+/* Flex-grid helpers used by the upload form layout. */
+.nc-grid-2  { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.nc-grid-3  { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+
+
+/* ---------- 20. Native progress bar (upload + ETA) ---------- */
+
+progress {
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--nc-bg-raised);
+    overflow: hidden;
+}
+progress::-webkit-progress-bar {
+    background: var(--nc-bg-raised);
+    border-radius: 999px;
+}
+progress::-webkit-progress-value {
+    background: var(--nc-blue);
+    border-radius: 999px;
+    transition: width 200ms ease;
+}
+progress::-moz-progress-bar {
+    background: var(--nc-blue);
+    border-radius: 999px;
+}
+
+
+/* ---------- 21. Details / summary (collapsibles) ---------- */
+
+details.nc-details {
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    background: var(--nc-bg-panel);
+    padding: 0;
+    margin-bottom: var(--nc-gap);
+}
+details.nc-details > summary {
+    padding: 12px 16px;
+    color: var(--nc-text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+details.nc-details > summary::-webkit-details-marker { display: none; }
+details.nc-details > summary::before {
+    content: "▸";
+    color: var(--nc-text-muted);
+    transition: transform 120ms ease;
+    font-size: 10px;
+}
+details.nc-details[open] > summary::before {
+    transform: rotate(90deg);
+}
+details.nc-details > div,
+details.nc-details > article {
+    padding: 0 16px 16px;
+}
+
+
+/* ---------- 22. Login screen specific ---------- */
+
+.nc-login-shell {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background:
+        radial-gradient(ellipse at top, var(--nc-blue-faint), transparent 60%),
+        var(--nc-bg-base);
+}
+.nc-login-card {
+    background: var(--nc-bg-panel);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius-lg);
+    padding: 32px;
+    width: 100%;
+    max-width: 380px;
+}
+.nc-login-card h1 {
+    color: var(--nc-blue);
+    margin: 0 0 4px 0;
+    font-size: 22px;
+    letter-spacing: 0.02em;
+}

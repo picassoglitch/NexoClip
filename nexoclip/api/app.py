@@ -17,8 +17,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from nexoclip.db import Database
 
@@ -76,6 +79,13 @@ def create_app(
     app.state.pipeline_runner = pipeline_runner or default_pipeline_runner
 
     app.add_middleware(BearerAuthMiddleware, db=db)
+
+    # Static assets — serves /static/nexoclip-theme.css and any future
+    # CSS / JS / icon bundles. The auth middleware whitelists `/static/`
+    # as public so the dashboard's stylesheet loads on the login page.
+    _static_dir = Path(__file__).resolve().parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:

@@ -1,66 +1,72 @@
 {% extends "base.html" %}
 {% block title %}Calibration - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>Vision-rescore calibration</h2>
-  <p>
+
+<div class="nc-page-header">
+  <div>
+    <h2>Vision-rescore calibration</h2>
     <small>
       Pearson r over (rescore_score, views) for the last 30 days, per platform.
       The auto-publish toggle stays off until r is high enough on real engagement.
     </small>
-  </p>
-</hgroup>
+  </div>
+</div>
 
 <div hx-get="/dashboard/calibration" hx-trigger="every 5m" hx-swap="none"></div>
 
-<div class="grid">
+<div class="nc-metric-grid">
   {% for r in reports %}
-  <article>
-    <header>
-      <strong>{{ r.platform }}</strong>
-      <small>n_paired = {{ r.n_paired }}</small>
-    </header>
+  <div class="nc-metric">
+    <div class="nc-metric__label">{{ r.platform }} <small>· n_paired = {{ r.n_paired }}</small></div>
     {% if r.pearson_r is not none %}
-      <h3>r = {{ "%+.3f"|format(r.pearson_r) }}</h3>
+      <div class="nc-metric__value">r = {{ "%+.3f"|format(r.pearson_r) }}</div>
       {% if r.pearson_r >= 0.6 %}
-        <small style="color: #065f46;">strong - the rescore is predictive</small>
+      <div class="nc-metric__sub" style="color: var(--nc-success);">strong — the rescore is predictive</div>
       {% elif r.pearson_r >= 0.3 %}
-        <small style="color: #92400e;">moderate - more data needed</small>
+      <div class="nc-metric__sub" style="color: var(--nc-warn);">moderate — more data needed</div>
       {% else %}
-        <small style="color: #991b1b;">weak - rescore is not yet predictive</small>
+      <div class="nc-metric__sub" style="color: var(--nc-danger);">weak — rescore not yet predictive</div>
       {% endif %}
     {% else %}
-      <p><em>not enough paired samples (need ≥ 3)</em></p>
+      <div class="nc-metric__value" style="font-size: 14px; color: var(--nc-text-muted);">not enough samples</div>
+      <div class="nc-metric__sub">need ≥ 3 paired</div>
     {% endif %}
-  </article>
+  </div>
   {% endfor %}
 </div>
 
 {% for r in reports %}
 {% if r.rows %}
-<h3>{{ r.platform }} — per-clip outcomes</h3>
-<table>
-  <thead>
-    <tr>
-      <th>Clip</th>
-      <th>Rescore</th>
-      <th>Views</th>
-      <th>Likes</th>
-      <th>Last fetched</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in r.rows %}
-    <tr>
-      <td><a href="/dashboard/clips/{{ row.clip_id }}"><code>{{ row.clip_id }}</code></a></td>
-      <td>{% if row.rescore_score is not none %}{{ "%.3f"|format(row.rescore_score) }}{% else %}—{% endif %}</td>
-      <td>{% if row.views is not none %}{{ "{:,}".format(row.views) }}{% else %}—{% endif %}</td>
-      <td>{% if row.likes is not none %}{{ "{:,}".format(row.likes) }}{% else %}—{% endif %}</td>
-      <td><small>{% if row.fetched_at %}{{ row.fetched_at[:19] }}{% else %}—{% endif %}</small></td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-table" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">{{ r.platform }} — per-clip outcomes</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Clip</th>
+          <th class="nc-num">Rescore</th>
+          <th class="nc-num">Views</th>
+          <th class="nc-num">Likes</th>
+          <th>Last fetched</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in r.rows %}
+        <tr>
+          <td><a href="/dashboard/clips/{{ row.clip_id }}" class="nc-mono">{{ row.clip_id }}</a></td>
+          <td class="nc-num nc-mono">{% if row.rescore_score is not none %}{{ "%.3f"|format(row.rescore_score) }}{% else %}—{% endif %}</td>
+          <td class="nc-num nc-mono">{% if row.views is not none %}{{ "{:,}".format(row.views) }}{% else %}—{% endif %}</td>
+          <td class="nc-num nc-mono">{% if row.likes is not none %}{{ "{:,}".format(row.likes) }}{% else %}—{% endif %}</td>
+          <td><span class="nc-mono nc-mono--muted">{% if row.fetched_at %}{{ row.fetched_at[:19] }}{% else %}—{% endif %}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endif %}
 {% endfor %}
 {% endblock %}

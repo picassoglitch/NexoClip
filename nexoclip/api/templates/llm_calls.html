@@ -1,92 +1,147 @@
 {% extends "base.html" %}
-{% block title %}LLM Spend - NexoClip{% endblock %}
+{% block title %}LLM spend - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>LLM spend</h2>
-  <p><small>Auto-refreshes every 60s.</small></p>
-</hgroup>
+
+<div class="nc-page-header">
+  <div>
+    <h2>LLM spend</h2>
+    <small>Auto-refreshes every 60s. Spend is computed from the <code>llm_calls</code> table at request time.</small>
+  </div>
+  <div class="nc-page-summary">
+    <span class="nc-mono">{{ projection.n_calls_mtd }}</span> call{{ "s" if projection.n_calls_mtd != 1 else "" }} this month
+  </div>
+</div>
 
 <div hx-get="/dashboard/llm-calls" hx-trigger="every 60s" hx-swap="none"></div>
 
-<div class="grid">
-  <article>
-    <header><strong>Today</strong></header>
-    <h3>${{ "%.4f"|format(projection.today_micros / 1000000) }}</h3>
+<div class="nc-metric-grid">
+  <div class="nc-metric">
+    <div class="nc-metric__label">Today</div>
+    <div class="nc-metric__value">${{ "%.4f"|format(projection.today_micros / 1000000) }}</div>
     {% if projection.daily_budget_micros %}
-      <small>daily ceiling ${{ "%.2f"|format(projection.daily_budget_micros / 1000000) }}</small>
+      <div class="nc-metric__sub">
+        daily ceiling ${{ "%.2f"|format(projection.daily_budget_micros / 1000000) }}
+      </div>
       {% set pct = (projection.budget_consumed_frac * 100)|round|int %}
-      <progress value="{{ projection.budget_consumed_frac if projection.budget_consumed_frac <= 1.0 else 1.0 }}" max="1.0"></progress>
-      <small>{{ pct }}% consumed</small>
+      <progress value="{{ projection.budget_consumed_frac if projection.budget_consumed_frac <= 1.0 else 1.0 }}" max="1.0" style="margin-top: 8px;"></progress>
+      <div class="nc-metric__sub"><span class="nc-mono">{{ pct }}%</span> consumed</div>
     {% else %}
-      <small>budget unlimited</small>
+      <div class="nc-metric__sub">Budget unlimited</div>
     {% endif %}
-  </article>
-  <article>
-    <header><strong>Month-to-date</strong></header>
-    <h3>${{ "%.4f"|format(projection.mtd_micros / 1000000) }}</h3>
-    <small>{{ projection.n_calls_mtd }} calls</small>
-  </article>
-  <article>
-    <header><strong>Projected EOM</strong></header>
-    <h3>${{ "%.4f"|format(projection.projected_eom_micros / 1000000) }}</h3>
-    <small>linear from MTD pace</small>
-  </article>
+  </div>
+  <div class="nc-metric">
+    <div class="nc-metric__label">Month-to-date</div>
+    <div class="nc-metric__value">${{ "%.4f"|format(projection.mtd_micros / 1000000) }}</div>
+    <div class="nc-metric__sub"><span class="nc-mono">{{ projection.n_calls_mtd }}</span> calls</div>
+  </div>
+  <div class="nc-metric">
+    <div class="nc-metric__label">Projected EOM</div>
+    <div class="nc-metric__value">${{ "%.4f"|format(projection.projected_eom_micros / 1000000) }}</div>
+    <div class="nc-metric__sub">Linear from MTD pace</div>
+  </div>
 </div>
 
-<div class="grid">
-  <article>
-    <header><strong>By purpose (MTD)</strong></header>
-    <table>
-      <thead><tr><th>Purpose</th><th>USD</th></tr></thead>
-      <tbody>
-        {% for purpose, micros in projection.by_purpose.items() %}
+<div class="nc-grid-2">
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-target" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">By purpose (MTD)</span>
+    </div>
+    <div class="nc-panel__body" style="padding: 0;">
+      {% if projection.by_purpose %}
+      <table class="nc-table">
+        <thead><tr><th>Purpose</th><th class="nc-num">USD</th></tr></thead>
+        <tbody>
+          {% for purpose, micros in projection.by_purpose.items() %}
+          <tr>
+            <td><span class="nc-chip nc-chip--code">{{ purpose }}</span></td>
+            <td class="nc-num nc-mono">${{ "%.4f"|format(micros / 1000000) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="nc-empty"><div class="nc-empty__title">Nothing this month</div></div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-cpu" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">By model (MTD)</span>
+    </div>
+    <div class="nc-panel__body" style="padding: 0;">
+      {% if projection.by_model %}
+      <table class="nc-table">
+        <thead><tr><th>Model</th><th class="nc-num">USD</th></tr></thead>
+        <tbody>
+          {% for model, micros in projection.by_model.items() %}
+          <tr>
+            <td><span class="nc-mono">{{ model }}</span></td>
+            <td class="nc-num nc-mono">${{ "%.4f"|format(micros / 1000000) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="nc-empty"><div class="nc-empty__title">Nothing this month</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-history" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Recent calls</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    {% if calls %}
+    <table class="nc-table">
+      <thead>
         <tr>
-          <td><code>{{ purpose }}</code></td>
-          <td>${{ "%.4f"|format(micros / 1000000) }}</td>
+          <th>Time</th>
+          <th>Purpose</th>
+          <th>Model</th>
+          <th class="nc-num">In</th>
+          <th class="nc-num">Out</th>
+          <th class="nc-num">USD</th>
+          <th>Status</th>
         </tr>
-        {% else %}
-        <tr><td colspan="2"><em>nothing this month</em></td></tr>
+      </thead>
+      <tbody>
+        {% for c in calls %}
+        <tr>
+          <td><span class="nc-mono nc-mono--muted">{{ c.ts[:19] }}</span></td>
+          <td><span class="nc-chip nc-chip--code">{{ c.purpose }}</span></td>
+          <td><span class="nc-mono" style="font-size: 11px;">{{ c.provider }}/{{ c.model }}</span></td>
+          <td class="nc-num nc-mono">{{ c.input_tokens }}</td>
+          <td class="nc-num nc-mono">{{ c.output_tokens }}</td>
+          <td class="nc-num nc-mono">${{ "%.4f"|format(c.cost_usd_micros / 1000000) }}</td>
+          <td>
+            {% if c.status == "ok" %}
+            <span class="nc-chip nc-chip--success">
+              <span class="nc-status-dot nc-status-dot--success"></span>
+              <span>OK</span>
+            </span>
+            {% else %}
+            <span class="nc-chip nc-chip--danger">
+              <span class="nc-status-dot nc-status-dot--danger"></span>
+              <span>{{ c.status }}</span>
+            </span>
+            {% endif %}
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
-  </article>
-  <article>
-    <header><strong>By model (MTD)</strong></header>
-    <table>
-      <thead><tr><th>Model</th><th>USD</th></tr></thead>
-      <tbody>
-        {% for model, micros in projection.by_model.items() %}
-        <tr>
-          <td><small>{{ model }}</small></td>
-          <td>${{ "%.4f"|format(micros / 1000000) }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="2"><em>nothing this month</em></td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </article>
-</div>
-
-<h3>Recent calls</h3>
-<table>
-  <thead>
-    <tr><th>Time</th><th>Purpose</th><th>Model</th><th>In</th><th>Out</th><th>USD</th><th>Status</th></tr>
-  </thead>
-  <tbody>
-    {% for c in calls %}
-    <tr>
-      <td><small>{{ c.ts[:19] }}</small></td>
-      <td>{{ c.purpose }}</td>
-      <td><small>{{ c.provider }}/{{ c.model }}</small></td>
-      <td>{{ c.input_tokens }}</td>
-      <td>{{ c.output_tokens }}</td>
-      <td>${{ "%.4f"|format(c.cost_usd_micros / 1000000) }}</td>
-      <td>{% if c.status == "ok" %}OK{% else %}<span class="status-badge status-rejected">{{ c.status }}</span>{% endif %}</td>
-    </tr>
     {% else %}
-    <tr><td colspan="7"><em>No LLM calls yet.</em></td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-coin-off" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">No LLM calls yet</div>
+      <p class="nc-empty__body">Spend rows show up here as soon as the variant generator or any other Anthropic call fires.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

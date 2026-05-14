@@ -1,41 +1,87 @@
 {% extends "base.html" %}
 {% block title %}LLM settings - NexoClip{% endblock %}
 {% block content %}
-<h2>LLM routing</h2>
-<p>Read from <code>config/llm.yaml</code>. Phase 1 ships read-only inspection;
-   editing routing rules requires a config-file change + restart.</p>
 
-<article>
-  <header><strong>Providers</strong></header>
-  <table>
-    <thead><tr><th>Provider</th><th>Standard model</th><th>Premium model</th><th>Timeout</th></tr></thead>
-    <tbody>
-      {% for name, p in providers.items() %}
-      <tr>
-        <td><strong>{{ name }}</strong></td>
-        <td><small>{{ p.models.standard }}</small></td>
-        <td><small>{{ p.models.premium or "-" }}</small></td>
-        <td>{{ p.timeout_s }}s</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</article>
+<div class="nc-page-header">
+  <div>
+    <h2>LLM routing</h2>
+    <small>
+      Read from <code>config/llm.yaml</code>.
+      Read-only in Phase 1 — editing routing rules requires a config-file change + restart.
+    </small>
+  </div>
+</div>
 
-<article>
-  <header><strong>Routing</strong></header>
-  <table>
-    <thead><tr><th>Purpose</th><th>Default quality</th><th>Primary</th><th>Fallbacks</th></tr></thead>
-    <tbody>
-      {% for purpose, rule in routing.items() %}
-      <tr>
-        <td><code>{{ purpose }}</code></td>
-        <td>{{ rule.default_quality }}</td>
-        <td>{{ rule.primary }}</td>
-        <td><small>{{ rule.fallbacks|join(", ") or "-" }}</small></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</article>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-server-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Providers</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Standard model</th>
+          <th>Premium model</th>
+          <th class="nc-num">Timeout</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for name, p in providers.items() %}
+        <tr>
+          <td><strong style="color: var(--nc-text);">{{ name }}</strong></td>
+          <td><span class="nc-mono">{{ p.models.standard }}</span></td>
+          <td><span class="nc-mono">{{ p.models.premium or "—" }}</span></td>
+          <td class="nc-num nc-mono">{{ p.timeout_s }}s</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-route" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Routing</span>
+    <small>— purpose → quality → provider → model</small>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Purpose</th>
+          <th>Default quality</th>
+          <th>Primary</th>
+          <th>Fallbacks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for purpose, rule in routing.items() %}
+        <tr>
+          <td><span class="nc-chip nc-chip--code">{{ purpose }}</span></td>
+          <td>
+            {% if rule.default_quality == "premium" %}
+            <span class="nc-chip">{{ rule.default_quality }}</span>
+            {% else %}
+            <span class="nc-chip nc-chip--muted">{{ rule.default_quality }}</span>
+            {% endif %}
+          </td>
+          <td>{{ rule.primary }}</td>
+          <td>
+            {% if rule.fallbacks %}
+              {% for fb in rule.fallbacks %}
+              <span class="nc-chip nc-chip--muted">{{ fb }}</span>
+              {% endfor %}
+            {% else %}
+            <span style="color: var(--nc-text-muted);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

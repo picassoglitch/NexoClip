@@ -1,175 +1,242 @@
 {% extends "base.html" %}
 {% block title %}Clip {{ clip.id }} - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>Clip review</h2>
-  <p>
-    <span class="status-badge status-{{ clip.status }}" id="clip-status">{{ clip.status }}</span>
-    &middot; <code>{{ clip.id }}</code> &middot; {{ "%.1f"|format(clip.duration_s) }}s
-  </p>
-</hgroup>
 
-<article>
-  <header><strong>Player</strong></header>
-  <p><small>Path: <code>{{ clip.path }}</code></small></p>
-  <video controls preload="metadata" style="width: 100%; max-width: 360px;">
-    <source src="/dashboard/clips/{{ clip.id }}/media">
-  </video>
-</article>
+<div class="nc-page-header">
+  <div>
+    <h2>Clip review</h2>
+    <div class="nc-row" style="margin-top: 4px;">
+      <span class="nc-chip nc-chip--{{ {'cut':'muted','approved':'success','rejected':'danger','published':'success','ready_for_review':'warn'}.get(clip.status, 'muted') }}"
+            id="clip-status">
+        <span class="nc-status-dot nc-status-dot--{{ {'cut':'muted','approved':'success','rejected':'danger','published':'success','ready_for_review':'warn'}.get(clip.status, 'muted') }}"></span>
+        <span>{{ clip.status }}</span>
+      </span>
+      <span class="nc-mono nc-mono--muted">{{ clip.id }}</span>
+      <span style="color: var(--nc-text-muted);">·</span>
+      <span class="nc-mono">{{ "%.1f"|format(clip.duration_s) }}s</span>
+    </div>
+  </div>
+  <div class="nc-page-summary">
+    <a href="/dashboard/streams/{{ clip.stream_id }}" class="nc-btn nc-btn--sm">
+      <i class="ti ti-arrow-left" aria-hidden="true"></i>
+      <span>Back to stream</span>
+    </a>
+  </div>
+</div>
 
-<article>
-  <header><strong>Variants</strong></header>
-  {% if variants %}
-  <form action="/dashboard/clips/{{ clip.id }}/publish" method="post">
-    {% for v in variants %}
-    <label>
-      <input type="radio" name="variant_id" value="{{ v.id }}" {% if loop.first %}checked{% endif %}>
-      <strong>{{ v.language }}</strong> &middot; {{ v.caption }}
-      {% if v.title_card_text %}<br><small>Title card: <em>{{ v.title_card_text }}</em></small>{% endif %}
-      {% if v.hashtags %}<br><small>{{ v.hashtags|map("string")|map("upper")|join(" #") }}</small>{% endif %}
-    </label><br>
-    {% endfor %}
-    <button type="submit" {% if clip.status != "approved" %}disabled{% endif %}>
-      Publish to {{ accounts|length }} account{% if accounts|length != 1 %}s{% endif %}
-    </button>
-    {% if clip.status != "approved" %}
-    <small>Approve the clip first to enable publishing.</small>
-    {% endif %}
-  </form>
-  {% else %}
-  <p><em>No variants generated yet.</em></p>
-  {% endif %}
-</article>
+<div class="nc-grid-2">
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-player-play" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Player</span>
+    </div>
+    <div class="nc-panel__body">
+      <video controls preload="metadata"
+             style="width: 100%; max-width: 360px; background: #000; border: var(--nc-hairline); border-radius: var(--nc-radius);">
+        <source src="/dashboard/clips/{{ clip.id }}/media">
+      </video>
+      <small style="display: block; margin-top: 8px;">
+        Path: <span class="nc-mono nc-trunc" title="{{ clip.path }}" style="max-width: 100%;">{{ clip.path }}</span>
+      </small>
+    </div>
+  </div>
 
-<article>
-  <header><strong>Status</strong></header>
-  <div hx-target="#clip-status" hx-swap="outerHTML">
-    {% for target in valid_transitions %}
-    <button hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
-            class="{% if target == 'rejected' %}contrast{% endif %}">
-      Mark {{ target }}
-    </button>
-    {% endfor %}
-    {% if not valid_transitions %}
-    <small><em>Final status - no further transitions.</em></small>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-toggle-right" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Status</span>
+    </div>
+    <div class="nc-panel__body">
+      <div hx-target="#clip-status" hx-swap="outerHTML" class="nc-row">
+        {% for target in valid_transitions %}
+        <button hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
+                class="nc-btn {% if target == 'rejected' %}nc-btn--danger{% elif target == 'approved' %}nc-btn--primary{% endif %}">
+          <i class="ti ti-{{ {'approved':'check','rejected':'x','ready_for_review':'eye','published':'rocket'}.get(target, 'arrow-right') }}"
+             aria-hidden="true"></i>
+          <span>Mark {{ target }}</span>
+        </button>
+        {% endfor %}
+      </div>
+      {% if not valid_transitions %}
+      <small style="display: block; margin-top: 8px;">Final status — no further transitions.</small>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-message-circle-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Variants</span>
+  </div>
+  <div class="nc-panel__body">
+    {% if variants %}
+    <form action="/dashboard/clips/{{ clip.id }}/publish" method="post">
+      {% for v in variants %}
+      <label class="nc-checkbox" style="align-items: flex-start; padding: 8px 12px; border: var(--nc-hairline); border-radius: var(--nc-radius); margin-bottom: 8px;">
+        <input type="radio" name="variant_id" value="{{ v.id }}" {% if loop.first %}checked{% endif %}>
+        <div>
+          <strong style="color: var(--nc-text);">{{ v.language }}</strong>
+          <span style="color: var(--nc-text-body);">— {{ v.caption }}</span>
+          {% if v.title_card_text %}
+          <div><small>Title card: <em>{{ v.title_card_text }}</em></small></div>
+          {% endif %}
+          {% if v.hashtags %}
+          <div style="margin-top: 4px;">
+            {% for h in v.hashtags %}
+            <span class="nc-chip nc-chip--muted">#{{ h }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </label>
+      {% endfor %}
+      <button type="submit"
+              class="nc-btn nc-btn--primary"
+              {% if clip.status != "approved" %}disabled{% endif %}>
+        <i class="ti ti-rocket" aria-hidden="true"></i>
+        <span>Publish to {{ accounts|length }} account{% if accounts|length != 1 %}s{% endif %}</span>
+      </button>
+      {% if clip.status != "approved" %}
+      <small style="display: block; margin-top: 8px;">Approve the clip first to enable publishing.</small>
+      {% endif %}
+    </form>
+    {% else %}
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-message-off" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">No variants generated yet</div>
+    </div>
     {% endif %}
   </div>
-</article>
+</div>
 
-<article>
-  <header><strong>Why this clip?</strong></header>
-  <table class="confidence-breakdown">
-    <tr>
-      <th scope="row">Heuristic that fired</th>
-      <td>
-        <code>{{ breakdown.heuristic_reason }}</code>
-        ({{ "%.3f"|format(breakdown.heuristic_score) }})
-      </td>
-    </tr>
-    <tr>
-      <th scope="row">Motion score</th>
-      <td>
-        {% if breakdown.motion_score is not none %}
-          {{ "%.3f"|format(breakdown.motion_score) }}
-          <small>(avg motion energy across the clip)</small>
-        {% else %}
-          <em>n/a — visual signals not analyzed</em>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-zoom-question" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Why this clip?</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <tbody>
+        <tr>
+          <td style="width: 40%;">Heuristic that fired</td>
+          <td>
+            <span class="nc-chip nc-chip--code">{{ breakdown.heuristic_reason }}</span>
+            <span class="nc-mono">{{ "%.3f"|format(breakdown.heuristic_score) }}</span>
+          </td>
+        </tr>
+        <tr>
+          <td>Motion score</td>
+          <td>
+            {% if breakdown.motion_score is not none %}
+              <span class="nc-mono">{{ "%.3f"|format(breakdown.motion_score) }}</span>
+              <small>(avg motion energy across the clip)</small>
+            {% else %}
+              <small><em>n/a — visual signals not analyzed</em></small>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Face presence</td>
+          <td>
+            {% if breakdown.face_presence is not none %}
+              <span class="nc-mono">{{ "%.0f%%"|format(breakdown.face_presence * 100) }}</span>
+              <small>of seconds with a detected face</small>
+            {% else %}
+              <small><em>n/a</em></small>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Speaking intensity</td>
+          <td>
+            {% if breakdown.speaking_intensity is not none %}
+              <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
+              <small>words/sec</small>
+            {% else %}
+              <small><em>n/a — no transcript</em></small>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Reaction confidence</td>
+          <td>
+            {% if breakdown.reaction_confidence is not none %}
+              <span class="nc-mono">{{ "%.3f"|format(breakdown.reaction_confidence) }}</span>
+              <small>(vision-LLM rescore)</small>
+            {% else %}
+              <small><em>not rescored — heuristic ranking stands</em></small>
+            {% endif %}
+          </td>
+        </tr>
+        {% if breakdown.rescore_delta is not none %}
+        <tr>
+          <td>Rescore delta</td>
+          <td>
+            <span class="nc-chip nc-chip--{% if breakdown.rescore_delta >= 0 %}success{% else %}danger{% endif %}">
+              <span class="nc-mono">{{ "%+.3f"|format(breakdown.rescore_delta) }}</span>
+            </span>
+            <small>(positive = the LLM thought this was better than the heuristic ranking)</small>
+          </td>
+        </tr>
         {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th scope="row">Face presence</th>
-      <td>
-        {% if breakdown.face_presence is not none %}
-          {{ "%.0f%%"|format(breakdown.face_presence * 100) }}
-          <small>of seconds with a detected face</small>
-        {% else %}
-          <em>n/a</em>
+        {% if breakdown.rescore_reason %}
+        <tr>
+          <td>Rescore reason</td>
+          <td><em>"{{ breakdown.rescore_reason }}"</em></td>
+        </tr>
         {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th scope="row">Speaking intensity</th>
-      <td>
-        {% if breakdown.speaking_intensity is not none %}
-          {{ "%.2f"|format(breakdown.speaking_intensity) }} words/sec
-        {% else %}
-          <em>n/a — no transcript</em>
-        {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th scope="row">Reaction confidence</th>
-      <td>
-        {% if breakdown.reaction_confidence is not none %}
-          {{ "%.3f"|format(breakdown.reaction_confidence) }}
-          <small>(vision-LLM rescore)</small>
-        {% else %}
-          <em>not rescored — heuristic ranking stands</em>
-        {% endif %}
-      </td>
-    </tr>
-    {% if breakdown.rescore_delta is not none %}
-    <tr>
-      <th scope="row">Rescore delta</th>
-      <td>
-        <span class="status-badge {% if breakdown.rescore_delta >= 0 %}status-approved{% else %}status-rejected{% endif %}">
-          {{ "%+.3f"|format(breakdown.rescore_delta) }}
-        </span>
-        <small>
-          (vision rescore vs heuristic; positive = the LLM thought this was
-          better than the heuristic ranking)
-        </small>
-      </td>
-    </tr>
-    {% endif %}
-    {% if breakdown.rescore_reason %}
-    <tr>
-      <th scope="row">Rescore reason</th>
-      <td><em>"{{ breakdown.rescore_reason }}"</em></td>
-    </tr>
-    {% endif %}
-  </table>
-</article>
+      </tbody>
+    </table>
+  </div>
+</div>
 
 {% if outcomes %}
-<article>
-  <header>
-    <strong>Engagement outcomes</strong>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-chart-bar" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Engagement outcomes</span>
     <small>(see <a href="/dashboard/calibration">calibration table</a>)</small>
-  </header>
-  <table>
-    <thead>
-      <tr>
-        <th>Platform</th>
-        <th>External</th>
-        <th>Status</th>
-        <th>Views</th>
-        <th>Likes</th>
-        <th>Comments</th>
-        <th>Last fetched</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for o in outcomes %}
-      <tr>
-        <td><code>{{ o.job.platform }}</code></td>
-        <td>
-          {% if o.job.external_url %}
-            <a href="{{ o.job.external_url }}" target="_blank"><small>{{ o.job.external_url[:40] }}...</small></a>
-          {% else %}
-            <small><em>{{ o.job.external_id or "—" }}</em></small>
-          {% endif %}
-        </td>
-        <td><span class="status-badge status-{{ o.job.status }}">{{ o.job.status }}</span></td>
-        <td>{% if o.metric and o.metric.views is not none %}{{ "{:,}".format(o.metric.views) }}{% else %}—{% endif %}</td>
-        <td>{% if o.metric and o.metric.likes is not none %}{{ "{:,}".format(o.metric.likes) }}{% else %}—{% endif %}</td>
-        <td>{% if o.metric and o.metric.comments is not none %}{{ "{:,}".format(o.metric.comments) }}{% else %}—{% endif %}</td>
-        <td><small>{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>not yet measured</em>{% endif %}</small></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</article>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>External</th>
+          <th>Status</th>
+          <th class="nc-num">Views</th>
+          <th class="nc-num">Likes</th>
+          <th class="nc-num">Comments</th>
+          <th>Last fetched</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in outcomes %}
+        <tr>
+          <td><span class="nc-chip nc-chip--code">{{ o.job.platform }}</span></td>
+          <td>
+            {% if o.job.external_url %}
+              <a href="{{ o.job.external_url }}" target="_blank" class="nc-mono"
+                 style="font-size: 11px;">{{ o.job.external_url[:40] }}...</a>
+            {% else %}
+              <span class="nc-mono nc-mono--muted">{{ o.job.external_id or "—" }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="nc-chip nc-chip--{{ {'sent':'success','failed':'danger','pending':'warn','canceled':'muted'}.get(o.job.status, 'muted') }}">
+              {{ o.job.status }}
+            </span>
+          </td>
+          <td class="nc-num nc-mono">{% if o.metric and o.metric.views is not none %}{{ "{:,}".format(o.metric.views) }}{% else %}—{% endif %}</td>
+          <td class="nc-num nc-mono">{% if o.metric and o.metric.likes is not none %}{{ "{:,}".format(o.metric.likes) }}{% else %}—{% endif %}</td>
+          <td class="nc-num nc-mono">{% if o.metric and o.metric.comments is not none %}{{ "{:,}".format(o.metric.comments) }}{% else %}—{% endif %}</td>
+          <td><small class="nc-mono nc-mono--muted">{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>not yet measured</em>{% endif %}</small></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endif %}
 {% endblock %}

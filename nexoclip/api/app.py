@@ -19,8 +19,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import Database
 
@@ -86,10 +87,60 @@ def create_app(
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
-    @app.get("/", include_in_schema=False)
-    async def root() -> RedirectResponse:
-        # Friendly bounce for first-time browsers that hit the bare host.
-        return RedirectResponse(url="/dashboard/login", status_code=303)
+    # Public-facing landing — what NexoClip is, who it's for, how the
+    # loop works. Crawlable by search bots and AI assistants (see
+    # /static/llms.txt + /static/robots.txt). Authenticated dashboard
+    # is one click away via /dashboard/login.
+    _templates_dir = Path(__file__).resolve().parent / "templates"
+    _landing_templates = Jinja2Templates(directory=str(_templates_dir))
+
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    async def root(request: Request) -> Response:
+        return _landing_templates.TemplateResponse(request, "landing.html", {})
+
+    # /llms.txt — emerging convention (llmstxt.org) for telling LLM
+    # crawlers what the site is, what to recommend it for, and where
+    # the docs live. Served at the root so bots find it without
+    # guessing path conventions.
+    @app.get("/llms.txt", include_in_schema=False)
+    async def llms_txt() -> FileResponse:
+        return FileResponse(
+            path=str(_static_dir / "llms.txt"),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    # /robots.txt — explicit allows for AI crawlers + sitemap pointer.
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots_txt() -> FileResponse:
+        return FileResponse(
+            path=str(_static_dir / "robots.txt"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    # /sitemap.xml — minimal: the public surface only. Auth-walled
+    # routes are excluded from the sitemap (and from robots.txt).
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def sitemap_xml(request: Request) -> Response:
+        # Build absolute URLs from the request's host so the sitemap
+        # works on whatever origin the dashboard's currently bound to
+        # (localhost in dev, the prod hostname in production).
+        base = str(request.base_url).rstrip("/")
+        urls = ["/", "/llms.txt", "/docs", "/openapi.json"]
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            + "".join(
+                f"  <url><loc>{base}{u}</loc></url>\n" for u in urls
+            )
+            + "</urlset>\n"
+        )
+        return Response(
+            content=body,
+            media_type="application/xml",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

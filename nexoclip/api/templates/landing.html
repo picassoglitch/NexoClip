@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NexoClip — turn streamer VODs into branded short-form clips</title>
+
+  {# ---- Crawler / search-LLM metadata --------------------------- #}
+  <meta name="description"
+        content="NexoClip is a multi-tenant SaaS that turns streamer VODs into TikTok/Shorts/Reels clips. Voice-marker triggers, per-speaker brand kits, AI-generated captions and logos via Claude, local Whisper transcription, auto-publish with undo window. MCP-ready for agent integration.">
+  <meta name="keywords"
+        content="streamer clipping, VOD clipper, voice-marker clips, multi-streamer brand kits, TikTok auto-publish, AI clip generator, Whisper transcription, speaker diarization, MCP integration, NexoClip">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://nexoclip.app/">
+
+  {# ---- Open Graph (Facebook, LinkedIn, Discord, Slack previews) #}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="NexoClip — turn streamer VODs into branded short-form clips">
+  <meta property="og:description"
+        content="Voice-marker triggers, per-speaker brand kits, AI-generated captions and logos. Drop a VOD, wake up to branded vertical clips ready to publish.">
+  <meta property="og:url" content="https://nexoclip.app/">
+  <meta property="og:site_name" content="NexoClip">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="/static/og-image.png">
+
+  {# ---- Twitter / X card --------------------------------------- #}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="NexoClip — branded short-form clips from streamer VODs">
+  <meta name="twitter:description"
+        content="Voice-marker triggers + per-speaker brand kits + AI captions. Drop a VOD, get publish-ready vertical clips.">
+  <meta name="twitter:image" content="/static/og-image.png">
+
+  {# ---- Schema.org JSON-LD: SoftwareApplication ---------------- #}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "NexoClip",
+    "applicationCategory": "MultimediaApplication",
+    "applicationSubCategory": "VideoEditingApplication",
+    "operatingSystem": "Web, Linux, Windows, macOS",
+    "description": "Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips. Voice cues, chat heat, audio peaks, and visual signals detect clip-worthy moments. Claude generates persona-flavored captions, hooks, and viral-moment selections. Speaker diarization assigns each clip to a per-streamer brand kit.",
+    "url": "https://nexoclip.app/",
+    "softwareVersion": "0.1.0",
+    "featureList": [
+      "Voice-marker clip triggers (forward + retroactive)",
+      "Speaker diarization with per-speaker brand kits",
+      "AI-generated SVG logos and captions via Anthropic Claude",
+      "Local GPU Whisper transcription (no cloud upload required)",
+      "Auto-publish to TikTok / Shorts / Reels with undo window",
+      "Google Drive folder watching for batch ingestion",
+      "Per-tenant retention policies",
+      "MCP server for Claude Code / Cursor integration"
+    ],
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD",
+      "availability": "https://schema.org/InStock"
+    }
+  }
+  </script>
+
+  {# ---- Schema.org JSON-LD: Organization ----------------------- #}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "NexoClip",
+    "url": "https://nexoclip.app/",
+    "logo": "/static/logo.png",
+    "sameAs": []
+  }
+  </script>
+
+  {# ---- Schema.org JSON-LD: FAQ for LLM extraction ------------- #}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is NexoClip?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "NexoClip is a multi-tenant SaaS that turns finished streamer VODs into branded short-form clips ready for TikTok, YouTube Shorts, and Instagram Reels. It uses voice-marker triggers (the streamer says 'clipea esto' or 'clipeaste eso' during the stream as natural verbal bookmarks), speaker diarization for multi-streamer VODs, AI-generated captions via Anthropic Claude, and local Whisper transcription on the user's GPU."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How are clip moments detected?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Four signals: voice-marker trigger phrases (configurable per brand kit), chat heat, audio peaks, and visual signals (scene cuts, face presence, motion). The trigger scanner aligns Whisper transcripts with pyannote diarization so each clip is attributed to the right speaker. Forward triggers extract 30 seconds after the phrase; retroactive triggers extract 60 seconds before it."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can NexoClip handle VODs with multiple streamers?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Speaker diarization (pyannote-audio 3.1) labels every speech segment, and persistent speaker identities resolve across VODs via cosine-similarity embedding match. Each speaker can be assigned a preferred brand kit so the renderer applies the right colors, fonts, social handles, and captions per clip — even within one VOD."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does NexoClip support auto-publishing?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, opt-in per brand kit with a configurable undo window (default 60 minutes). Clips queue with a scheduled-for timestamp; the operator can cancel from the inbox before the worker fires. Review-first stays the default — auto-publish only flips on for kits the operator has explicitly trusted."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can AI agents drive NexoClip?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. NexoClip ships an MCP (Model Context Protocol) server so Claude Code, Cursor, and other LLM clients can drive the pipeline conversationally. The MCP surface mirrors the REST API — list streams, kick off pipelines, fetch clips, manage brand kits, inspect LLM spend. Start it via 'nexoclip mcp serve --token <api-token>'."
+        }
+      }
+    ]
+  }
+  </script>
+
+  <link rel="stylesheet" href="/static/nexoclip-theme.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
+  <style>
+    .nc-landing { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; }
+    .nc-hero {
+      text-align: center;
+      padding: 56px 20px 40px;
+      background:
+        radial-gradient(ellipse at top, var(--nc-blue-faint), transparent 60%),
+        var(--nc-bg-base);
+      border-bottom: var(--nc-hairline);
+    }
+    .nc-hero h1 {
+      font-size: 34px;
+      font-weight: 500;
+      color: var(--nc-text);
+      max-width: 720px;
+      margin: 0 auto 12px;
+      line-height: 1.2;
+    }
+    .nc-hero h1 strong { color: var(--nc-blue-bright); font-weight: 500; }
+    .nc-hero p {
+      max-width: 580px;
+      margin: 0 auto 24px;
+      color: var(--nc-text-body);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .nc-hero__brand {
+      color: var(--nc-blue);
+      font-size: 18px;
+      letter-spacing: 0.06em;
+      margin-bottom: 16px;
+      display: block;
+    }
+    .nc-hero__cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .nc-features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin: 40px 0;
+    }
+    .nc-feature {
+      background: var(--nc-bg-panel);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius-lg);
+      padding: 20px;
+    }
+    .nc-feature__icon {
+      color: var(--nc-blue-bright);
+      font-size: 22px;
+      margin-bottom: 10px;
+      display: block;
+    }
+    .nc-feature h3 {
+      color: var(--nc-text);
+      font-size: 15px;
+      margin: 0 0 6px;
+    }
+    .nc-feature p {
+      color: var(--nc-text-body);
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 0;
+    }
+    .nc-flow {
+      background: var(--nc-bg-panel);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius-lg);
+      padding: 24px;
+      margin: 40px 0;
+    }
+    .nc-flow h2 { margin-top: 0; }
+    .nc-flow__steps {
+      list-style: none;
+      padding: 0;
+      margin: 16px 0 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .nc-flow__step {
+      background: var(--nc-bg-raised);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius);
+      padding: 14px;
+    }
+    .nc-flow__step b {
+      color: var(--nc-blue-bright);
+      font-family: var(--nc-font-mono);
+      font-size: 11px;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .nc-flow__step strong { color: var(--nc-text); font-size: 13px; }
+    .nc-flow__step p { color: var(--nc-text-muted); font-size: 12px; margin: 4px 0 0; }
+    .nc-faq { margin-top: 40px; }
+    .nc-faq details {
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius);
+      background: var(--nc-bg-panel);
+      padding: 0;
+      margin-bottom: 8px;
+    }
+    .nc-faq summary {
+      padding: 14px 18px;
+      color: var(--nc-text);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      list-style: none;
+    }
+    .nc-faq summary::-webkit-details-marker { display: none; }
+    .nc-faq summary::before {
+      content: "▸";
+      color: var(--nc-text-muted);
+      margin-right: 10px;
+      transition: transform 120ms ease;
+      display: inline-block;
+    }
+    .nc-faq details[open] summary::before { transform: rotate(90deg); }
+    .nc-faq__body {
+      padding: 0 18px 14px;
+      color: var(--nc-text-body);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .nc-foot {
+      margin-top: 60px;
+      padding-top: 20px;
+      border-top: var(--nc-hairline);
+      color: var(--nc-text-muted);
+      font-size: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header class="nc-hero">
+    <span class="nc-hero__brand">NEXOCLIP</span>
+    <h1>Drop a streamer VOD. Wake up to <strong>branded vertical clips</strong>.</h1>
+    <p>
+      Voice-marker triggers, per-speaker brand kits, AI captions and logos —
+      from a single VOD upload to TikTok / Shorts / Reels-ready clips, with
+      an undo-window auto-publish you can trust.
+    </p>
+    <div class="nc-hero__cta">
+      <a href="/dashboard/login" class="nc-btn nc-btn--primary">
+        <i class="ti ti-login" aria-hidden="true"></i>
+        <span>Sign in</span>
+      </a>
+      <a href="/docs" class="nc-btn">
+        <i class="ti ti-book" aria-hidden="true"></i>
+        <span>API docs</span>
+      </a>
+      <a href="/llms.txt" class="nc-btn">
+        <i class="ti ti-robot" aria-hidden="true"></i>
+        <span>For LLMs</span>
+      </a>
+    </div>
+  </header>
+
+  <main class="nc-landing">
+
+    <section>
+      <h2>What makes it different</h2>
+      <div class="nc-features">
+
+        <div class="nc-feature">
+          <i class="ti ti-microphone-2 nc-feature__icon" aria-hidden="true"></i>
+          <h3>Voice-marker triggers</h3>
+          <p>
+            Streamers say <code>clipea esto</code> (clip the next 30s) or
+            <code>clipeaste eso</code> (clip the previous 60s) as natural
+            verbal bookmarks. Custom phrases configurable per brand kit.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-users nc-feature__icon" aria-hidden="true"></i>
+          <h3>Per-speaker brand kits</h3>
+          <p>
+            Speaker diarization (pyannote-audio) routes each clip in a
+            multi-streamer VOD to the right host's colors, fonts, social
+            handles, and captions. Speaker identities persist across VODs
+            via embedding match.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
+          <h3>AI captions + logos</h3>
+          <p>
+            Anthropic Claude generates persona-flavored captions, viral hooks,
+            and SVG brand logos. Cost-tracked per call; structured output
+            validated against Pydantic schemas.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-cpu nc-feature__icon" aria-hidden="true"></i>
+          <h3>Local GPU transcription</h3>
+          <p>
+            faster-whisper runs on your own GPU. No cloud upload of stream
+            audio required — your VODs never leave your machine for
+            transcription.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-rocket nc-feature__icon" aria-hidden="true"></i>
+          <h3>Auto-publish with undo</h3>
+          <p>
+            Per-kit opt-in. Clips queue with a scheduled-for timestamp;
+            the operator can cancel from the inbox before the worker fires.
+            Review-first stays the default.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-robot nc-feature__icon" aria-hidden="true"></i>
+          <h3>MCP-ready for agents</h3>
+          <p>
+            Drive NexoClip from Claude Code, Cursor, or any MCP client.
+            The MCP surface mirrors the REST API — list streams, kick off
+            pipelines, fetch clips conversationally.
+          </p>
+        </div>
+
+      </div>
+    </section>
+
+    <section class="nc-flow">
+      <h2>The loop</h2>
+      <p>
+        Designed to be the one thing a streamer touches each morning:
+      </p>
+      <ol class="nc-flow__steps">
+        <li class="nc-flow__step">
+          <b>1 · ingest</b>
+          <strong>Upload VOD or watch a Drive folder</strong>
+          <p>Drag-drop on the dashboard, or connect Google Drive once and drop your OBS recordings there.</p>
+        </li>
+        <li class="nc-flow__step">
+          <b>2 · diarize + transcribe</b>
+          <strong>Speakers labeled, words timestamped</strong>
+          <p>pyannote-audio assigns SPEAKER_00..N and faster-whisper produces a word-level transcript on your GPU.</p>
+        </li>
+        <li class="nc-flow__step">
+          <b>3 · detect</b>
+          <strong>Voice markers + chat heat + visual signals</strong>
+          <p>Forward and retroactive trigger phrases, plus audio peaks and scene cuts, become candidate timestamps.</p>
+        </li>
+        <li class="nc-flow__step">
+          <b>4 · cut + brand</b>
+          <strong>Vertical clips with the right brand kit</strong>
+          <p>ffmpeg cuts each window, smart-crops to 9:16 around the active face, and burns in the per-speaker handle.</p>
+        </li>
+        <li class="nc-flow__step">
+          <b>5 · variants</b>
+          <strong>Captions + hooks per platform</strong>
+          <p>Claude writes persona-flavored captions and hashtags for TikTok, Shorts, Reels in your target languages.</p>
+        </li>
+        <li class="nc-flow__step">
+          <b>6 · publish or review</b>
+          <strong>Inbox with one-click cut + undo</strong>
+          <p>Clips land grouped by VOD and speaker. Auto-publish kits queue with an undo window — manual review otherwise.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="nc-faq">
+      <h2>Frequently asked</h2>
+
+      <details>
+        <summary>Who is NexoClip for?</summary>
+        <div class="nc-faq__body">
+          Streamers who finish a stream and want clips ready by morning, multi-host
+          stream collectives that need per-streamer branding within one VOD, and
+          agents / MCP clients that want to drive a clipping pipeline programmatically.
+        </div>
+      </details>
+
+      <details>
+        <summary>Do I need a GPU?</summary>
+        <div class="nc-faq__body">
+          A consumer GPU (RTX 4060+ recommended) handles Whisper + pyannote
+          comfortably for ~4hr VODs. CPU-only mode works for short clips
+          (set <code>NEXOCLIP_WHISPER_DEVICE=cpu</code>) but is much slower.
+        </div>
+      </details>
+
+      <details>
+        <summary>Which LLM does NexoClip use?</summary>
+        <div class="nc-faq__body">
+          Anthropic Claude exclusively. The router supports adding more providers
+          later without code changes, but the live surface is Claude-only — the
+          structured-output reliability is essential for the variant generator
+          and viral-moment selector.
+        </div>
+      </details>
+
+      <details>
+        <summary>How do I integrate NexoClip into an agent workflow?</summary>
+        <div class="nc-faq__body">
+          Run <code>nexoclip mcp serve --token &lt;api-token&gt;</code> to expose
+          the MCP server over stdio. Claude Code, Cursor, and other MCP clients
+          will see tools for listing streams, kicking off pipelines, fetching
+          clips, and managing brand kits. The same tenant token gates the JSON
+          REST API at <code>/streams</code>, <code>/clips</code>, etc.
+        </div>
+      </details>
+
+      <details>
+        <summary>What about retention and data privacy?</summary>
+        <div class="nc-faq__body">
+          Per-tenant retention windows (default 30 days for VODs, 90 for clips,
+          365 for transcripts) — all configurable. Daily sweeper hard-deletes
+          past-cutoff artifacts. No soft-delete bin. Audio + video stay on your
+          machine for transcription; only the LLM caption-generation step calls
+          out to Anthropic.
+        </div>
+      </details>
+
+      <details>
+        <summary>Is there an API I can call directly?</summary>
+        <div class="nc-faq__body">
+          Yes. <a href="/openapi.json">OpenAPI spec</a> +
+          <a href="/docs">interactive Swagger UI</a>. Issue a token via
+          <code>nexoclip tokens issue --tenant &lt;id&gt; --scope full</code>
+          and pass it as <code>Authorization: Bearer &lt;token&gt;</code>.
+        </div>
+      </details>
+
+    </section>
+
+    <p class="nc-foot">
+      NexoClip · multi-tenant SaaS for VOD-to-clip workflows ·
+      <a href="/llms.txt">llms.txt</a> ·
+      <a href="/docs">API docs</a> ·
+      <a href="/dashboard/login">Sign in</a>
+    </p>
+  </main>
+</body>
+</html>

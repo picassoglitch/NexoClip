@@ -1,35 +1,83 @@
 {% extends "base.html" %}
 {% block title %}Connected accounts - NexoClip{% endblock %}
 {% block content %}
-<h2>Connected accounts</h2>
-<p>Phase 1 supports manual entry. Phase 3 will add OAuth flows.</p>
 
-<article>
-  <header><strong>Connect a Buffer profile</strong></header>
-  <form action="/dashboard/connected-accounts" method="post">
-    <input type="hidden" name="platform" value="buffer">
-    <div class="grid">
-      <label>External id <input name="external_id" required placeholder="profile_123abc"></label>
-      <label>Display name <input name="display_name" placeholder="Aldo - TikTok"></label>
-    </div>
-    <label>Access token <input type="password" name="access_token" required></label>
-    <button type="submit">Connect</button>
-  </form>
-</article>
+<div class="nc-page-header">
+  <div>
+    <h2>Connected accounts</h2>
+    <small>Phase 1 supports manual entry. Phase 3 adds OAuth flows.</small>
+  </div>
+  <div class="nc-page-summary">
+    <span class="nc-mono">{{ accounts|length }}</span> connected
+  </div>
+</div>
 
-<table>
-  <thead><tr><th>Platform</th><th>Display name</th><th>External id</th><th>Connected</th></tr></thead>
-  <tbody>
-    {% for a in accounts %}
-    <tr>
-      <td>{{ a.platform }}</td>
-      <td>{{ a.display_name or "-" }}</td>
-      <td><code>{{ a.external_id }}</code></td>
-      <td><small>{{ a.created_at[:19] }}</small></td>
-    </tr>
-    {% else %}
-    <tr><td colspan="4"><em>No accounts connected.</em></td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-plug-connected" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Connect a Buffer profile</span>
+  </div>
+  <div class="nc-panel__body">
+    <form action="/dashboard/connected-accounts" method="post">
+      <input type="hidden" name="platform" value="buffer">
+      <div class="nc-grid-2">
+        <label class="nc-label">External id
+          <input class="nc-input nc-input--mono" name="external_id" required placeholder="profile_123abc">
+        </label>
+        <label class="nc-label">Display name
+          <input class="nc-input" name="display_name" placeholder="Aldo - TikTok">
+        </label>
+      </div>
+      <label class="nc-label">Access token
+        <input class="nc-input nc-input--mono" type="password" name="access_token" required placeholder="••••••••">
+      </label>
+      <button type="submit" class="nc-btn nc-btn--primary">
+        <i class="ti ti-link" aria-hidden="true"></i>
+        <span>Connect</span>
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if accounts %}
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-list" aria-hidden="true"></i>
+    <span class="nc-panel__title">All accounts</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>Display name</th>
+          <th>External id</th>
+          <th>Connected</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in accounts %}
+        <tr>
+          <td><span class="nc-chip nc-chip--code">{{ a.platform }}</span></td>
+          <td>{{ a.display_name or "—" }}</td>
+          <td><span class="nc-mono">{{ a.external_id }}</span></td>
+          <td><span class="nc-mono nc-mono--muted">{{ a.created_at[:19] }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="nc-panel">
+  <div class="nc-empty">
+    <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
+    <div class="nc-empty__title">No accounts connected</div>
+    <p class="nc-empty__body">
+      Connect a Buffer profile above to enable publishing. Native TikTok /
+      YouTube / Instagram OAuth lands in Phase 3.
+    </p>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

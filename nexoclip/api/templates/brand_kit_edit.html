@@ -1,221 +1,260 @@
 {% extends "base.html" %}
-{% block title %}{% if kit %}{{ kit.name }} - Brand Kit{% else %}New Brand Kit{% endif %} - NexoClip{% endblock %}
+{% block title %}{% if kit %}{{ kit.name }} - Brand kit{% else %}New brand kit{% endif %} - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>{% if kit %}Edit brand kit: {{ kit.name }}{% else %}New brand kit{% endif %}</h2>
-  <p>
-    <a href="/dashboard/brand-kits">← Back to all kits</a>
-    {% if kit %}&middot; <code>{{ kit.id }}</code>{% endif %}
-  </p>
-</hgroup>
+
+<div class="nc-page-header">
+  <div>
+    <h2>{% if kit %}Edit brand kit{% else %}New brand kit{% endif %}</h2>
+    <small>
+      {% if kit %}<span class="nc-mono">{{ kit.id }}</span>{% else %}Define colors, fonts, handles, and trigger overrides for one streamer.{% endif %}
+    </small>
+  </div>
+  <div class="nc-page-summary">
+    <a href="/dashboard/brand-kits" class="nc-btn nc-btn--sm">
+      <i class="ti ti-arrow-left" aria-hidden="true"></i>
+      <span>All kits</span>
+    </a>
+  </div>
+</div>
 
 <form action="{% if kit %}/dashboard/brand-kits/{{ kit.id }}{% else %}/dashboard/brand-kits{% endif %}" method="post">
-  <div class="grid">
 
-    <article>
-      <header><strong>Identity</strong></header>
+  <div class="nc-grid-2">
 
-      <label>Name
-        <input type="text" name="name" required
-               value="{{ kit.name if kit else '' }}"
-               placeholder="e.g. AARA, Aldo Villanueva, Nexo Academy">
-      </label>
-
-      <label>Primary color
-        <input type="color" name="primary_color"
-               value="{{ kit.primary_color if kit else '#FF3366' }}">
-      </label>
-
-      <label>Accent color
-        <input type="color" name="accent_color"
-               value="{{ kit.accent_color if kit else '#FFD700' }}">
-      </label>
-
-      <label>Text color
-        <input type="color" name="text_color"
-               value="{{ kit.text_color if kit else '#FFFFFF' }}">
-      </label>
-
-      <label>Font family
-        <input type="text" name="font_family"
-               value="{{ kit.font_family if kit else 'Inter' }}"
-               placeholder="Inter / Roboto / Montserrat / ...">
-      </label>
-
-      <label>Font weight
-        <select name="font_weight">
-          {% for w in [400, 500, 600, 700, 800, 900] %}
-          <option value="{{ w }}" {% if kit and kit.font_weight == w %}selected{% elif not kit and w == 800 %}selected{% endif %}>
-            {{ w }}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-
-      <label>Default layout
-        <select name="default_layout">
-          {% for layout in ['pip', 'split_stack', 'blurred_bg'] %}
-          <option value="{{ layout }}" {% if kit and kit.default_layout == layout %}selected{% elif not kit and layout == 'pip' %}selected{% endif %}>
-            {{ layout }}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-
-      {% if not kit %}
-      <label>
-        <input type="checkbox" name="is_default" value="1">
-        Make this the tenant default
-      </label>
-      {% endif %}
-    </article>
-
-    <article>
-      <header><strong>Live preview</strong></header>
-      <div id="preview" style="background: {{ kit.primary_color if kit else '#FF3366' }}; color: {{ kit.text_color if kit else '#FFFFFF' }}; font-family: {{ kit.font_family if kit else 'Inter' }}; font-weight: {{ kit.font_weight if kit else 800 }}; padding: 1.5rem; border-radius: 0.5rem; min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
-        <div style="font-size: 0.8rem; opacity: 0.85;">@yourhandle</div>
-        <div style="font-size: 1.6rem; text-align: center;">EPIC PLAY</div>
-        <div style="font-size: 0.7rem; text-align: right; color: {{ kit.accent_color if kit else '#FFD700' }};">▲ NexoClip</div>
+    <div class="nc-panel">
+      <div class="nc-panel__header">
+        <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+        <span class="nc-panel__title">Identity</span>
       </div>
-      <small style="display: block; margin-top: 0.5rem; color: var(--pico-muted-color);">Preview updates on save. Live preview without reload is a slice D upgrade.</small>
-    </article>
+      <div class="nc-panel__body">
+        <label class="nc-label">Name
+          <input class="nc-input" type="text" name="name" required
+                 value="{{ kit.name if kit else '' }}"
+                 placeholder="e.g. AARA, Aldo Villanueva">
+        </label>
+        <div class="nc-grid-3">
+          <label class="nc-label">Primary
+            <input class="nc-input" type="color" name="primary_color"
+                   value="{{ kit.primary_color if kit else '#FF3366' }}">
+          </label>
+          <label class="nc-label">Accent
+            <input class="nc-input" type="color" name="accent_color"
+                   value="{{ kit.accent_color if kit else '#FFD700' }}">
+          </label>
+          <label class="nc-label">Text
+            <input class="nc-input" type="color" name="text_color"
+                   value="{{ kit.text_color if kit else '#FFFFFF' }}">
+          </label>
+        </div>
+        <div class="nc-grid-2">
+          <label class="nc-label">Font family
+            <input class="nc-input" type="text" name="font_family"
+                   value="{{ kit.font_family if kit else 'Inter' }}"
+                   placeholder="Inter / Roboto / Montserrat">
+          </label>
+          <label class="nc-label">Font weight
+            <select class="nc-select" name="font_weight">
+              {% for w in [400, 500, 600, 700, 800, 900] %}
+              <option value="{{ w }}" {% if kit and kit.font_weight == w %}selected{% elif not kit and w == 800 %}selected{% endif %}>{{ w }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <label class="nc-label">Default layout
+          <select class="nc-select" name="default_layout">
+            {% for layout in ['pip', 'split_stack', 'blurred_bg'] %}
+            <option value="{{ layout }}" {% if kit and kit.default_layout == layout %}selected{% elif not kit and layout == 'pip' %}selected{% endif %}>{{ layout }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% if not kit %}
+        <label class="nc-checkbox">
+          <input type="checkbox" name="is_default" value="1">
+          <span>Make this the tenant default</span>
+        </label>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="nc-panel">
+      <div class="nc-panel__header">
+        <i class="ti ti-eye" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+        <span class="nc-panel__title">Live preview</span>
+        <small>— updates on save</small>
+      </div>
+      <div class="nc-panel__body">
+        <div style="background: {{ kit.primary_color if kit else '#FF3366' }}; color: {{ kit.text_color if kit else '#FFFFFF' }}; font-family: {{ kit.font_family if kit else 'Inter' }}, sans-serif; font-weight: {{ kit.font_weight if kit else 800 }}; padding: 1.5rem; border-radius: var(--nc-radius); min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
+          <div style="font-size: 0.8rem; opacity: 0.85;">@yourhandle</div>
+          <div style="font-size: 1.6rem; text-align: center;">EPIC PLAY</div>
+          <div style="font-size: 0.7rem; text-align: right; color: {{ kit.accent_color if kit else '#FFD700' }};">▲ NexoClip</div>
+        </div>
+      </div>
+    </div>
 
   </div>
 
-  <article>
-    <header><strong>Social handles</strong></header>
-    <div class="grid">
-      <label>TikTok
-        <input type="text" name="handle_tiktok"
-               value="{{ kit.handle_tiktok if kit else '' }}" placeholder="@yourhandle">
-      </label>
-      <label>YouTube
-        <input type="text" name="handle_youtube"
-               value="{{ kit.handle_youtube if kit else '' }}" placeholder="@yourhandle">
-      </label>
-      <label>Instagram
-        <input type="text" name="handle_instagram"
-               value="{{ kit.handle_instagram if kit else '' }}" placeholder="@yourhandle">
-      </label>
-      <label>Kick
-        <input type="text" name="handle_kick"
-               value="{{ kit.handle_kick if kit else '' }}" placeholder="username">
-      </label>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-at" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Social handles</span>
     </div>
-  </article>
-
-  <article>
-    <header>
-      <strong>Captions</strong>
-      <small> — burned into every clip rendered with this kit. Pick a preset; full preset details are in the docs.</small>
-    </header>
-    <label>Caption preset
-      <select name="caption_preset">
-        {% for choice_id, choice_label in caption_preset_choices %}
-        <option value="{{ choice_id }}"
-                {% if caption_style.preset == choice_id %}selected{% endif %}>
-          {{ choice_label }}
-        </option>
-        {% endfor %}
-      </select>
-    </label>
-    <small>
-      <strong>Current preset summary:</strong>
-      {{ caption_style.font_family }} {{ caption_style.font_weight }},
-      {{ caption_style.font_size_px }}px,
-      {{ caption_style.position }}, animation: {{ caption_style.animation }}.
-      {% if caption_style.censor_swears %}Swear-words censored.{% endif %}
-    </small>
-  </article>
-
-  <article>
-    <header>
-      <strong>Custom trigger phrases</strong>
-      <small> — added on top of the tenant base list when this kit's speaker is detected. One phrase per line.</small>
-    </header>
-    <div class="grid">
-      <label>Forward phrases <small>(clip extends FORWARD from the timestamp)</small>
-        <textarea name="forward_phrases" rows="6" placeholder="córtalo&#10;saca eso&#10;clip this">{{ kit.custom_trigger_phrases.forward|join('\n') if kit else '' }}</textarea>
-      </label>
-      <label>Retroactive phrases <small>(clip extends BACKWARD from the timestamp)</small>
-        <textarea name="retroactive_phrases" rows="6" placeholder="lo clipeaste&#10;monchi eso&#10;you clipped that">{{ kit.custom_trigger_phrases.retroactive|join('\n') if kit else '' }}</textarea>
-      </label>
+    <div class="nc-panel__body">
+      <div class="nc-grid-2">
+        <label class="nc-label">TikTok
+          <input class="nc-input nc-input--mono" type="text" name="handle_tiktok"
+                 value="{{ kit.handle_tiktok if kit else '' }}" placeholder="@yourhandle">
+        </label>
+        <label class="nc-label">YouTube
+          <input class="nc-input nc-input--mono" type="text" name="handle_youtube"
+                 value="{{ kit.handle_youtube if kit else '' }}" placeholder="@yourhandle">
+        </label>
+        <label class="nc-label">Instagram
+          <input class="nc-input nc-input--mono" type="text" name="handle_instagram"
+                 value="{{ kit.handle_instagram if kit else '' }}" placeholder="@yourhandle">
+        </label>
+        <label class="nc-label">Kick
+          <input class="nc-input nc-input--mono" type="text" name="handle_kick"
+                 value="{{ kit.handle_kick if kit else '' }}" placeholder="username">
+        </label>
+      </div>
     </div>
-  </article>
+  </div>
 
-  <article>
-    <header>
-      <strong>Auto-publish</strong>
-      <small> — review-first stays the default. Flip per-kit when you trust this brand's pipeline.</small>
-    </header>
-    <label>
-      <input type="checkbox" name="auto_publish_enabled" value="1"
-             {% if kit and kit.auto_publish_enabled %}checked{% endif %}>
-      Enable auto-publish for this kit
-    </label>
-    <label>Platforms <small>(comma-separated: tiktok, shorts, reels)</small>
-      <input type="text" name="auto_publish_platforms"
-             value="{{ kit.auto_publish_platforms|join(', ') if kit else '' }}"
-             placeholder="tiktok, shorts">
-    </label>
-    <label>Undo window (minutes)
-      <input type="number" name="auto_publish_delay_min" min="0" max="1440"
-             value="{{ kit.auto_publish_delay_min if kit else 60 }}">
-    </label>
-  </article>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-typography" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Captions</span>
+      <small>— burned into every clip rendered with this kit</small>
+    </div>
+    <div class="nc-panel__body">
+      <label class="nc-label">Caption preset
+        <select class="nc-select" name="caption_preset">
+          {% for choice_id, choice_label in caption_preset_choices %}
+          <option value="{{ choice_id }}" {% if caption_style.preset == choice_id %}selected{% endif %}>{{ choice_label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <small>
+        <strong>Current preset:</strong>
+        {{ caption_style.font_family }} {{ caption_style.font_weight }},
+        {{ caption_style.font_size_px }}px,
+        {{ caption_style.position }}, animation: {{ caption_style.animation }}.
+        {% if caption_style.censor_swears %}Swear-words censored.{% endif %}
+      </small>
+    </div>
+  </div>
 
-  <div style="display: flex; gap: 1rem; align-items: center;">
-    <button type="submit">{% if kit %}Save changes{% else %}Create brand kit{% endif %}</button>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-message-2-code" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Custom trigger phrases</span>
+      <small>— added on top of the tenant base list</small>
+    </div>
+    <div class="nc-panel__body">
+      <div class="nc-grid-2">
+        <label class="nc-label">Forward phrases <small>(clip extends FORWARD from the timestamp)</small>
+          <textarea class="nc-textarea" name="forward_phrases" rows="6"
+                    placeholder="córtalo&#10;saca eso&#10;clip this">{{ kit.custom_trigger_phrases.forward|join('\n') if kit else '' }}</textarea>
+        </label>
+        <label class="nc-label">Retroactive phrases <small>(clip extends BACKWARD from the timestamp)</small>
+          <textarea class="nc-textarea" name="retroactive_phrases" rows="6"
+                    placeholder="lo clipeaste&#10;monchi eso&#10;you clipped that">{{ kit.custom_trigger_phrases.retroactive|join('\n') if kit else '' }}</textarea>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-rocket" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Auto-publish</span>
+      <small>— review-first stays the default</small>
+    </div>
+    <div class="nc-panel__body">
+      <label class="nc-checkbox">
+        <input type="checkbox" name="auto_publish_enabled" value="1"
+               {% if kit and kit.auto_publish_enabled %}checked{% endif %}>
+        <span>Enable auto-publish for this kit</span>
+      </label>
+      <div class="nc-grid-2">
+        <label class="nc-label">Platforms <small>(comma-separated: tiktok, shorts, reels)</small>
+          <input class="nc-input nc-input--mono" type="text" name="auto_publish_platforms"
+                 value="{{ kit.auto_publish_platforms|join(', ') if kit else '' }}"
+                 placeholder="tiktok, shorts">
+        </label>
+        <label class="nc-label">Undo window (minutes)
+          <input class="nc-input" type="number" name="auto_publish_delay_min" min="0" max="1440"
+                 value="{{ kit.auto_publish_delay_min if kit else 60 }}">
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="nc-row" style="margin-top: 12px;">
+    <button type="submit" class="nc-btn nc-btn--primary">
+      <i class="ti ti-device-floppy" aria-hidden="true"></i>
+      <span>{% if kit %}Save changes{% else %}Create brand kit{% endif %}</span>
+    </button>
     {% if kit and not kit.is_default %}
-    <form action="/dashboard/brand-kits/{{ kit.id }}/default" method="post" style="display:inline;">
-      <button type="submit" class="secondary">Make tenant default</button>
-    </form>
+    <button type="submit"
+            formaction="/dashboard/brand-kits/{{ kit.id }}/default"
+            class="nc-btn">
+      <i class="ti ti-star" aria-hidden="true"></i>
+      <span>Make tenant default</span>
+    </button>
     {% endif %}
+    <div class="nc-spacer"></div>
     {% if kit %}
-    <form action="/dashboard/brand-kits/{{ kit.id }}/delete" method="post" style="display:inline; margin-left: auto;"
-          onsubmit="return confirm('Delete this brand kit? Speakers using it will fall back to tenant default.');">
-      <button type="submit" class="contrast outline">Delete</button>
-    </form>
+    <button type="submit"
+            formaction="/dashboard/brand-kits/{{ kit.id }}/delete"
+            class="nc-btn nc-btn--danger"
+            onclick="return confirm('Delete this brand kit? Speakers using it will fall back to tenant default.');">
+      <i class="ti ti-trash" aria-hidden="true"></i>
+      <span>Delete</span>
+    </button>
     {% endif %}
   </div>
 </form>
 
 {% if kit %}
-<article>
-  <header>
-    <strong>Logo</strong>
-    <small> — AI-generated SVG (Anthropic). Re-run regenerates a fresh variant; the existing logo stays in place if the call fails.</small>
-  </header>
-  <div class="grid">
-    <div>
-      {% if kit.logo_url %}
-      <img src="{{ kit.logo_url }}" alt="{{ kit.name }} logo"
-           style="width: 200px; height: 200px; background: var(--pico-card-background-color); padding: 0.5rem; border-radius: 0.5rem;">
-      <small style="display: block; margin-top: 0.25rem; color: var(--pico-muted-color);">
-        {% if kit.ai_generated %}
-        AI-generated{% if kit.ai_provider %} via {{ kit.ai_provider }}{% endif %}.
-        {% else %}
-        Manually uploaded.
-        {% endif %}
-      </small>
-      {% else %}
-      <div style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--pico-muted-border-color); border-radius: 0.5rem;">
-        <small style="color: var(--pico-muted-color);">No logo yet</small>
-      </div>
-      {% endif %}
-    </div>
-    <form action="/dashboard/brand-kits/{{ kit.id }}/generate-logo" method="post">
-      <label>Style hint
-        <input type="text" name="style_hint"
-               value="{{ kit.ai_prompt if kit.ai_prompt else 'Minimal mark / monogram' }}"
-               placeholder="Minimal mark / monogram">
-      </label>
-      <small style="display: block; margin-bottom: 0.5rem; color: var(--pico-muted-color);">
-        Uses your brand's primary + accent colors. Cost: one Anthropic call. Re-run for a different variant.
-      </small>
-      <button type="submit" class="secondary">{% if kit.logo_url %}Regenerate logo{% else %}Generate logo{% endif %}</button>
-    </form>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-sparkles" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Logo</span>
+    <small>— AI-generated SVG. Re-run for a different variant.</small>
   </div>
-</article>
+  <div class="nc-panel__body">
+    <div class="nc-grid-2">
+      <div>
+        {% if kit.logo_url %}
+        <img src="{{ kit.logo_url }}" alt="{{ kit.name }} logo"
+             style="width: 200px; height: 200px; background: var(--nc-bg-raised); padding: 0.5rem; border: var(--nc-hairline); border-radius: var(--nc-radius);">
+        <small style="display: block; margin-top: 6px;">
+          {% if kit.ai_generated %}AI-generated{% if kit.ai_provider %} via {{ kit.ai_provider }}{% endif %}.{% else %}Manually uploaded.{% endif %}
+        </small>
+        {% else %}
+        <div style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--nc-blue-dim); border-radius: var(--nc-radius); color: var(--nc-blue-dim); font-size: 32px;">
+          <i class="ti ti-photo-off" aria-hidden="true"></i>
+        </div>
+        <small style="display: block; margin-top: 6px;">No logo yet.</small>
+        {% endif %}
+      </div>
+      <form action="/dashboard/brand-kits/{{ kit.id }}/generate-logo" method="post">
+        <label class="nc-label">Style hint
+          <input class="nc-input" type="text" name="style_hint"
+                 value="{{ kit.ai_prompt if kit.ai_prompt else 'Minimal mark / monogram' }}"
+                 placeholder="Minimal mark / monogram">
+        </label>
+        <small style="display: block; margin-bottom: 12px;">
+          Uses the brand's primary + accent colors. Cost: one Anthropic call.
+        </small>
+        <button type="submit" class="nc-btn">
+          <i class="ti ti-wand" aria-hidden="true"></i>
+          <span>{% if kit.logo_url %}Regenerate logo{% else %}Generate logo{% endif %}</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
 {% endif %}
 {% endblock %}

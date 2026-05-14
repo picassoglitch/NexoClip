@@ -1,80 +1,110 @@
 {% extends "base.html" %}
-{% block title %}Brand Kits - NexoClip{% endblock %}
+{% block title %}Brand kits - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>Brand kits</h2>
-  <p>One visual identity per kit — colors, fonts, custom trigger phrases, auto-publish defaults. Assign kits to speakers on the <a href="/dashboard/streams">streams</a> page once they've been resolved by diarization.</p>
-</hgroup>
 
-<article>
-  <header>
-    <strong>{{ kits|length }} kit{% if kits|length != 1 %}s{% endif %}</strong>
-    <a href="/dashboard/brand-kits/new" role="button" style="float: right;">New brand kit</a>
-  </header>
+<div class="nc-page-header">
+  <div>
+    <h2>Brand kits</h2>
+    <small>One visual identity per kit — colors, fonts, custom trigger phrases, auto-publish defaults.</small>
+  </div>
+  <div class="nc-page-summary">
+    <a href="/dashboard/brand-kits/new" class="nc-btn nc-btn--primary nc-btn--sm">
+      <i class="ti ti-plus" aria-hidden="true"></i>
+      <span>New brand kit</span>
+    </a>
+  </div>
+</div>
 
-  {% if kits %}
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Colors</th>
-        <th>Layout</th>
-        <th>Trigger phrases</th>
-        <th>Auto-publish</th>
-        <th>Default?</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for kit in kits %}
-      <tr>
-        <td>
-          <a href="/dashboard/brand-kits/{{ kit.id }}">
-            <strong>{{ kit.name }}</strong>
-          </a>
-          <br>
-          <small><code>{{ kit.id }}</code></small>
-        </td>
-        <td>
-          <span style="display: inline-block; width: 16px; height: 16px; background: {{ kit.primary_color }}; border: 1px solid var(--pico-muted-border-color); vertical-align: middle;"></span>
-          <code>{{ kit.primary_color }}</code>
-          /
-          <span style="display: inline-block; width: 16px; height: 16px; background: {{ kit.accent_color }}; border: 1px solid var(--pico-muted-border-color); vertical-align: middle;"></span>
-          <code>{{ kit.accent_color }}</code>
-        </td>
-        <td><code>{{ kit.default_layout }}</code></td>
-        <td>
-          <small>
-            +{{ kit.custom_trigger_phrases.forward|length }} fwd ·
-            +{{ kit.custom_trigger_phrases.retroactive|length }} retro
-          </small>
-        </td>
-        <td>
-          {% if kit.auto_publish_enabled %}
-          <span class="status-badge status-approved">ON</span>
-          <small>{{ kit.auto_publish_platforms|join(', ') or '(no platforms set)' }}</small>
-          {% else %}
-          <small><em>off (review-first)</em></small>
-          {% endif %}
-        </td>
-        <td>
-          {% if kit.is_default %}
-          <span class="status-badge status-cut">default</span>
-          {% else %}
-          <form action="/dashboard/brand-kits/{{ kit.id }}/default" method="post" style="display:inline;">
-            <button type="submit" class="secondary outline" style="padding: 0.1rem 0.5rem;">Make default</button>
-          </form>
-          {% endif %}
-        </td>
-        <td>
-          <a href="/dashboard/brand-kits/{{ kit.id }}" role="button" class="secondary outline">Edit</a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p><em>No brand kits yet. <a href="/dashboard/brand-kits/new">Create your first kit</a> — colors, fonts, social handles, and any custom trigger phrases that should fire on top of the tenant base list.</em></p>
-  {% endif %}
-</article>
+{% if kits %}
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-palette" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">{{ kits|length }} kit{{ "s" if kits|length != 1 else "" }}</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Colors</th>
+          <th>Layout</th>
+          <th>Trigger phrases</th>
+          <th>Auto-publish</th>
+          <th>Default?</th>
+          <th class="nc-cell-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for kit in kits %}
+        <tr>
+          <td>
+            <a href="/dashboard/brand-kits/{{ kit.id }}">
+              <strong style="color: var(--nc-text);">{{ kit.name }}</strong>
+            </a>
+            <div><span class="nc-mono nc-mono--muted" style="font-size: 11px;">{{ kit.id }}</span></div>
+          </td>
+          <td>
+            <span style="display: inline-block; width: 14px; height: 14px; background: {{ kit.primary_color }}; border: var(--nc-hairline); border-radius: 3px; vertical-align: middle;"></span>
+            <span class="nc-mono">{{ kit.primary_color }}</span>
+            <span style="color: var(--nc-text-muted);">/</span>
+            <span style="display: inline-block; width: 14px; height: 14px; background: {{ kit.accent_color }}; border: var(--nc-hairline); border-radius: 3px; vertical-align: middle;"></span>
+            <span class="nc-mono">{{ kit.accent_color }}</span>
+          </td>
+          <td><span class="nc-chip nc-chip--code">{{ kit.default_layout }}</span></td>
+          <td>
+            <span class="nc-mono" style="font-size: 11px;">
+              +{{ kit.custom_trigger_phrases.forward|length }} fwd
+              · +{{ kit.custom_trigger_phrases.retroactive|length }} retro
+            </span>
+          </td>
+          <td>
+            {% if kit.auto_publish_enabled %}
+            <span class="nc-chip nc-chip--success">
+              <span class="nc-status-dot nc-status-dot--success"></span>
+              <span>ON</span>
+            </span>
+            <small style="display: block; margin-top: 2px;">{{ kit.auto_publish_platforms|join(', ') or '(no platforms set)' }}</small>
+            {% else %}
+            <span class="nc-chip nc-chip--muted">off</span>
+            <small style="display: block; margin-top: 2px;">review-first</small>
+            {% endif %}
+          </td>
+          <td>
+            {% if kit.is_default %}
+            <span class="nc-chip">default</span>
+            {% else %}
+            <form action="/dashboard/brand-kits/{{ kit.id }}/default" method="post" style="margin: 0;">
+              <button type="submit" class="nc-btn nc-btn--sm">Make default</button>
+            </form>
+            {% endif %}
+          </td>
+          <td class="nc-cell-actions">
+            <a href="/dashboard/brand-kits/{{ kit.id }}" class="nc-btn nc-btn--sm">
+              <i class="ti ti-edit" aria-hidden="true"></i>
+              <span>Edit</span>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="nc-panel">
+  <div class="nc-empty">
+    <div class="nc-empty__icon"><i class="ti ti-palette" aria-hidden="true"></i></div>
+    <div class="nc-empty__title">No brand kits yet</div>
+    <p class="nc-empty__body">
+      A brand kit ties colors, fonts, social handles, and custom trigger
+      phrases to a streamer. Create one and assign it to a speaker so the
+      renderer picks it up automatically.
+    </p>
+    <a href="/dashboard/brand-kits/new" class="nc-btn nc-btn--primary">
+      <i class="ti ti-plus" aria-hidden="true"></i>
+      <span>New brand kit</span>
+    </a>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

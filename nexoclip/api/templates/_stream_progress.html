@@ -1,109 +1,104 @@
-{# Live pipeline-progress card. Loaded via HTMX from
-   GET /dashboard/streams/{id}/progress and polled every 3s while the
-   pipeline is running. The outer #stream-progress div on the parent page
-   gets swapped in place with this fragment. #}
+{# Live pipeline-progress partial. Loaded via HTMX from
+   GET /dashboard/streams/{id}/progress and re-fetched every 3s while
+   the pipeline is running. The outer #stream-progress div on the
+   parent page swaps in place. #}
 <div id="stream-progress"
      {% if is_running and not is_done and not has_failed and not is_abandoned %}
      hx-get="/dashboard/streams/{{ stream.id }}/progress"
      hx-trigger="every 3s"
      hx-swap="outerHTML"
      {% endif %}>
-  <article{% if has_failed %} style="border-left: 4px solid #b00;"{% elif is_abandoned %} style="border-left: 4px solid #d97706;"{% endif %}>
-    <header>
-      <strong>
-        {% if is_done %}
-          Pipeline complete
-        {% elif has_failed %}
-          Pipeline failed
-        {% elif is_abandoned %}
-          Pipeline abandoned
-        {% else %}
-          Pipeline running
-          <span class="pulse-dot" aria-hidden="true">●</span>
-        {% endif %}
-      </strong>
-      <small style="float: right;">
-        {{ candidate_count }} candidate{{ "s" if candidate_count != 1 else "" }} &middot;
-        {{ clip_count }} clip{{ "s" if clip_count != 1 else "" }}
+
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      {% if is_done %}
+        <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-success);"></i>
+        <span class="nc-panel__title">Pipeline complete</span>
+      {% elif has_failed %}
+        <i class="ti ti-alert-octagon" aria-hidden="true" style="color: var(--nc-danger);"></i>
+        <span class="nc-panel__title">Pipeline failed</span>
+      {% elif is_abandoned %}
+        <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-warn);"></i>
+        <span class="nc-panel__title">Pipeline abandoned</span>
+      {% else %}
+        <span class="nc-status-dot nc-status-dot--warn nc-status-dot--pulse"></span>
+        <span class="nc-panel__title">Pipeline running</span>
+      {% endif %}
+      <div class="nc-spacer"></div>
+      <small>
+        <span class="nc-mono">{{ candidate_count }}</span> candidate{{ "s" if candidate_count != 1 else "" }} ·
+        <span class="nc-mono">{{ clip_count }}</span> clip{{ "s" if clip_count != 1 else "" }}
       </small>
-    </header>
-
-    <ol style="list-style: none; padding-left: 0; margin: 0;">
-      {% for s in steps %}
-      <li style="padding: 0.35rem 0; border-bottom: 1px solid var(--pico-muted-border-color); display: flex; align-items: center; gap: 0.6rem;">
-        {% if s.status == "done" %}
-          <span style="color: #0a8043; font-weight: bold; min-width: 1.2rem;">&check;</span>
-          <span>{{ s.name }}</span>
-          {% if s.duration_s %}
-          <small style="color: var(--pico-muted-color); margin-left: auto;">
-            {% if s.duration_s < 60 %}{{ "%.1f"|format(s.duration_s) }}s
-            {% else %}{{ "%.1f"|format(s.duration_s / 60.0) }}m{% endif %}
-          </small>
+    </div>
+    <div class="nc-panel__body">
+      <ol class="nc-steps">
+        {% for s in steps %}
+        <li>
+          {% if s.status == "done" %}
+            <span class="nc-steps__icon nc-steps__icon--done"><i class="ti ti-check" aria-hidden="true"></i></span>
+            <span>{{ s.name }}</span>
+            {% if s.duration_s %}
+            <span class="nc-steps__time">
+              {% if s.duration_s < 60 %}{{ "%.1f"|format(s.duration_s) }}s
+              {% else %}{{ "%.1f"|format(s.duration_s / 60.0) }}m{% endif %}
+            </span>
+            {% endif %}
+          {% elif s.status == "running" %}
+            <span class="nc-steps__icon nc-steps__icon--running">
+              <span class="nc-status-dot nc-status-dot--warn nc-status-dot--pulse"></span>
+            </span>
+            <span><strong>{{ s.name }}</strong> <em style="color: var(--nc-text-muted);">(running…)</em></span>
+            {% if s.elapsed_s is not none %}
+            <span class="nc-steps__time">
+              {% if s.elapsed_s < 60 %}{{ "%.0f"|format(s.elapsed_s) }}s elapsed
+              {% else %}{{ "%.1f"|format(s.elapsed_s / 60.0) }}m elapsed{% endif %}
+            </span>
+            {% endif %}
+          {% elif s.status == "abandoned" %}
+            <span class="nc-steps__icon nc-steps__icon--warn"><i class="ti ti-alert-triangle" aria-hidden="true"></i></span>
+            <span style="flex: 1;">
+              <strong>{{ s.name }}</strong>
+              <em style="color: var(--nc-text-muted);">— abandoned after {{ "%.0f"|format(s.elapsed_s / 60.0) }}m</em>
+              <small style="display: block; margin-top: 4px;">
+                The dashboard was probably restarted while this step was running.
+                Click <strong>Run pipeline</strong> below to start fresh — finished
+                steps stay finished.
+              </small>
+            </span>
+          {% elif s.status == "failed" %}
+            <span class="nc-steps__icon nc-steps__icon--failed"><i class="ti ti-x" aria-hidden="true"></i></span>
+            <span style="flex: 1;">
+              <strong>{{ s.name }}</strong> — <span style="color: var(--nc-danger);">{{ s.error or "failed" }}</span>
+              {% if s.error and ("cublas" in s.error|lower or "cudnn" in s.error|lower or "cudart" in s.error|lower) %}
+              <small style="display: block; margin-top: 6px;">
+                <strong>Fix (recommended):</strong> switch Whisper to CPU. Edit <code>.env</code> and set:<br>
+                <code>NEXOCLIP_WHISPER_DEVICE=cpu</code>,
+                <code>NEXOCLIP_WHISPER_COMPUTE_TYPE=int8</code>,
+                <code>NEXOCLIP_WHISPER_MODEL=base</code> — then restart and re-run.
+              </small>
+              {% endif %}
+            </span>
+          {% else %}
+            <span class="nc-steps__icon"><i class="ti ti-circle" aria-hidden="true"></i></span>
+            <span style="color: var(--nc-text-muted);">{{ s.name }}</span>
           {% endif %}
-        {% elif s.status == "running" %}
-          <span class="pulse-dot" aria-hidden="true" style="color: #1e6fd9; min-width: 1.2rem;">●</span>
-          <span><strong>{{ s.name }}</strong> <em>(running…)</em></span>
-          {% if s.elapsed_s is not none %}
-          <small style="color: var(--pico-muted-color); margin-left: auto;">
-            {% if s.elapsed_s < 60 %}{{ "%.0f"|format(s.elapsed_s) }}s elapsed
-            {% else %}{{ "%.1f"|format(s.elapsed_s / 60.0) }}m elapsed{% endif %}
-          </small>
-          {% endif %}
-        {% elif s.status == "abandoned" %}
-          <span style="color: #d97706; font-weight: bold; min-width: 1.2rem;" aria-label="abandoned">!</span>
-          <span>
-            <strong>{{ s.name }}</strong> &mdash;
-            <em>abandoned after {{ "%.0f"|format(s.elapsed_s / 60.0) }}m</em>
-            <small style="display: block; color: var(--pico-muted-color); margin-top: 0.2rem;">
-              The dashboard was probably restarted while this step was running. The original pipeline thread is gone. Click <strong>Run pipeline</strong> below to start fresh &mdash; ingest / analyze_video / transcribe are all idempotent, so finished steps stay finished.
-            </small>
-          </span>
-        {% elif s.status == "failed" %}
-          <span style="color: #b00; font-weight: bold; min-width: 1.2rem;">&times;</span>
-          <span><strong>{{ s.name }}</strong> &mdash; {{ s.error or "failed" }}</span>
-          {% if s.error and ("cublas" in s.error|lower or "cudnn" in s.error|lower or "cudart" in s.error|lower) %}
-          <small style="display: block; margin-top: 0.4rem; color: var(--pico-muted-color); flex-basis: 100%;">
-            <strong>Fix (recommended):</strong> switch Whisper to CPU. Edit <code>.env</code> in the project root, set:<br>
-            <code>NEXOCLIP_WHISPER_DEVICE=cpu</code><br>
-            <code>NEXOCLIP_WHISPER_COMPUTE_TYPE=int8</code><br>
-            <code>NEXOCLIP_WHISPER_MODEL=base</code><br>
-            Restart the dashboard, then click <em>Run pipeline</em>. CPU + base + int8 transcribes a few-minute clip in about a minute &mdash; plenty fast for iteration.<br>
-            <br>
-            <strong>Or fix CUDA</strong> (Windows is fussy): full <a href="https://developer.nvidia.com/cuda-downloads" target="_blank">CUDA Toolkit 12.x</a> install from NVIDIA. The pure-pip path (<code>pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-runtime-cu12</code>) sometimes works but DLL load order on Windows often defeats it.
-          </small>
-          {% endif %}
-        {% else %}
-          <span style="color: var(--pico-muted-color); min-width: 1.2rem;">○</span>
-          <span style="color: var(--pico-muted-color);">{{ s.name }}</span>
-        {% endif %}
-      </li>
-      {% endfor %}
-    </ol>
+        </li>
+        {% endfor %}
+      </ol>
 
-    {% if is_running and not is_done %}
-    <small style="display: block; margin-top: 0.5rem; color: var(--pico-muted-color);">
-      Auto-refreshes every 3 seconds. Whisper transcription is the slow step on a long VOD &mdash; expect minutes for hour-long videos.
-    </small>
-    {% endif %}
-  </article>
-
-  <style>
-    .pulse-dot {
-      animation: pulse 1.4s ease-in-out infinite;
-      display: inline-block;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
-  </style>
+      {% if is_running and not is_done %}
+      <small style="display: block; margin-top: 12px;">
+        Auto-refreshes every 3 seconds. Whisper transcription is the slow step
+        on a long VOD — expect minutes for hour-long videos.
+      </small>
+      {% endif %}
+    </div>
+  </div>
 
   {% if is_done or has_failed %}
-  {# When the poll first returns 'done' (or 'failed'), the rest of the page —
-     Run summary, Clips grid, Candidates table — is still rendered from
-     stale template vars set at page-load time. Trigger exactly one full
-     reload so those sections pick up the fresh DB state. sessionStorage
-     guards against the obvious infinite-refresh loop. #}
+  {# When the poll first returns 'done' (or 'failed'), the rest of the page
+     is still rendered from stale template vars set at page-load. Trigger one
+     full reload so those sections pick up the fresh DB state. #}
   <script>
     (function () {
       const key = "nexoclip-refresh-{{ stream.id }}";

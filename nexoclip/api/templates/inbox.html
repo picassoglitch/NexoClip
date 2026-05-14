@@ -1,105 +1,218 @@
 {% extends "base.html" %}
 {% block title %}Inbox - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>Inbox</h2>
-  <p>
-    Fresh clips grouped by VOD &rarr; speaker. Auto-publish jobs in the
-    undo window are listed at the top — click <strong>Undo</strong> to
-    cancel before they fire.
-  </p>
-</hgroup>
 
+{# ---- Helpers --------------------------------------------------- #}
+{% macro mid_trunc(text, head=10, tail=10) -%}
+  {%- if text and text|length > head + tail + 1 -%}
+    {{ text[:head] }}…{{ text[-tail:] }}
+  {%- else -%}
+    {{ text }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% set total_clips = streams_payload | sum(attribute='n_clips', start=0) %}
+
+{# ---- Page header ----------------------------------------------- #}
+<div class="nc-page-header">
+  <div>
+    <h2>Inbox</h2>
+    <small>Fresh clips grouped by VOD and speaker. Review, cut, or let auto-publish fire.</small>
+  </div>
+  <div class="nc-page-summary">
+    <span class="nc-mono">{{ total_clips }}</span> clip{{ "s" if total_clips != 1 else "" }}
+    {% if streams_payload %}across <span class="nc-mono">{{ streams_payload|length }}</span> VOD{{ "s" if streams_payload|length != 1 else "" }}{% endif %}
+  </div>
+</div>
+
+{# ---- Undo strip ------------------------------------------------ #}
 {% if scheduled_jobs %}
-<article>
-  <header>
-    <strong>{{ scheduled_jobs|length }} job{% if scheduled_jobs|length != 1 %}s{% endif %} scheduled to publish</strong>
-    <small>&nbsp;— still inside the undo window, hasn't fired yet</small>
-  </header>
-  <table>
-    <thead>
-      <tr>
-        <th>Clip</th>
-        <th>Platform</th>
-        <th>Fires at (UTC)</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for job in scheduled_jobs %}
-      {% set clip = clips_by_id.get(job.clip_id) %}
-      <tr>
-        <td>
-          {% if clip %}
-          <a href="/dashboard/clips/{{ clip.id }}">
-            <strong>{{ clip.id }}</strong>
-          </a>
-          {% else %}
-          <code>{{ job.clip_id }}</code>
-          {% endif %}
-        </td>
-        <td><code>{{ job.platform }}</code></td>
-        <td><small>{{ job.scheduled_for or "—" }}</small></td>
-        <td>
-          <form action="/dashboard/publish-jobs/{{ job.id }}/cancel" method="post" style="display:inline;">
-            <input type="hidden" name="redirect_to" value="/dashboard/inbox">
-            <button type="submit" class="contrast outline" style="padding: 0.2rem 0.7rem;">Undo</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</article>
+<div class="nc-alert" id="undo-strip">
+  <div class="nc-alert__icon"><i class="ti ti-clock-hour-3" aria-hidden="true"></i></div>
+  <div class="nc-alert__body">
+    <div class="nc-alert__title">
+      {{ scheduled_jobs|length }} job{{ "s" if scheduled_jobs|length != 1 else "" }} scheduled to publish
+    </div>
+    <div class="nc-alert__detail">
+      Inside the undo window — click a row's Undo button before the countdown hits zero.
+    </div>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Clip</th>
+          <th>Platform</th>
+          <th>Fires in</th>
+          <th class="nc-cell-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in scheduled_jobs %}
+        {% set clip = clips_by_id.get(job.clip_id) %}
+        <tr>
+          <td>
+            {% if clip %}
+            <a href="/dashboard/clips/{{ clip.id }}" class="nc-mono"
+               title="{{ clip.id }}">{{ mid_trunc(clip.id, 10, 8) }}</a>
+            {% else %}
+            <span class="nc-mono nc-mono--muted" title="{{ job.clip_id }}">{{ mid_trunc(job.clip_id, 10, 8) }}</span>
+            {% endif %}
+          </td>
+          <td><span class="nc-chip nc-chip--code">{{ job.platform }}</span></td>
+          <td>
+            <span class="nc-mono nc-undo-countdown"
+                  data-fires-at="{{ job.scheduled_for or '' }}">
+              {{ job.scheduled_for or '—' }}
+            </span>
+          </td>
+          <td class="nc-cell-actions">
+            <form action="/dashboard/publish-jobs/{{ job.id }}/cancel" method="post" style="margin: 0;">
+              <input type="hidden" name="redirect_to" value="/dashboard/inbox">
+              <button type="submit" class="nc-btn nc-btn--sm nc-btn--danger">
+                <i class="ti ti-x" aria-hidden="true"></i>
+                <span>Undo</span>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endif %}
 
+{# ---- VOD-grouped review queue ----------------------------------- #}
 {% if streams_payload %}
 {% for entry in streams_payload %}
-<article>
-  <header>
-    <strong>
-      <a href="/dashboard/streams/{{ entry.stream.id }}">{{ entry.stream.title or entry.stream.id }}</a>
-    </strong>
-    <small>&nbsp;— {{ entry.n_clips }} clip{% if entry.n_clips != 1 %}s{% endif %} · {{ entry.stream.channel or entry.stream.platform }}</small>
-  </header>
+{% set s = entry.stream %}
+<details class="nc-panel" {% if loop.first %}open{% endif %} style="padding: 0;">
+  <summary class="nc-panel__header" style="cursor: pointer; list-style: none;">
+    <i class="ti ti-video" aria-hidden="true" style="color: var(--nc-blue-bright); flex-shrink: 0;"></i>
+    <span class="nc-panel__title nc-mono nc-trunc"
+          title="{{ s.title or s.id }}"
+          style="max-width: 360px;">
+      {{ mid_trunc(s.title or s.id, 14, 12) }}
+    </span>
+    <span class="nc-chip">
+      <i class="ti ti-scissors" aria-hidden="true"></i>
+      <span class="nc-mono">{{ entry.n_clips }}</span> clip{{ "s" if entry.n_clips != 1 else "" }}
+    </span>
+    <span class="nc-chip nc-chip--muted">
+      <i class="ti ti-broadcast" aria-hidden="true"></i>
+      <span>{{ s.channel or s.platform }}</span>
+    </span>
+    <div class="nc-spacer"></div>
+    <span class="nc-chip nc-chip--{{ {'ingested':'success','done':'success','running':'warn','failed':'danger'}.get(s.status, 'muted') }}">
+      <span class="nc-status-dot nc-status-dot--{{ {'ingested':'success','done':'success','running':'warn','failed':'danger'}.get(s.status, 'muted') }}"></span>
+      <span>{{ s.status }}</span>
+    </span>
+    <a href="/dashboard/streams/{{ s.id }}"
+       class="nc-btn nc-btn--sm"
+       onclick="event.stopPropagation();">
+      <i class="ti ti-external-link" aria-hidden="true"></i>
+      <span>Open VOD</span>
+    </a>
+  </summary>
 
-  {% for group in entry.groups %}
-  <details {% if loop.first %}open{% endif %}>
-    <summary>
-      <strong>{{ group.speaker_label }}</strong>
-      <small>&nbsp;— {{ group.clips|length }} clip{% if group.clips|length != 1 %}s{% endif %}</small>
+  <div class="nc-panel__body" style="padding: 0;">
+    {% for group in entry.groups %}
+    <div style="padding: 8px 16px; border-top: var(--nc-hairline); display: flex; align-items: center; gap: 8px;">
+      <i class="ti ti-microphone-2" aria-hidden="true" style="color: var(--nc-text-muted); font-size: 14px;"></i>
+      <span style="color: var(--nc-text-muted); font-size: 12px;">
+        Speaker
+      </span>
+      <span class="nc-chip nc-chip--code">{{ group.speaker_label }}</span>
+      <span style="color: var(--nc-text-muted); font-size: 11px;">
+        {{ group.clips|length }} clip{{ "s" if group.clips|length != 1 else "" }}
+      </span>
       {% if group.vod_speaker and group.vod_speaker.resolved_speaker_id %}
-      <small><code>{{ group.vod_speaker.resolved_speaker_id }}</code></small>
+      <span class="nc-chip nc-chip--muted nc-chip--code"
+            title="{{ group.vod_speaker.resolved_speaker_id }}">
+        {{ mid_trunc(group.vod_speaker.resolved_speaker_id, 8, 6) }}
+      </span>
       {% endif %}
-    </summary>
+    </div>
 
-    <div class="grid">
+    <div class="nc-inbox-grid">
       {% for clip in group.clips %}
-      <article style="margin-bottom: 0.5rem;">
-        <header>
-          <strong>
-            <a href="/dashboard/clips/{{ clip.id }}">
-              {{ '%.0f' % clip.start_s }}s &rarr; {{ '%.0f' % clip.end_s }}s
-            </a>
-          </strong>
-          <span class="status-badge status-{{ clip.status }}" style="float: right;">{{ clip.status }}</span>
-        </header>
-        <small style="display: block; color: var(--pico-muted-color);">
-          {{ '%.1f' % clip.duration_s }}s &middot; {{ clip.width }}x{{ clip.height }}
-        </small>
-        {% if clip.thumbnail_frame_path %}
-        <small><em>thumbnail ready</em></small>
-        {% endif %}
-      </article>
+      <div class="nc-clip-card">
+        <div class="nc-clip-card__thumb">
+          {% if clip.thumbnail_frame_path %}
+          <img src="/dashboard/clips/{{ clip.id }}/thumbnail" alt="thumb">
+          {% else %}
+          <i class="ti ti-photo-off" aria-hidden="true"></i>
+          {% endif %}
+        </div>
+        <div class="nc-clip-card__time">
+          {{ "%d"|format(clip.start_s|int) }}s <span style="color: var(--nc-text-muted);">→</span> {{ "%d"|format(clip.end_s|int) }}s
+        </div>
+        <div class="nc-clip-card__meta">
+          {{ "%.1f"|format(clip.duration_s) }}s · {{ clip.width }}×{{ clip.height }}
+          · <span style="color: var(--nc-text-muted);">{{ clip.status }}</span>
+        </div>
+        <div class="nc-clip-card__actions">
+          <a href="/dashboard/clips/{{ clip.id }}" class="nc-btn nc-btn--primary">
+            <i class="ti ti-cut" aria-hidden="true"></i>
+            <span>Cut</span>
+          </a>
+          <a href="/dashboard/clips/{{ clip.id }}" class="nc-btn">
+            <i class="ti ti-eye" aria-hidden="true"></i>
+            <span>Open</span>
+          </a>
+        </div>
+      </div>
       {% endfor %}
     </div>
-  </details>
-  {% endfor %}
-</article>
+    {% endfor %}
+  </div>
+</details>
 {% endfor %}
 {% else %}
-<article>
-  <p><em>No clips yet. <a href="/dashboard/streams">Drop a VOD on the streams page</a> to get started.</em></p>
-</article>
+<div class="nc-empty">
+  <div class="nc-empty__icon"><i class="ti ti-inbox" aria-hidden="true"></i></div>
+  <div class="nc-empty__title">No clips yet</div>
+  <p class="nc-empty__body">
+    Drop a VOD on the streams page to get started — once the pipeline finishes,
+    its clips show up here grouped by speaker.
+  </p>
+  <a href="/dashboard/streams" class="nc-btn nc-btn--primary">
+    <i class="ti ti-upload" aria-hidden="true"></i>
+    <span>Go to streams</span>
+  </a>
+</div>
 {% endif %}
+
+{# ---- Undo countdown timer ------------------------------------- #}
+<script>
+(function () {
+  function fmt(ms) {
+    if (ms <= 0) return "now";
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    if (m < 60) return m + "m " + (rem < 10 ? "0" : "") + rem + "s";
+    var h = Math.floor(m / 60);
+    var mm = m % 60;
+    return h + "h " + (mm < 10 ? "0" : "") + mm + "m";
+  }
+  function tick() {
+    var now = Date.now();
+    document.querySelectorAll(".nc-undo-countdown").forEach(function (el) {
+      var raw = el.getAttribute("data-fires-at");
+      if (!raw) { el.textContent = "—"; return; }
+      var ts = Date.parse(raw);
+      if (isNaN(ts)) { el.textContent = raw; return; }
+      el.textContent = fmt(ts - now);
+    });
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
 {% endblock %}

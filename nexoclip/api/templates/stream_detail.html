@@ -1,88 +1,211 @@
 {% extends "base.html" %}
 {% block title %}{{ stream.title or stream.id }} - NexoClip{% endblock %}
 {% block content %}
-<hgroup>
-  <h2>{{ stream.title or stream.vod_url }}</h2>
-  <p>
-    <span class="status-badge status-{{ stream.status }}">{{ stream.status }}</span>
-    {{ stream.platform }} - {{ stream.channel or "-" }} - {{ "%.0f"|format(stream.duration_s) }}s
-  </p>
-</hgroup>
 
-{# Live pipeline-progress card. The fragment replaces this div on first
-   load and again every 3s until the pipeline finishes. #}
+{% macro mid_trunc(text, head=10, tail=10) -%}
+  {%- if text and text|length > head + tail + 1 -%}
+    {{ text[:head] }}…{{ text[-tail:] }}
+  {%- else -%}
+    {{ text }}
+  {%- endif -%}
+{%- endmacro %}
+
+<div class="nc-page-header">
+  <div>
+    <h2 class="nc-trunc" style="max-width: 720px;" title="{{ stream.title or stream.vod_url }}">
+      {{ stream.title or stream.vod_url }}
+    </h2>
+    <div class="nc-row" style="margin-top: 4px;">
+      <span class="nc-chip nc-chip--{{ {'ingested':'success','done':'success','running':'warn','failed':'danger'}.get(stream.status, 'muted') }}">
+        <span class="nc-status-dot nc-status-dot--{{ {'ingested':'success','done':'success','running':'warn','failed':'danger'}.get(stream.status, 'muted') }}"></span>
+        <span>{{ stream.status }}</span>
+      </span>
+      <span class="nc-chip nc-chip--muted">
+        <i class="ti ti-broadcast" aria-hidden="true"></i>
+        <span>{{ stream.platform }}</span>
+      </span>
+      <span style="color: var(--nc-text-muted); font-size: 12px;">
+        {{ stream.channel or "—" }} · <span class="nc-mono">{{ "%d"|format(stream.duration_s|int) }}s</span>
+      </span>
+    </div>
+  </div>
+  <div class="nc-page-summary">
+    <a href="/dashboard/streams" class="nc-btn nc-btn--sm">
+      <i class="ti ti-arrow-left" aria-hidden="true"></i>
+      <span>All streams</span>
+    </a>
+  </div>
+</div>
+
+{# Live pipeline-progress card. Loaded via HTMX from
+   /dashboard/streams/{id}/progress on first paint, then polled every 3s. #}
 <div id="stream-progress"
      hx-get="/dashboard/streams/{{ stream.id }}/progress"
      hx-trigger="load"
      hx-swap="outerHTML">
-  <article>
-    <header><strong>Pipeline status</strong></header>
-    <p><em>Loading progress…</em></p>
-  </article>
-</div>
-
-<article>
-  <header><strong>Source video</strong> <small>— what was uploaded / downloaded</small></header>
-  <video controls preload="metadata" style="width: 100%; max-width: 640px; background: #000;">
-    <source src="/dashboard/streams/{{ stream.id }}/source">
-    Your browser doesn&rsquo;t support inline HTML5 video. Open the file at <code>{{ stream.source_video_path }}</code>.
-  </video>
-</article>
-
-<article>
-  <header><strong>Re-run pipeline</strong> <small>— resumes from the on-disk video; each step is idempotent</small></header>
-  <form action="/dashboard/streams/{{ stream.id }}/rerun" method="post" style="display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap;">
-    <label style="flex: 1; min-width: 200px; margin: 0;">
-      Persona
-      <select name="persona_id" required>
-        {% for p in personas %}<option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>{% endfor %}
-      </select>
-    </label>
-    <button type="submit" class="secondary" {% if not personas %}disabled{% endif %} style="margin: 0;">Run pipeline</button>
-  </form>
-  {% if not personas %}
-  <small><em>Create a persona first &mdash; head to the <a href="/dashboard/personas">Personas</a> tab.</em></small>
-  {% endif %}
-</article>
-
-<article>
-  <header><strong>Run summary</strong></header>
-  <ul>
-    <li><strong>Stream id:</strong> <code>{{ stream.id }}</code></li>
-    <li><strong>VOD URL:</strong> <a href="{{ stream.vod_url }}">{{ stream.vod_url }}</a></li>
-    <li><strong>Candidates:</strong> {{ candidates|length }}</li>
-    <li><strong>Clips:</strong> {{ clips|length }}</li>
-  </ul>
-</article>
-
-<h3>Clips</h3>
-<div class="clip-grid">
-  {% for c in clips %}
-  <div class="clip-card">
-    <div><strong>{{ "%.1fs"|format(c.duration_s) }}</strong> &middot;
-         <span class="status-badge status-{{ c.status }}">{{ c.status }}</span></div>
-    <div><small>{{ "%.1f"|format(c.start_s) }}-{{ "%.1f"|format(c.end_s) }}s</small></div>
-    <div><a href="/dashboard/clips/{{ c.id }}">Review</a></div>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-loader" aria-hidden="true"></i>
+      <span class="nc-panel__title">Pipeline status</span>
+    </div>
+    <div class="nc-panel__body">
+      <small>Loading progress…</small>
+    </div>
   </div>
-  {% else %}
-  <div><em>No clips yet - the pipeline may still be running.</em></div>
-  {% endfor %}
 </div>
 
-<h3>Candidates</h3>
-<table>
-  <thead><tr><th>ts</th><th>Reason</th><th>Score</th><th>Phrase / signal</th></tr></thead>
-  <tbody>
-    {% for c in candidates %}
-    <tr>
-      <td>{{ "%.1f"|format(c.ts) }}s</td>
-      <td>{{ c.reason }}</td>
-      <td>{{ "%.3f"|format(c.score) }}</td>
-      <td><small>{{ c.evidence.get("phrase") or c.evidence.get("transcript_snippet") or "-" }}</small></td>
-    </tr>
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-video" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Source video</span>
+    <small>— what was uploaded / downloaded</small>
+  </div>
+  <div class="nc-panel__body">
+    <video controls preload="metadata" style="width: 100%; max-width: 640px; background: #000; border-radius: var(--nc-radius); border: var(--nc-hairline);">
+      <source src="/dashboard/streams/{{ stream.id }}/source">
+      Your browser doesn't support inline HTML5 video. Open
+      <code>{{ stream.source_video_path }}</code>.
+    </video>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-refresh" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Re-run pipeline</span>
+    <small>— resumes from the on-disk video; each step is idempotent</small>
+  </div>
+  <div class="nc-panel__body">
+    <form action="/dashboard/streams/{{ stream.id }}/rerun" method="post"
+          style="display: flex; gap: 12px; align-items: end; flex-wrap: wrap;">
+      <label class="nc-label" style="flex: 1; min-width: 220px; margin: 0;">
+        Persona
+        <select class="nc-select" name="persona_id" required>
+          {% for p in personas %}
+          <option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="nc-btn nc-btn--primary"
+              {% if not personas %}disabled{% endif %}>
+        <i class="ti ti-player-play" aria-hidden="true"></i>
+        <span>Run pipeline</span>
+      </button>
+    </form>
+    {% if not personas %}
+    <small style="display: block; margin-top: 8px;">
+      Create a persona first — head to the
+      <a href="/dashboard/personas">Personas</a> tab.
+    </small>
+    {% endif %}
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-info-circle" aria-hidden="true"></i>
+    <span class="nc-panel__title">Run summary</span>
+  </div>
+  <div class="nc-panel__body">
+    <div class="nc-grid-3">
+      <div>
+        <small>Stream id</small>
+        <div class="nc-mono nc-trunc" title="{{ stream.id }}">{{ stream.id }}</div>
+      </div>
+      <div>
+        <small>Candidates</small>
+        <div class="nc-mono">{{ candidates|length }}</div>
+      </div>
+      <div>
+        <small>Clips</small>
+        <div class="nc-mono">{{ clips|length }}</div>
+      </div>
+    </div>
+    <div style="margin-top: 12px;">
+      <small>VOD URL</small>
+      <div class="nc-trunc" style="max-width: 100%;">
+        <a href="{{ stream.vod_url }}" class="nc-mono">{{ stream.vod_url }}</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-scissors" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Clips</span>
+    <small>— {{ clips|length }} cut</small>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    {% if clips %}
+    <div class="nc-inbox-grid">
+      {% for c in clips %}
+      <div class="nc-clip-card">
+        <div class="nc-clip-card__thumb">
+          {% if c.thumbnail_frame_path %}
+          <img src="/dashboard/clips/{{ c.id }}/thumbnail" alt="thumb">
+          {% else %}
+          <i class="ti ti-photo-off" aria-hidden="true"></i>
+          {% endif %}
+        </div>
+        <div class="nc-clip-card__time">
+          {{ "%d"|format(c.start_s|int) }}s <span style="color: var(--nc-text-muted);">→</span> {{ "%d"|format(c.end_s|int) }}s
+        </div>
+        <div class="nc-clip-card__meta">
+          {{ "%.1f"|format(c.duration_s) }}s · <span class="nc-chip nc-chip--{{ {'cut':'muted','approved':'success','rejected':'danger','published':'success'}.get(c.status, 'muted') }}" style="font-size: 10px; padding: 0 6px;">{{ c.status }}</span>
+        </div>
+        <div class="nc-clip-card__actions">
+          <a href="/dashboard/clips/{{ c.id }}" class="nc-btn nc-btn--primary">
+            <i class="ti ti-cut" aria-hidden="true"></i>
+            <span>Review</span>
+          </a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
     {% else %}
-    <tr><td colspan="4"><em>No candidates.</em></td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-scissors-off" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">No clips yet</div>
+      <p class="nc-empty__body">The pipeline may still be running — watch the status panel above.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-list-numbers" aria-hidden="true"></i>
+    <span class="nc-panel__title">Candidates</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    {% if candidates %}
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th class="nc-num">ts</th>
+          <th>Reason</th>
+          <th class="nc-num">Score</th>
+          <th>Phrase / signal</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in candidates %}
+        <tr>
+          <td class="nc-num nc-mono">{{ "%.1f"|format(c.ts) }}s</td>
+          <td><span class="nc-chip nc-chip--muted">{{ c.reason }}</span></td>
+          <td class="nc-num nc-mono">{{ "%.3f"|format(c.score) }}</td>
+          <td><small>{{ c.evidence.get("phrase") or c.evidence.get("transcript_snippet") or "—" }}</small></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-search-off" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">No candidates</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

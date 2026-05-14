@@ -561,6 +561,35 @@ async def clip_media(
     )
 
 
+@router.get("/clips/{clip_id}/thumbnail")
+async def clip_thumbnail(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """Serve the per-clip thumbnail JPEG for the inbox clip cards.
+
+    Returns 404 when the clip row has no `thumbnail_frame_path` (the
+    pipeline skipped the picker step) or when the file is gone from disk.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if not clip.thumbnail_frame_path:
+        raise HTTPException(status_code=404, detail="no thumbnail for this clip")
+    thumb_path = Path(clip.thumbnail_frame_path)
+    if not thumb_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"thumbnail file missing from disk: {thumb_path}",
+        )
+    return FileResponse(
+        path=thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @router.get("/streams/{stream_id}/source")
 async def stream_source(
     stream_id: str,

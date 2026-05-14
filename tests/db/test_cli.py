@@ -16,13 +16,13 @@ def test_db_init_help() -> None:
 
 
 def test_db_init_brings_schema_to_current_version(tmp_path: Path) -> None:
-    """`db init` runs every migration; current head is version 7
-    (voice-markers spec slice E.1: per-tenant retention windows)."""
+    """`db init` runs every migration; current head is version 8
+    (voice-markers spec slice E.4: Google Drive watches)."""
     runner = CliRunner()
     db_path = tmp_path / "x.db"
     result = runner.invoke(app, ["db", "init", "--db-path", str(db_path)])
     assert result.exit_code == 0, result.output
-    assert "schema_version = 7" in result.output
+    assert "schema_version = 8" in result.output
 
 
 def test_tenants_add_and_list(tmp_path: Path) -> None:

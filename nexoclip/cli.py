@@ -56,6 +56,11 @@ retention_app = typer.Typer(
     help="Per-tenant retention sweeper (voice-markers spec slice E.1).",
     no_args_is_help=True,
 )
+drive_app = typer.Typer(
+    name="drive",
+    help="Google Drive folder watches (voice-markers spec slice E.4).",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
@@ -64,6 +69,7 @@ app.add_typer(metrics_app)
 app.add_typer(mcp_app)
 app.add_typer(queue_app)
 app.add_typer(retention_app)
+app.add_typer(drive_app)
 
 
 @queue_app.command("list")
@@ -1040,6 +1046,183 @@ def retention_sweep_cmd(
             f"  [{label}] {r['tenant_id']}  "
             f"vods={r['vods_deleted']}  clips={r['clips_deleted']}  "
             f"transcripts={r['transcripts_deleted']}  freed={mb_freed:.1f} MB"
+        )
+
+
+@drive_app.command("add")
+def drive_add_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant the watch belongs to."),
+    folder_id: str = typer.Argument(..., help="Drive folder id (or fake-client folder name)."),
+    folder_name: str | None = typer.Option(
+        None, "--folder-name", help="Optional human-readable label for the dashboard."
+    ),
+    refresh_token: str = typer.Option(
+        ...,
+        "--refresh-token",
+        help=(
+            "Drive OAuth refresh token. For dev with FakeDriveClient pass "
+            "any non-empty placeholder."
+        ),
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Register a new Drive folder to watch (slice E.4)."""
+    from nexoclip.db import DriveWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> str:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                w = await DriveWatchesRepo(db).create(
+                    folder_id=folder_id,
+                    folder_name=folder_name,
+                    refresh_token=refresh_token,
+                )
+            return w.id
+        finally:
+            await db.close()
+
+    new = asyncio.run(_run())
+    typer.echo(f"created drive watch: {new}")
+
+
+@drive_app.command("list")
+def drive_list_cmd(
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """List drive watches for one tenant."""
+    from nexoclip.db import DriveWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> list[object]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                return list(await DriveWatchesRepo(db).list_for_tenant())
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if not rows:
+        typer.echo("(no watches)")
+        return
+    for w in rows:
+        state = "enabled" if w.enabled else "paused"  # type: ignore[attr-defined]
+        typer.echo(
+            f"  {w.id}  folder={w.folder_id}  ({w.folder_name or '—'})  "  # type: ignore[attr-defined]
+            f"{state}  seen={len(w.seen_file_ids)}  last_polled_at={w.last_polled_at or 'never'}"  # type: ignore[attr-defined]
+        )
+
+
+@drive_app.command("poll")
+def drive_poll_cmd(
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Restrict polling to one tenant. Default: all."
+    ),
+    source_dir: Path | None = typer.Option(
+        None,
+        "--source-dir",
+        help=(
+            "DEV: poll a local directory via FakeDriveClient instead of Google. "
+            "When omitted, the real GoogleDriveClient is used (deferred — currently "
+            "unimplemented; poll exits 1 with a clear error)."
+        ),
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Project output root. Defaults to NEXOCLIP_DEFAULT_OUTPUT_DIR.",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit one JSON object per report instead of text."
+    ),
+) -> None:
+    """Poll every drive watch for new files and ingest them.
+
+    For dev / tests, pass `--source-dir <path>` to use the on-disk
+    FakeDriveClient. Drop video files into that directory; each new
+    file gets ingested through the standard pipeline.
+    """
+    import json as _json
+
+    from nexoclip.db import apply_migrations
+    from nexoclip.drive import FakeDriveClient, poll_drive_watches
+    from nexoclip.settings import get_settings
+
+    out_dir = output_dir or Path(get_settings().default_output_dir)
+
+    async def _run() -> list[dict[str, object]]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+
+            # Real Google client integration is a follow-up — for now
+            # CLI poll only works with --source-dir.
+            if source_dir is None:
+                typer.echo(
+                    "drive poll: --source-dir is required (real Google client integration is "
+                    "deferred to a follow-up commit)",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+            fake = FakeDriveClient(source_dir)
+
+            async def _stub_ingest(tenant_id_: str, local_path: Path, name: str) -> None:
+                # CLI mode just logs the file. Production wires this
+                # to nexoclip.ingest.ingest_local_file via the in-process
+                # scheduler — that lives in run.py's lifespan once the
+                # Google client lands.
+                typer.echo(f"  [{tenant_id_}] ingested: {name} -> {local_path}")
+
+            reports = await poll_drive_watches(
+                db,
+                output_dir=out_dir,
+                drive_client_factory=lambda _w: fake,
+                ingest_callback=_stub_ingest,
+                tenant_id=tenant,
+            )
+            return [
+                {
+                    "watch_id": r.watch_id,
+                    "tenant_id": r.tenant_id,
+                    "folder_id": r.folder_id,
+                    "files_seen": r.files_seen,
+                    "files_ingested": r.files_ingested,
+                    "files_failed": r.files_failed,
+                    "skipped_disabled": r.skipped_disabled,
+                }
+                for r in reports
+            ]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for row in rows:
+            typer.echo(_json.dumps(row))
+        return
+    if not rows:
+        typer.echo("(no watches matched)")
+        return
+    for r in rows:
+        flag = " (paused)" if r["skipped_disabled"] else ""
+        typer.echo(
+            f"  {r['watch_id']}  tenant={r['tenant_id']}  folder={r['folder_id']}{flag}  "
+            f"seen={r['files_seen']}  ingested={r['files_ingested']}  failed={r['files_failed']}"
         )
 
 

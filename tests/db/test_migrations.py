@@ -10,7 +10,7 @@ from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
 
-_CURRENT_HEAD = 7  # bumped each time we add a migration
+_CURRENT_HEAD = 8  # bumped each time we add a migration
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

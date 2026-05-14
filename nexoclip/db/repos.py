@@ -35,6 +35,7 @@ from .models import (
     ClipRow,
     ConnectedAccount,
     CustomTriggerPhrases,
+    DriveWatchRow,
     Event,
     LLMCallRow,
     PersonaRow,
@@ -2112,3 +2113,139 @@ class BrandKitsRepo:
             (kit_id, tenant_id),
         )
         await conn.commit()
+
+
+# ---------- Drive watches (voice-markers spec slice E.4) ----------
+
+
+_DRIVE_WATCH_COLS = (
+    "id, tenant_id, folder_id, folder_name, refresh_token, access_token, "
+    "access_token_expires_at, last_polled_at, seen_file_ids_json, enabled, "
+    "created_at, updated_at"
+)
+
+
+def _drive_watch_from_row(row: aiosqlite.Row) -> DriveWatchRow:
+    d = dict(row)
+    seen_blob = d.pop("seen_file_ids_json")
+    d["seen_file_ids"] = json.loads(seen_blob) if seen_blob else []
+    d["enabled"] = bool(d["enabled"])
+    return DriveWatchRow.model_validate(d)
+
+
+class DriveWatchesRepo:
+    """CRUD for `drive_watches`. Polled by `nexoclip drive poll` and the
+    in-process scheduler. (voice-markers spec slice E.4)
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        folder_id: str,
+        folder_name: str | None,
+        refresh_token: str,
+        access_token: str | None = None,
+        access_token_expires_at: str | None = None,
+    ) -> DriveWatchRow:
+        tenant_id = current_tenant_id()
+        watch_id = new_id("drv")
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            f"INSERT INTO drive_watches ({_DRIVE_WATCH_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', 1, ?, ?)",
+            (
+                watch_id,
+                tenant_id,
+                folder_id,
+                folder_name,
+                refresh_token,
+                access_token,
+                access_token_expires_at,
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def get(self, watch_id: str) -> DriveWatchRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_DRIVE_WATCH_COLS} FROM drive_watches "
+            "WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _drive_watch_from_row(row) if row else None
+
+    async def list_for_tenant(self) -> list[DriveWatchRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_DRIVE_WATCH_COLS} FROM drive_watches "
+            "WHERE tenant_id = ? ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_drive_watch_from_row(r) for r in await cur.fetchall()]
+
+    async def mark_polled(
+        self,
+        watch_id: str,
+        *,
+        seen_file_ids: list[str],
+        last_polled_at: str | None,
+    ) -> None:
+        """Persist progress after a poll pass.
+
+        Tenancy-checked even though the poller has already bound — same
+        defense-in-depth pattern other repos use."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_watches SET seen_file_ids_json = ?, "
+            "last_polled_at = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                json.dumps(seen_file_ids),
+                last_polled_at,
+                _now(),
+                watch_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+
+    async def set_enabled(self, watch_id: str, enabled: bool) -> DriveWatchRow:
+        """Pause / resume a watch without deleting (preserves seen_file_ids)."""
+        existing = await self.get(watch_id)
+        if existing is None:
+            raise NexoClipError(f"drive watch {watch_id!r} not found")
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_watches SET enabled = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (1 if enabled else 0, _now(), watch_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def delete(self, watch_id: str) -> None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM drive_watches WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        await conn.commit()
+
+

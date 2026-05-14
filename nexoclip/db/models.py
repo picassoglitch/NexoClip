@@ -409,3 +409,26 @@ class BrandKitRow(BaseModel):
 
     created_at: str
     updated_at: str
+
+
+# ---------- Drive watches (voice-markers spec slice E.4) ----------
+
+
+class DriveWatchRow(BaseModel):
+    """One row in `drive_watches` — a folder NexoClip polls for new VODs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    folder_id: str
+    folder_name: str | None = None
+    refresh_token: str
+    access_token: str | None = None
+    access_token_expires_at: str | None = None
+    last_polled_at: str | None = None
+    # Drive file IDs we've already ingested — the dedup key.
+    seen_file_ids: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: str
+    updated_at: str

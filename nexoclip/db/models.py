@@ -153,6 +153,12 @@ class ClipRow(BaseModel):
     thumbnail_frame_path: str | None = None
     status: str = "cut"
     created_at: str
+    # Per-clip overlay customization set in the clip editor screen.
+    # Empty / None means "fall back to the brand-kit defaults end-to-end".
+    # Schema is intentionally loose (dict[str, object]) — the renderer
+    # picks the keys it knows; adding a new overlay knob doesn't need a
+    # schema migration.
+    overlay_config: dict[str, object] | None = None
 
 
 class VariantRow(BaseModel):

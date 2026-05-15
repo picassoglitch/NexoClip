@@ -783,11 +783,59 @@ class ClipsRepo:
         )
         return [_clip_from_row(r) for r in await cur.fetchall()]
 
+    async def set_overlay_config(
+        self, clip_id: str, *, overlay_config: dict[str, object] | None
+    ) -> ClipRow:
+        """Persist the per-clip overlay config (set in the clip editor).
+
+        `None` clears the column → renderer falls back to brand-kit
+        defaults end-to-end.
+        """
+        tenant_id = current_tenant_id()
+        existing = await self.get(clip_id)
+        if existing is None:
+            raise NexoClipError(f"clip {clip_id!r} not found")
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET overlay_config_json = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                json.dumps(overlay_config) if overlay_config is not None else None,
+                clip_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(clip_id)
+        assert out is not None
+        return out
+
+    async def update_status(self, clip_id: str, *, status: str) -> ClipRow:
+        """Direct status write — caller checks the transition graph.
+
+        Surface for the clip editor's "Complete" button which moves the
+        clip to 'approved' (the existing pre-publish standby state) in
+        the same request that persists the overlay config.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET status = ? WHERE id = ? AND tenant_id = ?",
+            (status, clip_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(clip_id)
+        if out is None:
+            raise NexoClipError(f"clip {clip_id!r} not found")
+        return out
+
 
 def _clip_from_row(row: aiosqlite.Row) -> ClipRow:
     d = dict(row)
     box = d.pop("smart_crop_box_json")
     d["smart_crop_box"] = json.loads(box) if box else None
+    overlay = d.pop("overlay_config_json", None)
+    d["overlay_config"] = json.loads(overlay) if overlay else None
     return ClipRow.model_validate(d)
 
 

@@ -491,8 +491,17 @@ async def clip_detail(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    from nexoclip.branding import (
+        caption_style_or_default,
+        preset_choices,
+        resolve_brand_kit_for_candidate,
+    )
     from nexoclip.clip import clip_breakdown
-    from nexoclip.db import PublishJobsRepo, PublishMetricsRepo
+    from nexoclip.db import (
+        CandidatesRepo,
+        PublishJobsRepo,
+        PublishMetricsRepo,
+    )
 
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
@@ -501,6 +510,25 @@ async def clip_detail(
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
     breakdown = await clip_breakdown(db, clip_id)
+
+    # Resolve the brand kit + caption style so the editor can render
+    # the live preview against the right defaults when overlay_config
+    # is empty (or partially populated).
+    speaker_label: str | None = None
+    if clip.candidate_id:
+        for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
+            if cand.id == clip.candidate_id:
+                ev = cand.evidence or {}
+                lbl = ev.get("speaker_label")
+                if isinstance(lbl, str):
+                    speaker_label = lbl
+                break
+    brand_kit = await resolve_brand_kit_for_candidate(
+        db, stream_id=clip.stream_id, speaker_label=speaker_label
+    )
+    caption_style = caption_style_or_default(
+        brand_kit.caption_style if brand_kit is not None else None
+    )
 
     # Phase 3: surface engagement outcomes per published job. One row per
     # publish_job with the latest metric reading next to the platform +
@@ -528,8 +556,166 @@ async def clip_detail(
             "valid_transitions": valid_transitions,
             "breakdown": breakdown,
             "outcomes": outcomes,
+            "brand_kit": brand_kit,
+            "caption_style": caption_style,
+            "caption_preset_choices": preset_choices(),
         },
     )
+
+
+# ---- Clip overlay editor (slice F.6) ----
+
+
+def _parse_overlay_form(
+    *,
+    title_text: str,
+    banner_enabled: str,
+    banner_platform: str,
+    banner_url: str,
+    banner_color: str,
+    captions_enabled: str,
+    captions_preset: str,
+    captions_highlight_color: str,
+    comments_show: str,
+    comments_fake_likes: int,
+) -> dict[str, object]:
+    """Coerce the editor form's flat key/value submission into the
+    nested overlay_config shape the renderer reads.
+
+    Empty / blank string fields collapse to None at the top level so
+    the renderer falls back to brand-kit defaults — i.e. the editor
+    is additive, not destructive."""
+
+    def _bool(v: str) -> bool:
+        return v.lower() in ("1", "true", "on", "yes")
+
+    return {
+        "title_text": title_text.strip() or None,
+        "banner": {
+            "enabled": _bool(banner_enabled),
+            "platform": (banner_platform or "kick").strip().lower(),
+            "url": banner_url.strip() or None,
+            "color": banner_color.strip() or None,
+        },
+        "captions": {
+            "enabled": _bool(captions_enabled),
+            "preset": captions_preset.strip() or None,
+            "highlight_color": captions_highlight_color.strip() or None,
+        },
+        "comments": {
+            "show_overlay": _bool(comments_show),
+            "fake_likes": max(0, int(comments_fake_likes)),
+        },
+    }
+
+
+@router.post(
+    "/clips/{clip_id}/overlay",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_overlay_save(
+    request: Request,
+    clip_id: str,
+    title_text: str = Form(""),
+    banner_enabled: str = Form(""),
+    banner_platform: str = Form("kick"),
+    banner_url: str = Form(""),
+    banner_color: str = Form(""),
+    captions_enabled: str = Form(""),
+    captions_preset: str = Form(""),
+    captions_highlight_color: str = Form(""),
+    comments_show: str = Form(""),
+    comments_fake_likes: int = Form(0),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Save (only) the per-clip overlay config. Idempotent — re-POSTing
+    overwrites. Used by the "Save draft" button on the clip editor."""
+    if await ClipsRepo(db).get(clip_id) is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    cfg = _parse_overlay_form(
+        title_text=title_text,
+        banner_enabled=banner_enabled,
+        banner_platform=banner_platform,
+        banner_url=banner_url,
+        banner_color=banner_color,
+        captions_enabled=captions_enabled,
+        captions_preset=captions_preset,
+        captions_highlight_color=captions_highlight_color,
+        comments_show=comments_show,
+        comments_fake_likes=comments_fake_likes,
+    )
+    await ClipsRepo(db).set_overlay_config(clip_id, overlay_config=cfg)
+    return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
+
+
+@router.post(
+    "/clips/{clip_id}/finalize",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_overlay_finalize(
+    request: Request,
+    clip_id: str,
+    title_text: str = Form(""),
+    banner_enabled: str = Form(""),
+    banner_platform: str = Form("kick"),
+    banner_url: str = Form(""),
+    banner_color: str = Form(""),
+    captions_enabled: str = Form(""),
+    captions_preset: str = Form(""),
+    captions_highlight_color: str = Form(""),
+    comments_show: str = Form(""),
+    comments_fake_likes: int = Form(0),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """The 'Complete' button — saves the overlay config AND transitions
+    the clip from `cut` / `ready_for_review` → `approved` (the existing
+    pre-publish standby state).
+
+    Rejects when the current status doesn't allow the transition (e.g.
+    a `published` clip). The dashboard hides the button in those cases
+    so the 409 only fires on a stale page."""
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    allowed = _VALID_STATUS_TRANSITIONS.get(clip.status, set())
+    # If we're not already at `approved` and can't transition there
+    # directly, walk one step (`cut` -> `ready_for_review` -> `approved`).
+    if clip.status == "approved" or "approved" in allowed:
+        target = "approved"
+    elif clip.status == "cut" and "ready_for_review" in allowed:
+        # `cut` -> `ready_for_review` first, then `approved`.
+        await repo.update_status(clip_id, status="ready_for_review")
+        target = "approved"
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail=f"can't finalize from status {clip.status!r}",
+        )
+
+    cfg = _parse_overlay_form(
+        title_text=title_text,
+        banner_enabled=banner_enabled,
+        banner_platform=banner_platform,
+        banner_url=banner_url,
+        banner_color=banner_color,
+        captions_enabled=captions_enabled,
+        captions_preset=captions_preset,
+        captions_highlight_color=captions_highlight_color,
+        comments_show=comments_show,
+        comments_fake_likes=comments_fake_likes,
+    )
+    await repo.set_overlay_config(clip_id, overlay_config=cfg)
+    if target != clip.status:
+        await repo.update_status(clip_id, status=target)
+    await EventsRepo(db).emit(
+        type="clip.finalized",
+        payload={"clip_id": clip_id, "to_status": target},
+    )
+    return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
 @router.get("/clips/{clip_id}/media")

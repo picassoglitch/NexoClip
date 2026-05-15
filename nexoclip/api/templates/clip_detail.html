@@ -1,10 +1,198 @@
 {% extends "base.html" %}
 {% block title %}Clip {{ clip.id }} - NexoClip{% endblock %}
+{% block head %}
+<style>
+  /* ---- Clip editor: split-pane live preview ----------------- */
+
+  .nc-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .nc-editor { grid-template-columns: 1fr; }
+  }
+
+  /* The preview surface — a real <video> with absolutely-positioned
+     HTML overlay layers on top. The HTML overlays are a faithful
+     visual stand-in for what the renderer will burn in when the
+     operator clicks Complete. */
+  .nc-preview {
+    position: relative;
+    aspect-ratio: 9 / 16;
+    max-width: 360px;
+    margin: 0 auto;
+    background: #000;
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    overflow: hidden;
+    contain: layout paint;
+  }
+  .nc-preview video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+  }
+  .nc-preview__layer {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  /* Top title (the "Adin Ross asked Clav for RETA..." style header) */
+  .nc-pv-title {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    right: 14px;
+    background: rgba(255, 255, 255, 0.95);
+    color: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 1.25;
+    padding: 8px 12px;
+    border-radius: 6px;
+    text-align: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
+  .nc-pv-title.is-empty { display: none; }
+
+  /* Active-word caption — animated lower-third by default. */
+  .nc-pv-caption {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    text-align: center;
+    font-family: "Inter", -apple-system, sans-serif;
+    font-weight: 900;
+    color: #fff;
+    -webkit-text-stroke: 2px #000;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+    font-size: 22px;
+    line-height: 1.1;
+    pointer-events: none;
+  }
+  .nc-pv-caption--upper_third  { top: 33%; transform: translateY(-50%); }
+  .nc-pv-caption--centered     { top: 50%; transform: translateY(-50%); }
+  .nc-pv-caption--lower_third  { top: 67%; transform: translateY(-50%); }
+  .nc-pv-caption--bottom       { bottom: 90px; }
+  .nc-pv-caption__word {
+    display: inline-block;
+    margin: 0 0.15em;
+    transition: color 80ms linear, transform 80ms linear;
+  }
+  .nc-pv-caption__word.is-active {
+    color: var(--pv-highlight, #FFD700);
+    transform: scale(1.1);
+  }
+
+  /* Right-side rail (likes / comments / share — the Reels reference) */
+  .nc-pv-rail {
+    position: absolute;
+    right: 8px;
+    bottom: 90px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    font-family: -apple-system, sans-serif;
+  }
+  .nc-pv-rail__item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .nc-pv-rail__icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  /* Bottom platform banner (KICK / TIKTOK / etc.) */
+  .nc-pv-banner {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 38px;
+    background: var(--pv-banner-color, #53FC18);
+    color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px;
+    font-family: "Inter", -apple-system, sans-serif;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 14px;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+  }
+  .nc-pv-banner.is-hidden { display: none; }
+  .nc-pv-banner__platform { color: #000; }
+  .nc-pv-banner__url { font-size: 12px; opacity: 0.85; }
+
+  /* Editor controls (right column) */
+  .nc-editor-controls .nc-panel { margin-bottom: 12px; }
+  .nc-editor-controls .nc-panel__body { padding: 12px 14px; }
+  .nc-editor-controls .nc-label { margin-bottom: 8px; }
+
+  .nc-editor-actions {
+    position: sticky;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--nc-bg-base);
+    padding-top: 12px;
+    border-top: var(--nc-hairline);
+  }
+</style>
+{% endblock %}
+
 {% block content %}
+
+{# Per-clip overlay defaults derived from brand-kit + caption preset.
+   The form below pre-populates from clip.overlay_config when set,
+   else from these. #}
+{% set ov = clip.overlay_config or {} %}
+{% set banner = ov.get('banner') or {} %}
+{% set captions = ov.get('captions') or {} %}
+{% set comments = ov.get('comments') or {} %}
+
+{% set _default_handle = (
+  brand_kit.handle_kick if (brand_kit and brand_kit.handle_kick) else
+  brand_kit.handle_tiktok if (brand_kit and brand_kit.handle_tiktok) else
+  brand_kit.handle_instagram if (brand_kit and brand_kit.handle_instagram) else
+  brand_kit.handle_youtube if (brand_kit and brand_kit.handle_youtube) else
+  ''
+) %}
+{% set platform_colors = {
+  'kick':      '#53FC18',
+  'twitch':    '#9146FF',
+  'tiktok':    '#000000',
+  'youtube':   '#FF0000',
+  'instagram': '#E1306C',
+} %}
 
 <div class="nc-page-header">
   <div>
-    <h2>Clip review</h2>
+    <h2>Clip editor</h2>
     <div class="nc-row" style="margin-top: 4px;">
       <span class="nc-chip nc-chip--{{ {'cut':'muted','approved':'success','rejected':'danger','published':'success','ready_for_review':'warn'}.get(clip.status, 'muted') }}"
             id="clip-status">
@@ -24,50 +212,254 @@
   </div>
 </div>
 
-<div class="nc-grid-2">
-  <div class="nc-panel">
-    <div class="nc-panel__header">
-      <i class="ti ti-player-play" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Player</span>
-    </div>
-    <div class="nc-panel__body">
-      <video controls preload="metadata"
-             style="width: 100%; max-width: 360px; background: #000; border: var(--nc-hairline); border-radius: var(--nc-radius);">
-        <source src="/dashboard/clips/{{ clip.id }}/media">
-      </video>
-      <small style="display: block; margin-top: 8px;">
-        Path: <span class="nc-mono nc-trunc" title="{{ clip.path }}" style="max-width: 100%;">{{ clip.path }}</span>
-      </small>
-    </div>
-  </div>
+<form id="overlay-form"
+      action="/dashboard/clips/{{ clip.id }}/finalize"
+      method="post">
 
-  <div class="nc-panel">
-    <div class="nc-panel__header">
-      <i class="ti ti-toggle-right" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Status</span>
-    </div>
-    <div class="nc-panel__body">
-      <div hx-target="#clip-status" hx-swap="outerHTML" class="nc-row">
-        {% for target in valid_transitions %}
-        <button hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
-                class="nc-btn {% if target == 'rejected' %}nc-btn--danger{% elif target == 'approved' %}nc-btn--primary{% endif %}">
-          <i class="ti ti-{{ {'approved':'check','rejected':'x','ready_for_review':'eye','published':'rocket'}.get(target, 'arrow-right') }}"
-             aria-hidden="true"></i>
-          <span>Mark {{ target }}</span>
-        </button>
-        {% endfor %}
+  <div class="nc-editor">
+
+    {# ---- LEFT: live preview surface --------------------------- #}
+    <div>
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-eye" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+          <span class="nc-panel__title">Live preview</span>
+          <small>— what the rendered clip will look like</small>
+        </div>
+        <div class="nc-panel__body">
+
+          <div class="nc-preview"
+               id="preview"
+               style="--pv-highlight: {{ captions.highlight_color or caption_style.highlight_color }};
+                      --pv-banner-color: {{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }};">
+            <video id="preview-video" preload="metadata" muted playsinline loop>
+              <source src="/dashboard/clips/{{ clip.id }}/media">
+            </video>
+
+            <div class="nc-preview__layer" aria-hidden="true">
+              <div id="pv-title"
+                   class="nc-pv-title{% if not ov.get('title_text') %} is-empty{% endif %}">
+                {{ ov.get('title_text') or '' }}
+              </div>
+
+              <div id="pv-caption"
+                   class="nc-pv-caption nc-pv-caption--{{ caption_style.position }}"
+                   {% if not (captions.get('enabled', True)) %}style="display:none;"{% endif %}>
+                <span class="nc-pv-caption__word">EPIC</span>
+                <span class="nc-pv-caption__word is-active">PLAY</span>
+                <span class="nc-pv-caption__word">RIGHT</span>
+                <span class="nc-pv-caption__word">HERE</span>
+              </div>
+
+              <div class="nc-pv-rail"
+                   id="pv-rail"
+                   {% if not (comments.get('show_overlay', False)) %}style="display:none;"{% endif %}>
+                <div class="nc-pv-rail__item">
+                  <div class="nc-pv-rail__icon"><i class="ti ti-heart-filled"></i></div>
+                  <span id="pv-likes">{{ comments.get('fake_likes', 8) }}</span>
+                </div>
+                <div class="nc-pv-rail__item">
+                  <div class="nc-pv-rail__icon"><i class="ti ti-message-circle-2"></i></div>
+                  <span>—</span>
+                </div>
+                <div class="nc-pv-rail__item">
+                  <div class="nc-pv-rail__icon"><i class="ti ti-arrows-shuffle"></i></div>
+                  <span>—</span>
+                </div>
+                <div class="nc-pv-rail__item">
+                  <div class="nc-pv-rail__icon"><i class="ti ti-send"></i></div>
+                </div>
+              </div>
+
+              <div id="pv-banner"
+                   class="nc-pv-banner{% if not (banner.get('enabled', False)) %} is-hidden{% endif %}">
+                <span class="nc-pv-banner__platform" id="pv-banner-platform">
+                  {{ (banner.platform or 'kick')|upper }}
+                </span>
+                <span class="nc-pv-banner__url" id="pv-banner-url">
+                  {{ banner.url or ((banner.platform or 'kick') ~ '.com/' ~ (_default_handle|replace('@', '') or 'yourhandle')) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 8px; justify-content: center; margin-top: 12px;">
+            <button type="button" id="preview-play" class="nc-btn nc-btn--sm">
+              <i class="ti ti-player-play" aria-hidden="true"></i>
+              <span>Play preview</span>
+            </button>
+            <button type="button" id="preview-restart" class="nc-btn nc-btn--sm">
+              <i class="ti ti-refresh" aria-hidden="true"></i>
+              <span>Restart</span>
+            </button>
+          </div>
+
+          <small style="display: block; margin-top: 8px; text-align: center;">
+            HTML overlay preview. The renderer burns these into the final
+            MP4 when you click <strong>Complete &amp; stage for publish</strong>.
+          </small>
+        </div>
       </div>
-      {% if not valid_transitions %}
-      <small style="display: block; margin-top: 8px;">Final status — no further transitions.</small>
+
+      {# Existing reviewer-only context (variants, status transitions,
+         "why this clip", outcomes) lives below the preview/editor. #}
+
+      {% if valid_transitions %}
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-toggle-right" aria-hidden="true"></i>
+          <span class="nc-panel__title">Manual status transitions</span>
+          <small>— bypass the editor's Complete flow</small>
+        </div>
+        <div class="nc-panel__body">
+          <div hx-target="#clip-status" hx-swap="outerHTML" class="nc-row">
+            {% for target in valid_transitions %}
+            <button type="button"
+                    hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
+                    class="nc-btn nc-btn--sm {% if target == 'rejected' %}nc-btn--danger{% endif %}">
+              <i class="ti ti-{{ {'approved':'check','rejected':'x','ready_for_review':'eye','published':'rocket'}.get(target, 'arrow-right') }}"
+                 aria-hidden="true"></i>
+              <span>Mark {{ target }}</span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
       {% endif %}
     </div>
-  </div>
-</div>
 
+    {# ---- RIGHT: editor controls -------------------------------- #}
+    <div class="nc-editor-controls">
+
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-text-resize" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+          <span class="nc-panel__title">Title text</span>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-label">
+            Top banner copy <small>(blank = no title overlay)</small>
+            <textarea class="nc-textarea"
+                      name="title_text"
+                      id="ctl-title"
+                      rows="2"
+                      placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again">{{ ov.get('title_text') or '' }}</textarea>
+          </label>
+        </div>
+      </div>
+
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-flag" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+          <span class="nc-panel__title">Platform banner</span>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="banner_enabled" value="1" id="ctl-banner-on"
+                   {% if banner.get('enabled', False) %}checked{% endif %}>
+            <span>Show KICK-style bottom banner</span>
+          </label>
+          <label class="nc-label">Platform
+            <select class="nc-select" name="banner_platform" id="ctl-banner-platform">
+              {% for p in ['kick', 'twitch', 'tiktok', 'youtube', 'instagram'] %}
+              <option value="{{ p }}" {% if (banner.platform or 'kick') == p %}selected{% endif %}>{{ p }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="nc-label">URL
+            <input class="nc-input nc-input--mono"
+                   type="text"
+                   name="banner_url"
+                   id="ctl-banner-url"
+                   value="{{ banner.url or '' }}"
+                   placeholder="kick.com/yourhandle">
+          </label>
+          <label class="nc-label">Banner color <small>(blank = platform default)</small>
+            <input class="nc-input"
+                   type="color"
+                   name="banner_color"
+                   id="ctl-banner-color"
+                   value="{{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }}">
+          </label>
+        </div>
+      </div>
+
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-typography" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+          <span class="nc-panel__title">Captions</span>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="captions_enabled" value="1" id="ctl-captions-on"
+                   {% if captions.get('enabled', True) %}checked{% endif %}>
+            <span>Burn captions into the clip</span>
+          </label>
+          <label class="nc-label">Preset
+            <select class="nc-select" name="captions_preset" id="ctl-captions-preset">
+              <option value="">— use brand-kit default ({{ caption_style.preset }}) —</option>
+              {% for choice_id, choice_label in caption_preset_choices %}
+              <option value="{{ choice_id }}" {% if captions.get('preset') == choice_id %}selected{% endif %}>{{ choice_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="nc-label">Active-word highlight
+            <input class="nc-input"
+                   type="color"
+                   name="captions_highlight_color"
+                   id="ctl-captions-highlight"
+                   value="{{ captions.get('highlight_color') or caption_style.highlight_color }}">
+          </label>
+        </div>
+      </div>
+
+      <div class="nc-panel">
+        <div class="nc-panel__header">
+          <i class="ti ti-message-circle-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+          <span class="nc-panel__title">Comments / reactions rail</span>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="comments_show" value="1" id="ctl-comments-on"
+                   {% if comments.get('show_overlay', False) %}checked{% endif %}>
+            <span>Show platform-style reactions rail</span>
+          </label>
+          <label class="nc-label">Visual likes count <small>(decorative only)</small>
+            <input class="nc-input"
+                   type="number"
+                   name="comments_fake_likes"
+                   id="ctl-comments-likes"
+                   min="0" max="999999"
+                   value="{{ comments.get('fake_likes', 8) }}">
+          </label>
+        </div>
+      </div>
+
+      <div class="nc-editor-actions">
+        <button type="submit"
+                class="nc-btn nc-btn--primary nc-btn--full">
+          <i class="ti ti-check" aria-hidden="true"></i>
+          <span>Complete &amp; stage for publish</span>
+        </button>
+        <button type="submit"
+                formaction="/dashboard/clips/{{ clip.id }}/overlay"
+                class="nc-btn nc-btn--full">
+          <i class="ti ti-device-floppy" aria-hidden="true"></i>
+          <span>Save draft (don't change status)</span>
+        </button>
+      </div>
+
+    </div>
+
+  </div>
+</form>
+
+{# ---- Variants picker (kept from the old layout) -------------- #}
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-message-circle-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
     <span class="nc-panel__title">Variants</span>
+    <small>— choose which generated caption gets posted</small>
   </div>
   <div class="nc-panel__body">
     {% if variants %}
@@ -110,6 +502,7 @@
   </div>
 </div>
 
+{# ---- Why this clip + outcomes ------------------------------ #}
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-zoom-question" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
@@ -176,7 +569,6 @@
             <span class="nc-chip nc-chip--{% if breakdown.rescore_delta >= 0 %}success{% else %}danger{% endif %}">
               <span class="nc-mono">{{ "%+.3f"|format(breakdown.rescore_delta) }}</span>
             </span>
-            <small>(positive = the LLM thought this was better than the heuristic ranking)</small>
           </td>
         </tr>
         {% endif %}
@@ -239,4 +631,121 @@
   </div>
 </div>
 {% endif %}
+
+{# ---- Live overlay binding -------------------------------------- #}
+<script>
+(function () {
+  // Default platform colors — the editor flips the banner color when
+  // the platform changes (only when the operator hasn't explicitly
+  // set a custom one; otherwise we don't touch their choice).
+  var PLATFORM_COLORS = {
+    kick:      "#53FC18",
+    twitch:    "#9146FF",
+    tiktok:    "#000000",
+    youtube:   "#FF0000",
+    instagram: "#E1306C"
+  };
+
+  var preview         = document.getElementById("preview");
+  var pvTitle         = document.getElementById("pv-title");
+  var pvBanner        = document.getElementById("pv-banner");
+  var pvBannerPlat    = document.getElementById("pv-banner-platform");
+  var pvBannerUrl     = document.getElementById("pv-banner-url");
+  var pvCaption       = document.getElementById("pv-caption");
+  var pvRail          = document.getElementById("pv-rail");
+  var pvLikes         = document.getElementById("pv-likes");
+
+  var ctlTitle        = document.getElementById("ctl-title");
+  var ctlBannerOn     = document.getElementById("ctl-banner-on");
+  var ctlBannerPlat   = document.getElementById("ctl-banner-platform");
+  var ctlBannerUrl    = document.getElementById("ctl-banner-url");
+  var ctlBannerColor  = document.getElementById("ctl-banner-color");
+  var ctlCaptionsOn   = document.getElementById("ctl-captions-on");
+  var ctlCaptionsHl   = document.getElementById("ctl-captions-highlight");
+  var ctlCommentsOn   = document.getElementById("ctl-comments-on");
+  var ctlCommentsLk   = document.getElementById("ctl-comments-likes");
+
+  var bannerColorTouched = false;
+
+  function syncTitle() {
+    var t = (ctlTitle.value || "").trim();
+    pvTitle.textContent = t;
+    pvTitle.classList.toggle("is-empty", !t);
+  }
+  function syncBanner() {
+    pvBanner.classList.toggle("is-hidden", !ctlBannerOn.checked);
+    pvBannerPlat.textContent = (ctlBannerPlat.value || "kick").toUpperCase();
+    var url = (ctlBannerUrl.value || "").trim();
+    if (!url) {
+      url = (ctlBannerPlat.value || "kick") + ".com/yourhandle";
+    }
+    pvBannerUrl.textContent = url;
+    preview.style.setProperty("--pv-banner-color", ctlBannerColor.value);
+  }
+  function syncCaptions() {
+    pvCaption.style.display = ctlCaptionsOn.checked ? "" : "none";
+    preview.style.setProperty("--pv-highlight", ctlCaptionsHl.value);
+  }
+  function syncComments() {
+    pvRail.style.display = ctlCommentsOn.checked ? "" : "none";
+    var n = parseInt(ctlCommentsLk.value, 10);
+    pvLikes.textContent = isFinite(n) && n >= 0 ? n : 0;
+  }
+  function applyDefaultBannerColor() {
+    if (bannerColorTouched) return;
+    var p = ctlBannerPlat.value || "kick";
+    var col = PLATFORM_COLORS[p] || "#53FC18";
+    ctlBannerColor.value = col;
+    syncBanner();
+  }
+
+  // Wire up.
+  ctlTitle.addEventListener("input", syncTitle);
+  ctlBannerOn.addEventListener("change", syncBanner);
+  ctlBannerPlat.addEventListener("change", function () {
+    applyDefaultBannerColor();
+    syncBanner();
+  });
+  ctlBannerUrl.addEventListener("input", syncBanner);
+  ctlBannerColor.addEventListener("input", function () {
+    bannerColorTouched = true;
+    syncBanner();
+  });
+  ctlCaptionsOn.addEventListener("change", syncCaptions);
+  ctlCaptionsHl.addEventListener("input", syncCaptions);
+  ctlCommentsOn.addEventListener("change", syncComments);
+  ctlCommentsLk.addEventListener("input", syncComments);
+
+  // Caption animation: cycle the active word through the four words
+  // every 600ms while the video is playing. Approximates the karaoke
+  // feel without needing word-level timestamps from the transcript.
+  var words = pvCaption.querySelectorAll(".nc-pv-caption__word");
+  var idx = 0;
+  setInterval(function () {
+    words.forEach(function (w, i) {
+      w.classList.toggle("is-active", i === idx);
+    });
+    idx = (idx + 1) % words.length;
+  }, 600);
+
+  // Play / restart controls — small QoL. Keeps the <video> muted so the
+  // browser doesn't gate autoplay. The operator hears nothing here;
+  // audio is just a check on the rendered MP4.
+  var video = document.getElementById("preview-video");
+  document.getElementById("preview-play").addEventListener("click", function () {
+    if (video.paused) { video.play(); }
+    else { video.pause(); }
+  });
+  document.getElementById("preview-restart").addEventListener("click", function () {
+    video.currentTime = 0;
+    video.play();
+  });
+
+  // Initial paint (in case the form pre-populated from a saved overlay).
+  syncTitle();
+  syncBanner();
+  syncCaptions();
+  syncComments();
+})();
+</script>
 {% endblock %}

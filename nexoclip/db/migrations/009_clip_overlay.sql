@@ -1,0 +1,27 @@
+-- Per-clip overlay customization (clip-editor screen, slice F.6).
+--
+-- The brand kit defines DEFAULTS (caption preset, social handle, color
+-- palette). The clip editor lets the operator override-per-clip before
+-- publishing — different clips often want different title text, a
+-- different bottom banner emphasis, captions on/off, etc.
+--
+-- Stored as a single JSON blob so adding new overlay knobs (stickers,
+-- emoji reactions, sound bites) is schema-stable. The renderer reads
+-- whatever keys it knows; missing keys fall back to brand-kit values.
+--
+-- Schema-wise this is the safe minimum:
+--   - title_text:               string | null (top banner copy)
+--   - banner.enabled:           bool          (KICK-style strip)
+--   - banner.platform:          string        ('kick' / 'twitch' / etc.)
+--   - banner.url:               string        ('kick.com/<handle>')
+--   - banner.color:             hex string    (banner fill, defaults to platform color)
+--   - captions.enabled:         bool          (burn captions in?)
+--   - captions.preset:          preset id     (overrides brand_kits.caption_style)
+--   - captions.highlight_color: hex string    (active-word highlight color)
+--   - comments.show_overlay:    bool          (right-side reactions rail in render)
+--   - comments.fake_likes:      int           (placeholder count for the visual)
+--
+-- An empty / NULL column means "use brand-kit defaults across the
+-- board" — no migration needed for existing clips.
+
+ALTER TABLE clips ADD COLUMN overlay_config_json TEXT;

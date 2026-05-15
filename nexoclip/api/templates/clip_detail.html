@@ -402,6 +402,15 @@
               <span id="scrubber-now">0:00</span>
               <span id="scrubber-total">{{ "%d:%02d"|format(clip.duration_s|int // 60, clip.duration_s|int % 60) }}</span>
             </div>
+
+            {# Intelligence timeline rail (slice F.7-C). Markers
+               populate async from /clips/{id}/intelligence.json.
+               Click any marker (or its legend row below) to seek
+               the video to that timestamp. #}
+            <div class="nc-timeline" id="timeline">
+              <div class="nc-timeline__rail" id="timeline-rail"></div>
+              <div class="nc-timeline__legend" id="timeline-legend"></div>
+            </div>
           </div>
 
           <div style="display: flex; gap: 8px; justify-content: center; margin-top: 12px;">
@@ -1016,6 +1025,72 @@
     .then(function (r) { return r.ok ? r.json() : []; })
     .then(renderWaveformBars)
     .catch(function () { renderWaveformBars([]); });
+
+  // ---- Intelligence timeline (slice F.7-C) ----
+  // Per-clip markers (audio peak / scene cut / reaction / chat
+  // heat / face emotion). Renders as colored dots on the rail,
+  // labeled rows in the legend. Click either to seek.
+  var tlRail   = document.getElementById("timeline-rail");
+  var tlLegend = document.getElementById("timeline-legend");
+
+  function fmtMarkerTs(s) {
+    s = Math.max(0, s);
+    var m = Math.floor(s / 60);
+    var rem = Math.floor(s % 60);
+    return m + ":" + (rem < 10 ? "0" : "") + rem;
+  }
+
+  function renderTimeline(markers, durationS) {
+    tlRail.innerHTML = "";
+    tlLegend.innerHTML = "";
+    if (!markers || markers.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "nc-timeline__empty";
+      empty.textContent = "No standout moments detected — clip has no transcript / chat / visual signals to mine.";
+      tlLegend.appendChild(empty);
+      return;
+    }
+    var dur = durationS && durationS > 0 ? durationS : ({{ clip.duration_s }} || 1);
+
+    markers.forEach(function (m) {
+      var pct = Math.max(0, Math.min(100, (m.ts / dur) * 100));
+
+      // Rail dot.
+      var dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "nc-timeline__marker nc-timeline__marker--" + m.kind;
+      dot.style.left = pct + "%";
+      dot.title = fmtMarkerTs(m.ts) + "  ·  " + m.label;
+      dot.setAttribute("aria-label", m.label + " at " + fmtMarkerTs(m.ts));
+      dot.addEventListener("click", function () {
+        seekToFrac(m.ts / dur);
+      });
+      tlRail.appendChild(dot);
+
+      // Legend row.
+      var row = document.createElement("div");
+      row.className = "nc-timeline__legend-row";
+      row.title = "Click to seek";
+      row.addEventListener("click", function () { seekToFrac(m.ts / dur); });
+      var ts = document.createElement("span");
+      ts.className = "nc-timeline__legend-ts";
+      ts.textContent = fmtMarkerTs(m.ts);
+      var dotMini = document.createElement("span");
+      dotMini.className = "nc-timeline__legend-dot nc-timeline__marker--" + m.kind;
+      var lbl = document.createElement("span");
+      lbl.className = "nc-timeline__legend-label";
+      lbl.textContent = m.label;
+      row.appendChild(ts);
+      row.appendChild(dotMini);
+      row.appendChild(lbl);
+      tlLegend.appendChild(row);
+    });
+  }
+
+  fetch("/dashboard/clips/{{ clip.id }}/intelligence.json")
+    .then(function (r) { return r.ok ? r.json() : { markers: [] }; })
+    .then(function (data) { renderTimeline(data.markers || [], data.duration_s); })
+    .catch(function () { renderTimeline([], 0); });
 
   // ---- Hook generator (slice F.7-B) ----
   // Click "Generate 5" → POST /clips/{id}/generate-hooks with the

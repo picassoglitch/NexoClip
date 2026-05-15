@@ -1515,6 +1515,92 @@ details.nc-details > article {
 }
 
 
+/* ---------- 28c. Intelligence timeline (slice F.7-C) -------------
+ * Marker rail under the scrubber. Each marker is a colored dot
+ * positioned at its ts/duration ratio. Hover shows the tooltip;
+ * click seeks the video to that ts. Below the rail, a labeled
+ * legend strip lists each marker as text — operator-readable
+ * without hovering. */
+
+.nc-timeline {
+    margin-top: 8px;
+    user-select: none;
+}
+.nc-timeline__rail {
+    position: relative;
+    height: 18px;
+    border-radius: 4px;
+    background: var(--nc-bg-base);
+    border: var(--nc-hairline);
+    overflow: visible;
+}
+.nc-timeline__marker {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1.5px solid var(--nc-bg-base);
+    cursor: pointer;
+    z-index: 2;
+    box-shadow: 0 0 6px currentColor;
+    transition: transform 100ms ease;
+}
+.nc-timeline__marker:hover {
+    transform: translate(-50%, -50%) scale(1.35);
+    z-index: 3;
+}
+.nc-timeline__marker--audio_peak    { background: var(--nc-blue-bright); color: var(--nc-blue-bright); }
+.nc-timeline__marker--reaction      { background: var(--nc-warn);        color: var(--nc-warn); }
+.nc-timeline__marker--scene_cut     { background: var(--nc-ai-bright);   color: var(--nc-ai-bright); }
+.nc-timeline__marker--chat_heat     { background: var(--nc-success);     color: var(--nc-success); }
+.nc-timeline__marker--face_emotion  { background: var(--nc-danger);      color: var(--nc-danger); }
+
+.nc-timeline__legend {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--nc-text-body);
+}
+.nc-timeline__legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 80ms ease;
+}
+.nc-timeline__legend-row:hover {
+    background: var(--nc-blue-faint);
+}
+.nc-timeline__legend-ts {
+    font-family: var(--nc-font-mono);
+    color: var(--nc-blue-bright);
+    flex-shrink: 0;
+    width: 38px;
+}
+.nc-timeline__legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.nc-timeline__legend-label {
+    flex: 1;
+    color: var(--nc-text);
+}
+.nc-timeline__empty {
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    text-align: center;
+    padding: 8px;
+}
+
+
 /* ---------- 29. Login screen specific ---------- */
 
 .nc-login-shell {

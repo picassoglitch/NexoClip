@@ -621,6 +621,50 @@ async def test_clip_row_loader_tolerates_unknown_columns(
     assert clip.id == "clp_e"
 
 
+async def test_clip_editor_renders_intelligence_timeline(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """The scrubber strip ships with an empty marker rail + legend
+    that get populated async from /clips/{id}/intelligence.json."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    body = r.text
+    assert 'id="timeline-rail"' in body
+    assert 'id="timeline-legend"' in body
+    assert "/dashboard/clips/clp_e/intelligence.json" in body
+
+
+async def test_intelligence_endpoint_returns_shape(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e/intelligence.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert "markers" in body
+    assert "duration_s" in body
+    assert isinstance(body["markers"], list)
+    # Fixture clip has no transcript / visual_signals / chat → empty markers.
+    assert body["markers"] == []
+
+
+async def test_intelligence_endpoint_404_for_unknown_clip(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    await _login(client, tenants["alice"]["token"])
+    r = await client.get("/dashboard/clips/clp_nope/intelligence.json")
+    assert r.status_code == 404
+
+
 async def test_clip_editor_renders_hook_generator_ui(
     client: httpx.AsyncClient,
     db: Database,

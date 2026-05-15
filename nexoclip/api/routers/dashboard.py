@@ -942,6 +942,49 @@ async def clip_thumbnail(
     )
 
 
+@router.get("/clips/{clip_id}/intelligence.json")
+async def clip_intelligence(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Per-clip intelligence markers (audio peaks / scene cuts /
+    laughter reactions / chat-heat spikes / face-emotion changes).
+
+    Aggregated read-only across the existing transcripts +
+    visual_signals + chat_replay surfaces. Returns a flat
+    `{markers: [{kind, ts, score, label}, ...]}` JSON shape — no
+    caching needed (the underlying tables are already indexed by
+    stream_id and the aggregation is cheap).
+    """
+    import json as _json
+
+    from nexoclip.clip import compute_intelligence
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    markers = await compute_intelligence(db, clip_id=clip_id)
+    return Response(
+        content=_json.dumps(
+            {
+                "markers": [
+                    {
+                        "kind": m.kind,
+                        "ts": m.ts,
+                        "score": m.score,
+                        "label": m.label,
+                    }
+                    for m in markers
+                ],
+                "duration_s": clip.duration_s,
+            }
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/clips/{clip_id}/waveform.json")
 async def clip_waveform(
     clip_id: str,

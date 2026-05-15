@@ -1334,6 +1334,86 @@ details.nc-details > article {
 }
 
 
+/* ---------- 28b. Waveform + scrubber (under preview) ----------------
+ * Two stacked layers: an SVG waveform showing audio energy buckets,
+ * and a scrubber bar with a draggable playhead. Click anywhere in
+ * the waveform OR the scrubber to seek the video. */
+
+.nc-scrubber {
+    margin-top: 10px;
+    user-select: none;
+}
+.nc-waveform {
+    width: 100%;
+    height: 36px;
+    display: block;
+    cursor: pointer;
+    background: var(--nc-bg-base);
+    border: var(--nc-hairline);
+    border-radius: 4px;
+    overflow: visible;
+}
+.nc-waveform__bar {
+    fill: var(--nc-blue-dim);
+    transition: fill 80ms linear;
+}
+.nc-waveform__bar.is-played {
+    fill: var(--nc-blue-bright);
+}
+.nc-waveform__playhead {
+    stroke: var(--nc-blue-bright);
+    stroke-width: 1.5;
+    pointer-events: none;
+    filter: drop-shadow(0 0 4px var(--nc-blue-bright));
+}
+.nc-waveform__empty {
+    fill: var(--nc-text-muted);
+    font-family: var(--nc-font-mono);
+    font-size: 10px;
+}
+
+.nc-scrubber__bar {
+    margin-top: 4px;
+    position: relative;
+    height: 10px;
+    background: var(--nc-bg-raised);
+    border-radius: 999px;
+    cursor: pointer;
+    overflow: hidden;
+}
+.nc-scrubber__progress {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    background: linear-gradient(90deg, var(--nc-blue), var(--nc-blue-bright));
+    border-radius: 999px;
+    transition: width 80ms linear;
+}
+.nc-scrubber__handle {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    background: var(--nc-text);
+    border: 2px solid var(--nc-blue-bright);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 8px var(--nc-blue);
+    transition: left 80ms linear;
+    pointer-events: none;
+}
+.nc-scrubber__times {
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--nc-text-muted);
+    font-family: var(--nc-font-mono);
+    font-size: 10px;
+}
+
+
 /* ---------- 29. Login screen specific ---------- */
 
 .nc-login-shell {

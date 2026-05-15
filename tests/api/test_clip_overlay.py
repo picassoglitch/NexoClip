@@ -424,6 +424,53 @@ async def test_finalize_404_for_unknown_clip(
 # ---- Tenant isolation ------------------------------------------
 
 
+async def test_clip_editor_renders_waveform_scrubber(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """The preview now has a click-to-seek scrubber + SVG waveform
+    placeholder under it. The waveform peaks load async via fetch
+    against /dashboard/clips/{id}/waveform.json."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    body = r.text
+    assert 'id="waveform"' in body
+    assert 'id="scrubber-bar"' in body
+    assert 'id="scrubber-progress"' in body
+    assert 'id="scrubber-handle"' in body
+    assert "/dashboard/clips/clp_e/waveform.json" in body
+    # Total time renders mm:ss from clip.duration_s (10s in fixture).
+    assert "0:10" in body
+
+
+async def test_waveform_endpoint_returns_empty_when_clip_missing_on_disk(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Fixture clip points at /tmp/c.mp4 which doesn't exist; the
+    endpoint must return [] (200) instead of 500ing so the editor
+    JS gracefully degrades."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e/waveform.json")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_waveform_endpoint_404_for_unknown_clip(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    await _login(client, tenants["alice"]["token"])
+    r = await client.get("/dashboard/clips/clp_nope/waveform.json")
+    assert r.status_code == 404
+
+
 async def test_clip_editor_renders_ai_insights_strip(
     client: httpx.AsyncClient,
     db: Database,

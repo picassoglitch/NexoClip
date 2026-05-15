@@ -789,6 +789,44 @@ async def clip_thumbnail(
     )
 
 
+@router.get("/clips/{clip_id}/waveform.json")
+async def clip_waveform(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Serve the per-clip audio waveform as a list of normalized peaks.
+
+    Computed on first request via ffmpeg PCM extraction, then cached
+    next to the clip MP4 as `waveform.json` for instant subsequent
+    loads. Returns `[]` (200, not 404) when extraction fails so the
+    editor's scrubber gracefully degrades to a flat baseline rather
+    than spamming the console with 404s on every clip without audio.
+    """
+    import json as _json
+
+    from nexoclip.clip import load_or_compute_waveform
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    clip_path = Path(clip.path)
+    if not clip_path.exists():
+        return Response(
+            content="[]",
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+    peaks = load_or_compute_waveform(clip_path)
+    return Response(
+        content=_json.dumps(peaks),
+        media_type="application/json",
+        # The on-disk cache means we can be aggressive with browser
+        # caching too; the file changes only when ops manually delete it.
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/streams/{stream_id}/source")
 async def stream_source(
     stream_id: str,

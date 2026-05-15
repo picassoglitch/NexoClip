@@ -380,6 +380,30 @@
             </div>
           </div>
 
+          {# Waveform + click-to-seek scrubber. The waveform JSON
+             loads async via fetch() — see <script> at the bottom of
+             this template. SVG starts empty; gets populated once
+             the peaks arrive. #}
+          <div class="nc-scrubber" id="scrubber">
+            <svg class="nc-waveform" id="waveform"
+                 viewBox="0 0 200 36" preserveAspectRatio="none">
+              <text class="nc-waveform__empty" x="100" y="22"
+                    text-anchor="middle" id="waveform-loading">loading waveform…</text>
+              <line class="nc-waveform__playhead" id="waveform-playhead"
+                    x1="0" y1="0" x2="0" y2="36"
+                    style="display: none;"></line>
+            </svg>
+            <div class="nc-scrubber__bar" id="scrubber-bar">
+              <div class="nc-scrubber__progress" id="scrubber-progress"></div>
+              <div class="nc-scrubber__handle" id="scrubber-handle"
+                   style="left: 0%;"></div>
+            </div>
+            <div class="nc-scrubber__times">
+              <span id="scrubber-now">0:00</span>
+              <span id="scrubber-total">{{ "%d:%02d"|format(clip.duration_s|int // 60, clip.duration_s|int % 60) }}</span>
+            </div>
+          </div>
+
           <div style="display: flex; gap: 8px; justify-content: center; margin-top: 12px;">
             <button type="button" id="preview-play" class="nc-btn nc-btn--sm">
               <i class="ti ti-player-play" aria-hidden="true"></i>
@@ -861,6 +885,105 @@
     video.currentTime = 0;
     video.play();
   });
+
+  // ---- Waveform + scrubber (slice F.7 follow-up A) ----
+  // Async-load the per-clip waveform peaks, render as SVG bars,
+  // wire click-to-seek over both the waveform and the progress bar.
+  var waveformSvg     = document.getElementById("waveform");
+  var waveformLoading = document.getElementById("waveform-loading");
+  var waveformPlayhead= document.getElementById("waveform-playhead");
+  var scrubberBar     = document.getElementById("scrubber-bar");
+  var scrubberProgress= document.getElementById("scrubber-progress");
+  var scrubberHandle  = document.getElementById("scrubber-handle");
+  var scrubberNow     = document.getElementById("scrubber-now");
+
+  function fmtTime(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    var m = Math.floor(s / 60);
+    var rem = Math.floor(s % 60);
+    return m + ":" + (rem < 10 ? "0" : "") + rem;
+  }
+
+  function renderWaveformBars(peaks) {
+    if (!peaks || peaks.length === 0) {
+      waveformLoading.textContent = "no waveform";
+      return;
+    }
+    waveformLoading.style.display = "none";
+    var w = 200, h = 36;
+    var barW = w / peaks.length;
+    var ns = "http://www.w3.org/2000/svg";
+    peaks.forEach(function (p, i) {
+      var barH = Math.max(1, p * h * 0.95);
+      var rect = document.createElementNS(ns, "rect");
+      rect.setAttribute("class", "nc-waveform__bar");
+      rect.setAttribute("data-index", String(i));
+      rect.setAttribute("x", String(i * barW));
+      rect.setAttribute("y", String((h - barH) / 2));
+      rect.setAttribute("width", String(Math.max(0.5, barW - 0.3)));
+      rect.setAttribute("height", String(barH));
+      // Insert before the playhead so the playhead stays on top.
+      waveformSvg.insertBefore(rect, waveformPlayhead);
+    });
+    waveformPlayhead.style.display = "";
+  }
+
+  function syncPlayhead() {
+    if (!isFinite(video.duration) || video.duration === 0) return;
+    var frac = Math.max(0, Math.min(1, video.currentTime / video.duration));
+    var x = frac * 200;
+    waveformPlayhead.setAttribute("x1", String(x));
+    waveformPlayhead.setAttribute("x2", String(x));
+    scrubberProgress.style.width = (frac * 100).toFixed(2) + "%";
+    scrubberHandle.style.left = (frac * 100).toFixed(2) + "%";
+    scrubberNow.textContent = fmtTime(video.currentTime);
+    // Color the played-through bars in bright blue, the rest in dim.
+    var played = Math.floor(frac * waveformSvg.querySelectorAll(".nc-waveform__bar").length);
+    waveformSvg.querySelectorAll(".nc-waveform__bar").forEach(function (b, i) {
+      b.classList.toggle("is-played", i < played);
+    });
+  }
+
+  function seekToFrac(frac) {
+    if (!isFinite(video.duration) || video.duration === 0) return;
+    frac = Math.max(0, Math.min(1, frac));
+    video.currentTime = frac * video.duration;
+  }
+
+  function fracFromEvent(el, ev) {
+    var rect = el.getBoundingClientRect();
+    return (ev.clientX - rect.left) / rect.width;
+  }
+
+  // Scrubber-bar drag interactions.
+  var scrubberDragging = false;
+  scrubberBar.addEventListener("pointerdown", function (ev) {
+    scrubberDragging = true;
+    seekToFrac(fracFromEvent(scrubberBar, ev));
+    scrubberBar.setPointerCapture(ev.pointerId);
+  });
+  scrubberBar.addEventListener("pointermove", function (ev) {
+    if (scrubberDragging) seekToFrac(fracFromEvent(scrubberBar, ev));
+  });
+  scrubberBar.addEventListener("pointerup", function (ev) {
+    scrubberDragging = false;
+    try { scrubberBar.releasePointerCapture(ev.pointerId); } catch (_) {}
+  });
+
+  // Click-anywhere-on-the-waveform to seek.
+  waveformSvg.addEventListener("click", function (ev) {
+    seekToFrac(fracFromEvent(waveformSvg, ev));
+  });
+
+  video.addEventListener("timeupdate", syncPlayhead);
+  video.addEventListener("loadedmetadata", syncPlayhead);
+
+  // Fetch waveform peaks. Failure → keep the "no waveform" message
+  // visible but the scrubber bar still works for seeking.
+  fetch("/dashboard/clips/{{ clip.id }}/waveform.json")
+    .then(function (r) { return r.ok ? r.json() : []; })
+    .then(renderWaveformBars)
+    .catch(function () { renderWaveformBars([]); });
 
   // Initial paint (in case the form pre-populated from a saved overlay).
   syncTitle();

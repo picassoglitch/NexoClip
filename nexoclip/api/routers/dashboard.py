@@ -724,11 +724,95 @@ async def clip_overlay_finalize(
     await repo.set_overlay_config(clip_id, overlay_config=cfg)
     if target != clip.status:
         await repo.update_status(clip_id, status=target)
+
+    # ---- Renderer-side overlay burn-in (slice F.7-E) ----
+    # Re-render the clip with title / banner / captions burned into
+    # the pixels. Output goes to `<clip_dir>/clip_final.mp4` next to
+    # the original. Publishers prefer the final when present and
+    # fall back to the original on burn failure.
+    burn_outcome = await _burn_overlays_for_clip(
+        db=db, clip_id=clip_id, overlay_config=cfg
+    )
     await EventsRepo(db).emit(
         type="clip.finalized",
-        payload={"clip_id": clip_id, "to_status": target},
+        payload={
+            "clip_id": clip_id,
+            "to_status": target,
+            "burn_outcome": burn_outcome,
+        },
     )
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
+
+
+async def _burn_overlays_for_clip(
+    *,
+    db: Database,
+    clip_id: str,
+    overlay_config: dict[str, object],
+) -> str:
+    """Run the overlay burn for one clip, returning a short outcome
+    string suitable for the clip.finalized event payload:
+
+      - "skipped_no_overlays"  — nothing was enabled (no title, no
+                                 banner, captions off OR no transcript)
+      - "skipped_clip_missing" — the source MP4 isn't on disk
+      - "burned"               — clip_final.mp4 written successfully
+      - "failed:<short reason>" — ffmpeg returned non-zero; the
+                                  original clip.mp4 is untouched and
+                                  publishers will fall back to it
+
+    NEVER raises — the finalize endpoint shouldn't fail just because
+    a render variant didn't pan out. The operator can re-finalize to
+    retry. The full ffmpeg stderr is logged regardless.
+    """
+    import asyncio
+    import json as _json
+
+    import structlog
+
+    from nexoclip.clip import burn_overlays
+    from nexoclip.db import TranscriptsRepo
+
+    log = structlog.get_logger("nexoclip.api.dashboard")
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        return "skipped_clip_missing"
+    source_path = Path(clip.path)
+    if not source_path.exists():
+        log.warning("burn.source_missing", clip_id=clip_id, path=str(source_path))
+        return "skipped_clip_missing"
+    target_path = source_path.parent / "clip_final.mp4"
+
+    transcript = await TranscriptsRepo(db).get(clip.stream_id)
+    segments: list[object] = []
+    if transcript is not None:
+        try:
+            segments = _json.loads(transcript.segments_json) or []
+        except (TypeError, _json.JSONDecodeError):
+            segments = []
+
+    try:
+        # ffmpeg is sync + CPU-bound; offload to a thread so the
+        # event loop isn't blocked while a 30s clip re-encodes.
+        burned = await asyncio.to_thread(
+            burn_overlays,
+            source_path=source_path,
+            target_path=target_path,
+            overlay_config=overlay_config,
+            transcript_segments=segments,
+            clip_start_s=clip.start_s,
+            clip_end_s=clip.end_s,
+            output_w=clip.width,
+            output_h=clip.height,
+        )
+    except Exception as e:  # noqa: BLE001 — we want the catch-all
+        log.warning("burn.failed", clip_id=clip_id, error=str(e))
+        # Reason capped at 80 chars so the events table doesn't get
+        # ffmpeg essays.
+        reason = str(e)[:80].replace("\n", " ")
+        return f"failed:{reason}"
+    return "burned" if burned else "skipped_no_overlays"
 
 
 @router.post(
@@ -892,6 +976,12 @@ async def clip_media(
 ) -> FileResponse:
     """Stream the cut MP4 for inline <video> playback on the clip detail page.
 
+    Prefers `clip_final.mp4` when present — that's the burned-in
+    version from the overlay finalize endpoint (slice F.7-E). The
+    editor's preview surface immediately reflects what publishers
+    will upload after the operator clicks Ship to platforms. Falls
+    back to the original `clip.mp4` when no burn has run yet.
+
     Returns 404 if the clip row is missing or the on-disk file disappeared
     (e.g., out/ was nuked between runs). Tenant-bound so one tenant can't
     fetch another's clip even by guessing the id.
@@ -899,7 +989,9 @@ async def clip_media(
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
-    clip_path = Path(clip.path)
+    original = Path(clip.path)
+    final = original.parent / "clip_final.mp4"
+    clip_path = final if final.exists() else original
     if not clip_path.exists():
         raise HTTPException(
             status_code=404,

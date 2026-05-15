@@ -15,6 +15,7 @@ End-to-end through the dashboard:
 from __future__ import annotations
 
 import datetime as _dt
+from pathlib import Path
 
 import httpx
 
@@ -278,6 +279,169 @@ async def test_overlay_save_404_for_unknown_clip(
 
 
 # ---- Finalize ---------------------------------------------------
+
+
+async def test_finalize_runs_overlay_burn_when_overlays_enabled(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Slice F.7-E: finalize triggers a renderer-side burn pass.
+    Patch ClipsRepo.get to return a clip whose path lives under
+    tmp_path so the burn helper can find it on disk; patch
+    burn_overlays to confirm it gets called with the right config."""
+    from nexoclip.clip import overlay_burn
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+
+    # Seed a clip whose path is a real file on disk so the burn
+    # helper's "source missing" guard doesn't short-circuit.
+    clip_dir = tmp_path / "clips" / "clp_e"
+    clip_dir.mkdir(parents=True)
+    clip_path = clip_dir / "clip.mp4"
+    clip_path.write_bytes(b"fake mp4")
+
+    with bound_tenant(tid):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_e", tenant_id=tid, vod_url="x", platform="kick",
+                title="t", channel="c", duration_s=60.0,
+                source_video_path="/tmp/v", source_audio_path="/tmp/a",
+                status="ingested", created_at=_now(),
+            )
+        )
+        from nexoclip.db import CandidatesRepo
+        await CandidatesRepo(db).upsert_many([CandidateRow(
+            id="cnd_e", stream_id="str_e", tenant_id=tid, ts=10.0,
+            score=0.9, reason="voice", evidence={}, created_at=_now(),
+        )])
+        await ClipsRepo(db).upsert_many([ClipRow(
+            id="clp_e", stream_id="str_e", tenant_id=tid,
+            candidate_id="cnd_e",
+            start_s=0.0, end_s=10.0, duration_s=10.0,
+            width=1080, height=1920, path=str(clip_path),
+            status="cut", created_at=_now(),
+        )])
+
+    captured: dict[str, object] = {}
+
+    def fake_burn(**kwargs):
+        captured.update(kwargs)
+        # Pretend we wrote the final MP4.
+        Path(kwargs["target_path"]).write_bytes(b"burned")
+        return True
+
+    # Patch BOTH the module-of-origin AND the re-exported name on
+    # nexoclip.clip — the dashboard handler imports
+    # `from nexoclip.clip import burn_overlays` at call time, so
+    # the re-export binding is what it actually grabs.
+    import nexoclip.clip
+    monkeypatch.setattr(overlay_burn, "burn_overlays", fake_burn)
+    monkeypatch.setattr(nexoclip.clip, "burn_overlays", fake_burn)
+
+    r = await client.post(
+        "/dashboard/clips/clp_e/finalize",
+        data={
+            "title_text": "Adin Ross asked Clav for RETA",
+            "banner_enabled": "1",
+            "banner_platform": "kick",
+            "banner_url": "kick.com/clavicular",
+            "banner_color": "#53FC18",
+            "captions_enabled": "1",
+            "captions_preset": "",
+            "captions_highlight_color": "#FFD700",
+            "comments_show": "",
+            "comments_fake_likes": "0",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    # Burn was called with the operator's overlay config.
+    assert captured["source_path"] == clip_path
+    assert captured["target_path"] == clip_dir / "clip_final.mp4"
+    cfg = captured["overlay_config"]
+    assert isinstance(cfg, dict)
+    assert cfg["title_text"] == "Adin Ross asked Clav for RETA"
+    assert cfg["banner"]["platform"] == "kick"
+    # And the burned file lives on disk now — publishers will pick it up.
+    assert (clip_dir / "clip_final.mp4").exists()
+
+
+async def test_finalize_tolerates_burn_failure(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """If ffmpeg fails, finalize still succeeds (status moves,
+    overlay_config persists). Publishers fall back to the original
+    clip.mp4 — the operator can retry from the editor."""
+    from nexoclip.clip import overlay_burn
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+
+    clip_dir = tmp_path / "clips" / "clp_e"
+    clip_dir.mkdir(parents=True)
+    clip_path = clip_dir / "clip.mp4"
+    clip_path.write_bytes(b"fake")
+    with bound_tenant(tid):
+        await StreamsRepo(db).upsert(StreamRow(
+            id="str_e", tenant_id=tid, vod_url="x", platform="kick",
+            title="t", channel="c", duration_s=60.0,
+            source_video_path="/tmp/v", source_audio_path="/tmp/a",
+            status="ingested", created_at=_now(),
+        ))
+        from nexoclip.db import CandidatesRepo
+        await CandidatesRepo(db).upsert_many([CandidateRow(
+            id="cnd_e", stream_id="str_e", tenant_id=tid, ts=10.0,
+            score=0.9, reason="voice", evidence={}, created_at=_now(),
+        )])
+        await ClipsRepo(db).upsert_many([ClipRow(
+            id="clp_e", stream_id="str_e", tenant_id=tid,
+            candidate_id="cnd_e",
+            start_s=0.0, end_s=10.0, duration_s=10.0,
+            width=1080, height=1920, path=str(clip_path),
+            status="cut", created_at=_now(),
+        )])
+
+    def boom(**kwargs):
+        raise RuntimeError("ffmpeg burn failed: pretend stderr")
+
+    import nexoclip.clip
+    monkeypatch.setattr(overlay_burn, "burn_overlays", boom)
+    monkeypatch.setattr(nexoclip.clip, "burn_overlays", boom)
+
+    r = await client.post(
+        "/dashboard/clips/clp_e/finalize",
+        data={
+            "title_text": "x",
+            "banner_enabled": "",
+            "banner_platform": "kick",
+            "banner_url": "",
+            "banner_color": "",
+            "captions_enabled": "1",
+            "captions_preset": "",
+            "captions_highlight_color": "#FFD700",
+            "comments_show": "",
+            "comments_fake_likes": "0",
+        },
+        follow_redirects=False,
+    )
+    # Status still moves even though the burn failed.
+    assert r.status_code == 303
+    with bound_tenant(tid):
+        clip = await ClipsRepo(db).get("clp_e")
+    assert clip is not None
+    assert clip.status == "approved"
+    assert clip.overlay_config is not None
+    # No burned file → publishers fall back to clip.mp4.
+    assert not (clip_dir / "clip_final.mp4").exists()
 
 
 async def test_finalize_walks_cut_to_approved(

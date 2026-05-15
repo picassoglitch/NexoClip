@@ -1,0 +1,472 @@
+"""Renderer-side overlay burn-in (slice F.7-E) — pure-function tests."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from nexoclip.clip.overlay_burn import (
+    PLATFORM_COLORS,
+    _ff_escape_path,
+    _ff_escape_text,
+    _hex_to_ff_color,
+    _spec_from_overlay_config,
+    _srt_ts,
+    build_filter_graph,
+    build_srt,
+    burn_overlays,
+)
+
+# ---- text + color escaping --------------------------------------
+
+
+def test_ff_escape_text_handles_every_special_char() -> None:
+    """ffmpeg drawtext eats: backslash, colon, single-quote, square
+    brackets, comma, semicolon, percent. All must be escaped."""
+    s = r"hi: 'world', [test]; 100% (\backslash)"
+    out = _ff_escape_text(s)
+    # Every special char is preceded by a backslash.
+    assert "\\\\" in out  # backslash
+    assert "\\:" in out
+    assert "\\'" in out
+    assert "\\[" in out and "\\]" in out
+    assert "\\," in out
+    assert "\\;" in out
+    assert "\\%" in out
+
+
+def test_ff_escape_text_leaves_normal_chars_alone() -> None:
+    out = _ff_escape_text("Hello world")
+    assert out == "Hello world"
+
+
+def test_ff_escape_path_handles_windows_colons() -> None:
+    p = Path(r"C:\Windows\Fonts\arial.ttf")
+    out = _ff_escape_path(p)
+    # Forward slashes + escaped colon for ffmpeg's filter parser.
+    assert out == "C\\:/Windows/Fonts/arial.ttf"
+    assert "\\\\" not in out  # backslashes flipped to forward
+
+
+def test_ff_escape_path_unix_path_passthrough() -> None:
+    p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    out = _ff_escape_path(p)
+    assert out == "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+def test_hex_to_ff_color_rejects_hash_prefix_returns_named_or_0x() -> None:
+    assert _hex_to_ff_color("#FFD700") == "0xFFD700"
+    assert _hex_to_ff_color("FFD700") == "0xFFD700"
+    # 3-digit hex expands to 6.
+    assert _hex_to_ff_color("#abc") == "0xAABBCC"
+    # Junk input → fallback.
+    assert _hex_to_ff_color("not a hex") == "white"
+    assert _hex_to_ff_color("zzzzzz") == "white"
+
+
+def test_hex_to_ff_color_custom_fallback() -> None:
+    assert _hex_to_ff_color("not a hex", fallback="black") == "black"
+
+
+# ---- _spec_from_overlay_config ---------------------------------
+
+
+def test_spec_from_none_collapses_to_defaults() -> None:
+    s = _spec_from_overlay_config(None)
+    assert s.title_text is None
+    assert s.banner_enabled is False
+    assert s.banner_platform == "kick"
+    assert s.captions_enabled is True  # default-ON to match the editor
+
+
+def test_spec_strips_whitespace_only_title_to_none() -> None:
+    s = _spec_from_overlay_config({"title_text": "   "})
+    assert s.title_text is None
+
+
+def test_spec_extracts_full_config_correctly() -> None:
+    s = _spec_from_overlay_config({
+        "title_text": "Hello world",
+        "banner": {
+            "enabled": True,
+            "platform": "TWITCH",  # uppercase from form → lowercased
+            "url": "twitch.tv/foo",
+            "color": "#9146FF",
+        },
+        "captions": {"enabled": False},
+    })
+    assert s.title_text == "Hello world"
+    assert s.banner_enabled is True
+    assert s.banner_platform == "twitch"
+    assert s.banner_url == "twitch.tv/foo"
+    assert s.banner_color == "#9146FF"
+    assert s.captions_enabled is False
+
+
+def test_spec_tolerates_malformed_nested_blocks() -> None:
+    """Missing or wrong-typed nested blocks don't raise — they fall
+    back to defaults so the editor saves are non-destructive."""
+    s = _spec_from_overlay_config({
+        "title_text": None,
+        "banner": "not a dict",  # type: ignore[dict-item]
+        "captions": 42,           # type: ignore[dict-item]
+    })
+    assert s.title_text is None
+    assert s.banner_enabled is False
+    assert s.captions_enabled is True
+
+
+# ---- build_srt --------------------------------------------------
+
+
+def test_srt_ts_format() -> None:
+    assert _srt_ts(0) == "00:00:00,000"
+    assert _srt_ts(0.5) == "00:00:00,500"
+    assert _srt_ts(61.234) == "00:01:01,234"
+    assert _srt_ts(3661.999) == "01:01:01,999"
+
+
+def test_srt_ts_clamps_negative_to_zero() -> None:
+    assert _srt_ts(-5) == "00:00:00,000"
+
+
+def test_srt_ts_handles_999ms_rounding_carry() -> None:
+    """0.9999s rounds to 1000ms → must carry into the seconds field
+    rather than stamp `00:00:00,1000` (which would break players)."""
+    out = _srt_ts(0.9999)
+    assert out == "00:00:01,000"
+
+
+def test_build_srt_returns_empty_string_when_no_segments() -> None:
+    assert build_srt([], clip_start_s=0, clip_end_s=10) == ""
+
+
+def test_build_srt_filters_to_clip_window_and_shifts_timing() -> None:
+    """A segment at stream-time 105-107 inside a clip starting at 100
+    becomes SRT-time 5-7 (clip-relative)."""
+    segs = [
+        {"start": 50.0, "end": 55.0, "text": "before clip"},     # outside
+        {"start": 105.0, "end": 107.0, "text": "inside clip"},   # inside
+        {"start": 200.0, "end": 205.0, "text": "way after"},     # outside
+    ]
+    body = build_srt(segs, clip_start_s=100.0, clip_end_s=130.0)
+    assert "before clip" not in body
+    assert "way after" not in body
+    assert "inside clip" in body
+    # Timing shifted: segment at 105 → clip-relative 5s.
+    assert "00:00:05,000" in body
+    assert "00:00:07,000" in body
+
+
+def test_build_srt_clamps_segments_at_window_edges() -> None:
+    """A segment that straddles the clip end gets clipped to the end."""
+    segs = [
+        {"start": 95.0, "end": 105.0, "text": "straddles start"},
+        {"start": 125.0, "end": 140.0, "text": "straddles end"},
+    ]
+    body = build_srt(segs, clip_start_s=100.0, clip_end_s=130.0)
+    # First segment starts before the window — clamped to 0:00.
+    assert "00:00:00,000 -->" in body
+    # Second segment ends after the window — clamped to 30s.
+    assert "00:00:30,000" in body
+
+
+def test_build_srt_skips_segments_with_missing_text() -> None:
+    segs = [
+        {"start": 5.0, "end": 6.0, "text": ""},
+        {"start": 6.0, "end": 7.0},  # no text key
+        {"start": 7.0, "end": 8.0, "text": "real one"},
+    ]
+    body = build_srt(segs, clip_start_s=0, clip_end_s=10)
+    assert body.count("-->") == 1
+    assert "real one" in body
+
+
+def test_build_srt_assigns_sequential_indices() -> None:
+    segs = [
+        {"start": 1.0, "end": 2.0, "text": "first"},
+        {"start": 3.0, "end": 4.0, "text": "second"},
+        {"start": 5.0, "end": 6.0, "text": "third"},
+    ]
+    body = build_srt(segs, clip_start_s=0, clip_end_s=10)
+    lines = body.split("\n")
+    # Indices 1, 2, 3 appear at the start of each block.
+    assert lines[0] == "1"
+    assert "second" in lines
+    assert "third" in lines
+
+
+# ---- build_filter_graph ----------------------------------------
+
+
+def test_filter_graph_returns_empty_when_nothing_enabled(tmp_path: Path) -> None:
+    """No title, no banner, captions on but no SRT → empty graph
+    (caller skips the entire re-render in this case)."""
+    spec = _spec_from_overlay_config({
+        "title_text": None,
+        "banner": {"enabled": False},
+        "captions": {"enabled": True},
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    assert graph == ""
+
+
+def test_filter_graph_includes_title_when_set(tmp_path: Path) -> None:
+    spec = _spec_from_overlay_config({"title_text": "Hello world"})
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    assert "drawtext=" in graph
+    assert "Hello world" in graph
+    # Title sits at top with the configured top margin.
+    assert ":y=28" in graph or ":y=" in graph
+    # Background box, white, padded.
+    assert "boxcolor=white" in graph
+    assert "boxborderw=14" in graph
+
+
+def test_filter_graph_includes_banner_when_enabled(tmp_path: Path) -> None:
+    spec = _spec_from_overlay_config({
+        "banner": {
+            "enabled": True,
+            "platform": "kick",
+            "url": "kick.com/clavicular",
+            "color": "#53FC18",
+        },
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    # Colored band first, then platform name, then URL.
+    assert "drawbox=" in graph
+    assert "0x53FC18" in graph  # color converted from #-prefix
+    assert "KICK" in graph  # platform uppercased
+    assert "kick.com/clavicular" in graph
+
+
+def test_filter_graph_banner_uses_platform_default_color_when_blank(
+    tmp_path: Path,
+) -> None:
+    """No explicit color → fall back to PLATFORM_COLORS[platform]."""
+    spec = _spec_from_overlay_config({
+        "banner": {"enabled": True, "platform": "twitch"},
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    # Twitch default → 0x9146FF.
+    twitch = PLATFORM_COLORS["twitch"].lstrip("#")
+    assert f"0x{twitch.upper()}" in graph
+
+
+def test_filter_graph_skips_drawtext_when_no_fontfile(tmp_path: Path) -> None:
+    """Without a system font ffmpeg drawtext can't run — title +
+    banner are skipped silently. Captions can still render via the
+    subtitles filter (SRT carries its own ASS styling)."""
+    spec = _spec_from_overlay_config({
+        "title_text": "x",
+        "banner": {"enabled": True, "platform": "kick"},
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=None,
+        srt_path=None,
+    )
+    assert graph == ""
+
+
+def test_filter_graph_includes_captions_when_srt_exists(tmp_path: Path) -> None:
+    srt = tmp_path / ".captions.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
+    spec = _spec_from_overlay_config({"captions": {"enabled": True}})
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=srt,
+    )
+    assert "subtitles=" in graph
+    assert "force_style" in graph
+
+
+def test_filter_graph_skips_captions_when_disabled(tmp_path: Path) -> None:
+    srt = tmp_path / ".captions.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
+    spec = _spec_from_overlay_config({"captions": {"enabled": False}})
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=srt,
+    )
+    assert "subtitles=" not in graph
+
+
+def test_filter_graph_chains_filters_with_commas(tmp_path: Path) -> None:
+    """ffmpeg -vf joins filters with commas (NOT semicolons — that'd
+    create a graph link, not a chain). The builder's contract is
+    'comma-joined filter chunks'."""
+    srt = tmp_path / ".captions.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nx\n", encoding="utf-8")
+    spec = _spec_from_overlay_config({
+        "title_text": "T",
+        "banner": {"enabled": True, "platform": "kick"},
+        "captions": {"enabled": True},
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=srt,
+    )
+    # All three families present.
+    assert "drawtext=" in graph
+    assert "subtitles=" in graph
+    assert "drawbox=" in graph
+    # Joined with commas, not semicolons.
+    assert ";" not in graph
+    assert "," in graph
+
+
+# ---- burn_overlays driver --------------------------------------
+
+
+def test_burn_overlays_returns_false_when_nothing_to_burn(
+    tmp_path: Path,
+) -> None:
+    """Empty overlay_config + no transcript → nothing to render.
+    Returns False so the caller falls back to the original clip."""
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"fake")
+    target = tmp_path / "clip_final.mp4"
+    out = burn_overlays(
+        source_path=src,
+        target_path=target,
+        overlay_config=None,
+        transcript_segments=[],
+        clip_start_s=0,
+        clip_end_s=10,
+        output_w=1080,
+        output_h=1920,
+    )
+    assert out is False
+    assert not target.exists()
+
+
+def test_burn_overlays_raises_when_source_missing(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="source clip missing"):
+        burn_overlays(
+            source_path=tmp_path / "nope.mp4",
+            target_path=tmp_path / "out.mp4",
+            overlay_config={"title_text": "x"},
+            transcript_segments=[],
+            clip_start_s=0,
+            clip_end_s=10,
+            output_w=1080,
+            output_h=1920,
+        )
+
+
+def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
+    tmp_path: Path,
+) -> None:
+    """Happy path: source exists, title is set, fake ffmpeg run
+    succeeds → SRT is cleaned up + we return True."""
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"fake")
+    target = tmp_path / "clip_final.mp4"
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, check):
+        captured.append(cmd)
+        # Pretend ffmpeg wrote the output.
+        Path(cmd[-1]).write_bytes(b"burned")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    with patch("nexoclip.clip.overlay_burn.subprocess.run", fake_run):
+        out = burn_overlays(
+            source_path=src,
+            target_path=target,
+            overlay_config={
+                "title_text": "Hello",
+                "banner": {"enabled": True, "platform": "kick", "color": "#53FC18"},
+                "captions": {"enabled": True},
+            },
+            transcript_segments=[
+                {"start": 1.0, "end": 2.0, "text": "hi"},
+            ],
+            clip_start_s=0,
+            clip_end_s=10,
+            output_w=1080,
+            output_h=1920,
+        )
+    assert out is True
+    assert target.exists()
+    # The captions SRT should have been cleaned up after the run.
+    assert not (target.parent / ".captions.srt").exists()
+    # ffmpeg cmd carried -vf with the filter graph.
+    cmd = captured[0]
+    assert "ffmpeg" in cmd[0]
+    vf_idx = cmd.index("-vf")
+    vf = cmd[vf_idx + 1]
+    assert "Hello" in vf
+    assert "subtitles=" in vf
+    # Audio is copied (no re-encode).
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+
+
+def test_burn_overlays_propagates_ffmpeg_failure(tmp_path: Path) -> None:
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"fake")
+    target = tmp_path / "clip_final.mp4"
+
+    def fake_run(cmd, capture_output, check):
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=1,
+            stdout=b"",
+            stderr=b"Error: invalid filter graph",
+        )
+
+    with (
+        patch("nexoclip.clip.overlay_burn.subprocess.run", fake_run),
+        pytest.raises(RuntimeError, match="ffmpeg burn failed"),
+    ):
+        burn_overlays(
+            source_path=src,
+            target_path=target,
+            overlay_config={"title_text": "x"},
+            transcript_segments=[],
+            clip_start_s=0,
+            clip_end_s=10,
+            output_w=1080,
+            output_h=1920,
+        )
+    # SRT gets cleaned up even on failure.
+    assert not (target.parent / ".captions.srt").exists()

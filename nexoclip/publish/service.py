@@ -528,11 +528,25 @@ async def _post_with_retries(
 
 
 async def _resolve_clip_path(db: Database, clip_id: str) -> str:
-    """Fetch the on-disk clip path. Buffer ignores it; TikTok/YT need it."""
+    """Fetch the on-disk clip path. Buffer ignores it; TikTok/YT need it.
+
+    Prefers `clip_final.mp4` when present — that's the burned-in
+    version produced by the overlay finalize endpoint (slice F.7-E,
+    with title / KICK banner / captions composited into the pixels).
+    Falls back to the original `clip.mp4` when the operator never
+    finalized OR the burn failed (in which case we still want
+    publishing to work, just without the overlay layer).
+    """
+    from pathlib import Path
+
     from nexoclip.db import ClipsRepo
 
     clip = await ClipsRepo(db).get(clip_id)
-    return clip.path if clip is not None else ""
+    if clip is None:
+        return ""
+    original = Path(clip.path)
+    final = original.parent / "clip_final.mp4"
+    return str(final) if final.exists() else clip.path
 
 
 async def _mark_sent(

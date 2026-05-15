@@ -731,6 +731,159 @@ async def clip_overlay_finalize(
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
+@router.post(
+    "/clips/{clip_id}/generate-hooks",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_generate_hooks(
+    request: Request,
+    clip_id: str,
+    tone: str = Form("default"),
+    n: int = Form(5),
+    persona_id: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Generate `n` viral-hook title candidates for a clip and return
+    them as JSON for the editor's hook-picker UI to render inline.
+
+    Driven by a tone preset (default / aggressive / gen_z / corporate /
+    curious) so the operator can sweep approaches without re-typing
+    the prompt. Each call is a single Anthropic request — cost-tracked
+    by the LLMRouter under purpose='hook_generation'.
+
+    Returns:
+        JSON: {"hooks": [{"text": "..."}, ...], "tone": "...", "n": N}
+        on success.
+        502 on provider failure with the LLM error inline.
+    """
+    import json as _json
+
+    from nexoclip.db import CandidatesRepo, PersonasRepo, TranscriptsRepo
+    from nexoclip.llm import LLMRouter, load_llm_config
+    from nexoclip.settings import get_settings
+    from nexoclip.variants import generate_hooks
+    from nexoclip.variants.personas import (
+        get_persona as get_yaml_persona,
+        load_personas as load_yaml_personas,
+    )
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    # Pick the persona: explicit form arg > first-DB-persona > YAML fallback.
+    persona_voice = ""
+    persona_language = "en"
+    if persona_id:
+        db_persona = await PersonasRepo(db).get(persona_id)
+        if db_persona is not None:
+            persona_voice = db_persona.voice_prompt
+            persona_language = db_persona.primary_language
+        else:
+            try:
+                yp = get_yaml_persona(persona_id)
+                persona_voice = yp.voice_prompt
+                persona_language = yp.primary_language
+            except Exception:
+                pass
+    if not persona_voice:
+        # No explicit persona — grab any persona the tenant has, else
+        # the first YAML persona, else generate with empty voice (the
+        # service tolerates it via "(no persona voice provided)").
+        db_personas = await PersonasRepo(db).list_for_tenant()
+        if db_personas:
+            persona_voice = db_personas[0].voice_prompt
+            persona_language = db_personas[0].primary_language
+        else:
+            try:
+                yps = list(load_yaml_personas().values())
+                if yps:
+                    persona_voice = yps[0].voice_prompt
+                    persona_language = yps[0].primary_language
+            except Exception:
+                pass
+
+    # Pull a transcript snippet — the candidate evidence is the
+    # cheapest source. Falls back to scanning the candidates table for
+    # this clip when the candidate row carries a longer snippet.
+    snippet = ""
+    if clip.candidate_id:
+        for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
+            if cand.id == clip.candidate_id:
+                ev = cand.evidence or {}
+                snippet = (
+                    str(ev.get("transcript_snippet") or ev.get("phrase") or "")
+                ).strip()
+                break
+    if not snippet:
+        # Fall back to the words from the transcript that overlap
+        # the clip window. Cheap heuristic — we slice the JSON segments.
+        try:
+            tx = await TranscriptsRepo(db).get(clip.stream_id)
+            if tx is not None:
+                segs = _json.loads(tx.segments_json)
+                if isinstance(segs, list):
+                    pieces = []
+                    for s in segs:
+                        if not isinstance(s, dict):
+                            continue
+                        s_start = s.get("start") or 0
+                        s_end = s.get("end") or 0
+                        text = (s.get("text") or "").strip()
+                        if text and s_end >= clip.start_s and s_start <= clip.end_s:
+                            pieces.append(text)
+                    snippet = " ".join(pieces).strip()[:600]
+        except Exception:
+            snippet = ""
+
+    output_dir = Path(get_settings().default_output_dir)
+    call_log_path = output_dir / "llm_calls_hooks.jsonl"
+    router_ = LLMRouter(
+        config=load_llm_config(),
+        call_log_path=call_log_path,
+        db=db,
+    )
+
+    # Coerce + clamp form inputs.
+    tone_id = tone.strip().lower() or "default"
+    if tone_id not in ("default", "aggressive", "gen_z", "corporate", "curious"):
+        tone_id = "default"
+    try:
+        n_int = int(n)
+    except (TypeError, ValueError):
+        n_int = 5
+    n_int = max(1, min(10, n_int))
+
+    try:
+        hooks = await generate_hooks(
+            tenant_id=tenant_id,
+            persona_voice=persona_voice,
+            persona_language=persona_language,
+            transcript_snippet=snippet,
+            tone=tone_id,  # type: ignore[arg-type]
+            n=n_int,
+            router=router_,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"hook generation failed: {e}",
+        ) from e
+
+    return Response(
+        content=_json.dumps(
+            {
+                "hooks": [{"text": h.text} for h in hooks],
+                "tone": tone_id,
+                "n": n_int,
+            }
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/clips/{clip_id}/media")
 async def clip_media(
     clip_id: str,

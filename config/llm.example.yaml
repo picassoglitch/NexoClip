@@ -63,6 +63,11 @@ routing:
     primary: anthropic
     fallbacks: []
 
+  hook_generation:                              # Viral-hook title variants (slice F.7-B)
+    default_quality: standard
+    primary: anthropic
+    fallbacks: []
+
 # Reliability
 retry:
   max_attempts: 3

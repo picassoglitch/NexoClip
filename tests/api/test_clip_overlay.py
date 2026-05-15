@@ -621,6 +621,130 @@ async def test_clip_row_loader_tolerates_unknown_columns(
     assert clip.id == "clp_e"
 
 
+async def test_clip_editor_renders_hook_generator_ui(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """The Viral hook section now ships with an AI tone picker + a
+    'Generate 5' button that hits /clips/{id}/generate-hooks."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    body = r.text
+    assert 'id="hook-tone"' in body
+    assert 'id="hook-gen-btn"' in body
+    assert 'id="hook-results"' in body
+    assert "/dashboard/clips/clp_e/generate-hooks" in body
+    # All five tone presets in the dropdown.
+    for tone in ("default", "aggressive", "gen_z", "corporate", "curious"):
+        assert f'value="{tone}"' in body
+
+
+async def test_generate_hooks_endpoint_returns_json(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """End-to-end: POST /clips/{id}/generate-hooks → patches the
+    real Anthropic factory with a FakeProvider → returns the canned
+    hooks as JSON shaped {hooks: [{text}], tone, n}."""
+    from nexoclip.llm import router as router_module
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_DEFAULT_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from tests.llm._fakes import FakeProvider  # type: ignore[import]
+
+    fake = FakeProvider("anthropic")
+    fake.queue_success({
+        "hooks": [
+            {"text": "title one"},
+            {"text": "title two"},
+            {"text": "title three"},
+        ],
+    })
+
+    def factory(name, _config, _api_key):
+        return fake if name == "anthropic" else None
+
+    monkeypatch.setattr(router_module, "_default_provider_factory", factory)
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.post(
+        "/dashboard/clips/clp_e/generate-hooks",
+        data={"tone": "aggressive", "n": "3"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tone"] == "aggressive"
+    assert body["n"] == 3
+    assert [h["text"] for h in body["hooks"]] == [
+        "title one",
+        "title two",
+        "title three",
+    ]
+    get_settings.cache_clear()
+
+
+async def test_generate_hooks_endpoint_404_for_unknown_clip(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    await _login(client, tenants["alice"]["token"])
+    r = await client.post(
+        "/dashboard/clips/clp_nope/generate-hooks",
+        data={"tone": "default", "n": "5"},
+    )
+    assert r.status_code == 404
+
+
+async def test_generate_hooks_endpoint_clamps_invalid_inputs(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Bogus tone falls back to 'default'; n outside [1, 10] gets clamped."""
+    from nexoclip.llm import router as router_module
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_DEFAULT_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from tests.llm._fakes import FakeProvider  # type: ignore[import]
+
+    fake = FakeProvider("anthropic")
+    fake.queue_success({"hooks": [{"text": "x"}]})
+
+    def factory(name, _config, _api_key):
+        return fake if name == "anthropic" else None
+
+    monkeypatch.setattr(router_module, "_default_provider_factory", factory)
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.post(
+        "/dashboard/clips/clp_e/generate-hooks",
+        data={"tone": "BOGUS", "n": "999"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tone"] == "default"  # bogus → default
+    assert body["n"] == 10  # clamped from 999
+    get_settings.cache_clear()
+
+
 async def test_overlay_endpoints_isolated_per_tenant(
     client: httpx.AsyncClient,
     db: Database,

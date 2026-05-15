@@ -471,6 +471,38 @@
                       placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again">{{ ov.get('title_text') or '' }}</textarea>
             <small>Blank = no title overlay. Strongest performers are 6–10 words with curiosity / conflict / status.</small>
           </label>
+
+          {# AI hook generator (slice F.7-B). Tone picker + Generate
+             button. Returned candidates render as click-to-fill chips
+             that drop into the textarea above. Uses the .nc-ai accent
+             so the surface visually announces it's AI-driven. #}
+          <div class="nc-hook-gen">
+            <div class="nc-hook-gen__row">
+              <label class="nc-label" style="flex: 1; margin: 0;">
+                <small>AI tone</small>
+                <select class="nc-select" id="hook-tone">
+                  <option value="default">Default — natural voice</option>
+                  <option value="aggressive">Aggressive — confrontational</option>
+                  <option value="gen_z">Gen Z — TikTok slang</option>
+                  <option value="corporate">Corporate — clean / pro</option>
+                  <option value="curious">Curious — open-loop questions</option>
+                </select>
+              </label>
+              <button type="button" class="nc-btn nc-btn--ai"
+                      id="hook-gen-btn"
+                      title="Generates 5 AI title candidates · one Anthropic call">
+                <i class="ti ti-sparkles" aria-hidden="true"></i>
+                <span>Generate 5</span>
+              </button>
+            </div>
+            <div class="nc-hook-gen__results"
+                 id="hook-results"
+                 aria-live="polite">
+              {# Filled in by JS after the LLM call. Each .nc-hook-chip
+                 is a clickable button that copies its text into the
+                 hook textarea above. #}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -984,6 +1016,91 @@
     .then(function (r) { return r.ok ? r.json() : []; })
     .then(renderWaveformBars)
     .catch(function () { renderWaveformBars([]); });
+
+  // ---- Hook generator (slice F.7-B) ----
+  // Click "Generate 5" → POST /clips/{id}/generate-hooks with the
+  // selected tone → render returned candidates as click-to-fill
+  // chips that drop into the title textarea.
+  var hookBtn     = document.getElementById("hook-gen-btn");
+  var hookTone    = document.getElementById("hook-tone");
+  var hookResults = document.getElementById("hook-results");
+
+  function renderHookError(msg) {
+    hookResults.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "nc-hook-gen__error";
+    d.textContent = "Generation failed: " + msg;
+    hookResults.appendChild(d);
+  }
+
+  function renderHookChips(hooks) {
+    hookResults.innerHTML = "";
+    if (!hooks.length) {
+      var hint = document.createElement("div");
+      hint.className = "nc-hook-gen__hint";
+      hint.textContent = "No hooks returned — try a different tone.";
+      hookResults.appendChild(hint);
+      return;
+    }
+    hooks.forEach(function (h) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "nc-hook-chip";
+      btn.title = "Click to use as hook title";
+      var icon = document.createElement("i");
+      icon.className = "ti ti-arrow-up-right nc-hook-chip__icon";
+      icon.setAttribute("aria-hidden", "true");
+      var text = document.createElement("span");
+      text.className = "nc-hook-chip__text";
+      text.textContent = h.text;
+      btn.appendChild(icon);
+      btn.appendChild(text);
+      btn.addEventListener("click", function () {
+        ctlTitle.value = h.text;
+        // Re-fire the input listener so the live preview's title
+        // overlay updates without a save.
+        ctlTitle.dispatchEvent(new Event("input", { bubbles: true }));
+        // Brief flash to confirm it took.
+        ctlTitle.style.transition = "border-color 600ms ease";
+        ctlTitle.style.borderColor = "var(--nc-ai-bright)";
+        setTimeout(function () { ctlTitle.style.borderColor = ""; }, 800);
+      });
+      hookResults.appendChild(btn);
+    });
+  }
+
+  hookBtn.addEventListener("click", function () {
+    if (hookBtn.classList.contains("is-loading")) return;
+    hookBtn.classList.add("is-loading");
+    hookResults.innerHTML = "";
+    var hint = document.createElement("div");
+    hint.className = "nc-hook-gen__hint";
+    hint.textContent = "Generating " + hookTone.options[hookTone.selectedIndex].text + "…";
+    hookResults.appendChild(hint);
+
+    var form = new FormData();
+    form.append("tone", hookTone.value);
+    form.append("n", "5");
+
+    fetch("/dashboard/clips/{{ clip.id }}/generate-hooks", {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (body) {
+            var msg = body || (r.status + " " + r.statusText);
+            try { msg = JSON.parse(body).detail || msg; } catch (_) {}
+            throw new Error(msg);
+          });
+        }
+        return r.json();
+      })
+      .then(function (data) { renderHookChips(data.hooks || []); })
+      .catch(function (err) { renderHookError(err.message || String(err)); })
+      .finally(function () { hookBtn.classList.remove("is-loading"); });
+  });
 
   // Initial paint (in case the form pre-populated from a saved overlay).
   syncTitle();

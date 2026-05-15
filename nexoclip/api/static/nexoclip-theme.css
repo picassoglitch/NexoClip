@@ -1334,6 +1334,107 @@ details.nc-details > article {
 }
 
 
+/* ---------- 28a. AI button + hook generator (slice F.7-B) ----------
+ * .nc-btn--ai is the primary affordance for any AI-driven action —
+ * uses the purple --nc-ai accent so it announces itself as
+ * "this fires an LLM call" without competing with the regular blue
+ * --nc-btn--primary. */
+
+.nc-btn--ai {
+    background: var(--nc-ai-bg);
+    border-color: var(--nc-ai-dim);
+    color: var(--nc-ai-bright);
+}
+.nc-btn--ai:hover {
+    background: var(--nc-ai);
+    border-color: var(--nc-ai);
+    color: var(--nc-bg-base);
+}
+.nc-btn--ai:focus-visible {
+    box-shadow: 0 0 0 3px var(--nc-ai-bg);
+}
+.nc-btn--ai i {
+    color: inherit;
+}
+.nc-btn--ai.is-loading {
+    cursor: wait;
+}
+.nc-btn--ai.is-loading i {
+    animation: nc-spin 0.8s linear infinite;
+}
+@keyframes nc-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.nc-hook-gen {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: var(--nc-hairline);
+}
+.nc-hook-gen__row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.nc-hook-gen__row .nc-btn--ai {
+    flex-shrink: 0;
+    height: 34px;
+    margin-bottom: 0;
+}
+.nc-hook-gen__results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    min-height: 0;
+}
+.nc-hook-gen__hint {
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    text-align: center;
+    padding: 12px 8px;
+}
+.nc-hook-gen__error {
+    color: var(--nc-danger);
+    font-size: 12px;
+    padding: 10px 12px;
+    background: var(--nc-danger-bg);
+    border: 1px solid var(--nc-danger-dim);
+    border-radius: var(--nc-radius);
+}
+.nc-hook-chip {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--nc-bg-raised);
+    border: var(--nc-hairline);
+    border-radius: var(--nc-radius);
+    color: var(--nc-text);
+    font-family: var(--nc-font);
+    font-size: 13px;
+    line-height: 1.4;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 100ms ease, transform 60ms ease;
+    width: 100%;
+}
+.nc-hook-chip:hover {
+    border-color: var(--nc-ai);
+    background: var(--nc-ai-bg);
+}
+.nc-hook-chip:active {
+    transform: scale(0.99);
+}
+.nc-hook-chip__icon {
+    color: var(--nc-ai-bright);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+.nc-hook-chip__text { flex: 1; }
+
+
 /* ---------- 28b. Waveform + scrubber (under preview) ----------------
  * Two stacked layers: an SVG waveform showing audio energy buckets,
  * and a scrubber bar with a draggable playhead. Click anywhere in

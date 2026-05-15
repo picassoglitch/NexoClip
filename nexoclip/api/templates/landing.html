@@ -3,21 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NexoClip — turn streamer VODs into branded short-form clips</title>
+  <title>NexoClip — the AI growth engine for streamers</title>
 
   {# ---- Crawler / search-LLM metadata --------------------------- #}
   <meta name="description"
-        content="NexoClip is a multi-tenant SaaS that turns streamer VODs into TikTok/Shorts/Reels clips. Voice-marker triggers, per-speaker brand kits, AI-generated captions and logos via Claude, local Whisper transcription, auto-publish with undo window. MCP-ready for agent integration.">
+        content="NexoClip is the AI operating system for stream growth. Voice-marker clip detection, per-speaker brand kits, viral-hook generation, AI scoring, intelligence timelines, auto-publish with undo. Built for streamers and creator agencies who want to ship more clips, more often, with less manual review.">
   <meta name="keywords"
-        content="streamer clipping, VOD clipper, voice-marker clips, multi-streamer brand kits, TikTok auto-publish, AI clip generator, Whisper transcription, speaker diarization, MCP integration, NexoClip">
+        content="stream growth, creator OS, AI clipping, viral hook generator, virality scoring, multi-streamer clipping, voice-marker triggers, brand kit routing, MCP-driven clipping, NexoClip">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <link rel="canonical" href="https://nexoclip.app/">
 
   {# ---- Open Graph (Facebook, LinkedIn, Discord, Slack previews) #}
   <meta property="og:type" content="website">
-  <meta property="og:title" content="NexoClip — turn streamer VODs into branded short-form clips">
+  <meta property="og:title" content="NexoClip — the AI growth engine for streamers">
   <meta property="og:description"
-        content="Voice-marker triggers, per-speaker brand kits, AI-generated captions and logos. Drop a VOD, wake up to branded vertical clips ready to publish.">
+        content="Voice-marker clip detection. Per-speaker brand kits. AI hook generation + viral scoring + intelligence timeline. Drop a VOD, wake up to publish-ready clips routed to the right streamer's brand.">
   <meta property="og:url" content="https://nexoclip.app/">
   <meta property="og:site_name" content="NexoClip">
   <meta property="og:locale" content="en_US">
@@ -25,9 +25,9 @@
 
   {# ---- Twitter / X card --------------------------------------- #}
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="NexoClip — branded short-form clips from streamer VODs">
+  <meta name="twitter:title" content="NexoClip — the AI growth engine for streamers">
   <meta name="twitter:description"
-        content="Voice-marker triggers + per-speaker brand kits + AI captions. Drop a VOD, get publish-ready vertical clips.">
+        content="Voice-marker triggers · per-speaker brand kits · viral scoring · hook generator · intelligence timeline · auto-publish with undo.">
   <meta name="twitter:image" content="/static/og-image.png">
 
   {# ---- Schema.org JSON-LD: SoftwareApplication ---------------- #}
@@ -39,18 +39,22 @@
     "applicationCategory": "MultimediaApplication",
     "applicationSubCategory": "VideoEditingApplication",
     "operatingSystem": "Web, Linux, Windows, macOS",
-    "description": "Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips. Voice cues, chat heat, audio peaks, and visual signals detect clip-worthy moments. Claude generates persona-flavored captions, hooks, and viral-moment selections. Speaker diarization assigns each clip to a per-streamer brand kit.",
+    "description": "AI operating system for stream growth. Voice-marker clip detection routes clips to the right streamer's brand kit. AI scoring (viral / hook strength / readability / dead-air risk), hook generator with five tone presets, per-clip intelligence timeline (audio peaks / chat spikes / scene cuts / face-emotion changes), auto-publish to TikTok / Shorts / Reels with undo window. Local GPU transcription (Whisper) + speaker diarization (pyannote-audio) keep audio on the streamer's machine. MCP server lets Claude Code / Cursor / any LLM client drive the pipeline.",
     "url": "https://nexoclip.app/",
     "softwareVersion": "0.1.0",
     "featureList": [
-      "Voice-marker clip triggers (forward + retroactive)",
-      "Speaker diarization with per-speaker brand kits",
+      "AI viral scoring + hook strength + readability + dead-air risk per clip",
+      "Generate-variations: 5 hook candidates with tone presets (Aggressive / Gen Z / Corporate / Curious)",
+      "Intelligence timeline: per-second audio peaks, scene cuts, laughter, chat heat, face-emotion changes",
+      "Voice-marker triggers (forward 'clipea esto' + retroactive 'clipeaste eso')",
+      "Per-speaker brand kits — multi-streamer VODs route to the right host",
       "AI-generated SVG logos and captions via Anthropic Claude",
       "Local GPU Whisper transcription (no cloud upload required)",
       "Auto-publish to TikTok / Shorts / Reels with undo window",
       "Google Drive folder watching for batch ingestion",
+      "Live audio waveform + click-to-seek scrubber in the editor",
       "Per-tenant retention policies",
-      "MCP server for Claude Code / Cursor integration"
+      "MCP server for Claude Code / Cursor / agent integration"
     ],
     "offers": {
       "@type": "Offer",
@@ -84,7 +88,15 @@
         "name": "What is NexoClip?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "NexoClip is a multi-tenant SaaS that turns finished streamer VODs into branded short-form clips ready for TikTok, YouTube Shorts, and Instagram Reels. It uses voice-marker triggers (the streamer says 'clipea esto' or 'clipeaste eso' during the stream as natural verbal bookmarks), speaker diarization for multi-streamer VODs, AI-generated captions via Anthropic Claude, and local Whisper transcription on the user's GPU."
+          "text": "NexoClip is the AI operating system for stream growth. It turns finished streamer VODs into branded short-form clips ready for TikTok, YouTube Shorts, and Instagram Reels. Voice-marker triggers detect clip-worthy moments; speaker diarization routes each clip to the right host's brand kit; AI scoring (viral / hook strength / readability / dead-air risk) tells the operator which clips to push first; the hook generator writes 5 title candidates per clip with five tone presets; the per-clip intelligence timeline surfaces audio peaks, chat heat, scene cuts, and laughter reactions."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What's an AI growth engine vs. a clip editor?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Clip editors give you a timeline and trim handles. NexoClip is upstream of editing: it watches your VODs, scores every clip on virality dimensions, generates hook titles in your voice, routes clips through brand kits per speaker, and queues auto-publish with an undo window. The operator's job shifts from 'find and cut clips' to 'pick the AI's top 3 and let it ship'. The editor is still there when you need it — it's just not the primary surface."
         }
       },
       {
@@ -92,7 +104,7 @@
         "name": "How are clip moments detected?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Four signals: voice-marker trigger phrases (configurable per brand kit), chat heat, audio peaks, and visual signals (scene cuts, face presence, motion). The trigger scanner aligns Whisper transcripts with pyannote diarization so each clip is attributed to the right speaker. Forward triggers extract 30 seconds after the phrase; retroactive triggers extract 60 seconds before it."
+          "text": "Four signal sources: voice-marker trigger phrases (configurable per brand kit), chat heat, audio peaks, and visual signals (scene cuts, face presence, motion). The trigger scanner aligns Whisper transcripts with pyannote diarization so each clip is attributed to the right speaker. Forward triggers extract 30 seconds after the phrase ('clipea esto'); retroactive triggers extract 60 seconds before it ('clipeaste eso')."
         }
       },
       {
@@ -100,7 +112,7 @@
         "name": "Can NexoClip handle VODs with multiple streamers?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes. Speaker diarization (pyannote-audio 3.1) labels every speech segment, and persistent speaker identities resolve across VODs via cosine-similarity embedding match. Each speaker can be assigned a preferred brand kit so the renderer applies the right colors, fonts, social handles, and captions per clip — even within one VOD."
+          "text": "Yes. Speaker diarization (pyannote-audio 3.1) labels every speech segment, and persistent speaker identities resolve across VODs via cosine-similarity embedding match. Each speaker can be assigned a preferred brand kit so the renderer applies the right colors, fonts, social handles, and captions per clip — even within one VOD. This is the differentiator most clipping tools don't ship."
         }
       },
       {
@@ -108,7 +120,7 @@
         "name": "Does NexoClip support auto-publishing?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes, opt-in per brand kit with a configurable undo window (default 60 minutes). Clips queue with a scheduled-for timestamp; the operator can cancel from the inbox before the worker fires. Review-first stays the default — auto-publish only flips on for kits the operator has explicitly trusted."
+          "text": "Yes, opt-in per brand kit with a configurable undo window (default 60 minutes). Clips queue with a scheduled-for timestamp; the operator cancels from the inbox before the worker fires. Review-first stays the default — auto-publish only flips on for kits the operator has explicitly trusted. Combined with the AI scoring strip, this means high-confidence clips can ship without ever opening the editor."
         }
       },
       {
@@ -116,7 +128,7 @@
         "name": "Can AI agents drive NexoClip?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes. NexoClip ships an MCP (Model Context Protocol) server so Claude Code, Cursor, and other LLM clients can drive the pipeline conversationally. The MCP surface mirrors the REST API — list streams, kick off pipelines, fetch clips, manage brand kits, inspect LLM spend. Start it via 'nexoclip mcp serve --token <api-token>'."
+          "text": "Yes. NexoClip ships an MCP (Model Context Protocol) server so Claude Code, Cursor, and other LLM clients can drive the pipeline conversationally. The MCP surface mirrors the REST API — list streams, kick off pipelines, fetch clips, manage brand kits, inspect LLM spend. Start it via 'nexoclip mcp serve --token <api-token>'. This makes NexoClip the only stream-growth OS that's natively agent-driveable."
         }
       }
     ]
@@ -264,11 +276,12 @@
 <body>
   <header class="nc-hero">
     <span class="nc-hero__brand">NEXOCLIP</span>
-    <h1>Drop a streamer VOD. Wake up to <strong>branded vertical clips</strong>.</h1>
+    <h1>The <strong>AI growth engine</strong> for streamers.</h1>
     <p>
-      Voice-marker triggers, per-speaker brand kits, AI captions and logos —
-      from a single VOD upload to TikTok / Shorts / Reels-ready clips, with
-      an undo-window auto-publish you can trust.
+      Drop a VOD. AI scores every clip on virality, generates the hook,
+      routes it to the right streamer's brand, and queues publish with
+      an undo window. The editor's still there when you need it — most
+      mornings you won't.
     </p>
     <div class="nc-hero__cta">
       <a href="/dashboard/login" class="nc-btn nc-btn--primary">
@@ -289,8 +302,40 @@
   <main class="nc-landing">
 
     <section>
-      <h2>What makes it different</h2>
+      <h2>Why it's different</h2>
       <div class="nc-features">
+
+        <div class="nc-feature">
+          <i class="ti ti-trending-up nc-feature__icon" aria-hidden="true"></i>
+          <h3>AI scoring on every clip</h3>
+          <p>
+            Viral score, hook strength, caption readability, dead-air risk —
+            computed from the multimodal signals NexoClip already collects
+            (rescore, motion, face presence, words-per-sec). The operator
+            picks the AI's top 3 and ships.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
+          <h3>Hook generator, 5 tones</h3>
+          <p>
+            One click, 5 viral title candidates in the streamer's voice.
+            Tone presets: aggressive, Gen Z, corporate, curious, default.
+            Click a candidate to drop it into the title overlay.
+          </p>
+        </div>
+
+        <div class="nc-feature">
+          <i class="ti ti-chart-line nc-feature__icon" aria-hidden="true"></i>
+          <h3>Intelligence timeline</h3>
+          <p>
+            Per-second markers under the preview: audio peaks, scene cuts,
+            laughter reactions, chat-heat spikes, face-emotion changes.
+            Click any marker to seek. Spot the moment that goes viral
+            before you watch the clip.
+          </p>
+        </div>
 
         <div class="nc-feature">
           <i class="ti ti-microphone-2 nc-feature__icon" aria-hidden="true"></i>
@@ -298,7 +343,7 @@
           <p>
             Streamers say <code>clipea esto</code> (clip the next 30s) or
             <code>clipeaste eso</code> (clip the previous 60s) as natural
-            verbal bookmarks. Custom phrases configurable per brand kit.
+            verbal bookmarks. Custom phrases per brand kit.
           </p>
         </div>
 
@@ -306,20 +351,10 @@
           <i class="ti ti-users nc-feature__icon" aria-hidden="true"></i>
           <h3>Per-speaker brand kits</h3>
           <p>
-            Speaker diarization (pyannote-audio) routes each clip in a
-            multi-streamer VOD to the right host's colors, fonts, social
-            handles, and captions. Speaker identities persist across VODs
-            via embedding match.
-          </p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
-          <h3>AI captions + logos</h3>
-          <p>
-            Anthropic Claude generates persona-flavored captions, viral hooks,
-            and SVG brand logos. Cost-tracked per call; structured output
-            validated against Pydantic schemas.
+            Multi-streamer VOD? Speaker diarization routes each clip to the
+            right host's colors, fonts, handles, and captions. Speaker
+            identities persist across VODs via embedding match. The
+            differentiator most clipping tools don't ship.
           </p>
         </div>
 
@@ -327,9 +362,9 @@
           <i class="ti ti-cpu nc-feature__icon" aria-hidden="true"></i>
           <h3>Local GPU transcription</h3>
           <p>
-            faster-whisper runs on your own GPU. No cloud upload of stream
-            audio required — your VODs never leave your machine for
-            transcription.
+            faster-whisper runs on your own GPU. Stream audio never leaves
+            your machine for transcription — only the LLM caption-generation
+            step calls out to Anthropic.
           </p>
         </div>
 
@@ -338,18 +373,20 @@
           <h3>Auto-publish with undo</h3>
           <p>
             Per-kit opt-in. Clips queue with a scheduled-for timestamp;
-            the operator can cancel from the inbox before the worker fires.
-            Review-first stays the default.
+            cancel from the inbox before the worker fires. Combined with
+            AI scoring, high-confidence clips ship without you ever
+            opening the editor.
           </p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-robot nc-feature__icon" aria-hidden="true"></i>
-          <h3>MCP-ready for agents</h3>
+          <h3>Native to AI agents</h3>
           <p>
-            Drive NexoClip from Claude Code, Cursor, or any MCP client.
-            The MCP surface mirrors the REST API — list streams, kick off
-            pipelines, fetch clips conversationally.
+            MCP server — drive NexoClip from Claude Code, Cursor, or any
+            LLM client. The agent lists streams, kicks off pipelines,
+            fetches clips, manages brand kits. The only stream-growth OS
+            built agent-first.
           </p>
         </div>
 
@@ -357,40 +394,40 @@
     </section>
 
     <section class="nc-flow">
-      <h2>The loop</h2>
+      <h2>The growth loop</h2>
       <p>
-        Designed to be the one thing a streamer touches each morning:
+        The one thing a streamer (or their agency) touches each morning:
       </p>
       <ol class="nc-flow__steps">
         <li class="nc-flow__step">
           <b>1 · ingest</b>
-          <strong>Upload VOD or watch a Drive folder</strong>
-          <p>Drag-drop on the dashboard, or connect Google Drive once and drop your OBS recordings there.</p>
+          <strong>Drop VOD · watch Drive · pull from platform</strong>
+          <p>Drag-drop, OBS-to-Drive auto-watch, or Twitch / Kick VOD pull. Single ingest endpoint, three sources.</p>
         </li>
         <li class="nc-flow__step">
           <b>2 · diarize + transcribe</b>
           <strong>Speakers labeled, words timestamped</strong>
-          <p>pyannote-audio assigns SPEAKER_00..N and faster-whisper produces a word-level transcript on your GPU.</p>
+          <p>pyannote-audio + faster-whisper, both on your GPU. Audio never leaves your machine.</p>
         </li>
         <li class="nc-flow__step">
-          <b>3 · detect</b>
-          <strong>Voice markers + chat heat + visual signals</strong>
-          <p>Forward and retroactive trigger phrases, plus audio peaks and scene cuts, become candidate timestamps.</p>
+          <b>3 · detect + score</b>
+          <strong>Multimodal candidate-finding + AI scoring</strong>
+          <p>Voice markers, chat heat, audio peaks, scene cuts → candidate windows. Each candidate gets a viral score, hook strength, and dead-air risk.</p>
         </li>
         <li class="nc-flow__step">
           <b>4 · cut + brand</b>
-          <strong>Vertical clips with the right brand kit</strong>
-          <p>ffmpeg cuts each window, smart-crops to 9:16 around the active face, and burns in the per-speaker handle.</p>
+          <strong>Vertical clips routed to the right host</strong>
+          <p>ffmpeg cuts each window, smart-crops 9:16 around the active face, applies the resolved speaker's brand kit.</p>
         </li>
         <li class="nc-flow__step">
-          <b>5 · variants</b>
-          <strong>Captions + hooks per platform</strong>
-          <p>Claude writes persona-flavored captions and hashtags for TikTok, Shorts, Reels in your target languages.</p>
+          <b>5 · hook + variants</b>
+          <strong>Title + caption + hashtags per platform</strong>
+          <p>Claude generates 5 viral-hook titles per tone preset, captions per persona, hashtags per platform. Operator picks one or skips and accepts the AI default.</p>
         </li>
         <li class="nc-flow__step">
-          <b>6 · publish or review</b>
-          <strong>Inbox with one-click cut + undo</strong>
-          <p>Clips land grouped by VOD and speaker. Auto-publish kits queue with an undo window — manual review otherwise.</p>
+          <b>6 · ship</b>
+          <strong>Auto-publish with undo · or manual review</strong>
+          <p>Trusted brand kits queue with a scheduled-for + undo window. Untrusted kits land in the inbox grouped by VOD/speaker. Same flow either way.</p>
         </li>
       </ol>
     </section>
@@ -399,11 +436,25 @@
       <h2>Frequently asked</h2>
 
       <details>
+        <summary>Why call it a "growth engine" instead of a clip editor?</summary>
+        <div class="nc-faq__body">
+          Clip editors give you a timeline and trim handles. NexoClip is upstream
+          of editing: AI scores every clip on virality dimensions, generates the
+          hook, routes to the right brand kit, and queues publish with an undo
+          window. The operator's job shifts from "find and cut clips" to "pick
+          the AI's top 3 and let it ship". The editor's still there when you need
+          it — most mornings you won't.
+        </div>
+      </details>
+
+      <details>
         <summary>Who is NexoClip for?</summary>
         <div class="nc-faq__body">
-          Streamers who finish a stream and want clips ready by morning, multi-host
-          stream collectives that need per-streamer branding within one VOD, and
-          agents / MCP clients that want to drive a clipping pipeline programmatically.
+          Streamers who want clips ready by morning. Multi-host stream collectives
+          that need per-streamer branding within one VOD. Agencies running clipping
+          for several creators at once. Agents / MCP clients that want to drive a
+          clipping pipeline programmatically (we're the only stream-growth OS
+          built agent-first).
         </div>
       </details>
 
@@ -419,10 +470,10 @@
       <details>
         <summary>Which LLM does NexoClip use?</summary>
         <div class="nc-faq__body">
-          Anthropic Claude exclusively. The router supports adding more providers
-          later without code changes, but the live surface is Claude-only — the
-          structured-output reliability is essential for the variant generator
-          and viral-moment selector.
+          Anthropic Claude exclusively for the live surface. The router supports
+          adding more providers later without code changes, but Claude is what
+          ships — the structured-output reliability is essential for the hook
+          generator, variant generator, and viral-moment selector.
         </div>
       </details>
 

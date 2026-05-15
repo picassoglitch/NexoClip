@@ -237,6 +237,50 @@
   </div>
 </div>
 
+{# ---- AI insights strip (slice F.7) ----
+   Composite scores derived from clip_breakdown — viral, hook,
+   readability, dead-air. Each chip carries the *_why explanation
+   on hover so the operator can see what drove the number. #}
+{% if ai_scores is defined %}
+<div class="nc-ai-strip">
+  <div class="nc-ai-strip__header">
+    <i class="ti ti-sparkles" aria-hidden="true"></i>
+    <span>AI insights</span>
+  </div>
+
+  <div class="nc-ai-score" title="{{ ai_scores.viral_why }}">
+    <div class="nc-ai-score__label">Viral score</div>
+    <div class="nc-ai-score__value">
+      {{ ai_scores.viral_score }}<span class="nc-ai-score__value--lg100"> / 100</span>
+    </div>
+    <div class="nc-ai-score__bar">
+      <div class="nc-ai-score__bar-fill" style="width: {{ ai_scores.viral_score }}%;"></div>
+    </div>
+  </div>
+
+  <div class="nc-ai-score" title="{{ ai_scores.hook_why }}">
+    <div class="nc-ai-score__label">Hook strength</div>
+    <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.hook_strength|lower }}">
+      {{ ai_scores.hook_strength }}
+    </span>
+  </div>
+
+  <div class="nc-ai-score" title="{{ ai_scores.readability_why }}">
+    <div class="nc-ai-score__label">Caption readability</div>
+    <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.caption_readability|lower }}">
+      {{ ai_scores.caption_readability }}
+    </span>
+  </div>
+
+  <div class="nc-ai-score" title="{{ ai_scores.dead_air_why }}">
+    <div class="nc-ai-score__label">Dead-air risk</div>
+    <span class="nc-ai-score__pill nc-ai-score__pill--{% if ai_scores.dead_air_risk == 'HIGH' %}high-risk{% else %}{{ ai_scores.dead_air_risk|lower }}{% endif %}">
+      {{ ai_scores.dead_air_risk }}
+    </span>
+  </div>
+</div>
+{% endif %}
+
 <form id="overlay-form"
       action="/dashboard/clips/{{ clip.id }}/finalize"
       method="post">
@@ -305,6 +349,34 @@
                   {{ banner.url or ((banner.platform or 'kick') ~ '.com/' ~ (_default_handle|replace('@', '') or 'yourhandle')) }}
                 </span>
               </div>
+
+              {# Social-context overlays — toggled by Branding section
+                 "Show platform context". Decorative; helps the operator
+                 visualize what the clip looks like inside the platform UI. #}
+              <div id="pv-live"
+                   class="nc-pv-live"
+                   {% if not (banner.get('show_context', False)) %}style="display:none;"{% endif %}>
+                <span class="nc-pv-live__dot"></span>
+                <span>LIVE</span>
+                <span class="nc-pv-live__count" id="pv-live-count">{{ (banner.context_viewers or 1247)|int }}</span>
+              </div>
+
+              <div id="pv-chat"
+                   class="nc-pv-chat"
+                   {% if not (banner.get('show_context', False)) %}style="display:none;"{% endif %}>
+                <div class="nc-pv-chat__row">
+                  <span class="nc-pv-chat__name">@stevefan</span>
+                  <span class="nc-pv-chat__msg">no way 😂😂</span>
+                </div>
+                <div class="nc-pv-chat__row">
+                  <span class="nc-pv-chat__name">@kx_clipper</span>
+                  <span class="nc-pv-chat__msg">CLIP IT CLIP IT</span>
+                </div>
+                <div class="nc-pv-chat__row">
+                  <span class="nc-pv-chat__name">@aldo_fan</span>
+                  <span class="nc-pv-chat__msg">w stream fr</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -321,7 +393,7 @@
 
           <small style="display: block; margin-top: 8px; text-align: center;">
             HTML overlay preview. The renderer burns these into the final
-            MP4 when you click <strong>Complete &amp; stage for publish</strong>.
+            MP4 when you click <strong>Ship to platforms</strong>.
           </small>
         </div>
       </div>
@@ -353,30 +425,66 @@
       {% endif %}
     </div>
 
-    {# ---- RIGHT: editor controls -------------------------------- #}
+    {# ---- RIGHT: editor controls — four sections (Viral hook /
+       Captions / Branding / Advanced) per the right-panel
+       hierarchy redesign. Section 4 is collapsible by default
+       so the primary surface stays low on cognitive load. #}
     <div class="nc-editor-controls">
 
       <div class="nc-panel">
-        <div class="nc-panel__header">
-          <i class="ti ti-text-resize" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-          <span class="nc-panel__title">Title text</span>
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">1</span>
+          <span class="nc-panel__title">Viral hook</span>
+          <small>— first thing viewers read · drives the swipe rate</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-label">
-            Top banner copy <small>(blank = no title overlay)</small>
+            Hook title
             <textarea class="nc-textarea"
                       name="title_text"
                       id="ctl-title"
                       rows="2"
                       placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again">{{ ov.get('title_text') or '' }}</textarea>
+            <small>Blank = no title overlay. Strongest performers are 6–10 words with curiosity / conflict / status.</small>
           </label>
         </div>
       </div>
 
       <div class="nc-panel">
-        <div class="nc-panel__header">
-          <i class="ti ti-flag" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-          <span class="nc-panel__title">Platform banner</span>
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">2</span>
+          <span class="nc-panel__title">Captions</span>
+          <small>— burned in word-by-word</small>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="captions_enabled" value="1" id="ctl-captions-on"
+                   {% if captions.get('enabled', True) %}checked{% endif %}>
+            <span>Burn captions into the clip</span>
+          </label>
+          <label class="nc-label">Preset
+            <select class="nc-select" name="captions_preset" id="ctl-captions-preset">
+              <option value="">— use brand-kit default ({{ caption_style.preset }}) —</option>
+              {% for choice_id, choice_label in caption_preset_choices %}
+              <option value="{{ choice_id }}" {% if captions.get('preset') == choice_id %}selected{% endif %}>{{ choice_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="nc-label">Active-word highlight
+            <input class="nc-input"
+                   type="color"
+                   name="captions_highlight_color"
+                   id="ctl-captions-highlight"
+                   value="{{ captions.get('highlight_color') or caption_style.highlight_color }}">
+          </label>
+        </div>
+      </div>
+
+      <div class="nc-panel">
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">3</span>
+          <span class="nc-panel__title">Branding</span>
+          <small>— platform watermark + URL · matches your stream's UI</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-checkbox">
@@ -406,43 +514,22 @@
                    id="ctl-banner-color"
                    value="{{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }}">
           </label>
-        </div>
-      </div>
-
-      <div class="nc-panel">
-        <div class="nc-panel__header">
-          <i class="ti ti-typography" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-          <span class="nc-panel__title">Captions</span>
-        </div>
-        <div class="nc-panel__body">
-          <label class="nc-checkbox">
-            <input type="checkbox" name="captions_enabled" value="1" id="ctl-captions-on"
-                   {% if captions.get('enabled', True) %}checked{% endif %}>
-            <span>Burn captions into the clip</span>
-          </label>
-          <label class="nc-label">Preset
-            <select class="nc-select" name="captions_preset" id="ctl-captions-preset">
-              <option value="">— use brand-kit default ({{ caption_style.preset }}) —</option>
-              {% for choice_id, choice_label in caption_preset_choices %}
-              <option value="{{ choice_id }}" {% if captions.get('preset') == choice_id %}selected{% endif %}>{{ choice_label }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label class="nc-label">Active-word highlight
-            <input class="nc-input"
-                   type="color"
-                   name="captions_highlight_color"
-                   id="ctl-captions-highlight"
-                   value="{{ captions.get('highlight_color') or caption_style.highlight_color }}">
+          <label class="nc-checkbox" style="margin-top: 8px;">
+            <input type="checkbox" name="banner_show_context" value="1" id="ctl-context-on"
+                   {% if banner.get('show_context', False) %}checked{% endif %}>
+            <span>Show platform context (LIVE badge + chat)</span>
           </label>
         </div>
       </div>
 
-      <div class="nc-panel">
-        <div class="nc-panel__header">
-          <i class="ti ti-message-circle-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-          <span class="nc-panel__title">Comments / reactions rail</span>
-        </div>
+      <details class="nc-panel" id="advanced-section">
+        <summary class="nc-panel__header nc-panel__header--editor"
+                 style="cursor: pointer; list-style: none;">
+          <span class="nc-panel__step">4</span>
+          <span class="nc-panel__title">Advanced</span>
+          <small>— reactions rail · low-frequency overrides</small>
+          <i class="ti ti-chevron-down" aria-hidden="true" style="margin-left: auto; color: var(--nc-text-muted);"></i>
+        </summary>
         <div class="nc-panel__body">
           <label class="nc-checkbox">
             <input type="checkbox" name="comments_show" value="1" id="ctl-comments-on"
@@ -458,19 +545,19 @@
                    value="{{ comments.get('fake_likes', 8) }}">
           </label>
         </div>
-      </div>
+      </details>
 
       <div class="nc-editor-actions">
         <button type="submit"
                 class="nc-btn nc-btn--primary nc-btn--full">
-          <i class="ti ti-check" aria-hidden="true"></i>
-          <span>Complete &amp; stage for publish</span>
+          <i class="ti ti-rocket" aria-hidden="true"></i>
+          <span>Ship to platforms</span>
         </button>
         <button type="submit"
                 formaction="/dashboard/clips/{{ clip.id }}/overlay"
                 class="nc-btn nc-btn--full">
           <i class="ti ti-device-floppy" aria-hidden="true"></i>
-          <span>Save draft (don't change status)</span>
+          <span>Save draft</span>
         </button>
       </div>
 
@@ -689,6 +776,9 @@
   var ctlCaptionsHl   = document.getElementById("ctl-captions-highlight");
   var ctlCommentsOn   = document.getElementById("ctl-comments-on");
   var ctlCommentsLk   = document.getElementById("ctl-comments-likes");
+  var ctlContextOn    = document.getElementById("ctl-context-on");
+  var pvLive          = document.getElementById("pv-live");
+  var pvChat          = document.getElementById("pv-chat");
 
   var bannerColorTouched = false;
 
@@ -716,6 +806,11 @@
     var n = parseInt(ctlCommentsLk.value, 10);
     pvLikes.textContent = isFinite(n) && n >= 0 ? n : 0;
   }
+  function syncContext() {
+    var on = ctlContextOn && ctlContextOn.checked;
+    if (pvLive) pvLive.style.display = on ? "" : "none";
+    if (pvChat) pvChat.style.display = on ? "" : "none";
+  }
   function applyDefaultBannerColor() {
     if (bannerColorTouched) return;
     var p = ctlBannerPlat.value || "kick";
@@ -740,6 +835,7 @@
   ctlCaptionsHl.addEventListener("input", syncCaptions);
   ctlCommentsOn.addEventListener("change", syncComments);
   ctlCommentsLk.addEventListener("input", syncComments);
+  if (ctlContextOn) ctlContextOn.addEventListener("change", syncContext);
 
   // Caption animation: cycle the active word through the four words
   // every 600ms while the video is playing. Approximates the karaoke
@@ -771,6 +867,7 @@
   syncBanner();
   syncCaptions();
   syncComments();
+  syncContext();
 })();
 </script>
 {% endblock %}

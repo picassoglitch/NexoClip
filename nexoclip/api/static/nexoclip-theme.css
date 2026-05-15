@@ -39,6 +39,16 @@
     --nc-danger-bg:    rgba(226, 75, 74, 0.08);
     --nc-danger-dim:   rgba(226, 75, 74, 0.35);
 
+    /* AI accent — purple/cyan glow reserved for AI-driven surfaces
+     * (score chips, generated suggestions, the variations panel).
+     * Keeps electric blue as the SINGLE primary accent for ordinary
+     * UI affordances, so AI surfaces visually announce themselves
+     * without competing with primary buttons. */
+    --nc-ai:           #b58fff;
+    --nc-ai-bright:    #d6b4ff;
+    --nc-ai-bg:        rgba(181, 143, 255, 0.10);
+    --nc-ai-dim:       rgba(181, 143, 255, 0.30);
+
     /* Borders / radius */
     --nc-hairline:     0.5px solid var(--nc-blue-dim);
     --nc-radius:       8px;
@@ -1049,7 +1059,282 @@ details.nc-details > article {
 }
 
 
-/* ---------- 23. Login screen specific ---------- */
+/* ---------- 24. AI score strip (clip-editor "AI insights" row) ---------- */
+
+.nc-ai-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 12px 16px;
+    background:
+        linear-gradient(135deg, var(--nc-ai-bg), transparent 60%),
+        var(--nc-bg-panel);
+    border: 1px solid var(--nc-ai-dim);
+    border-radius: var(--nc-radius-lg);
+    margin-bottom: var(--nc-gap);
+}
+.nc-ai-strip__header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--nc-ai-bright);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 2px;
+}
+.nc-ai-strip__header i {
+    font-size: 14px;
+}
+.nc-ai-score {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: help;
+}
+.nc-ai-score__label {
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    line-height: 1.2;
+}
+.nc-ai-score__value {
+    color: var(--nc-text);
+    font-family: var(--nc-font-mono);
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.nc-ai-score__value--lg100 {
+    /* The /100 suffix is intentionally smaller and muted — viewers
+     * read the big number first. */
+    color: var(--nc-text-muted);
+    font-size: 13px;
+}
+.nc-ai-score__bar {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--nc-bg-raised);
+    overflow: hidden;
+    margin-top: 4px;
+}
+.nc-ai-score__bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--nc-ai), var(--nc-blue-bright));
+    transition: width 200ms ease;
+}
+.nc-ai-score__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    align-self: flex-start;
+    margin-top: 2px;
+}
+.nc-ai-score__pill--high,
+.nc-ai-score__pill--good,
+.nc-ai-score__pill--low {
+    color: var(--nc-success);
+    background: var(--nc-success-bg);
+    border: 1px solid rgba(93, 202, 165, 0.30);
+}
+.nc-ai-score__pill--medium,
+.nc-ai-score__pill--ok,
+.nc-ai-score__pill--med {
+    color: var(--nc-warn);
+    background: var(--nc-warn-bg);
+    border: 1px solid var(--nc-warn-dim);
+}
+.nc-ai-score__pill--developing,
+.nc-ai-score__pill--check,
+.nc-ai-score__pill--high-risk {
+    color: var(--nc-danger);
+    background: var(--nc-danger-bg);
+    border: 1px solid var(--nc-danger-dim);
+}
+
+
+/* ---------- 25. Right-panel hierarchy (editor-section H3 + group label) ---------- */
+
+/* Bigger, calmer section titles inside .nc-panel__header so the
+ * editor's four sections read as ranked steps instead of a wall of
+ * equal-weight chrome. */
+.nc-panel__header--editor {
+    padding: 14px 16px;
+    gap: 10px;
+}
+.nc-panel__header--editor .nc-panel__title {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.005em;
+}
+.nc-panel__header--editor .nc-panel__step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--nc-blue-faint);
+    color: var(--nc-blue-bright);
+    font-family: var(--nc-font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+.nc-panel__header--editor small {
+    font-size: 12px;
+    color: var(--nc-text-muted);
+    flex-basis: 100%;
+    margin-top: 2px;
+}
+
+/* Stronger label hierarchy inside editor controls. */
+.nc-editor-controls .nc-label {
+    font-size: 13px;
+    color: var(--nc-text);
+    font-weight: 500;
+}
+.nc-editor-controls .nc-label small {
+    font-weight: 400;
+    color: var(--nc-text-muted);
+}
+
+
+/* ---------- 26. Live-caption glow (preview overlay polish) ---------- */
+
+@keyframes nc-caption-glow {
+    0%, 100% {
+        text-shadow:
+            0 0 8px var(--pv-highlight, #FFD700),
+            0 2px 6px rgba(0, 0, 0, 0.6);
+    }
+    50% {
+        text-shadow:
+            0 0 18px var(--pv-highlight, #FFD700),
+            0 0 32px var(--pv-highlight, #FFD700),
+            0 2px 6px rgba(0, 0, 0, 0.6);
+    }
+}
+.nc-pv-caption__word.is-active {
+    animation: nc-caption-glow 1.2s ease-in-out infinite;
+}
+
+
+/* ---------- 27. Social-context overlays (preview engagement chrome) ---------- */
+
+/* Top-left "LIVE" badge with viewer count — gives the preview the
+ * platform-context vibe creators recognize. Toggleable from the
+ * Branding section's "Show platform context" checkbox. */
+.nc-pv-live {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    color: #fff;
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    z-index: 3;
+}
+.nc-pv-live__dot {
+    width: 7px;
+    height: 7px;
+    background: #ff3b30;
+    border-radius: 50%;
+    box-shadow: 0 0 6px #ff3b30;
+    animation: nc-caption-glow 1.5s ease-in-out infinite;
+}
+.nc-pv-live__count {
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Bottom-left fake live-chat strip — three faded chat lines that
+ * cycle so the preview shows what platform chat overlay looks like.
+ * Pure visual; no real chat data wired in. */
+.nc-pv-chat {
+    position: absolute;
+    left: 14px;
+    bottom: 56px;
+    width: 60%;
+    max-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+    z-index: 3;
+}
+.nc-pv-chat__row {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    color: #fff;
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    line-height: 1.3;
+    background: rgba(0, 0, 0, 0.45);
+    padding: 3px 8px;
+    border-radius: 4px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    animation: nc-pv-chat-fade 9s ease-in-out infinite;
+}
+.nc-pv-chat__row:nth-child(2) { animation-delay: -3s; }
+.nc-pv-chat__row:nth-child(3) { animation-delay: -6s; }
+.nc-pv-chat__name {
+    color: var(--nc-blue-bright);
+    font-weight: 600;
+}
+.nc-pv-chat__msg { opacity: 0.95; }
+@keyframes nc-pv-chat-fade {
+    0%, 90%, 100% { opacity: 0.85; transform: translateX(0); }
+    95%           { opacity: 0; transform: translateX(-6px); }
+}
+
+/* Engagement pulse — subtle ring that radiates from the heart icon
+ * in the rail, every 4s. Hints "this clip is being reacted to". */
+@keyframes nc-pv-pulse {
+    0%   { transform: scale(1);   opacity: 0.7; }
+    100% { transform: scale(2.4); opacity: 0; }
+}
+.nc-pv-rail__icon::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid var(--nc-danger);
+    opacity: 0;
+}
+.nc-pv-rail__item:first-child .nc-pv-rail__icon {
+    position: relative;
+}
+.nc-pv-rail__item:first-child .nc-pv-rail__icon::after {
+    animation: nc-pv-pulse 3.5s ease-out infinite;
+}
+
+
+/* ---------- 28. Editor section spacing tightening ---------- */
+
+.nc-editor-controls .nc-panel + .nc-panel {
+    margin-top: 8px;
+}
+
+
+/* ---------- 29. Login screen specific ---------- */
 
 .nc-login-shell {
     min-height: 100vh;

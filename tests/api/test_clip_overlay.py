@@ -133,7 +133,9 @@ async def test_clip_editor_page_renders_live_preview_surface(
     assert 'name="comments_show"' in body
 
     # The two action buttons live on the same form via formaction.
-    assert "Complete &amp; stage for publish" in body
+    # CTA copy was rewritten in slice F.7 (creator-OS positioning):
+    # "Complete & stage for publish" -> "Ship to platforms".
+    assert "Ship to platforms" in body
     assert "Save draft" in body
     assert "/dashboard/clips/clp_e/overlay" in body
     assert "/dashboard/clips/clp_e/finalize" in body
@@ -420,6 +422,119 @@ async def test_finalize_404_for_unknown_clip(
 
 
 # ---- Tenant isolation ------------------------------------------
+
+
+async def test_clip_editor_renders_ai_insights_strip(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Slice F.7: the clip editor surfaces the four AI scores
+    (viral, hook strength, caption readability, dead-air risk) as
+    a strip above the editor split-pane."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    assert r.status_code == 200
+    body = r.text
+    # The AI-strip wrapper + the four labels.
+    assert 'class="nc-ai-strip"' in body
+    assert ">AI insights<" in body
+    assert "Viral score" in body
+    assert "Hook strength" in body
+    assert "Caption readability" in body
+    assert "Dead-air risk" in body
+    # The viral-score progress bar fills from 0-100.
+    assert 'class="nc-ai-score__bar-fill"' in body
+    # One of the three label families must appear.
+    assert any(
+        label in body
+        for label in ("HIGH", "MEDIUM", "DEVELOPING")
+    )
+
+
+async def test_clip_editor_right_panel_uses_step_numbered_sections(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Right-panel hierarchy: Viral hook → Captions → Branding →
+    Advanced (collapsible). Each section header carries a numbered
+    step badge so the operator reads them as ranked steps."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    body = r.text
+    assert ">Viral hook<" in body
+    assert ">Captions<" in body
+    assert ">Branding<" in body
+    assert ">Advanced<" in body
+    # Numbered step badges 1-4 — the visual hierarchy of the panel.
+    for n in (1, 2, 3, 4):
+        assert (
+            f'class="nc-panel__step">{n}<'
+        ) in body, f"missing step {n}"
+    # Advanced section is wrapped in <details> so it collapses.
+    assert 'id="advanced-section"' in body
+
+
+async def test_clip_editor_renders_social_context_toggle(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Branding section has a 'Show platform context' checkbox and
+    the preview surface carries the (initially hidden) LIVE badge +
+    fake chat overlays."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e")
+    body = r.text
+    assert 'name="banner_show_context"' in body
+    assert 'id="ctl-context-on"' in body
+    assert 'id="pv-live"' in body
+    assert 'id="pv-chat"' in body
+
+
+async def test_overlay_save_persists_show_context_flag(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """The new banner.show_context flag round-trips through
+    save → load."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.post(
+        "/dashboard/clips/clp_e/overlay",
+        data={
+            "title_text": "x",
+            "banner_enabled": "1",
+            "banner_platform": "kick",
+            "banner_url": "kick.com/me",
+            "banner_color": "#53FC18",
+            "banner_show_context": "1",
+            "captions_enabled": "1",
+            "captions_preset": "",
+            "captions_highlight_color": "#FFD700",
+            "comments_show": "",
+            "comments_fake_likes": "0",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with bound_tenant(tid):
+        clip = await ClipsRepo(db).get("clp_e")
+    assert clip is not None
+    cfg = clip.overlay_config
+    assert cfg is not None
+    banner = cfg["banner"]
+    assert isinstance(banner, dict)
+    assert banner["show_context"] is True
 
 
 async def test_clip_row_loader_tolerates_unknown_columns(

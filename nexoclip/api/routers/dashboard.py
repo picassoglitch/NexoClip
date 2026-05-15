@@ -496,7 +496,7 @@ async def clip_detail(
         preset_choices,
         resolve_brand_kit_for_candidate,
     )
-    from nexoclip.clip import clip_breakdown
+    from nexoclip.clip import clip_breakdown, compute_ai_scores
     from nexoclip.db import (
         CandidatesRepo,
         PublishJobsRepo,
@@ -510,6 +510,7 @@ async def clip_detail(
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
     breakdown = await clip_breakdown(db, clip_id)
+    ai_scores = compute_ai_scores(breakdown)
 
     # Resolve the brand kit + caption style so the editor can render
     # the live preview against the right defaults when overlay_config
@@ -555,6 +556,7 @@ async def clip_detail(
             "accounts": accounts,
             "valid_transitions": valid_transitions,
             "breakdown": breakdown,
+            "ai_scores": ai_scores,
             "outcomes": outcomes,
             "brand_kit": brand_kit,
             "caption_style": caption_style,
@@ -573,6 +575,7 @@ def _parse_overlay_form(
     banner_platform: str,
     banner_url: str,
     banner_color: str,
+    banner_show_context: str = "",
     captions_enabled: str,
     captions_preset: str,
     captions_highlight_color: str,
@@ -596,6 +599,12 @@ def _parse_overlay_form(
             "platform": (banner_platform or "kick").strip().lower(),
             "url": banner_url.strip() or None,
             "color": banner_color.strip() or None,
+            # Slice F.7 social-context overlay toggle. Decorative
+            # only — the renderer doesn't burn the LIVE badge / chat
+            # into the MP4. The HTML preview shows them so the
+            # operator can see what the published clip looks like
+            # inside the platform UI.
+            "show_context": _bool(banner_show_context),
         },
         "captions": {
             "enabled": _bool(captions_enabled),
@@ -621,6 +630,7 @@ async def clip_overlay_save(
     banner_platform: str = Form("kick"),
     banner_url: str = Form(""),
     banner_color: str = Form(""),
+    banner_show_context: str = Form(""),
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
@@ -639,6 +649,7 @@ async def clip_overlay_save(
         banner_platform=banner_platform,
         banner_url=banner_url,
         banner_color=banner_color,
+        banner_show_context=banner_show_context,
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,
@@ -661,6 +672,7 @@ async def clip_overlay_finalize(
     banner_platform: str = Form("kick"),
     banner_url: str = Form(""),
     banner_color: str = Form(""),
+    banner_show_context: str = Form(""),
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
@@ -702,6 +714,7 @@ async def clip_overlay_finalize(
         banner_platform=banner_platform,
         banner_url=banner_url,
         banner_color=banner_color,
+        banner_show_context=banner_show_context,
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,

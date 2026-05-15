@@ -169,11 +169,36 @@
 
 {# Per-clip overlay defaults derived from brand-kit + caption preset.
    The form below pre-populates from clip.overlay_config when set,
-   else from these. #}
+   else from these.
+
+   Defensive defaults: if the handler somehow forgot to pass
+   caption_style / caption_preset_choices / brand_kit (stale module,
+   partial deploy, etc.) the page still renders sensible values
+   instead of crashing. The handler IS correct — these defaults are
+   belt-and-suspenders. #}
 {% set ov = clip.overlay_config or {} %}
 {% set banner = ov.get('banner') or {} %}
 {% set captions = ov.get('captions') or {} %}
 {% set comments = ov.get('comments') or {} %}
+
+{% set _caption_default = {
+    'preset': 'karaoke_pop',
+    'position': 'upper_third',
+    'highlight_color': '#FFD700',
+    'font_family': 'Inter',
+    'font_weight': 900,
+    'font_size_px': 72,
+    'animation': 'pop_in',
+    'censor_swears': True,
+} %}
+{% set caption_style = caption_style|default(_caption_default, true) %}
+{% set caption_preset_choices = caption_preset_choices|default([
+    ('karaoke_pop',  'Karaoke pop — word-by-word highlight, scale bounce'),
+    ('typewriter',   'Typewriter — char-by-char reveal'),
+    ('bold_block',   'Bold block — 2-3 word chunks, hard cut'),
+    ('subtle',       'Subtle — single line bottom, no animation'),
+], true) %}
+{% set brand_kit = brand_kit|default(none) %}
 
 {% set _default_handle = (
   brand_kit.handle_kick if (brand_kit and brand_kit.handle_kick) else

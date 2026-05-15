@@ -831,12 +831,25 @@ class ClipsRepo:
 
 
 def _clip_from_row(row: aiosqlite.Row) -> ClipRow:
+    """Deserialize a `clips` row into ClipRow.
+
+    Defensive against schema/model skew: we explicitly translate the
+    JSON columns we know about, then filter `d` to only the keys
+    ClipRow declares. This means a future column addition doesn't
+    crash the page if someone forgets to update this function — the
+    new column just gets dropped on the floor here. Trade-off: a bug
+    where the model field is misspelled wouldn't surface as a
+    validation error any more, but the static type-check + test
+    suite catch that earlier.
+    """
     d = dict(row)
-    box = d.pop("smart_crop_box_json")
+    box = d.pop("smart_crop_box_json", None)
     d["smart_crop_box"] = json.loads(box) if box else None
     overlay = d.pop("overlay_config_json", None)
     d["overlay_config"] = json.loads(overlay) if overlay else None
-    return ClipRow.model_validate(d)
+    known = set(ClipRow.model_fields.keys())
+    filtered = {k: v for k, v in d.items() if k in known}
+    return ClipRow.model_validate(filtered)
 
 
 class VariantsRepo:

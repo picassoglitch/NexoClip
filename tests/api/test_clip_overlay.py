@@ -422,6 +422,43 @@ async def test_finalize_404_for_unknown_clip(
 # ---- Tenant isolation ------------------------------------------
 
 
+async def test_clip_row_loader_tolerates_unknown_columns(
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Defense-in-depth regression: if a future migration adds a
+    column to `clips` that the ClipRow Pydantic model doesn't yet
+    declare, `_clip_from_row` must still load existing rows. Without
+    this defense an out-of-sync deploy (DB ahead of code) crashes
+    every dashboard page that reads a clip.
+
+    We simulate this by injecting a fake column directly via SQL,
+    then verifying the loader strips it without raising.
+    """
+    from nexoclip.db.repos import _clip_from_row
+
+    tid = tenants["alice"]["id"]
+    await _seed_clip(db, tenant_id=tid)
+    conn = await db.connect()
+    # Add a hypothetical future column. SQLite ALTER TABLE is cheap.
+    await conn.execute("ALTER TABLE clips ADD COLUMN imaginary_v10_col TEXT")
+    await conn.execute(
+        "UPDATE clips SET imaginary_v10_col = ? WHERE id = ?",
+        ("future-data", "clp_e"),
+    )
+    await conn.commit()
+    cur = await conn.execute(
+        "SELECT * FROM clips WHERE id = ?",
+        ("clp_e",),
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    # The unknown column is in the row dict, but the loader filters
+    # it out before model_validate — no ValidationError raised.
+    clip = _clip_from_row(row)
+    assert clip.id == "clp_e"
+
+
 async def test_overlay_endpoints_isolated_per_tenant(
     client: httpx.AsyncClient,
     db: Database,

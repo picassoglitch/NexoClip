@@ -87,8 +87,9 @@ class ClipStyle(BaseModel):
     # Bottom banner ----------------------------------------------------
     banner_variant: BannerVariantId
     """Which Kick banner family to render."""
-    banner_height_frac: float = Field(default=0.07, gt=0.0, le=0.25)
-    """Banner height as a fraction of output_h. Repost-page = 0.07 (chunky)."""
+    banner_height_frac: float = Field(default=0.07, ge=0.0, le=0.25)
+    """Banner height as a fraction of output_h. 0.0 = no banner (minimal_native).
+    Repost-page chunky = 0.07; gaming-block tall = 0.08."""
 
     # Top hook box -----------------------------------------------------
     top_hook_default: TopHookConfig = Field(default_factory=TopHookConfig)

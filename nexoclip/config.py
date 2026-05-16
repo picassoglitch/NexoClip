@@ -178,6 +178,30 @@ class ViralConfig(BaseModel):
     )
 
 
+class FusionConfigModel(BaseModel):
+    """Weighted multi-signal fusion — slice G.1.
+
+    The dataclass-based `FusionConfig` in `nexoclip.detect.fusion` is
+    the runtime contract; this Pydantic mirror exists so operators can
+    tune weights / bonuses from `nexoclip.yaml` without touching code.
+    The two are kept in sync via `to_runtime()` below.
+    """
+
+    voice: float = Field(default=0.35, ge=0.0, le=1.0)
+    visual: float = Field(default=0.20, ge=0.0, le=1.0)
+    audio: float = Field(default=0.15, ge=0.0, le=1.0)
+    chat: float = Field(default=0.15, ge=0.0, le=1.0)
+    viral: float = Field(default=0.10, ge=0.0, le=1.0)
+    transcript_hook: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    two_detector_bonus: float = Field(default=0.05, ge=0.0, le=1.0)
+    three_plus_detector_bonus: float = Field(default=0.10, ge=0.0, le=1.0)
+    face_visible_bonus: float = Field(default=0.05, ge=0.0, le=1.0)
+    strong_signal_bonus: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    overlap_window_s: float = Field(default=10.0, gt=0.0)
+
+
 class DetectionConfig(BaseModel):
     """All detector configuration."""
 
@@ -187,6 +211,7 @@ class DetectionConfig(BaseModel):
     visual: VisualConfig = Field(default_factory=VisualConfig)
     viral: ViralConfig = Field(default_factory=ViralConfig)
     diarization: DiarizationConfig = Field(default_factory=DiarizationConfig)
+    fusion: FusionConfigModel = Field(default_factory=FusionConfigModel)
     merge_window_s: float = Field(default=30.0, ge=0.0)
 
 
@@ -202,6 +227,14 @@ class ClipConfig(BaseModel):
     preset: str = "fast"
     crf: int = Field(default=23, ge=0, le=51)
     burn_captions: bool = False
+    # Slice G.1 — dynamic per-candidate clip windowing. When True
+    # (the default) and a transcript is available, each clip's
+    # start/end snaps to sentence boundaries inside a kind-aware
+    # band (reaction 10-22s / quote 12-25s / story 35-60s / etc).
+    # Set False to fall back to the legacy pre_roll/post_roll
+    # geometry on every clip (useful when transcripts are unreliable
+    # or for debugging the static cut path).
+    dynamic_windowing: bool = True
 
 
 class NexoClipConfig(BaseModel):

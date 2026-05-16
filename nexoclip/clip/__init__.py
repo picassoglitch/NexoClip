@@ -13,6 +13,14 @@ from .overlay_burn import (
 from .scoring import AIScoreCard, compute_ai_scores
 from .service import cut_clips, cut_window, load_clips
 from .waveform import compute_waveform, load_or_compute as load_or_compute_waveform
+from .windowing import (
+    WINDOW_BANDS,
+    WindowBand,
+    WindowKind,
+    WindowPlan,
+    classify_window_kind,
+    plan_clip_window,
+)
 from .word_captions import (
     CaptionLine,
     CaptionWord,
@@ -33,6 +41,10 @@ __all__ = [
     "Emphasis",
     "Marker",
     "MarkerKind",
+    "WINDOW_BANDS",
+    "WindowBand",
+    "WindowKind",
+    "WindowPlan",
     "build_ass",
     "build_filter_graph",
     "build_srt",
@@ -41,6 +53,7 @@ __all__ = [
     "captions_for_clip",
     "chunk_words_to_lines",
     "classify_emphasis",
+    "classify_window_kind",
     "clip_breakdown",
     "compute_ai_scores",
     "compute_intelligence",
@@ -50,4 +63,5 @@ __all__ = [
     "lines_to_json",
     "load_clips",
     "load_or_compute_waveform",
+    "plan_clip_window",
 ]

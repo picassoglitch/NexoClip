@@ -668,6 +668,9 @@ async def _run_pipeline(
             config=config.clip,
             force=force,
             brand_kits=candidate_kits,
+            # Slice G.1 — dynamic per-candidate windowing snaps each
+            # clip's start/end to transcript sentence boundaries.
+            transcript=transcript,
         )
         if db is not None:
             await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])

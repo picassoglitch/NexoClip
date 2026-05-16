@@ -6,6 +6,7 @@ loud-but-empty heuristic hits.
 
 from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
+from .fusion import FusionBonuses, FusionConfig, FusionWeights, fuse_candidates
 from .models import Candidate, CandidateBatch, CandidateReason
 from .service import (
     detect_candidates,
@@ -21,6 +22,9 @@ __all__ = [
     "Candidate",
     "CandidateBatch",
     "CandidateReason",
+    "FusionBonuses",
+    "FusionConfig",
+    "FusionWeights",
     "RescoreOutcome",
     "ViralMoment",
     "ViralMomentList",
@@ -30,6 +34,7 @@ __all__ = [
     "detect_viral_moments",
     "detect_visual_candidates",
     "detect_voice_triggers",
+    "fuse_candidates",
     "load_candidates",
     "rescore_candidates",
     "save_candidates",

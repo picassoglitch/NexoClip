@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from nexoclip.config import ClipConfig
 from nexoclip.detect import Candidate
@@ -30,6 +31,9 @@ from nexoclip.errors import ClipError
 from nexoclip.ids import new_id
 from nexoclip.ingest import Stream
 from nexoclip.logging import get_logger
+
+if TYPE_CHECKING:
+    from nexoclip.transcribe import Transcript
 
 from .models import Clip, ClipManifest, SmartCropBox
 from .smart_crop import compute_smart_crop_box, crop_box_to_ffmpeg_filter
@@ -83,6 +87,7 @@ async def cut_clips(
     config: ClipConfig | None = None,
     force: bool = False,
     brand_kits: list[object] | None = None,
+    transcript: "Transcript | None" = None,
 ) -> list[Clip]:
     """Cut + reformat one clip per candidate. Idempotent on `clips_manifest.json`.
 
@@ -99,6 +104,11 @@ async def cut_clips(
             as `list[object] | None` to avoid a clip → db type cycle; the
             renderer reads attributes via `getattr` and falls back to no overlay
             on any missing field. Voice-markers spec slice D.1.
+        transcript: Optional Transcript — when present (and the new
+            `ClipConfig.dynamic_windowing` flag is True), each clip's
+            start/end snaps to sentence boundaries instead of using the
+            fixed pre_roll/post_roll. Slice G.1. Pass `None` to keep the
+            legacy static-window behavior (existing tests use this path).
     """
     if tenant_id != stream.tenant_id:
         raise ClipError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -124,6 +134,7 @@ async def cut_clips(
         clips_dir=clips_dir,
         cfg=cfg,
         brand_kits=brand_kits,
+        transcript=transcript,
     )
 
     manifest = ClipManifest(stream_id=stream.id, tenant_id=tenant_id, clips=clips)
@@ -139,6 +150,7 @@ def _cut_all(
     clips_dir: Path,
     cfg: ClipConfig,
     brand_kits: list[object] | None = None,
+    transcript: "Transcript | None" = None,
 ) -> list[Clip]:
     """Synchronous helper kept off the event loop via `asyncio.to_thread`."""
     clips: list[Clip] = []
@@ -148,14 +160,38 @@ def _cut_all(
         trigger_kind = str(ev.get("trigger_kind", "forward"))
         retro_lookback = ev.get("retroactive_lookback_s")
         retro_lookback_f = float(retro_lookback) if isinstance(retro_lookback, int | float) else None
-        start, end, duration = cut_window(
-            timestamp=candidate.timestamp,
-            pre_roll_s=cfg.pre_roll_s,
-            post_roll_s=cfg.post_roll_s,
-            stream_duration_s=stream.duration_s,
-            trigger_kind=trigger_kind,
-            retroactive_lookback_s=retro_lookback_f,
-        )
+
+        # Slice G.1 — dynamic windowing when a transcript is available
+        # AND the operator hasn't disabled it. Falls back to the legacy
+        # static cut_window() so existing tests + callers (without
+        # transcript) keep producing the same boundaries they did before.
+        if transcript is not None and getattr(cfg, "dynamic_windowing", True):
+            from .windowing import plan_clip_window
+
+            plan = plan_clip_window(
+                candidate=candidate,
+                transcript=transcript,
+                stream_duration_s=stream.duration_s,
+                fallback_pre_roll_s=cfg.pre_roll_s,
+                fallback_post_roll_s=cfg.post_roll_s,
+            )
+            start, end, duration = plan.start_s, plan.end_s, plan.duration_s
+            window_plan_evidence: dict[str, object] | None = {
+                "kind": plan.kind,
+                "reason": plan.reason,
+                "duration_s": round(plan.duration_s, 3),
+            }
+        else:
+            start, end, duration = cut_window(
+                timestamp=candidate.timestamp,
+                pre_roll_s=cfg.pre_roll_s,
+                post_roll_s=cfg.post_roll_s,
+                stream_duration_s=stream.duration_s,
+                trigger_kind=trigger_kind,
+                retroactive_lookback_s=retro_lookback_f,
+            )
+            window_plan_evidence = None
+
         if duration <= 0.0:
             continue
 
@@ -203,6 +239,20 @@ def _cut_all(
         finally:
             if intermediate.exists():
                 intermediate.unlink()
+
+        # Slice G.1 — when the new dynamic-windowing path picked the
+        # boundaries, stamp the plan's metadata onto the candidate's
+        # evidence so it persists with the clip and the dashboard can
+        # display "reaction band 10-22s; snapped end to sentence boundary".
+        if window_plan_evidence is not None:
+            candidate = candidate.model_copy(
+                update={
+                    "evidence": {
+                        **(candidate.evidence or {}),
+                        "window_plan": window_plan_evidence,
+                    }
+                }
+            )
 
         clip = Clip(
             id=clip_id,

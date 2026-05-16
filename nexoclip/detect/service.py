@@ -32,6 +32,12 @@ from nexoclip.vision import VisualSignalTrack
 
 from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
+from .fusion import (
+    FusionBonuses,
+    FusionConfig,
+    FusionWeights,
+    fuse_candidates,
+)
 from .levenshtein import levenshtein
 from .models import Candidate, CandidateBatch
 from .viral import detect_viral_moments
@@ -323,40 +329,18 @@ def _apply_per_speaker_cooldown(
 
 
 def _merge_candidates(candidates: list[Candidate], *, window_s: float) -> list[Candidate]:
-    """Collapse temporally-close candidates: highest score wins, evidence unions."""
-    if not candidates:
-        return []
-    if window_s <= 0:
-        return sorted(candidates, key=lambda c: c.timestamp)
+    """Collapse temporally-close candidates via the slice-G.1 weighted fusion.
 
-    sorted_c = sorted(candidates, key=lambda c: c.timestamp)
-    clusters: list[list[Candidate]] = [[sorted_c[0]]]
-    for c in sorted_c[1:]:
-        if c.timestamp - clusters[-1][-1].timestamp <= window_s:
-            clusters[-1].append(c)
-        else:
-            clusters.append([c])
-
-    merged: list[Candidate] = []
-    for cluster in clusters:
-        winner = max(cluster, key=lambda c: c.score)
-        if len(cluster) == 1:
-            merged.append(winner)
-            continue
-        evidence = {
-            **winner.evidence,
-            "matches": [c.evidence for c in cluster],
-            "merged_count": len(cluster),
-        }
-        merged.append(
-            Candidate(
-                timestamp=winner.timestamp,
-                score=winner.score,
-                reason=winner.reason,
-                evidence=evidence,
-            )
-        )
-    return merged
+    Kept under the historical name so existing test suites that import
+    `_merge_candidates` directly keep working. The implementation now
+    routes through `fuse_candidates` with default weights — operators
+    can override via `DetectionConfig.fusion` and the cluster window
+    via `window_s` (mapped to `cluster_window_s`).
+    """
+    return fuse_candidates(
+        candidates,
+        config=FusionConfig(cluster_window_s=window_s),
+    )
 
 
 def detect_candidates(
@@ -420,8 +404,30 @@ def detect_candidates(
     if not chat and not audio and not visual and not viral:
         # Voice-only — already merged by detect_voice_triggers.
         return voice
-    return _merge_candidates(
-        voice + chat + audio + visual + viral, window_s=config.merge_window_s
+    # Slice G.1 — weighted fusion. Operators tune weights / bonuses via
+    # `detection.fusion` in nexoclip.yaml; the dataclass below is the
+    # runtime shape `fuse_candidates` consumes.
+    fusion_cfg = FusionConfig(
+        cluster_window_s=config.merge_window_s,
+        overlap_window_s=config.fusion.overlap_window_s,
+        weights=FusionWeights(
+            voice=config.fusion.voice,
+            visual=config.fusion.visual,
+            audio=config.fusion.audio,
+            chat=config.fusion.chat,
+            viral=config.fusion.viral,
+            transcript_hook=config.fusion.transcript_hook,
+        ),
+        bonuses=FusionBonuses(
+            two_detectors=config.fusion.two_detector_bonus,
+            three_plus_detectors=config.fusion.three_plus_detector_bonus,
+            face_visible=config.fusion.face_visible_bonus,
+            strong_signal=config.fusion.strong_signal_bonus,
+        ),
+    )
+    return fuse_candidates(
+        voice + chat + audio + visual + viral,
+        config=fusion_cfg,
     )
 
 

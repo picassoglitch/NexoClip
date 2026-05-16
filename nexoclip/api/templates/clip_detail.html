@@ -348,6 +348,204 @@
     -webkit-box-orient: vertical;
   }
 
+  /* Slice I.2 — preview-mode pill switcher above the video. */
+  .nc-preview-modes {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    background: var(--nc-bg-base);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--nc-border);
+  }
+  .nc-preview-mode {
+    flex: 1;
+    padding: 6px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--nc-text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: all 120ms ease;
+  }
+  .nc-preview-mode:hover { color: var(--nc-text); }
+  .nc-preview-mode.is-active {
+    background: var(--nc-blue-bright, #4f8bff);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Slice I.2 — collision warning bar above the preview. */
+  .nc-pv-collisions {
+    display: none;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 180, 0, 0.4);
+  }
+  .nc-pv-collisions.is-active { display: block; }
+  .nc-pv-collisions__row {
+    padding: 6px 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    border-bottom: 1px solid rgba(255, 180, 0, 0.18);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .nc-pv-collisions__row:last-child { border-bottom: 0; }
+  .nc-pv-collisions__row--warn {
+    background: rgba(255, 180, 0, 0.10);
+    color: #ffc24a;
+  }
+  .nc-pv-collisions__row--block {
+    background: rgba(255, 60, 60, 0.14);
+    color: #ff8a8a;
+    border-color: rgba(255, 60, 60, 0.4);
+  }
+  .nc-pv-collisions__row::before {
+    content: "▸";
+    font-weight: 900;
+    opacity: 0.6;
+  }
+
+  /* Slice I.2 — platform UI simulation layer. */
+  .nc-pv-platform-sim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .nc-pv-platform-sim__profile {
+    position: absolute;
+    left: 16px;
+    bottom: 16%;
+    color: #fff;
+    font-weight: 700;
+    font-size: 11px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .nc-pv-platform-sim__avatar {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ff3b30, #ff9500);
+    border: 1.5px solid #fff;
+  }
+  .nc-pv-platform-sim__caption {
+    position: absolute;
+    left: 16px;
+    right: 24%;
+    bottom: 8%;
+    color: #fff;
+    font-size: 10px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    line-height: 1.3;
+  }
+  .nc-pv-platform-sim__rail {
+    position: absolute;
+    right: 6px;
+    bottom: 14%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+  }
+  .nc-pv-platform-sim__rail-icon {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 13px;
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+  }
+  .nc-pv-platform-sim__rail-label {
+    color: #fff;
+    font-size: 8px;
+    font-weight: 700;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    margin-top: 2px;
+  }
+  .nc-pv-platform-sim__top {
+    position: absolute;
+    top: 6px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    opacity: 0.85;
+  }
+  .nc-pv-platform-sim__bottom-nav {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 5%;
+    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.55));
+  }
+
+  /* Slice I.2 — dynamic safe-zone overlay (rebuilt by JS from server zone catalog). */
+  .nc-pv-safezones__zone {
+    position: absolute;
+    border: 1.5px dashed rgba(255, 60, 60, 0.65);
+    background: rgba(255, 60, 60, 0.05);
+    pointer-events: none;
+    color: rgba(255, 200, 200, 0.85);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 3px 5px;
+    box-sizing: border-box;
+    border-radius: 3px;
+  }
+  .nc-pv-safezones__zone--right_action {
+    border-color: rgba(255, 120, 60, 0.65);
+    background: rgba(255, 120, 60, 0.06);
+  }
+  .nc-pv-safezones__zone--caption_danger,
+  .nc-pv-safezones__zone--profile_username {
+    border-color: rgba(255, 200, 0, 0.65);
+    background: rgba(255, 200, 0, 0.05);
+    color: rgba(255, 220, 140, 0.9);
+  }
+
+  /* Slice I.2 — preview-mode display rules.
+     Raw      → hide every overlay
+     Edited   → standard burn-target overlays
+     Platform → Edited + platform sim layer
+     Final    → same as Edited; reserved for export-pipeline parity */
+  .nc-preview[data-preview-mode="raw"] .nc-pv-title,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-top-hook,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-caption,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-banner,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-rail,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-platform-sim,
+  .nc-preview[data-preview-mode="raw"] .nc-pv-safezones {
+    display: none !important;
+  }
+  .nc-preview[data-preview-mode="edited"] .nc-pv-platform-sim,
+  .nc-preview[data-preview-mode="final"] .nc-pv-platform-sim,
+  .nc-preview[data-preview-mode="edited"] .nc-pv-safezones,
+  .nc-preview[data-preview-mode="final"] .nc-pv-safezones {
+    display: none !important;
+  }
+
   /* Editor controls (right column) */
   .nc-editor-controls .nc-panel { margin-bottom: 12px; }
   .nc-editor-controls .nc-panel__body { padding: 12px 14px; }
@@ -640,8 +838,38 @@
         </div>
         <div class="nc-panel__body">
 
+          {# Slice I.2 — preview-mode switcher.
+             Raw         = source crop, no overlays at all
+             Edited      = title + captions + banner (the published MP4)
+             Platform    = Edited + platform UI simulation chrome
+             Final       = same as Edited; reserved for export-pipeline parity #}
+          <div class="nc-preview-modes" role="tablist">
+            {% set _preview_mode = ov.get('preview_mode') or 'edited' %}
+            {% for mode_id, mode_label, mode_hint in [
+              ('raw',      'Raw',      'Source crop · no overlays'),
+              ('edited',   'Edited',   'Title + captions + banner'),
+              ('platform', 'Platform', 'Edited + fake platform UI chrome'),
+              ('final',    'Final',    'Exactly what publishers upload'),
+            ] %}
+            <button type="button"
+                    class="nc-preview-mode{% if _preview_mode == mode_id %} is-active{% endif %}"
+                    data-mode="{{ mode_id }}"
+                    role="tab"
+                    title="{{ mode_hint }}">
+              {{ mode_label }}
+            </button>
+            {% endfor %}
+          </div>
+
+          {# Slice I.2 — collision warning bar. JS fills this from the
+             client-side collision detector whenever a relevant control
+             changes (banner toggle, captions position, platform sim
+             pick). Empty/hidden when no overlays collide. #}
+          <div id="pv-collisions" class="nc-pv-collisions" aria-live="polite"></div>
+
           <div class="nc-preview"
                id="preview"
+               data-preview-mode="{{ _preview_mode }}"
                style="--pv-highlight: {{ captions.highlight_color or caption_style.highlight_color }};
                       --pv-banner-color: {{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }};">
             <video id="preview-video" preload="metadata" muted playsinline loop>
@@ -700,19 +928,31 @@
                 </div>
               </div>
 
-              {# Platform safe-zone guides — slice F.7-F.
-                 Off by default; toggled from Branding section. Shows
-                 the bands where TikTok / Reels / Shorts UI lives
-                 (right rail, top profile, bottom strip). Captions
-                 default-position above the bottom band so they
-                 don't get covered post-publish. #}
+              {# Slice I.2 — platform safe-zone guides + platform UI sim.
+                 The dashed-box overlay draws each rect from the chosen
+                 platform's _PLATFORM_ZONES list. The platform UI sim
+                 layer paints fake right-rail icons / bottom dock /
+                 profile pill so the operator sees exactly what gets
+                 covered when their clip ships. Both layers are
+                 preview-only — never burned. #}
               <div id="pv-safezones"
                    class="nc-pv-safezones"
+                   data-platform="{{ ov.get('safe_zone_platform') or 'tiktok' }}"
                    {% if not (banner.get('show_safezones', False)) %}style="display:none;"{% endif %}
                    aria-hidden="true">
-                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--profile">profile</div>
-                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--right-rail">UI rail</div>
-                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--bottom">caption · audio · CTA</div>
+                {# JS fills this with one .nc-pv-safezones__zone per
+                   _PLATFORM_ZONES entry so we never drift from the
+                   server-side zone catalog. #}
+              </div>
+
+              <div id="pv-platform-sim"
+                   class="nc-pv-platform-sim"
+                   data-platform="{{ ov.get('platform_overlay_preview') or 'clean' }}"
+                   aria-hidden="true">
+                {# Fake platform chrome. Layouts are mounted by
+                   syncPlatformSim() in the editor JS so picking a
+                   different platform swaps the entire mock UI without
+                   reloading the page. #}
               </div>
 
               <div id="pv-banner"
@@ -1049,6 +1289,29 @@
             <input type="checkbox" name="banner_show_safezones" value="1" id="ctl-safezones-on"
                    {% if banner.get('show_safezones', False) %}checked{% endif %}>
             <span>Show platform safe zones (TikTok / Reels UI bands)</span>
+          </label>
+
+          {# Slice I.2 — platform overlay simulation + safe-zone target. #}
+          <label class="nc-label" style="margin-top: 10px;">Simulate platform UI
+            <select class="nc-select" name="platform_overlay_preview" id="ctl-platform-sim">
+              {% set _cur_sim = ov.get('platform_overlay_preview') or 'clean' %}
+              {% for p_id, p_label in platform_choices %}
+              <option value="{{ p_id }}" {% if _cur_sim == p_id %}selected{% endif %}>{{ p_label }}</option>
+              {% endfor %}
+            </select>
+            <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
+              Preview-only fake chrome — never burned. Pick the platform you'll publish to.
+            </small>
+          </label>
+          <label class="nc-label">Safe-zone target
+            <select class="nc-select" name="safe_zone_platform" id="ctl-safezone-target">
+              {% set _cur_sz = ov.get('safe_zone_platform') or 'tiktok' %}
+              {% for p_id, p_label in platform_choices %}
+                {% if p_id != 'clean' %}
+              <option value="{{ p_id }}" {% if _cur_sz == p_id %}selected{% endif %}>{{ p_label }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
           </label>
 
           {# Slice I.1 — Kick banner variant + LIVE badge. #}
@@ -1447,11 +1710,277 @@
     if (pvLive) pvLive.style.display = on ? "" : "none";
     if (pvChat) pvChat.style.display = on ? "" : "none";
   }
+  // ---- Slice I.2 — server-supplied per-platform zone catalog. ----
+  // Mirrors nexoclip.branding.platform_zones._PLATFORM_ZONES so the
+  // editor can draw exact platform chrome rectangles without an extra
+  // fetch. Keep in sync with that module if zones get retuned.
+  var PLATFORM_ZONE_SPECS = {{ platform_zone_specs|tojson }};
+
   function syncSafezones() {
     var el = document.getElementById("pv-safezones");
     var ctl = document.getElementById("ctl-safezones-on");
-    if (el && ctl) el.style.display = ctl.checked ? "" : "none";
+    var targetSel = document.getElementById("ctl-safezone-target");
+    if (!el) return;
+    el.style.display = (ctl && ctl.checked) ? "" : "none";
+    // Rebuild the inner rectangles from the chosen platform's zone list.
+    var platform = (targetSel && targetSel.value) || "tiktok";
+    var zones = PLATFORM_ZONE_SPECS[platform] || [];
+    el.setAttribute("data-platform", platform);
+    el.innerHTML = "";
+    zones.forEach(function (z) {
+      var box = document.createElement("div");
+      box.className = "nc-pv-safezones__zone nc-pv-safezones__zone--" + z.kind;
+      box.style.left   = (z.x * 100) + "%";
+      box.style.top    = (z.y * 100) + "%";
+      box.style.width  = (z.w * 100) + "%";
+      box.style.height = (z.h * 100) + "%";
+      // Short label inside the box — the full reason lives on the title.
+      box.textContent = z.kind.replace("_", " ");
+      box.title = z.reason;
+      el.appendChild(box);
+    });
   }
+
+  // ---- Slice I.2 — platform UI simulation layer. ----
+  // Paints fake Reels/TikTok/Shorts/Kick chrome over the playback frame
+  // so the operator sees what their published clip looks like INSIDE
+  // the destination platform. Preview-only — never burned.
+  var SIM_LAYOUTS = {
+    clean: function () { return ""; },
+    tiktok: function () {
+      return (
+        '<div class="nc-pv-platform-sim__top">' +
+          '<span>For You</span><span>Following</span>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__rail">' +
+          '<div class="nc-pv-platform-sim__rail-icon">♡</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">⤴</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">♪</div>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__profile">' +
+          '<span class="nc-pv-platform-sim__avatar"></span>@username · Follow' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__caption">' +
+          'epic moment 🤯 #fyp #viral #clip' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+      );
+    },
+    reels: function () {
+      return (
+        '<div class="nc-pv-platform-sim__top">' +
+          '<span>Reels</span><span>📷</span>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__rail">' +
+          '<div class="nc-pv-platform-sim__rail-icon">♥</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">↗</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">⋯</div>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__profile">' +
+          '<span class="nc-pv-platform-sim__avatar"></span>username · Follow' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__caption">' +
+          'reaction clip 🎬 #reels' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+      );
+    },
+    shorts: function () {
+      return (
+        '<div class="nc-pv-platform-sim__top">' +
+          '<span>Shorts</span><span>🔍</span>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__rail">' +
+          '<div class="nc-pv-platform-sim__rail-icon">👍</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">👎</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
+          '<div class="nc-pv-platform-sim__rail-icon">↗</div>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__profile">' +
+          '<span class="nc-pv-platform-sim__avatar"></span>@channel · Subscribe' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__caption">' +
+          'title goes here #shorts' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+      );
+    },
+    kick: function () {
+      return (
+        '<div class="nc-pv-platform-sim__top">' +
+          '<span>← Clip</span><span>Kick</span>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+      );
+    },
+  };
+
+  function syncPlatformSim() {
+    var el = document.getElementById("pv-platform-sim");
+    var sel = document.getElementById("ctl-platform-sim");
+    if (!el) return;
+    var platform = (sel && sel.value) || "clean";
+    var render = SIM_LAYOUTS[platform] || SIM_LAYOUTS.clean;
+    el.setAttribute("data-platform", platform);
+    el.innerHTML = render();
+    runCollisionCheck();
+  }
+
+  // ---- Slice I.2 — client-side collision detector. ----
+  // Reads the current banner / caption / hook positions and tests them
+  // against the chosen safe-zone platform's rectangles. Surfaces results
+  // in the .nc-pv-collisions bar above the preview.
+  function _overlayRects() {
+    var rects = [];
+    // Banner: full-width strip at the bottom; height varies by variant.
+    var bannerOn = ctlBannerOn && ctlBannerOn.checked;
+    if (bannerOn) {
+      var variant = (ctlBannerVariant && ctlBannerVariant.value) || "kick_repost_page";
+      var bandFrac =
+        variant === "kick_minimal_url"     ? 0.04 :
+        variant === "kick_green_block"     ? 0.08 :
+        variant === "kick_black_bar_classic" ? 0.05 :
+        0.07; // kick_repost_page
+      rects.push({
+        name: "banner", x: 0, y: 1 - bandFrac, w: 1, h: bandFrac,
+      });
+    }
+    // Top hook: ~8% from top, height ~14%.
+    var topHookOn = ctlTopHookOn && ctlTopHookOn.checked &&
+                    ctlTopHookText && ctlTopHookText.value.trim();
+    if (topHookOn) {
+      rects.push({
+        name: "top_hook", x: 0.08, y: 0.08, w: 0.84, h: 0.14,
+      });
+    }
+    // Captions: position-driven; thin band centered on the chosen y.
+    var captionsOn = ctlCaptionsOn && ctlCaptionsOn.checked;
+    if (captionsOn) {
+      var pos = (ctlCaptionsPos && ctlCaptionsPos.value) || "lower_third";
+      var capY =
+        pos === "upper_third" ? 0.27 :
+        pos === "centered"    ? 0.46 :
+        pos === "lower_third" ? 0.58 :
+                                0.88; // bottom
+      rects.push({
+        name: "captions", x: 0.04, y: capY, w: 0.92, h: 0.10,
+      });
+    }
+    return rects;
+  }
+
+  function _rectsOverlap(a, b) {
+    if (a.x + a.w <= b.x || b.x + b.w <= a.x) return false;
+    if (a.y + a.h <= b.y || b.y + b.h <= a.y) return false;
+    return true;
+  }
+
+  function runCollisionCheck() {
+    var bar = document.getElementById("pv-collisions");
+    var targetSel = document.getElementById("ctl-safezone-target");
+    if (!bar) return;
+    var platform = (targetSel && targetSel.value) || "tiktok";
+    var zones = PLATFORM_ZONE_SPECS[platform] || [];
+    var overlays = _overlayRects();
+    var warnings = [];
+    overlays.forEach(function (o) {
+      zones.forEach(function (z) {
+        if (_rectsOverlap(o, z)) {
+          var severity = (z.kind === "top_unsafe" || z.kind === "bottom_unsafe")
+                          ? "block" : "warn";
+          warnings.push({
+            overlay: o.name, kind: z.kind, severity: severity,
+            message: o.name.replace("_", " ") + ": " + z.reason,
+          });
+        }
+      });
+    });
+    bar.innerHTML = "";
+    if (!warnings.length) {
+      bar.classList.remove("is-active");
+      return;
+    }
+    warnings.forEach(function (w) {
+      var row = document.createElement("div");
+      row.className = "nc-pv-collisions__row nc-pv-collisions__row--" + w.severity;
+      row.textContent = w.message;
+      bar.appendChild(row);
+    });
+    bar.classList.add("is-active");
+  }
+
+  // ---- Slice I.2 — preview mode switcher. ----
+  // Pure CSS-driven visibility (see .nc-preview[data-preview-mode=...]
+  // rules). The JS just toggles the data attribute + persists.
+  function applyPreviewMode(mode) {
+    var preview = document.getElementById("preview");
+    if (preview) preview.setAttribute("data-preview-mode", mode);
+    document.querySelectorAll(".nc-preview-mode").forEach(function (btn) {
+      btn.classList.toggle("is-active", btn.getAttribute("data-mode") === mode);
+    });
+    try { localStorage.setItem("nc-preview-mode", mode); } catch (_) {}
+  }
+  document.querySelectorAll(".nc-preview-mode").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyPreviewMode(btn.getAttribute("data-mode"));
+    });
+  });
+  // Restore from localStorage on load (editor-only state).
+  try {
+    var savedMode = localStorage.getItem("nc-preview-mode");
+    if (savedMode) applyPreviewMode(savedMode);
+  } catch (_) {}
+
+  // Wire the new selectors so picking a platform sim or safe-zone
+  // target immediately re-paints the relevant overlays + warnings.
+  var ctlPlatformSim   = document.getElementById("ctl-platform-sim");
+  var ctlSafezoneTarget = document.getElementById("ctl-safezone-target");
+  if (ctlPlatformSim) {
+    ctlPlatformSim.addEventListener("change", function () {
+      syncPlatformSim();
+      try { localStorage.setItem("nc-platform-sim", ctlPlatformSim.value); } catch (_) {}
+    });
+    try {
+      var savedSim = localStorage.getItem("nc-platform-sim");
+      if (savedSim) {
+        ctlPlatformSim.value = savedSim;
+      }
+    } catch (_) {}
+  }
+  if (ctlSafezoneTarget) {
+    ctlSafezoneTarget.addEventListener("change", function () {
+      syncSafezones();
+      runCollisionCheck();
+      try { localStorage.setItem("nc-safezone-target", ctlSafezoneTarget.value); } catch (_) {}
+    });
+    try {
+      var savedTgt = localStorage.getItem("nc-safezone-target");
+      if (savedTgt) {
+        ctlSafezoneTarget.value = savedTgt;
+      }
+    } catch (_) {}
+  }
+  // Initial paint + collision pass.
+  syncPlatformSim();
+  syncSafezones();
+  runCollisionCheck();
+
+  // Re-run collision check whenever an overlay-controlling input
+  // changes. Cheap (rectangle math); fine to fire on every input.
+  [
+    "ctl-banner-on", "ctl-banner-variant",
+    "ctl-top-hook-on", "ctl-top-hook-text",
+    "ctl-captions-on", "ctl-captions-position",
+  ].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) {
+      var evtName = (el.type === "checkbox" || el.tagName === "SELECT")
+                      ? "change" : "input";
+      el.addEventListener(evtName, runCollisionCheck);
+    }
+  });
   function applyDefaultBannerColor() {
     if (bannerColorTouched) return;
     var p = ctlBannerPlat.value || "kick";

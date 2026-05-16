@@ -512,8 +512,10 @@ async def clip_detail(
 ) -> Response:
     from nexoclip.branding import (
         caption_style_or_default,
+        platform_choices,
         preset_choices,
         style_choices,
+        zones_for_platform,
         resolve_brand_kit_for_candidate,
     )
     from nexoclip.clip import clip_breakdown, compute_ai_scores
@@ -607,6 +609,25 @@ async def clip_detail(
             # Slice I.1 — Clip Style preset cards (Repost Page Viral /
             # Clean Creator / Gaming Chaos / Documentary / Minimal Native).
             "clip_style_choices": style_choices(),
+            # Slice I.2 — platform overlay simulation + safe zones.
+            # `platform_choices` populates the simulation dropdown;
+            # `platform_zone_specs` is the full zone catalog, indexed
+            # by platform id, so the editor JS can draw dashed zones
+            # without a round-trip and run collision warnings client
+            # side. The server-side `detect_collisions` is reserved
+            # for headless validation (export checklist in I.3).
+            "platform_choices": platform_choices(),
+            "platform_zone_specs": {
+                p: [
+                    {
+                        "kind": z.kind,
+                        "x": z.x, "y": z.y, "w": z.w, "h": z.h,
+                        "reason": z.reason,
+                    }
+                    for z in zones_for_platform(p)
+                ]
+                for p, _label in platform_choices()
+            },
             # Slice F.7-G — passed through so the template's form-
             # prefill block can fall back to the previous clip's
             # overlay when this clip's overlay_config is still null.
@@ -643,6 +664,13 @@ def _parse_overlay_form(
     top_hook_enabled: str = "",
     top_hook_text: str = "",
     top_hook_style: str = "",
+    # Slice I.2 — platform overlay simulation + safe-zone target +
+    # preview mode. All three are EDITOR-only state — they never feed
+    # the burn, but they DO persist to the brand_kit so the operator's
+    # preferred simulation target survives across clips.
+    platform_overlay_preview: str = "",
+    safe_zone_platform: str = "",
+    preview_mode: str = "",
 ) -> dict[str, object]:
     """Coerce the editor form's flat key/value submission into the
     nested overlay_config shape the renderer reads.
@@ -684,6 +712,11 @@ def _parse_overlay_form(
             "text": top_hook_text.strip(),
             "style": (top_hook_style or "white_rounded").strip().lower(),
         },
+        # Slice I.2 — editor-only platform sim + safe-zone target.
+        "platform_overlay_preview":
+            (platform_overlay_preview or "").strip().lower() or None,
+        "safe_zone_platform": (safe_zone_platform or "").strip().lower() or None,
+        "preview_mode": (preview_mode or "").strip().lower() or None,
         "captions": {
             "enabled": _bool(captions_enabled),
             "preset": captions_preset.strip() or None,
@@ -1019,6 +1052,13 @@ async def me_brand_kit_prefs(
         "top_hook_style": ("style", str),
     }
 
+    # `clip_style` is the only top-level brand-kit-bound editor field.
+    # The I.2 editor-only fields (platform_overlay_preview / safe_zone_
+    # platform / preview_mode) are persisted client-side via localStorage
+    # rather than written to the brand_kit — they're pure editor state
+    # and don't belong in the user's branding record. They still ride
+    # the Save Draft path into clips.overlay_config_json so a per-clip
+    # override is honored when set, but day-to-day persistence is JS.
     if field == "clip_style":
         cfg["clip_style"] = _coerce(value, str)
     elif field in _BANNER_FIELDS:
@@ -1091,6 +1131,10 @@ async def clip_overlay_save(
     top_hook_enabled: str = Form(""),
     top_hook_text: str = Form(""),
     top_hook_style: str = Form(""),
+    # Slice I.2 — editor-only platform simulation + safe-zone target.
+    platform_overlay_preview: str = Form(""),
+    safe_zone_platform: str = Form(""),
+    preview_mode: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1121,6 +1165,9 @@ async def clip_overlay_save(
         top_hook_enabled=top_hook_enabled,
         top_hook_text=top_hook_text,
         top_hook_style=top_hook_style,
+        platform_overlay_preview=platform_overlay_preview,
+        safe_zone_platform=safe_zone_platform,
+        preview_mode=preview_mode,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
@@ -1159,6 +1206,10 @@ async def clip_overlay_finalize(
     top_hook_enabled: str = Form(""),
     top_hook_text: str = Form(""),
     top_hook_style: str = Form(""),
+    # Slice I.2 — editor-only platform simulation + safe-zone target.
+    platform_overlay_preview: str = Form(""),
+    safe_zone_platform: str = Form(""),
+    preview_mode: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1212,6 +1263,9 @@ async def clip_overlay_finalize(
         top_hook_enabled=top_hook_enabled,
         top_hook_text=top_hook_text,
         top_hook_style=top_hook_style,
+        platform_overlay_preview=platform_overlay_preview,
+        safe_zone_platform=safe_zone_platform,
+        preview_mode=preview_mode,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )

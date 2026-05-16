@@ -576,6 +576,7 @@ def _parse_overlay_form(
     banner_url: str,
     banner_color: str,
     banner_show_context: str = "",
+    banner_show_safezones: str = "",
     captions_enabled: str,
     captions_preset: str,
     captions_highlight_color: str,
@@ -605,6 +606,10 @@ def _parse_overlay_form(
             # operator can see what the published clip looks like
             # inside the platform UI.
             "show_context": _bool(banner_show_context),
+            # Slice F.7-F platform safe-zone guides. Editor-only —
+            # never affects the burned MP4. Tells the operator which
+            # regions of the frame get covered by TikTok/Reels chrome.
+            "show_safezones": _bool(banner_show_safezones),
         },
         "captions": {
             "enabled": _bool(captions_enabled),
@@ -631,6 +636,7 @@ async def clip_overlay_save(
     banner_url: str = Form(""),
     banner_color: str = Form(""),
     banner_show_context: str = Form(""),
+    banner_show_safezones: str = Form(""),
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
@@ -650,6 +656,7 @@ async def clip_overlay_save(
         banner_url=banner_url,
         banner_color=banner_color,
         banner_show_context=banner_show_context,
+        banner_show_safezones=banner_show_safezones,
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,
@@ -673,6 +680,7 @@ async def clip_overlay_finalize(
     banner_url: str = Form(""),
     banner_color: str = Form(""),
     banner_show_context: str = Form(""),
+    banner_show_safezones: str = Form(""),
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
@@ -715,6 +723,7 @@ async def clip_overlay_finalize(
         banner_url=banner_url,
         banner_color=banner_color,
         banner_show_context=banner_show_context,
+        banner_show_safezones=banner_show_safezones,
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,
@@ -1072,6 +1081,52 @@ async def clip_intelligence(
                 "duration_s": clip.duration_s,
             }
         ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/clips/{clip_id}/captions.json")
+async def clip_captions(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Word-level captions sliced to the clip window — slice F.7-F.
+
+    Returns the same caption lines the renderer's ASS pass burns into
+    the MP4, so the live editor preview and the published clip
+    match exactly. Each line carries:
+
+      - ts / end_ts (clip-relative seconds)
+      - text (joined line)
+      - words: [{ts, end_ts, text, emphasis}]
+      - emphasis: strongest emphasis tag on the line
+
+    Empty {lines: []} when the transcript has no word-level data
+    overlapping the clip window — the preview gracefully renders the
+    fallback placeholder copy in that case.
+    """
+    import json as _json
+
+    from nexoclip.clip import captions_for_clip, lines_to_json
+    from nexoclip.db import TranscriptsRepo
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    transcript = await TranscriptsRepo(db).get(clip.stream_id)
+    if transcript is None:
+        body = {"lines": [], "duration_s": clip.duration_s}
+    else:
+        lines = captions_for_clip(
+            transcript.segments_json or "",
+            clip_start_s=clip.start_s,
+            clip_end_s=clip.end_s,
+        )
+        body = {"lines": lines_to_json(lines), "duration_s": clip.duration_s}
+    return Response(
+        content=_json.dumps(body),
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )

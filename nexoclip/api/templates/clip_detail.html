@@ -80,17 +80,46 @@
   }
   .nc-pv-caption--upper_third  { top: 33%; transform: translateY(-50%); }
   .nc-pv-caption--centered     { top: 50%; transform: translateY(-50%); }
-  .nc-pv-caption--lower_third  { top: 67%; transform: translateY(-50%); }
-  .nc-pv-caption--bottom       { bottom: 90px; }
+  /* Default caption position moved up so it lands ABOVE the TikTok/
+     Reels/Shorts bottom UI band (caption row + audio chip + CTA).
+     The platform-eats-your-subtitle anti-pattern is the #1 reason
+     clips look amateur. */
+  .nc-pv-caption--lower_third  { top: 62%; transform: translateY(-50%); }
+  .nc-pv-caption--bottom       { bottom: 110px; }
   .nc-pv-caption__word {
     display: inline-block;
     margin: 0 0.15em;
-    transition: color 80ms linear, transform 80ms linear;
+    color: #fff;
+    transition: color 100ms linear, transform 100ms linear, font-size 80ms linear;
+    opacity: 0.55;
   }
+  /* Active word — base emphasis: gold glow + scale */
   .nc-pv-caption__word.is-active {
     color: var(--pv-highlight, #FFD700);
-    transform: scale(1.1);
+    transform: scale(1.15);
+    opacity: 1;
+    animation: nc-caption-glow 0.9s ease-in-out infinite;
   }
+  /* Per-emphasis variants — strongest signal wins */
+  .nc-pv-caption__word[data-emphasis="shout"].is-active {
+    font-size: 1.5em;
+    color: #ff3b30;
+    -webkit-text-stroke-width: 3px;
+    transform: scale(1.35);
+  }
+  .nc-pv-caption__word[data-emphasis="reaction"].is-active {
+    font-size: 1.3em;
+    color: #ffd66b;
+    transform: scale(1.25) rotate(-2deg);
+  }
+  .nc-pv-caption__word[data-emphasis="emphasis"].is-active {
+    font-size: 1.2em;
+    color: var(--pv-highlight, #FFD700);
+    transform: scale(1.2);
+  }
+  /* Past words fade slightly so the eye knows what's "now" vs already-said */
+  .nc-pv-caption__word.is-past { opacity: 0.40; }
+  .nc-pv-caption__word.is-upcoming { opacity: 0.85; }
 
   /* Right-side rail (likes / comments / share — the Reels reference) */
   .nc-pv-rail {
@@ -237,47 +266,131 @@
   </div>
 </div>
 
-{# ---- AI insights strip (slice F.7) ----
-   Composite scores derived from clip_breakdown — viral, hook,
-   readability, dead-air. Each chip carries the *_why explanation
-   on hover so the operator can see what drove the number. #}
+{# ---- AI insights strip (slice F.7-F upgrade) ----
+   Each score is a click-to-expand card showing the EVIDENCE that
+   drove the number: heuristic that fired, rescore, motion, face
+   presence, speaking pace, candidate reason. Pulled from the
+   `breakdown` we already compute — just surfaced visually instead
+   of hidden behind a hover tooltip. This is what makes the scoring
+   feel believable rather than arbitrary. #}
 {% if ai_scores is defined %}
 <div class="nc-ai-strip">
   <div class="nc-ai-strip__header">
     <i class="ti ti-sparkles" aria-hidden="true"></i>
     <span>AI insights</span>
+    <small>· click any score to see the evidence</small>
   </div>
 
-  <div class="nc-ai-score" title="{{ ai_scores.viral_why }}">
-    <div class="nc-ai-score__label">Viral score</div>
-    <div class="nc-ai-score__value">
-      {{ ai_scores.viral_score }}<span class="nc-ai-score__value--lg100"> / 100</span>
+  <details class="nc-ai-score nc-ai-score--detail">
+    <summary>
+      <div class="nc-ai-score__label">Viral score</div>
+      <div class="nc-ai-score__value">
+        {{ ai_scores.viral_score }}<span class="nc-ai-score__value--lg100"> / 100</span>
+      </div>
+      <div class="nc-ai-score__bar">
+        <div class="nc-ai-score__bar-fill" style="width: {{ ai_scores.viral_score }}%;"></div>
+      </div>
+    </summary>
+    <div class="nc-ai-score__evidence">
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Heuristic that fired</span>
+        <span class="nc-mono">{{ breakdown.heuristic_reason }}</span>
+        <span class="nc-mono nc-mono--muted">{{ "%.3f"|format(breakdown.heuristic_score) }}</span>
+      </div>
+      {% if breakdown.reaction_confidence is not none %}
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Vision-LLM rescore</span>
+        <span class="nc-mono">{{ "%.3f"|format(breakdown.reaction_confidence) }}</span>
+        {% if breakdown.rescore_delta is not none %}
+        <span class="nc-mono nc-mono--muted">Δ {{ "%+.3f"|format(breakdown.rescore_delta) }}</span>
+        {% endif %}
+      </div>
+      {% endif %}
+      {% if breakdown.face_presence is not none %}
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Face presence</span>
+        <span class="nc-mono">{{ "%.0f%%"|format(breakdown.face_presence * 100) }}</span>
+        <span class="nc-mono nc-mono--muted">of clip seconds</span>
+      </div>
+      {% endif %}
+      {% if breakdown.motion_score is not none %}
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Motion energy</span>
+        <span class="nc-mono">{{ "%.3f"|format(breakdown.motion_score) }}</span>
+        <span class="nc-mono nc-mono--muted">avg / sec</span>
+      </div>
+      {% endif %}
+      <div class="nc-ai-evidence__why">{{ ai_scores.viral_why }}</div>
     </div>
-    <div class="nc-ai-score__bar">
-      <div class="nc-ai-score__bar-fill" style="width: {{ ai_scores.viral_score }}%;"></div>
+  </details>
+
+  <details class="nc-ai-score nc-ai-score--detail">
+    <summary>
+      <div class="nc-ai-score__label">Hook strength</div>
+      <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.hook_strength|lower }}">
+        {{ ai_scores.hook_strength }}
+      </span>
+    </summary>
+    <div class="nc-ai-score__evidence">
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Viral score</span>
+        <span class="nc-mono">{{ ai_scores.viral_score }} / 100</span>
+      </div>
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Band</span>
+        <span class="nc-mono">{{ ai_scores.hook_strength }}</span>
+      </div>
+      <div class="nc-ai-evidence__why">{{ ai_scores.hook_why }}</div>
     </div>
-  </div>
+  </details>
 
-  <div class="nc-ai-score" title="{{ ai_scores.hook_why }}">
-    <div class="nc-ai-score__label">Hook strength</div>
-    <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.hook_strength|lower }}">
-      {{ ai_scores.hook_strength }}
-    </span>
-  </div>
+  <details class="nc-ai-score nc-ai-score--detail">
+    <summary>
+      <div class="nc-ai-score__label">Caption readability</div>
+      <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.caption_readability|lower }}">
+        {{ ai_scores.caption_readability }}
+      </span>
+    </summary>
+    <div class="nc-ai-score__evidence">
+      {% if breakdown.speaking_intensity is not none %}
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Speaking pace</span>
+        <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
+        <span class="nc-mono nc-mono--muted">words / sec</span>
+      </div>
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Sweet spot</span>
+        <span class="nc-mono">0.8 – 2.2 wps</span>
+      </div>
+      {% else %}
+      <div class="nc-ai-evidence__why">No transcript on this clip yet — can't measure pacing.</div>
+      {% endif %}
+      <div class="nc-ai-evidence__why">{{ ai_scores.readability_why }}</div>
+    </div>
+  </details>
 
-  <div class="nc-ai-score" title="{{ ai_scores.readability_why }}">
-    <div class="nc-ai-score__label">Caption readability</div>
-    <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.caption_readability|lower }}">
-      {{ ai_scores.caption_readability }}
-    </span>
-  </div>
-
-  <div class="nc-ai-score" title="{{ ai_scores.dead_air_why }}">
-    <div class="nc-ai-score__label">Dead-air risk</div>
-    <span class="nc-ai-score__pill nc-ai-score__pill--{% if ai_scores.dead_air_risk == 'HIGH' %}high-risk{% else %}{{ ai_scores.dead_air_risk|lower }}{% endif %}">
-      {{ ai_scores.dead_air_risk }}
-    </span>
-  </div>
+  <details class="nc-ai-score nc-ai-score--detail">
+    <summary>
+      <div class="nc-ai-score__label">Dead-air risk</div>
+      <span class="nc-ai-score__pill nc-ai-score__pill--{% if ai_scores.dead_air_risk == 'HIGH' %}high-risk{% else %}{{ ai_scores.dead_air_risk|lower }}{% endif %}">
+        {{ ai_scores.dead_air_risk }}
+      </span>
+    </summary>
+    <div class="nc-ai-score__evidence">
+      {% if breakdown.speaking_intensity is not none %}
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Speaking density</span>
+        <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
+        <span class="nc-mono nc-mono--muted">words / sec</span>
+      </div>
+      <div class="nc-ai-evidence__row">
+        <span class="nc-ai-evidence__label">Risk thresholds</span>
+        <span class="nc-mono">&lt; 0.4 = HIGH · 0.4–0.8 = MED · ≥ 0.8 = LOW</span>
+      </div>
+      {% endif %}
+      <div class="nc-ai-evidence__why">{{ ai_scores.dead_air_why }}</div>
+    </div>
+  </details>
 </div>
 {% endif %}
 
@@ -311,13 +424,18 @@
                 {{ ov.get('title_text') or '' }}
               </div>
 
+              {# Word-level live captions (slice F.7-F). Populated
+                 async from /clips/{id}/captions.json by the editor
+                 JS — empty until that fetch lands. Per-word spans
+                 carry data-ts / data-end-ts and a data-emphasis tag
+                 (shout / emphasis / reaction / normal) so the
+                 stylesheet drives the visual pop. While paused at
+                 t=0 we render an empty box (no placeholder lying
+                 about what the clip says). #}
               <div id="pv-caption"
                    class="nc-pv-caption nc-pv-caption--{{ caption_style.position }}"
+                   data-position="{{ caption_style.position }}"
                    {% if not (captions.get('enabled', True)) %}style="display:none;"{% endif %}>
-                <span class="nc-pv-caption__word">EPIC</span>
-                <span class="nc-pv-caption__word is-active">PLAY</span>
-                <span class="nc-pv-caption__word">RIGHT</span>
-                <span class="nc-pv-caption__word">HERE</span>
               </div>
 
               <div class="nc-pv-rail"
@@ -338,6 +456,21 @@
                 <div class="nc-pv-rail__item">
                   <div class="nc-pv-rail__icon"><i class="ti ti-send"></i></div>
                 </div>
+              </div>
+
+              {# Platform safe-zone guides — slice F.7-F.
+                 Off by default; toggled from Branding section. Shows
+                 the bands where TikTok / Reels / Shorts UI lives
+                 (right rail, top profile, bottom strip). Captions
+                 default-position above the bottom band so they
+                 don't get covered post-publish. #}
+              <div id="pv-safezones"
+                   class="nc-pv-safezones"
+                   {% if not (banner.get('show_safezones', False)) %}style="display:none;"{% endif %}
+                   aria-hidden="true">
+                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--profile">profile</div>
+                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--right-rail">UI rail</div>
+                <div class="nc-pv-safezones__zone nc-pv-safezones__zone--bottom">caption · audio · CTA</div>
               </div>
 
               <div id="pv-banner"
@@ -584,6 +717,11 @@
             <input type="checkbox" name="banner_show_context" value="1" id="ctl-context-on"
                    {% if banner.get('show_context', False) %}checked{% endif %}>
             <span>Show platform context (LIVE badge + chat)</span>
+          </label>
+          <label class="nc-checkbox">
+            <input type="checkbox" name="banner_show_safezones" value="1" id="ctl-safezones-on"
+                   {% if banner.get('show_safezones', False) %}checked{% endif %}>
+            <span>Show platform safe zones (TikTok / Reels UI bands)</span>
           </label>
         </div>
       </div>
@@ -877,6 +1015,11 @@
     if (pvLive) pvLive.style.display = on ? "" : "none";
     if (pvChat) pvChat.style.display = on ? "" : "none";
   }
+  function syncSafezones() {
+    var el = document.getElementById("pv-safezones");
+    var ctl = document.getElementById("ctl-safezones-on");
+    if (el && ctl) el.style.display = ctl.checked ? "" : "none";
+  }
   function applyDefaultBannerColor() {
     if (bannerColorTouched) return;
     var p = ctlBannerPlat.value || "kick";
@@ -902,6 +1045,8 @@
   ctlCommentsOn.addEventListener("change", syncComments);
   ctlCommentsLk.addEventListener("input", syncComments);
   if (ctlContextOn) ctlContextOn.addEventListener("change", syncContext);
+  var ctlSafezonesOn = document.getElementById("ctl-safezones-on");
+  if (ctlSafezonesOn) ctlSafezonesOn.addEventListener("change", syncSafezones);
 
   // Caption animation: cycle the active word through the four words
   // every 600ms while the video is playing. Approximates the karaoke
@@ -1026,6 +1171,97 @@
     .then(function (r) { return r.ok ? r.json() : []; })
     .then(renderWaveformBars)
     .catch(function () { renderWaveformBars([]); });
+
+  // ---- Live word-level captions (slice F.7-F) ----
+  // Fetch the per-clip caption lines and sync them to video.currentTime.
+  // The active word pops + glows + scales per its emphasis tag.
+  // This REPLACES the static "EPIC PLAY RIGHT HERE" placeholder —
+  // what you see in the preview is exactly what gets burned.
+  var pvCaptionEl = document.getElementById("pv-caption");
+  var captionLines = [];   // [{ts, end_ts, text, emphasis, words:[{ts,end_ts,text,emphasis}]}]
+  var captionActiveLineIdx = -1;
+
+  function captionsEnabled() {
+    return ctlCaptionsOn && ctlCaptionsOn.checked;
+  }
+
+  function renderCaptionLine(line) {
+    // Replace the inner HTML with per-word spans carrying timing
+    // + emphasis so the per-frame sync just toggles classes.
+    var html = "";
+    line.words.forEach(function (w) {
+      html += '<span class="nc-pv-caption__word"'
+            + ' data-ts="' + w.ts + '"'
+            + ' data-end-ts="' + w.end_ts + '"'
+            + ' data-emphasis="' + (w.emphasis || "normal") + '">'
+            + escapeHTML(w.text)
+            + '</span>';
+    });
+    pvCaptionEl.innerHTML = html;
+  }
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function syncCaptionFrame() {
+    if (!captionsEnabled() || !captionLines.length) {
+      // If captions toggled off mid-play, clear the surface.
+      if (pvCaptionEl.children.length && !captionsEnabled()) {
+        pvCaptionEl.innerHTML = "";
+        captionActiveLineIdx = -1;
+      }
+      return;
+    }
+    var t = video.currentTime;
+    // Find the line whose window contains t. Linear scan is fine —
+    // a clip has at most ~50 lines.
+    var newIdx = -1;
+    for (var i = 0; i < captionLines.length; i++) {
+      var ln = captionLines[i];
+      if (t >= ln.ts && t < ln.end_ts) { newIdx = i; break; }
+    }
+    // Fall back to the LAST completed line during gaps so the
+    // preview isn't blank between words — feels more "alive".
+    if (newIdx === -1) {
+      for (var j = captionLines.length - 1; j >= 0; j--) {
+        if (captionLines[j].end_ts <= t) { newIdx = j; break; }
+      }
+    }
+    if (newIdx !== captionActiveLineIdx) {
+      captionActiveLineIdx = newIdx;
+      if (newIdx >= 0) renderCaptionLine(captionLines[newIdx]);
+      else pvCaptionEl.innerHTML = "";
+    }
+    // Per-word active state inside the current line.
+    pvCaptionEl.querySelectorAll(".nc-pv-caption__word").forEach(function (w) {
+      var ws = parseFloat(w.getAttribute("data-ts"));
+      var we = parseFloat(w.getAttribute("data-end-ts"));
+      w.classList.remove("is-active", "is-past", "is-upcoming");
+      if (t >= ws && t < we) w.classList.add("is-active");
+      else if (we <= t)     w.classList.add("is-past");
+      else                  w.classList.add("is-upcoming");
+    });
+  }
+  // Run the caption sync alongside the existing playhead sync.
+  video.addEventListener("timeupdate", syncCaptionFrame);
+  // Also drive it on a 60ms timer while playing — the browser only
+  // fires `timeupdate` every ~250ms which is too coarse for word-
+  // level animation.
+  setInterval(function () {
+    if (!video.paused) syncCaptionFrame();
+  }, 60);
+
+  fetch("/dashboard/clips/{{ clip.id }}/captions.json")
+    .then(function (r) { return r.ok ? r.json() : { lines: [] }; })
+    .then(function (data) {
+      captionLines = (data && Array.isArray(data.lines)) ? data.lines : [];
+      // Initial paint — show the first line if the video is at t=0.
+      syncCaptionFrame();
+    })
+    .catch(function () { captionLines = []; });
 
   // ---- Intelligence timeline (slice F.7-C) ----
   // Per-clip markers (audio peak / scene cut / reaction / chat
@@ -1184,6 +1420,7 @@
   syncCaptions();
   syncComments();
   syncContext();
+  syncSafezones();
 })();
 </script>
 {% endblock %}

@@ -41,6 +41,7 @@ from typing import NamedTuple
 import structlog
 
 from .service import _find_system_font
+from .word_captions import CaptionLine, captions_for_clip
 
 _log = structlog.get_logger(__name__)
 
@@ -165,24 +166,27 @@ def build_srt(
     """Generate SRT subtitles from transcript segments, sliced to the
     clip's window and with timestamps shifted to clip-relative.
 
-    Returns "" when no segments overlap the window — caller should
-    treat that as "no captions to burn" and skip the subtitles filter.
+    Tolerates BOTH the real Whisper-serialized shape `{ts, end_ts}`
+    (Pydantic field names from `transcribe.models.Segment`) AND the
+    legacy test-fixture shape `{start, end}`. This is the foundational
+    fix — production data uses `ts`/`end_ts` so the previous version
+    of this function silently produced empty SRTs on real clips.
 
-    Each segment dict needs:
-      - start (float, stream-relative seconds)
-      - end   (float, stream-relative seconds)
-      - text  (str)
-    Anything missing is skipped.
+    Returns "" when no segments overlap the window — caller treats
+    that as "no captions to burn" and skips the subtitles filter.
     """
     rows: list[tuple[float, float, str]] = []
     for s in segments:
         if not isinstance(s, dict):
             continue
-        try:
-            seg_start = float(s.get("start") or 0)
-            seg_end = float(s.get("end") or seg_start)
-        except (TypeError, ValueError):
+        # Real DB shape uses `ts` / `end_ts`; test fixtures + legacy
+        # callers use `start` / `end`. Read whichever is present.
+        seg_start = _as_float(s.get("ts"), s.get("start"))
+        seg_end = _as_float(s.get("end_ts"), s.get("end"))
+        if seg_start is None or seg_end is None:
             continue
+        if seg_end < seg_start:
+            seg_end = seg_start
         text = str(s.get("text") or "").strip()
         if not text:
             continue
@@ -204,6 +208,213 @@ def build_srt(
         out.append(text)
         out.append("")
     return "\n".join(out)
+
+
+def _as_float(*candidates: object) -> float | None:
+    """First non-None numeric coercible to float. Returns None when
+    nothing in the chain is usable."""
+    for c in candidates:
+        if isinstance(c, int | float):
+            return float(c)
+        if isinstance(c, str):
+            try:
+                return float(c)
+            except ValueError:
+                continue
+    return None
+
+
+# ---- ASS (Advanced SubStation Alpha) generation ----------------
+#
+# ASS is the format ffmpeg's `subtitles=` filter renders with the
+# richest tag support — per-word karaoke fill, scale, color, position.
+# This is what burns into clip_final.mp4 to match the editor preview.
+
+# ASS expects integer (width, height) for PlayResX/Y in the Script Info
+# block. Renderer scales positioning + font-size relative to these.
+_ASS_PLAYRES_W = 1080
+_ASS_PLAYRES_H = 1920
+
+# Bottom UI band on TikTok/Reels/Shorts measured in PlayRes units —
+# captions sit ABOVE this so platform chrome doesn't eat them. ~220
+# of 1920 = bottom ~11% of the frame is "danger zone".
+_ASS_BOTTOM_SAFE_MARGIN_V = 220
+
+# Per-emphasis font-size multiplier on a baseline of 56pt (renders
+# tall + readable at 1080x1920). Shout > reaction > emphasis > normal.
+_ASS_BASE_FONTSIZE = 56
+_ASS_EMPHASIS_SCALE: dict[str, float] = {
+    "shout": 1.55,
+    "reaction": 1.30,
+    "emphasis": 1.18,
+    "normal": 1.00,
+}
+# Per-emphasis fill color (ASS &HBBGGRR — BGR + alpha-first hex).
+_ASS_EMPHASIS_FILL: dict[str, str] = {
+    "shout": "&H003B3BFF",      # red-ish (FF3B3B in RGB)
+    "reaction": "&H006BD6FF",   # warm gold-orange
+    "emphasis": "&H0000D7FF",   # gold (FFD700 in RGB)
+    "normal": "&H00FFFFFF",     # white
+}
+
+
+def _ass_ts(seconds: float) -> str:
+    """ASS timestamp — H:MM:SS.cs (centiseconds, NOT ms)."""
+    if seconds < 0:
+        seconds = 0
+    h = int(seconds // 3600)
+    rem = seconds - h * 3600
+    m = int(rem // 60)
+    s = rem - m * 60
+    whole = int(s)
+    cs = round((s - whole) * 100)
+    if cs == 100:
+        cs = 0
+        whole += 1
+    return f"{h:d}:{m:02d}:{whole:02d}.{cs:02d}"
+
+
+def _ass_escape(text: str) -> str:
+    """Escape user text for inclusion in an ASS dialogue. ASS treats
+    `{` / `}` as override-tag delimiters and `\\` as a continuation
+    escape. Hard linebreaks via `\\N`; we don't use them here but
+    must not let raw `\\N` leak in from transcript text."""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("{", "(")
+        .replace("}", ")")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
+def build_ass(
+    lines: Iterable[CaptionLine],
+    *,
+    playres_w: int = _ASS_PLAYRES_W,
+    playres_h: int = _ASS_PLAYRES_H,
+) -> str:
+    """Generate an ASS subtitle file with per-word karaoke + emphasis.
+
+    Each `CaptionLine` becomes ONE Dialogue entry. Inside the dialogue
+    text, each word is wrapped with `{\\kf<cs>}` (karaoke fill over
+    `<cs>` centiseconds) so the active word lights up in real-time as
+    the clip plays back. Emphasized words also get `{\\fs<size>\\c<col>}`
+    overrides so SHOUT lands BIG + red, REACTION lands warm gold,
+    EMPHASIS lands gold, NORMAL stays white.
+
+    Captions sit ABOVE the TikTok/Reels/Shorts bottom UI band (default
+    margin_v = 220 of 1920 → ~11.5% from bottom).
+
+    Returns "" when no lines were passed — caller should treat that
+    as "no captions to burn" and skip the subtitles filter entirely.
+    """
+    lines = list(lines)
+    if not lines:
+        return ""
+
+    header = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {playres_w}",
+        f"PlayResY: {playres_h}",
+        "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
+        "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding",
+        # Base style: white-fill, black-outline, alignment 2 (bottom-
+        # center), high MarginV so captions sit above platform UI.
+        f"Style: Default,Arial,{_ASS_BASE_FONTSIZE},&H00FFFFFF,"
+        f"&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,"
+        f"40,40,{_ASS_BOTTOM_SAFE_MARGIN_V},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text",
+    ]
+
+    events: list[str] = []
+    for line in lines:
+        text = _ass_line_text(line)
+        events.append(
+            f"Dialogue: 0,{_ass_ts(line.ts)},{_ass_ts(line.end_ts)},"
+            f"Default,,0,0,0,,{text}"
+        )
+
+    return "\n".join(header + events) + "\n"
+
+
+def _ass_line_text(line: CaptionLine) -> str:
+    """Compose the ASS dialogue text for one line — per-word
+    karaoke timings + emphasis-driven overrides."""
+    pieces: list[str] = []
+    line_start = line.ts
+    for i, w in enumerate(line.words):
+        # Centiseconds the word holds (used by \kf for fill duration).
+        cs = max(1, round((w.end_ts - w.ts) * 100))
+        scale = _ASS_EMPHASIS_SCALE.get(w.emphasis, 1.0)
+        fontsize = round(_ASS_BASE_FONTSIZE * scale)
+        color = _ASS_EMPHASIS_FILL.get(w.emphasis, "&H00FFFFFF")
+        text = _ass_escape(w.text)
+        # \kf needs to advance through the entire dialogue's duration.
+        # Insert a leading silent-skip if there's a gap between the
+        # line start and the word start (rare but happens).
+        if i == 0 and w.ts > line_start:
+            gap_cs = max(0, round((w.ts - line_start) * 100))
+            if gap_cs > 0:
+                pieces.append(f"{{\\kf{gap_cs}}}")
+        pieces.append(f"{{\\kf{cs}\\fs{fontsize}\\c{color}}}{text} ")
+    return "".join(pieces).rstrip()
+
+
+def captions_artifact_for_clip(
+    transcript_segments_json: str | None,
+    *,
+    clip_start_s: float,
+    clip_end_s: float,
+) -> tuple[str, str]:
+    """Return `(ass_or_srt_body, extension)` for the captions file
+    the burn-in should write.
+
+    Prefers ASS (word-level karaoke + emphasis) when the transcript
+    has word-level data; falls back to SRT (segment-level only) when
+    it doesn't. The ASS / SRT filter is identical from ffmpeg's
+    perspective — same `subtitles=` directive.
+    """
+    if not transcript_segments_json:
+        return "", "srt"
+    lines = captions_for_clip(
+        transcript_segments_json,
+        clip_start_s=clip_start_s,
+        clip_end_s=clip_end_s,
+    )
+    if not lines:
+        return "", "srt"
+    # Did any line carry word-level timings? If yes → ASS for karaoke.
+    has_words = any(
+        len(line.words) > 0 and line.words[0].end_ts > line.words[0].ts
+        for line in lines
+    )
+    if has_words:
+        return build_ass(lines), "ass"
+
+    # Fall back to SRT (legacy segment-level) by going through the
+    # same JSON the build_srt function consumes.
+    import json
+
+    try:
+        segments = json.loads(transcript_segments_json)
+    except json.JSONDecodeError:
+        return "", "srt"
+    if not isinstance(segments, list):
+        return "", "srt"
+    return build_srt(
+        segments, clip_start_s=clip_start_s, clip_end_s=clip_end_s
+    ), "srt"
 
 
 def _srt_ts(seconds: float) -> str:
@@ -231,7 +442,8 @@ def build_filter_graph(
     output_w: int,
     output_h: int,
     fontfile: Path | None,
-    srt_path: Path | None,
+    srt_path: Path | None = None,
+    captions_path: Path | None = None,
 ) -> str:
     """Compose the chained ffmpeg `-vf` filter expression for the
     overlay burn pass. Returns "" when nothing's enabled — caller
@@ -250,12 +462,14 @@ def build_filter_graph(
     if spec.title_text and fontfile is not None:
         chunks.append(_title_filter(spec.title_text, output_w=output_w, fontfile=fontfile))
 
-    # 2. Captions — subtitles= filter against an SRT we wrote next
-    # to the clip. Skipped when captions_enabled is False, when no
-    # transcript segments overlapped the clip window (srt_path is
-    # None), or when the SRT body was empty.
-    if spec.captions_enabled and srt_path is not None and srt_path.exists():
-        chunks.append(_captions_filter(srt_path))
+    # 2. Captions — subtitles= filter against an ASS (word-level
+    # karaoke, slice F.7-F) or SRT (segment-level fallback) file we
+    # wrote next to the clip. Skipped when captions_enabled is False,
+    # when no transcript data overlapped the clip window, or when the
+    # body was empty.
+    cap_path = captions_path or srt_path
+    if spec.captions_enabled and cap_path is not None and cap_path.exists():
+        chunks.append(_captions_filter(cap_path))
 
     # 3. Platform banner — drawbox + drawtext (platform left, URL right).
     if spec.banner_enabled and fontfile is not None:
@@ -293,15 +507,22 @@ def _title_filter(
     )
 
 
-def _captions_filter(srt_path: Path) -> str:
-    """Burn segment-level captions via the subtitles filter.
+def _captions_filter(captions_path: Path) -> str:
+    """Burn captions via the subtitles filter.
 
-    Uses `force_style` to override the SRT default (Arial yellow)
-    with a high-contrast white-on-black-stroke that reads on any
-    background — matches the editor's caption preview vibe.
+    Two paths the captions_path can take:
+
+      * `.ass` — Advanced SubStation Alpha with word-level karaoke
+                 (slice F.7-F). Carries its own styling so we DON'T
+                 pass force_style — the ASS file's own Style line
+                 controls font / colors / position / margins.
+      * `.srt` — segment-level fallback. We layer force_style so it
+                 picks up our white-on-black-stroke baseline.
     """
+    if captions_path.suffix.lower() == ".ass":
+        return f"subtitles='{_ff_escape_path(captions_path)}'"
     return (
-        f"subtitles='{_ff_escape_path(srt_path)}'"
+        f"subtitles='{_ff_escape_path(captions_path)}'"
         f":force_style='"
         f"FontName=Arial,FontSize=22,"
         f"PrimaryColour=&H00FFFFFF,"
@@ -388,18 +609,27 @@ def burn_overlays(
 
     spec = _spec_from_overlay_config(overlay_config)
 
-    # Write SRT next to the target (deterministic path so the
-    # captions filter can resolve it; cleaned up after burn).
-    srt_path: Path | None = None
+    # Write captions file (ASS for word-level karaoke when available,
+    # SRT otherwise) next to the target. Deterministic path so the
+    # subtitles filter can resolve it; cleaned up after the burn.
+    captions_path: Path | None = None
     if spec.captions_enabled:
-        srt_body = build_srt(
-            transcript_segments,
-            clip_start_s=clip_start_s,
-            clip_end_s=clip_end_s,
-        )
-        if srt_body:
-            srt_path = target_path.parent / ".captions.srt"
-            srt_path.write_text(srt_body, encoding="utf-8")
+        # Serialize the segments to JSON so we can reuse the same
+        # captions_artifact_for_clip path the editor's preview uses —
+        # one source of truth for what gets rendered.
+        import json as _json
+
+        segments_list = [s for s in transcript_segments if isinstance(s, dict)]
+        if segments_list:
+            segments_json = _json.dumps(segments_list)
+            body, ext = captions_artifact_for_clip(
+                segments_json,
+                clip_start_s=clip_start_s,
+                clip_end_s=clip_end_s,
+            )
+            if body:
+                captions_path = target_path.parent / f".captions.{ext}"
+                captions_path.write_text(body, encoding="utf-8")
 
     fontfile = _find_system_font()
     filter_graph = build_filter_graph(
@@ -407,14 +637,14 @@ def burn_overlays(
         output_w=output_w,
         output_h=output_h,
         fontfile=fontfile,
-        srt_path=srt_path,
+        captions_path=captions_path,
     )
 
     if not filter_graph:
         # Nothing to burn — caller should fall back to source_path.
         # We still return False so the caller can decide what to do.
-        if srt_path and srt_path.exists():
-            srt_path.unlink(missing_ok=True)
+        if captions_path and captions_path.exists():
+            captions_path.unlink(missing_ok=True)
         return False
 
     cmd = [
@@ -431,9 +661,10 @@ def burn_overlays(
     ]
     proc = subprocess.run(cmd, capture_output=True, check=False)
 
-    # Clean up the SRT regardless of outcome — it's a per-burn artifact.
-    if srt_path and srt_path.exists():
-        srt_path.unlink(missing_ok=True)
+    # Clean up the captions file regardless of outcome — it's a
+    # per-burn artifact.
+    if captions_path and captions_path.exists():
+        captions_path.unlink(missing_ok=True)
 
     if proc.returncode != 0:
         # Surface the LAST ~600 chars of stderr so the operator can

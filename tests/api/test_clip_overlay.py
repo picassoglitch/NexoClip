@@ -610,6 +610,87 @@ async def test_clip_editor_renders_waveform_scrubber(
     assert "0:10" in body
 
 
+async def test_captions_endpoint_returns_word_level_lines(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Slice F.7-F: /captions.json serves word-level caption lines
+    chunked + emphasis-classified, ready for the editor's live
+    preview to drive word-by-word animation."""
+    import datetime as _dt
+    import json
+
+    from nexoclip.db import TranscriptsRepo
+    from nexoclip.db.models import TranscriptRow
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    # Seed a transcript with the REAL DB shape (ts/end_ts +
+    # word-level data) — what production actually stores.
+    segs = [
+        {
+            "ts": 0.0,
+            "end_ts": 2.0,
+            "text": "hello WORLD test",
+            "words": [
+                {"ts": 0.0, "end_ts": 0.5, "text": "hello", "prob": 0.9},
+                {"ts": 0.5, "end_ts": 1.0, "text": "WORLD", "prob": 0.9},
+                {"ts": 1.0, "end_ts": 2.0, "text": "test!", "prob": 0.9},
+            ],
+        },
+    ]
+    with bound_tenant(tid):
+        await TranscriptsRepo(db).upsert(
+            TranscriptRow(
+                stream_id="str_e",
+                tenant_id=tid,
+                language="en",
+                duration_s=60.0,
+                model="medium",
+                segments_json=json.dumps(segs),
+                created_at=_dt.datetime.now(_dt.UTC).isoformat(),
+            )
+        )
+
+    r = await client.get("/dashboard/clips/clp_e/captions.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert "lines" in body
+    assert body["duration_s"] == 10.0  # fixture clip duration
+    # Should have multiple chunked lines (WORLD breaks out as shout,
+    # test! as emphasis, hello as its own).
+    assert len(body["lines"]) >= 2
+    # Emphasis tags actually flow through.
+    emphases = {ln["emphasis"] for ln in body["lines"]}
+    assert "shout" in emphases or "emphasis" in emphases
+
+
+async def test_captions_endpoint_404_for_unknown_clip(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    await _login(client, tenants["alice"]["token"])
+    r = await client.get("/dashboard/clips/clp_nope/captions.json")
+    assert r.status_code == 404
+
+
+async def test_captions_endpoint_returns_empty_when_no_transcript(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """No transcript yet → empty lines (the editor's fallback)."""
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    r = await client.get("/dashboard/clips/clp_e/captions.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["lines"] == []
+
+
 async def test_waveform_endpoint_returns_empty_when_clip_missing_on_disk(
     client: httpx.AsyncClient,
     db: Database,

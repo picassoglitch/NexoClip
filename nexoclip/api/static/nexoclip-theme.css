@@ -1160,6 +1160,75 @@ details.nc-details > article {
     border: 1px solid var(--nc-danger-dim);
 }
 
+/* --- expandable variant (slice F.7-F) ---
+ * `<details>` wrapper: passive chip until clicked, then unfurls
+ * the evidence rows that show WHY the score is what it is. Span
+ * full strip width when open so the rows have room to breathe. */
+.nc-ai-score--detail {
+    position: relative;
+}
+.nc-ai-score--detail > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.nc-ai-score--detail > summary::-webkit-details-marker { display: none; }
+.nc-ai-score--detail > summary::after {
+    content: "▾";
+    position: absolute;
+    top: 0;
+    right: 0;
+    color: var(--nc-text-muted);
+    font-size: 10px;
+    transition: transform 120ms ease;
+    pointer-events: none;
+}
+.nc-ai-score--detail[open] > summary::after {
+    transform: rotate(180deg);
+}
+.nc-ai-score--detail[open] {
+    grid-column: 1 / -1;
+    background: var(--nc-ai-bg);
+    border: 1px solid var(--nc-ai-dim);
+    border-radius: var(--nc-radius);
+    padding: 12px;
+    margin: -4px 0;
+}
+.nc-ai-score__evidence {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--nc-ai-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nc-ai-evidence__row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 12px;
+}
+.nc-ai-evidence__label {
+    color: var(--nc-text-muted);
+    flex: 0 0 140px;
+}
+.nc-ai-evidence__row .nc-mono {
+    color: var(--nc-text);
+}
+.nc-ai-evidence__row .nc-mono--muted {
+    color: var(--nc-text-muted);
+    font-size: 11px;
+}
+.nc-ai-evidence__why {
+    color: var(--nc-text-body);
+    font-size: 12px;
+    margin-top: 4px;
+    line-height: 1.45;
+    font-style: italic;
+}
+
 
 /* ---------- 25. Right-panel hierarchy (editor-section H3 + group label) ---------- */
 
@@ -1512,6 +1581,77 @@ details.nc-details > article {
     color: var(--nc-text-muted);
     font-family: var(--nc-font-mono);
     font-size: 10px;
+}
+
+
+/* ---------- 28d. Platform safe-zone overlay (slice F.7-F) -----------
+ * TikTok/Reels/Shorts cover specific bands of the frame with their
+ * own UI (profile + likes/comments/share rail + caption + audio + CTA).
+ * A clip composed without respecting those bands gets PARTIALLY
+ * covered the moment it's published — captions cut off, branding
+ * eaten, viewer thinks "amateur edit". This overlay shows the
+ * danger zones so the operator can position their overlays safely.
+ * Toggleable from the Branding section. */
+
+.nc-pv-safezones {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 4;
+}
+.nc-pv-safezones__zone {
+    position: absolute;
+    border: 1.5px dashed rgba(255, 59, 48, 0.55);
+    background: rgba(255, 59, 48, 0.06);
+    font-family: var(--nc-font-mono);
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 4px 6px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+/* TikTok / Reels right rail (likes, comments, share, bookmarks, sound) */
+.nc-pv-safezones__zone--right-rail {
+    top: 38%;
+    right: 0;
+    width: 14%;
+    height: 50%;
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
+    align-items: center;
+    justify-content: center;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    letter-spacing: 0.08em;
+}
+/* Profile / avatar (TikTok upper-right, Reels upper-left varies) */
+.nc-pv-safezones__zone--profile {
+    top: 0;
+    right: 0;
+    width: 16%;
+    height: 12%;
+    border-top: 0;
+    border-right: 0;
+    border-bottom-left-radius: 8px;
+}
+/* Bottom UI band — caption row + audio + CTA + ad markup */
+.nc-pv-safezones__zone--bottom {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 17%;
+    border-bottom: 0;
+    border-left: 0;
+    border-right: 0;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    justify-content: center;
+    align-items: flex-end;
+    padding-bottom: 8px;
 }
 
 

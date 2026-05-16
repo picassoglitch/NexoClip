@@ -10,15 +10,19 @@ import pytest
 
 from nexoclip.clip.overlay_burn import (
     PLATFORM_COLORS,
+    _ass_ts,
     _ff_escape_path,
     _ff_escape_text,
     _hex_to_ff_color,
     _spec_from_overlay_config,
     _srt_ts,
+    build_ass,
     build_filter_graph,
     build_srt,
     burn_overlays,
+    captions_artifact_for_clip,
 )
+from nexoclip.clip.word_captions import chunk_words_to_lines
 
 # ---- text + color escaping --------------------------------------
 
@@ -470,3 +474,139 @@ def test_burn_overlays_propagates_ffmpeg_failure(tmp_path: Path) -> None:
         )
     # SRT gets cleaned up even on failure.
     assert not (target.parent / ".captions.srt").exists()
+
+
+# ---- ASS / word-level karaoke (slice F.7-F) ----------------------
+
+
+def _make_words(specs: list[tuple[float, float, str]]) -> list:
+    return chunk_words_to_lines(
+        [{"ts": t, "end_ts": e, "text": txt} for t, e, txt in specs],
+        clip_start_s=0,
+        clip_end_s=60,
+    )
+
+
+def test_ass_ts_format() -> None:
+    """ASS uses H:MM:SS.cs — centiseconds, NOT ms like SRT."""
+    assert _ass_ts(0) == "0:00:00.00"
+    assert _ass_ts(1.5) == "0:00:01.50"
+    assert _ass_ts(61.23) == "0:01:01.23"
+    assert _ass_ts(3661.99) == "1:01:01.99"
+
+
+def test_ass_ts_clamps_negative_to_zero() -> None:
+    assert _ass_ts(-5) == "0:00:00.00"
+
+
+def test_build_ass_empty_lines_returns_empty_string() -> None:
+    assert build_ass([]) == ""
+
+
+def test_build_ass_includes_header_and_dialogue_block() -> None:
+    lines = _make_words([(0.0, 0.5, "hello"), (0.5, 1.0, "world")])
+    out = build_ass(lines)
+    assert "[Script Info]" in out
+    assert "[V4+ Styles]" in out
+    assert "[Events]" in out
+    assert "Dialogue: " in out
+    # Margins reflect platform-safe positioning.
+    assert "220" in out  # _ASS_BOTTOM_SAFE_MARGIN_V
+
+
+def test_build_ass_inserts_karaoke_tag_per_word() -> None:
+    """Every word gets a `\\kf<centiseconds>` tag for fill timing."""
+    lines = _make_words([(0.0, 0.5, "hello"), (0.5, 1.0, "world")])
+    out = build_ass(lines)
+    # \kf50 for 0.5s words.
+    assert "\\kf50" in out
+
+
+def test_build_ass_uses_larger_font_for_shouts() -> None:
+    """ALL-CAPS words get scaled up via the per-word `\\fs<size>` tag."""
+    lines = _make_words([(0.0, 0.5, "EPIC")])
+    out = build_ass(lines)
+    # Shout scale 1.55 * baseline 56 ~ 87.
+    assert "\\fs87" in out or "\\fs86" in out or "\\fs88" in out
+
+
+def test_build_ass_uses_emphasis_color_per_word() -> None:
+    """Shout words get the red fill; normal words get white."""
+    shout_lines = _make_words([(0.0, 0.5, "WHAT")])
+    out = build_ass(shout_lines)
+    # Shout fill = &H003B3BFF.
+    assert "&H003B3BFF" in out
+
+
+def test_build_ass_escapes_curly_braces_in_word_text() -> None:
+    """Words containing `{` / `}` (rare but Whisper can emit them)
+    must not break ASS's override-tag parser."""
+    lines = chunk_words_to_lines(
+        [{"ts": 0.0, "end_ts": 0.5, "text": "weird{}word"}],
+        clip_start_s=0,
+        clip_end_s=10,
+    )
+    out = build_ass(lines)
+    # Curly braces in the user text replaced; ASS still has its own
+    # override braces around the karaoke tags.
+    assert "weird()word" in out
+
+
+def test_captions_artifact_prefers_ass_when_word_data_available() -> None:
+    """The real DB shape carries word-level timings → ASS wins."""
+    import json
+
+    segments = [
+        {
+            "ts": 0.0,
+            "end_ts": 1.0,
+            "text": "hello world",
+            "words": [
+                {"ts": 0.0, "end_ts": 0.4, "text": "hello", "prob": 0.9},
+                {"ts": 0.4, "end_ts": 1.0, "text": "world", "prob": 0.9},
+            ],
+        },
+    ]
+    body, ext = captions_artifact_for_clip(
+        json.dumps(segments), clip_start_s=0, clip_end_s=10
+    )
+    assert ext == "ass"
+    assert "[Events]" in body
+    assert "\\kf" in body
+
+
+def test_captions_artifact_returns_empty_when_no_transcript() -> None:
+    body, _ext = captions_artifact_for_clip(None, clip_start_s=0, clip_end_s=10)
+    assert body == ""
+
+
+def test_build_srt_reads_real_db_shape_ts_end_ts() -> None:
+    """REGRESSION GUARD for the production bug: build_srt USED to read
+    only `start`/`end`, so it silently produced empty SRTs on real
+    data (DB shape uses `ts`/`end_ts`). The fix reads either shape.
+
+    This test feeds the real shape and proves the SRT body is
+    non-empty + carries the expected text."""
+    segments = [
+        {"ts": 5.0, "end_ts": 6.5, "text": "actual production shape"},
+    ]
+    body = build_srt(segments, clip_start_s=0, clip_end_s=10)
+    assert "actual production shape" in body
+    assert "00:00:05" in body
+
+
+def test_filter_graph_uses_subtitles_filter_for_ass_path(tmp_path) -> None:
+    """`.ass` files don't pass force_style — the ASS file's Style
+    line carries its own font / position / margins."""
+    ass = tmp_path / ".captions.ass"
+    ass.write_text("[Script Info]\n", encoding="utf-8")
+    spec = _spec_from_overlay_config({"captions": {"enabled": True}})
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        captions_path=ass,
+    )
+    assert "subtitles=" in graph
+    assert "force_style" not in graph  # ASS carries its own style

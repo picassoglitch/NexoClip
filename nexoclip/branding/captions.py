@@ -27,7 +27,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 CaptionPresetId = Literal["karaoke_pop", "typewriter", "bold_block", "subtle"]
 CaptionPosition = Literal["upper_third", "centered", "lower_third", "bottom"]
-CaptionAnimation = Literal["pop_in", "typewriter", "fade", "none"]
+# Slice F.7-H added "pop" / "slide" as editor-surface animation choices;
+# kept the legacy "pop_in" / "none" to round-trip older saved kits.
+CaptionAnimation = Literal["pop", "slide", "fade", "typewriter", "pop_in", "none"]
+CaptionFontSize = Literal["small", "medium", "large", "xl"]
 HighlightMode = Literal["active_word", "active_chunk", "none"]
 
 
@@ -65,6 +68,15 @@ class CaptionStyle(BaseModel):
     animation: CaptionAnimation = "pop_in"
     shadow: CaptionShadow = Field(default_factory=CaptionShadow)
     censor_swears: bool = True
+
+    # Slice H.1 — editor-controlled knobs the operator picks from the
+    # right panel. Persisted to brand_kits.caption_style_json so they
+    # survive across clips. font_size is a coarse band (the renderer
+    # multiplies font_size_px by the band's scale factor — small=0.78,
+    # medium=1.0, large=1.24, xl=1.5). lead_ms shifts caption timing
+    # FORWARD in the preview AND the ASS burn so words can read-ahead.
+    font_size: CaptionFontSize = "medium"
+    lead_ms: int = Field(default=0, ge=0, le=500)
 
 
 def builtin_presets() -> dict[CaptionPresetId, CaptionStyle]:

@@ -1491,12 +1491,16 @@
       }
       return;
     }
-    // Slice F.7-H — lead-time: the operator wants words to APPEAR
-    // a few hundred ms before they're spoken so viewers can read
-    // ahead. We implement this by shifting the lookup time FORWARD —
-    // at clock time t, render the word whose ts is `lead_ms` from now.
-    // Equivalent to subtracting `lead_ms` from each word's ts but
-    // doesn't require rebuilding the line array on every drag.
+    // Slice H.2 — caption visibility is binary on a per-line window:
+    //   t  ∈ [ts, end_ts]   → show the line, animate the active word
+    //   t  outside any line → render NOTHING
+    // The "upcoming preview" and "last completed line" gap-fillers
+    // from earlier slices made the preview lie (captions before / after
+    // they were actually spoken). Killed.
+    //
+    // Lead-time still works: we shift the lookup time forward so words
+    // POP IN slightly before their ts. With lead_ms=0 the preview matches
+    // the audio frame-for-frame.
     var leadMs = 0;
     if (ctlCaptionsLead) {
       var parsed = parseInt(ctlCaptionsLead.value, 10);
@@ -1510,37 +1514,20 @@
       var ln = captionLines[i];
       if (t >= ln.ts && t < ln.end_ts) { newIdx = i; break; }
     }
-    // Fall back to the LAST completed line during gaps so the
-    // preview isn't blank between words — feels more "alive".
-    if (newIdx === -1) {
-      for (var j = captionLines.length - 1; j >= 0; j--) {
-        if (captionLines[j].end_ts <= t) { newIdx = j; break; }
-      }
-    }
-    // Slice F.7-G — when no line has fired yet (video paused at t=0,
-    // or before the first word's ts), show the FIRST upcoming line at
-    // reduced opacity so the operator sees what's coming instead of
-    // an empty preview that looks broken.
-    var isUpcomingPreview = false;
-    if (newIdx === -1 && captionLines.length) {
-      newIdx = 0;
-      isUpcomingPreview = true;
-    }
     if (newIdx !== captionActiveLineIdx) {
       captionActiveLineIdx = newIdx;
       if (newIdx >= 0) renderCaptionLine(captionLines[newIdx]);
       else pvCaptionEl.innerHTML = "";
     }
     // Per-word active state inside the current line.
-    pvCaptionEl.style.opacity = isUpcomingPreview ? "0.55" : "1";
+    pvCaptionEl.style.opacity = "1";
     pvCaptionEl.querySelectorAll(".nc-pv-caption__word").forEach(function (w) {
       var ws = parseFloat(w.getAttribute("data-ts"));
       var we = parseFloat(w.getAttribute("data-end-ts"));
       w.classList.remove("is-active", "is-past", "is-upcoming");
-      if (isUpcomingPreview)  w.classList.add("is-upcoming");
-      else if (t >= ws && t < we) w.classList.add("is-active");
-      else if (we <= t)       w.classList.add("is-past");
-      else                    w.classList.add("is-upcoming");
+      if (t >= ws && t < we) w.classList.add("is-active");
+      else if (we <= t)      w.classList.add("is-past");
+      else                   w.classList.add("is-upcoming");
     });
   }
   // Run the caption sync alongside the existing playhead sync.

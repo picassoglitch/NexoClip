@@ -55,6 +55,17 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 _COOKIE_NAME = "nexoclip_token"
 
 
+@router.get("", include_in_schema=False)
+@router.get("/", include_in_schema=False)
+async def dashboard_root() -> Response:
+    """Slice I.3 follow-up — operators kept hitting /dashboard/ in the
+    address bar and getting a bare 404. There's no actual dashboard
+    HOME page (the streams index is the canonical landing); just
+    redirect there. The bearer-auth middleware will bounce them on to
+    /dashboard/login if they're not authenticated."""
+    return RedirectResponse(url="/dashboard/streams", status_code=303)
+
+
 def _split_csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 

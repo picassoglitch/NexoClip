@@ -745,6 +745,219 @@
   }
   .nc-btn--warn:hover { background: rgba(255, 184, 0, 1); }
 
+  /* Slice I.4 — Variant card grid + filter tabs. */
+  .nc-variant-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--nc-border);
+  }
+  .nc-variant-filter {
+    padding: 5px 10px;
+    border: 1px solid var(--nc-border);
+    background: transparent;
+    color: var(--nc-text-muted);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .nc-variant-filter:hover { color: var(--nc-text); border-color: var(--nc-blue-bright, #4f8bff); }
+  .nc-variant-filter.is-active {
+    background: var(--nc-blue-bright, #4f8bff);
+    color: #fff;
+    border-color: var(--nc-blue-bright, #4f8bff);
+  }
+  .nc-variant-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .nc-variant-card {
+    background: var(--nc-bg-elevated);
+    border: 1px solid var(--nc-border);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: all 120ms ease;
+    position: relative;
+  }
+  .nc-variant-card:hover {
+    border-color: var(--nc-blue-bright, #4f8bff);
+    transform: translateY(-1px);
+  }
+  .nc-variant-card.is-selected {
+    border-color: var(--nc-blue-bright, #4f8bff);
+    box-shadow: 0 0 0 1px var(--nc-blue-bright, #4f8bff) inset;
+    background: linear-gradient(180deg,
+      rgba(79, 139, 255, 0.10),
+      var(--nc-bg-elevated));
+  }
+  .nc-variant-card.is-hidden { display: none; }
+
+  .nc-variant-card__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .nc-variant-card__tone {
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 999px;
+  }
+  .nc-variant-card__tone--funny         { background: rgba(255, 200, 60, 0.16); color: #ffc83c; }
+  .nc-variant-card__tone--aggressive    { background: rgba(255, 60, 60, 0.16);  color: #ff7a7a; }
+  .nc-variant-card__tone--motivational  { background: rgba(0, 217, 122, 0.16);  color: #00d97a; }
+  .nc-variant-card__tone--controversial { background: rgba(180, 70, 255, 0.16); color: #c78bff; }
+  .nc-variant-card__tone--clean         { background: rgba(120, 200, 255, 0.16); color: #78c8ff; }
+  .nc-variant-card__tone--neutral       { background: rgba(255, 255, 255, 0.06); color: var(--nc-text-muted); }
+
+  .nc-variant-card__lang {
+    font-family: var(--nc-font-mono);
+    font-size: 9px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--nc-text-muted);
+  }
+  .nc-variant-card__risk {
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    margin-left: auto;
+    cursor: help;
+  }
+  .nc-variant-card__risk--spicy   { background: rgba(255, 90, 30, 0.18); color: #ff9856; }
+  .nc-variant-card__risk--generic { background: rgba(255, 255, 255, 0.06); color: var(--nc-text-muted); }
+
+  .nc-variant-card__title {
+    font-weight: 700;
+    color: var(--nc-text);
+    font-size: 13px;
+    line-height: 1.3;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-style: italic;
+  }
+  .nc-variant-card__caption {
+    color: var(--nc-text);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .nc-variant-card__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .nc-variant-card__fit {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 10px;
+  }
+  .nc-variant-card__fit small {
+    color: var(--nc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    margin-right: 4px;
+  }
+  .nc-chip--platform {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--nc-border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--nc-text);
+  }
+  .nc-chip--platform[data-platform="tiktok"]   { color: #ff3b8b; border-color: rgba(255, 59, 139, 0.4); }
+  .nc-chip--platform[data-platform="reels"]    { color: #e1306c; border-color: rgba(225, 48, 108, 0.4); }
+  .nc-chip--platform[data-platform="shorts"]   { color: #ff4040; border-color: rgba(255, 64, 64, 0.4); }
+  .nc-chip--platform[data-platform="kick"]     { color: #53fc18; border-color: rgba(83, 252, 24, 0.4); }
+
+  .nc-variant-card__retention {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+    align-items: center;
+    font-size: 10px;
+  }
+  .nc-variant-card__retention small {
+    grid-column: 1 / 3;
+    color: var(--nc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+  .nc-variant-card__retention-bar {
+    background: rgba(255, 255, 255, 0.06);
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .nc-variant-card__retention-fill {
+    height: 100%;
+    background: var(--rc-color, #4f8bff);
+    transition: width 200ms ease;
+  }
+  .nc-variant-card__retention-pct {
+    font-family: var(--nc-font-mono);
+    color: var(--nc-text);
+    font-weight: 700;
+  }
+  .nc-variant-card__use {
+    align-self: flex-start;
+    margin-top: auto;
+  }
+
+  /* Slice I.4 — premium timeline rail. Reuses the existing marker
+     placement; visual upgrade is colors + icons + hover affordances. */
+  .nc-timeline__marker--audio_peak    { background: #4f8bff; }
+  .nc-timeline__marker--motion_peak   { background: #c78bff; }
+  .nc-timeline__marker--scene_cut     { background: #ffb800; }
+  .nc-timeline__marker--reaction      { background: #ff7a7a; }
+  .nc-timeline__marker--chat_heat     { background: #ff3b8b; }
+  .nc-timeline__marker--face_emotion  { background: #78c8ff; }
+  .nc-timeline__marker--dead_air      { background: #555; border: 1px dashed rgba(255,255,255,0.3); }
+  .nc-timeline__marker--viral_moment  { background: linear-gradient(135deg, #ffc83c, #ff3b8b); box-shadow: 0 0 6px rgba(255,200,60,0.5); }
+  .nc-timeline__marker--ai_cut        { background: #00d97a; }
+
+  .nc-timeline__marker {
+    cursor: pointer;
+    transition: transform 100ms ease, box-shadow 100ms ease;
+  }
+  .nc-timeline__marker:hover {
+    transform: translate(-50%, -50%) scale(1.5);
+    box-shadow: 0 0 8px currentColor;
+    z-index: 2;
+  }
+  .nc-timeline__legend-row {
+    cursor: pointer;
+    transition: background 100ms ease;
+  }
+  .nc-timeline__legend-row:hover {
+    background: rgba(79, 139, 255, 0.08);
+  }
+
   /* Editor controls (right column) */
   .nc-editor-controls .nc-panel { margin-bottom: 12px; }
   .nc-editor-controls .nc-panel__body { padding: 12px 14px; }
@@ -1728,35 +1941,98 @@
 
 <form id="reject-form" action="/dashboard/clips/{{ clip.id }}/reject" method="post" style="display: none;"></form>
 
-{# ---- Variants picker (kept from the old layout) -------------- #}
-<div class="nc-panel">
+{# ---- Slice I.4 — Variant cards + filter tabs ----
+   Each variant becomes a richer card: tone label + predicted-platform
+   chips + retention-confidence meter + risk badge + "Use this" CTA.
+   Filter tabs let the operator slice by Safe / Aggressive / Funny /
+   Clean / Spanish / English. Picking a card updates the editor's
+   top-hook box live so the preview reflects the chosen variant
+   without a save round-trip. #}
+<div class="nc-panel" id="variants-panel">
   <div class="nc-panel__header">
     <i class="ti ti-message-circle-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
     <span class="nc-panel__title">Variants</span>
-    <small>— choose which generated caption gets posted</small>
+    <small>— pick the caption that drives the post</small>
   </div>
   <div class="nc-panel__body">
     {% if variants %}
-    <form action="/dashboard/clips/{{ clip.id }}/publish" method="post">
-      {% for v in variants %}
-      <label class="nc-checkbox" style="align-items: flex-start; padding: 8px 12px; border: var(--nc-hairline); border-radius: var(--nc-radius); margin-bottom: 8px;">
-        <input type="radio" name="variant_id" value="{{ v.id }}" {% if loop.first %}checked{% endif %}>
-        <div>
-          <strong style="color: var(--nc-text);">{{ v.language }}</strong>
-          <span style="color: var(--nc-text-body);">— {{ v.caption }}</span>
+    <form action="/dashboard/clips/{{ clip.id }}/publish" method="post" id="variants-form">
+      <input type="hidden" name="variant_id" id="variants-selected-id"
+             value="{{ variants[0].id if variants else '' }}">
+
+      {# Filter tabs — all / safe / aggressive / funny / clean / spanish / english #}
+      <div class="nc-variant-filters" role="tablist">
+        {% for filter_id, filter_label in [
+          ('all',          'All'),
+          ('safe',         'Safe'),
+          ('aggressive',   'Aggressive'),
+          ('funny',        'Funny'),
+          ('clean',        'Clean'),
+          ('controversial','Controversial'),
+          ('es',           'Spanish'),
+          ('en',           'English'),
+        ] %}
+        <button type="button"
+                class="nc-variant-filter{% if filter_id == 'all' %} is-active{% endif %}"
+                data-filter="{{ filter_id }}">
+          {{ filter_label }}
+        </button>
+        {% endfor %}
+      </div>
+
+      <div class="nc-variant-grid" id="variants-grid">
+        {% for ev in enriched_variants %}
+        {% set v = ev.variant %}
+        <article class="nc-variant-card{% if loop.first %} is-selected{% endif %}"
+                 data-variant-id="{{ v.id }}"
+                 data-facets="{{ ev.facets|join(' ') }}"
+                 data-title-card="{{ v.title_card_text or '' }}">
+          <header class="nc-variant-card__head">
+            <span class="nc-variant-card__tone nc-variant-card__tone--{{ ev.tone }}">
+              {{ ev.tone }}
+            </span>
+            <span class="nc-variant-card__lang">{{ v.language|upper }}</span>
+            {% if ev.risk != 'safe' %}
+            <span class="nc-variant-card__risk nc-variant-card__risk--{{ ev.risk }}"
+                  title="{{ ev.risk_reason }}">
+              {{ ev.risk }}
+            </span>
+            {% endif %}
+          </header>
           {% if v.title_card_text %}
-          <div><small>Title card: <em>{{ v.title_card_text }}</em></small></div>
+          <div class="nc-variant-card__title">{{ v.title_card_text }}</div>
           {% endif %}
+          <div class="nc-variant-card__caption">{{ v.caption }}</div>
           {% if v.hashtags %}
-          <div style="margin-top: 4px;">
+          <div class="nc-variant-card__tags">
             {% for h in v.hashtags %}
             <span class="nc-chip nc-chip--muted">#{{ h }}</span>
             {% endfor %}
           </div>
           {% endif %}
-        </div>
-      </label>
-      {% endfor %}
+          <div class="nc-variant-card__fit">
+            <small>Fits</small>
+            {% for p in ev.fit %}
+            <span class="nc-chip nc-chip--platform" data-platform="{{ p }}">{{ p }}</span>
+            {% endfor %}
+          </div>
+          <div class="nc-variant-card__retention" title="Heuristic retention confidence 0-100">
+            <small>Retention confidence</small>
+            <div class="nc-variant-card__retention-bar">
+              <div class="nc-variant-card__retention-fill"
+                   style="width: {{ ev.retention_confidence }}%;
+                          --rc-color: {% if ev.retention_confidence >= 70 %}#00d97a{% elif ev.retention_confidence >= 45 %}#ffb800{% else %}#ff8a8a{% endif %};"></div>
+            </div>
+            <span class="nc-variant-card__retention-pct">{{ ev.retention_confidence }}%</span>
+          </div>
+          <button type="button" class="nc-btn nc-btn--sm nc-variant-card__use">
+            <i class="ti ti-check"></i>
+            <span>Use this</span>
+          </button>
+        </article>
+        {% endfor %}
+      </div>
+
       <button type="submit"
               class="nc-btn nc-btn--primary"
               {% if clip.status != "approved" %}disabled{% endif %}>
@@ -2578,6 +2854,74 @@
   if (ctlBannerVariant) ctlBannerVariant.addEventListener("change", syncBannerVariant);
   if (ctlLiveBadge)     ctlLiveBadge.addEventListener("change", syncBannerVariant);
   syncBannerVariant();
+
+  // ---- Slice I.4: Variant cards — filter tabs + Use-this CTA ----
+  //
+  // Filters toggle .is-hidden via the card's data-facets attribute.
+  // "Use this" sets the hidden variant_id input + flips .is-selected +
+  // promotes the variant's title_card_text into the top-hook box so
+  // the preview reflects the chosen variant immediately.
+  var variantFilters = document.querySelectorAll(".nc-variant-filter");
+  var variantCards   = document.querySelectorAll(".nc-variant-card");
+  var variantHidden  = document.getElementById("variants-selected-id");
+
+  function applyVariantFilter(filter) {
+    variantFilters.forEach(function (b) {
+      b.classList.toggle("is-active", b.getAttribute("data-filter") === filter);
+    });
+    variantCards.forEach(function (c) {
+      if (filter === "all") {
+        c.classList.remove("is-hidden");
+        return;
+      }
+      var facets = (c.getAttribute("data-facets") || "").split(/\s+/);
+      c.classList.toggle("is-hidden", facets.indexOf(filter) === -1);
+    });
+  }
+  variantFilters.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyVariantFilter(btn.getAttribute("data-filter") || "all");
+    });
+  });
+
+  function selectVariant(card) {
+    if (!card) return;
+    variantCards.forEach(function (c) { c.classList.remove("is-selected"); });
+    card.classList.add("is-selected");
+    var id = card.getAttribute("data-variant-id");
+    if (variantHidden && id) variantHidden.value = id;
+    // Push title_card_text → top-hook box so the preview updates live.
+    var title = card.getAttribute("data-title-card") || "";
+    var ctlTopHookText = document.getElementById("ctl-top-hook-text");
+    var ctlTopHookOn   = document.getElementById("ctl-top-hook-on");
+    if (ctlTopHookText && title) {
+      ctlTopHookText.value = title;
+      ctlTopHookText.dispatchEvent(new Event("input"));
+      if (ctlTopHookOn && !ctlTopHookOn.checked) {
+        ctlTopHookOn.checked = true;
+        ctlTopHookOn.dispatchEvent(new Event("change"));
+      }
+    }
+  }
+  // Whole-card click (except inside its buttons) also selects.
+  variantCards.forEach(function (card) {
+    card.addEventListener("click", function (e) {
+      var target = e.target;
+      // Don't toggle when the inner submit/Use button was clicked —
+      // their own handlers run, and submit shouldn't get double-fired.
+      if (target instanceof Element && target.closest("button[type=submit]")) {
+        return;
+      }
+      selectVariant(card);
+    });
+    var useBtn = card.querySelector(".nc-variant-card__use");
+    if (useBtn) {
+      useBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        selectVariant(card);
+      });
+    }
+  });
 
   // Caption animation: cycle the active word through the four words
   // every 600ms while the video is playing. Approximates the karaoke

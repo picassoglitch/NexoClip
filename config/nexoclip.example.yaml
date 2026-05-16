@@ -56,7 +56,10 @@ detection:
   visual:
     enabled: true
     weight: 0.6
-    timeout_s: 120.0
+    # 10-min cap covers most VOD lengths on a typical desktop GPU+CPU.
+    # On timeout the pipeline continues without visual signals (the
+    # rest still runs), so this is a safety net not a hard requirement.
+    timeout_s: 600.0
 
   # Viral / controversy detector — sends the transcript to an LLM and asks it
   # to identify the moments most likely to go viral on short-form platforms.

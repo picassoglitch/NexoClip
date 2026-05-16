@@ -90,7 +90,14 @@ diarize = [
     # pyannote-audio for speaker diarization (voice-markers spec slice B).
     # Pulls torch via dep chain — ~2GB install on Windows. Skip if you
     # don't need per-speaker labeling.
-    "pyannote.audio>=3.1,<4",
+    #
+    # Pinned to 3.3.2: 3.4.0 references torchaudio.AudioMetaData which
+    # was removed in torchaudio 2.8+. Likewise huggingface_hub<1.0
+    # because hub 1.0 dropped the `use_auth_token` kwarg pyannote still
+    # passes. Until upstream pyannote ships a fix these pins are the
+    # known-good combo. Tested with torch==2.4.1+cu121.
+    "pyannote.audio==3.3.2",
+    "huggingface_hub>=0.23,<1.0",
 ]
 
 [project.scripts]

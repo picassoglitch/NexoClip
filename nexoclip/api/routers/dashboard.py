@@ -518,7 +518,12 @@ async def clip_detail(
         zones_for_platform,
         resolve_brand_kit_for_candidate,
     )
-    from nexoclip.clip import clip_breakdown, compute_ai_scores
+    from nexoclip.clip import (
+        clip_breakdown,
+        compute_ai_scores,
+        compute_publishability,
+        director_lines,
+    )
     from nexoclip.db import (
         CandidatesRepo,
         PublishJobsRepo,
@@ -533,6 +538,25 @@ async def clip_detail(
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
     breakdown = await clip_breakdown(db, clip_id)
     ai_scores = compute_ai_scores(breakdown)
+
+    # Slice I.3 — publishability verdict + AI Director narration.
+    # The verdict reads BOTH the breakdown AND the operator's overlay
+    # config (current banner / hook / caption choices) so it scores
+    # what's about to ship, not the raw clip. Safe-zone target falls
+    # back to TikTok (the strictest mainstream chrome).
+    safe_zone_target = "tiktok"
+    if isinstance(clip.overlay_config, dict):
+        szp = clip.overlay_config.get("safe_zone_platform")
+        if isinstance(szp, str) and szp:
+            safe_zone_target = szp
+    publishability = compute_publishability(
+        breakdown=breakdown,
+        overlay_config=(
+            clip.overlay_config if isinstance(clip.overlay_config, dict) else {}
+        ),
+        safe_zone_platform=safe_zone_target,
+    )
+    director = director_lines(breakdown=breakdown, verdict=publishability)
 
     # Resolve the brand kit + caption style so the editor can render
     # the live preview against the right defaults when overlay_config
@@ -602,6 +626,9 @@ async def clip_detail(
             "valid_transitions": valid_transitions,
             "breakdown": breakdown,
             "ai_scores": ai_scores,
+            # Slice I.3 — Publishability verdict + AI Director narrative.
+            "publishability": publishability,
+            "director_lines": director,
             "outcomes": outcomes,
             "brand_kit": brand_kit,
             "caption_style": caption_style,
@@ -968,6 +995,83 @@ async def _persist_branding_to_brand_kit(
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+@router.post(
+    "/clips/{clip_id}/apply-ai-fixes",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_apply_ai_fixes(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice I.3 — apply non-destructive AI-recommended fixes to a clip.
+
+    Re-runs `apply_ai_fixes` against the clip's current overlay_config
+    and writes the updated dict back. Returns the list of changes so
+    the dashboard can flash "AI fixed N issues" and the operator sees
+    exactly what got touched. Never modifies the clip's media — only
+    the overlay layer, which is what the burn step consumes.
+    """
+    import json as _json
+
+    from nexoclip.clip import apply_ai_fixes
+
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    safe_zone_target = "tiktok"
+    if isinstance(clip.overlay_config, dict):
+        szp = clip.overlay_config.get("safe_zone_platform")
+        if isinstance(szp, str) and szp:
+            safe_zone_target = szp
+
+    result = apply_ai_fixes(
+        overlay_config=(
+            clip.overlay_config if isinstance(clip.overlay_config, dict) else {}
+        ),
+        safe_zone_platform=safe_zone_target,
+    )
+    if result.fixes:
+        await repo.set_overlay_config(clip_id, overlay_config=result.new_overlay_config)
+        await EventsRepo(db).emit(
+            type="clip.ai_fixes_applied",
+            payload={
+                "clip_id": clip_id,
+                "fix_count": len(result.fixes),
+                "fields": [f.field for f in result.fixes],
+            },
+        )
+    return Response(
+        content=_json.dumps(
+            {
+                "ok": True,
+                "fix_count": len(result.fixes),
+                "fixes": [
+                    {
+                        "field": f.field,
+                        "before": _json_safe(f.before),
+                        "after": _json_safe(f.after),
+                        "why": f.why,
+                    }
+                    for f in result.fixes
+                ],
+            }
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _json_safe(value: object) -> object:
+    """Coerce a fix's before/after into JSON-serializable scalars."""
+    if isinstance(value, str | int | float | bool | type(None)):
+        return value
+    return str(value)
 
 
 @router.post(

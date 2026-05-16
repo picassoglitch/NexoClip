@@ -10,6 +10,14 @@ from .overlay_burn import (
     burn_overlays,
     captions_artifact_for_clip,
 )
+from .ai_fixes import AIFixesResult, FixOutcome, apply_ai_fixes
+from .publishability import (
+    DirectorLine,
+    PublishabilityVerdict,
+    PublishStatus,
+    compute_publishability,
+    director_lines,
+)
 from .scoring import AIScoreCard, compute_ai_scores
 from .service import cut_clips, cut_window, load_clips
 from .waveform import compute_waveform, load_or_compute as load_or_compute_waveform
@@ -32,19 +40,25 @@ from .word_captions import (
 )
 
 __all__ = [
+    "AIFixesResult",
     "AIScoreCard",
     "CaptionLine",
     "CaptionWord",
     "Clip",
     "ClipBreakdown",
     "ClipManifest",
+    "DirectorLine",
     "Emphasis",
+    "FixOutcome",
     "Marker",
     "MarkerKind",
+    "PublishStatus",
+    "PublishabilityVerdict",
     "WINDOW_BANDS",
     "WindowBand",
     "WindowKind",
     "WindowPlan",
+    "apply_ai_fixes",
     "build_ass",
     "build_filter_graph",
     "build_srt",
@@ -57,9 +71,11 @@ __all__ = [
     "clip_breakdown",
     "compute_ai_scores",
     "compute_intelligence",
+    "compute_publishability",
     "compute_waveform",
     "cut_clips",
     "cut_window",
+    "director_lines",
     "lines_to_json",
     "load_clips",
     "load_or_compute_waveform",

@@ -546,6 +546,205 @@
     display: none !important;
   }
 
+  /* Slice I.3 — AI Director panel + Publish Confidence ring. */
+  .nc-director {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 16px;
+    background: linear-gradient(135deg,
+      rgba(79, 139, 255, 0.08),
+      rgba(155, 79, 255, 0.06));
+    border: 1px solid var(--nc-border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .nc-director__score {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .nc-director__confidence {
+    width: 130px;
+    height: 130px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-family: var(--nc-font-mono);
+    background: var(--nc-bg-base);
+    position: relative;
+  }
+  .nc-director__confidence::before {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(
+      var(--nc-confidence-color, #4f8bff) 0deg,
+      var(--nc-confidence-color, #4f8bff) calc(var(--nc-confidence, 0) * 3.6deg),
+      rgba(255, 255, 255, 0.08) calc(var(--nc-confidence, 0) * 3.6deg),
+      rgba(255, 255, 255, 0.08) 360deg
+    );
+    z-index: -1;
+  }
+  .nc-director__confidence--publish_ready { --nc-confidence-color: #00d97a; }
+  .nc-director__confidence--needs_edit   { --nc-confidence-color: #ffb800; }
+  .nc-director__confidence--reject       { --nc-confidence-color: #ff3b30; }
+  .nc-director__confidence-pct {
+    font-size: 36px;
+    font-weight: 900;
+    color: var(--nc-text);
+    line-height: 1;
+  }
+  .nc-director__confidence-label {
+    font-size: 9px;
+    color: var(--nc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .nc-director__status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .nc-director__status--publish_ready { background: rgba(0, 217, 122, 0.18); color: #00d97a; }
+  .nc-director__status--needs_edit   { background: rgba(255, 184, 0, 0.18); color: #ffb800; }
+  .nc-director__status--reject       { background: rgba(255, 59, 48, 0.18); color: #ff8a8a; }
+
+  .nc-director__body { display: flex; flex-direction: column; gap: 10px; }
+  .nc-director__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .nc-director__header small { font-weight: 400; opacity: 0.7; }
+  .nc-director__lines {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .nc-director__line {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 13px;
+    line-height: 1.4;
+    padding: 4px 0;
+  }
+  .nc-director__line--good  .nc-director__line-icon { color: #00d97a; }
+  .nc-director__line--warn  .nc-director__line-icon { color: #ffb800; }
+  .nc-director__line--block .nc-director__line-icon { color: #ff3b30; }
+  .nc-director__line--info  .nc-director__line-icon { color: #4f8bff; }
+  .nc-director__line-icon { flex-shrink: 0; line-height: 1.4; }
+  .nc-director__line-text { color: var(--nc-text); }
+  .nc-director__line--info .nc-director__line-text { color: var(--nc-text-muted); font-style: italic; }
+  .nc-director__apply-btn { align-self: flex-start; margin-top: 4px; }
+  .nc-director__feedback {
+    font-size: 11px;
+    color: var(--nc-text-muted);
+    font-style: italic;
+    min-height: 14px;
+  }
+  .nc-director__feedback--ok { color: #00d97a; font-style: normal; }
+  .nc-director__feedback--err { color: #ff8a8a; }
+
+  @media (max-width: 720px) {
+    .nc-director { grid-template-columns: 1fr; }
+    .nc-director__score { flex-direction: row; justify-content: flex-start; }
+  }
+
+  /* Slice I.3 — Export checklist + status-aware Ship button. */
+  .nc-export-checklist {
+    border: 1px solid var(--nc-border);
+    border-radius: 8px;
+    padding: 0;
+    margin-bottom: 8px;
+    background: var(--nc-bg-base);
+    overflow: hidden;
+  }
+  .nc-export-checklist summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--nc-text);
+    background: var(--nc-bg-elevated);
+  }
+  .nc-export-checklist summary::-webkit-details-marker { display: none; }
+  .nc-export-checklist__score {
+    margin-left: auto;
+    font-family: var(--nc-font-mono);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 11px;
+  }
+  .nc-export-checklist--publish_ready { border-color: rgba(0, 217, 122, 0.4); }
+  .nc-export-checklist--publish_ready .nc-export-checklist__score { background: rgba(0, 217, 122, 0.2); color: #00d97a; }
+  .nc-export-checklist--needs_edit { border-color: rgba(255, 184, 0, 0.4); }
+  .nc-export-checklist--needs_edit .nc-export-checklist__score { background: rgba(255, 184, 0, 0.2); color: #ffb800; }
+  .nc-export-checklist--reject { border-color: rgba(255, 59, 48, 0.4); }
+  .nc-export-checklist--reject .nc-export-checklist__score { background: rgba(255, 59, 48, 0.2); color: #ff8a8a; }
+  .nc-export-checklist ul {
+    list-style: none;
+    margin: 0;
+    padding: 8px 12px;
+  }
+  .nc-export-checklist__row {
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 3px 0;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .nc-export-checklist__row--good  i { color: #00d97a; }
+  .nc-export-checklist__row--warn  i { color: #ffb800; }
+  .nc-export-checklist__row--block i { color: #ff3b30; }
+  .nc-export-checklist__rec {
+    padding: 8px 12px;
+    border-top: 1px solid var(--nc-border);
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    font-style: italic;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .nc-export-checklist__rec i { color: #4f8bff; }
+  .nc-btn--warn {
+    background: rgba(255, 184, 0, 0.85);
+    color: #1a1300;
+  }
+  .nc-btn--warn:hover { background: rgba(255, 184, 0, 1); }
+
   /* Editor controls (right column) */
   .nc-editor-controls .nc-panel { margin-bottom: 12px; }
   .nc-editor-controls .nc-panel__body { padding: 12px 14px; }
@@ -694,13 +893,69 @@
   </div>
 </div>
 
-{# ---- AI insights strip (slice F.7-F upgrade) ----
+{# ---- Slice I.3 — AI Director panel ----
+   Replaces the cold "AI insights" chip strip with a human-readable
+   recommendation panel + Publish Confidence ring + Apply AI fixes CTA.
+   This is what the operator reads at a glance to answer "do I trust
+   this clip enough to ship?". The old chips still render below for
+   evidence drill-down. #}
+{% if publishability is defined %}
+<div class="nc-director">
+  <div class="nc-director__score">
+    <div class="nc-director__confidence nc-director__confidence--{{ publishability.status }}"
+         style="--nc-confidence: {{ publishability.score }};">
+      <div class="nc-director__confidence-pct">{{ publishability.score }}</div>
+      <div class="nc-director__confidence-label">Publish<br>Confidence</div>
+    </div>
+    <div class="nc-director__status nc-director__status--{{ publishability.status }}">
+      {% if publishability.status == 'publish_ready' %}
+        <i class="ti ti-rocket"></i> Ready to publish
+      {% elif publishability.status == 'needs_edit' %}
+        <i class="ti ti-edit"></i> Needs review
+      {% else %}
+        <i class="ti ti-alert-triangle"></i> Unsafe for auto-publish
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="nc-director__body">
+    <div class="nc-director__header">
+      <i class="ti ti-sparkles" aria-hidden="true"></i>
+      <span>AI Director</span>
+      <small>· human-readable recommendations</small>
+    </div>
+    <ul class="nc-director__lines">
+      {% for line in director_lines %}
+      <li class="nc-director__line nc-director__line--{{ line.kind }}">
+        <span class="nc-director__line-icon">
+          {% if line.kind == 'good' %}<i class="ti ti-check"></i>
+          {% elif line.kind == 'warn' %}<i class="ti ti-alert-circle"></i>
+          {% elif line.kind == 'block' %}<i class="ti ti-x"></i>
+          {% else %}<i class="ti ti-info-circle"></i>
+          {% endif %}
+        </span>
+        <span class="nc-director__line-text">{{ line.text }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <button type="button"
+            class="nc-btn nc-btn--ai nc-director__apply-btn"
+            id="apply-ai-fixes-btn"
+            data-clip-id="{{ clip.id }}">
+      <i class="ti ti-wand" aria-hidden="true"></i>
+      <span>Apply AI fixes</span>
+    </button>
+    <div id="apply-ai-fixes-feedback" class="nc-director__feedback"></div>
+  </div>
+</div>
+{% endif %}
+
+{# ---- AI insights strip (slice F.7-F upgrade — kept as evidence drill-down) ----
    Each score is a click-to-expand card showing the EVIDENCE that
    drove the number: heuristic that fired, rescore, motion, face
-   presence, speaking pace, candidate reason. Pulled from the
-   `breakdown` we already compute — just surfaced visually instead
-   of hidden behind a hover tooltip. This is what makes the scoring
-   feel believable rather than arbitrary. #}
+   presence, speaking pace, candidate reason. Below the Director
+   panel because the operator reads Director first, then drills
+   into specific evidence chips when they want detail. #}
 {% if ai_scores is defined %}
 <div class="nc-ai-strip">
   <div class="nc-ai-strip__header">
@@ -1400,10 +1655,50 @@
       </details>
 
       <div class="nc-editor-actions">
+        {# Slice I.3 — Export checklist + status-aware Ship button.
+           The checklist mirrors the publishability verdict's reasons
+           (green) and warnings (yellow / red). The Ship button's label
+           and color shift based on `publishability.status`:
+              publish_ready → green "Ship to platforms"
+              needs_edit    → yellow "Ship anyway (needs review)"
+              reject        → red    "Review issues before shipping"
+           Submit is never disabled — the operator can force-ship if
+           they really want to. The label change is informational. #}
+        {% if publishability is defined %}
+        <details class="nc-export-checklist nc-export-checklist--{{ publishability.status }}" open>
+          <summary>
+            <i class="ti ti-list-check"></i>
+            <span>Export checklist</span>
+            <span class="nc-export-checklist__score">{{ publishability.score }}/100</span>
+          </summary>
+          <ul>
+            {% for r in publishability.reasons %}
+            <li class="nc-export-checklist__row nc-export-checklist__row--good">
+              <i class="ti ti-check"></i>{{ r }}
+            </li>
+            {% endfor %}
+            {% for w in publishability.blocking %}
+            <li class="nc-export-checklist__row nc-export-checklist__row--block">
+              <i class="ti ti-x"></i>{{ w }}
+            </li>
+            {% endfor %}
+            {% for w in publishability.warnings %}
+            <li class="nc-export-checklist__row nc-export-checklist__row--warn">
+              <i class="ti ti-alert-circle"></i>{{ w }}
+            </li>
+            {% endfor %}
+          </ul>
+          {% if publishability.recommended_action %}
+          <div class="nc-export-checklist__rec">
+            <i class="ti ti-sparkles"></i>{{ publishability.recommended_action }}
+          </div>
+          {% endif %}
+        </details>
+        {% endif %}
         <button type="submit"
-                class="nc-btn nc-btn--primary nc-btn--full">
+                class="nc-btn {% if publishability is defined and publishability.status == 'reject' %}nc-btn--danger{% elif publishability is defined and publishability.status == 'needs_edit' %}nc-btn--warn{% else %}nc-btn--primary{% endif %} nc-btn--full">
           <i class="ti ti-rocket" aria-hidden="true"></i>
-          <span>Ship to platforms</span>
+          <span>{% if publishability is defined and publishability.status == 'reject' %}Review issues before shipping{% elif publishability is defined and publishability.status == 'needs_edit' %}Ship anyway (needs review){% else %}Ship to platforms{% endif %}</span>
         </button>
         <button type="submit"
                 formaction="/dashboard/clips/{{ clip.id }}/overlay"
@@ -1981,6 +2276,60 @@
       el.addEventListener(evtName, runCollisionCheck);
     }
   });
+
+  // ---- Slice I.3: Apply AI Fixes ----
+  // POSTs to /clips/{id}/apply-ai-fixes which runs the safe non-
+  // destructive fix engine, persists the new overlay_config, and
+  // returns the list of changes. We then reload so the new values
+  // pre-fill every form input (simplest path; the editor's pre-fill
+  // logic already does the right thing from clip.overlay_config).
+  var applyBtn = document.getElementById("apply-ai-fixes-btn");
+  var applyFb  = document.getElementById("apply-ai-fixes-feedback");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", function () {
+      var clipId = applyBtn.getAttribute("data-clip-id");
+      if (!clipId) return;
+      applyBtn.disabled = true;
+      if (applyFb) {
+        applyFb.textContent = "Applying fixes…";
+        applyFb.className = "nc-director__feedback";
+      }
+      fetch("/dashboard/clips/" + clipId + "/apply-ai-fixes", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: "{}",
+      })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          var n = (data && data.fix_count) || 0;
+          if (n === 0) {
+            if (applyFb) {
+              applyFb.textContent = "Nothing to fix — the clip is already in good shape";
+              applyFb.className = "nc-director__feedback nc-director__feedback--ok";
+            }
+            applyBtn.disabled = false;
+            return;
+          }
+          if (applyFb) {
+            applyFb.textContent = "Fixed " + n + " issue" + (n === 1 ? "" : "s") + " — refreshing…";
+            applyFb.className = "nc-director__feedback nc-director__feedback--ok";
+          }
+          // Reload so the form repopulates from the new overlay_config.
+          setTimeout(function () { window.location.reload(); }, 600);
+        })
+        .catch(function (err) {
+          if (applyFb) {
+            applyFb.textContent = "Couldn't apply fixes (" + err.message + ")";
+            applyFb.className = "nc-director__feedback nc-director__feedback--err";
+          }
+          applyBtn.disabled = false;
+        });
+    });
+  }
   function applyDefaultBannerColor() {
     if (bannerColorTouched) return;
     var p = ctlBannerPlat.value || "kick";

@@ -24,6 +24,15 @@ from .captions import (
     caption_style_or_default,
     preset_choices,
 )
+from .clip_styles import (
+    BUILTIN_STYLES,
+    BannerVariantId,
+    ClipStyle,
+    ClipStyleId,
+    TopHookConfig,
+    get_clip_style,
+    style_choices,
+)
 from .logo import (
     LogoSVG,
     generate_logo,
@@ -38,13 +47,19 @@ from .service import (
 )
 
 __all__ = [
+    "BUILTIN_STYLES",
+    "BannerVariantId",
     "CaptionPresetId",
     "CaptionShadow",
     "CaptionStyle",
+    "ClipStyle",
+    "ClipStyleId",
     "LogoSVG",
+    "TopHookConfig",
     "builtin_presets",
     "caption_style_or_default",
     "generate_logo",
+    "get_clip_style",
     "is_rasterization_available",
     "merged_trigger_phrases_for_speaker",
     "preset_choices",
@@ -52,4 +67,5 @@ __all__ = [
     "resolve_brand_kit_for_candidate",
     "resolve_brand_kit_for_speaker",
     "sanitize_svg",
+    "style_choices",
 ]

@@ -1907,6 +1907,10 @@ _BRAND_KIT_COLS = (
     # Slice H.1 — user-level editor prefs (migration 010).
     "default_platform, banner_enabled_default, "
     "banner_show_context_default, banner_show_safezones_default, "
+    # Slice I.1 — clip style preset + Kick banner variant + top hook
+    # (migration 011).
+    "clip_style, bottom_banner_style, banner_live_badge_default, "
+    "top_hook_enabled_default, top_hook_style_default, "
     "created_at, updated_at"
 )
 
@@ -1920,6 +1924,9 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     d["banner_enabled_default"] = bool(d.get("banner_enabled_default", 0))
     d["banner_show_context_default"] = bool(d.get("banner_show_context_default", 0))
     d["banner_show_safezones_default"] = bool(d.get("banner_show_safezones_default", 0))
+    # Slice I.1 — new boolean cols from migration 011.
+    d["banner_live_badge_default"] = bool(d.get("banner_live_badge_default", 0))
+    d["top_hook_enabled_default"] = bool(d.get("top_hook_enabled_default", 0))
 
     raw_caption = d.pop("caption_style_json", None)
     d["caption_style"] = json.loads(raw_caption) if raw_caption else None
@@ -1991,7 +1998,7 @@ class BrandKitsRepo:
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -2013,6 +2020,15 @@ class BrandKitsRepo:
                 0,       # banner_enabled_default
                 0,       # banner_show_context_default
                 0,       # banner_show_safezones_default
+                # Slice I.1 — clip style preset + banner variant + top hook.
+                # Defaults to "repost_page_viral" via get_clip_style() when
+                # read back; we write NULL here so a brand-new tenant
+                # transparently inherits the system default until they pick.
+                None,    # clip_style
+                None,    # bottom_banner_style
+                0,       # banner_live_badge_default
+                0,       # top_hook_enabled_default
+                None,    # top_hook_style_default
                 now, now,
             ),
         )
@@ -2105,6 +2121,12 @@ class BrandKitsRepo:
         banner_enabled_default: bool | None = None,
         banner_show_context_default: bool | None = None,
         banner_show_safezones_default: bool | None = None,
+        # Slice I.1 — clip style preset + banner variant + top hook.
+        clip_style: str | None = None,
+        bottom_banner_style: str | None = None,
+        banner_live_badge_default: bool | None = None,
+        top_hook_enabled_default: bool | None = None,
+        top_hook_style_default: str | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -2182,6 +2204,22 @@ class BrandKitsRepo:
         if banner_show_safezones_default is not None:
             sets.append("banner_show_safezones_default = ?")
             values.append(1 if banner_show_safezones_default else 0)
+        # Slice I.1 — clip style preset + banner variant + top hook.
+        if clip_style is not None:
+            sets.append("clip_style = ?")
+            values.append(clip_style if clip_style else None)
+        if bottom_banner_style is not None:
+            sets.append("bottom_banner_style = ?")
+            values.append(bottom_banner_style if bottom_banner_style else None)
+        if banner_live_badge_default is not None:
+            sets.append("banner_live_badge_default = ?")
+            values.append(1 if banner_live_badge_default else 0)
+        if top_hook_enabled_default is not None:
+            sets.append("top_hook_enabled_default = ?")
+            values.append(1 if top_hook_enabled_default else 0)
+        if top_hook_style_default is not None:
+            sets.append("top_hook_style_default = ?")
+            values.append(top_hook_style_default if top_hook_style_default else None)
         if not sets:
             return existing
         sets.append("updated_at = ?")

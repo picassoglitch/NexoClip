@@ -199,6 +199,154 @@
   .nc-pv-banner.is-hidden { display: none; }
   .nc-pv-banner__platform { color: #000; }
   .nc-pv-banner__url { font-size: 12px; opacity: 0.85; }
+  .nc-pv-banner__live-pill {
+    background: #ff3b30;
+    color: #fff;
+    font-weight: 900;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 999px;
+    margin-left: 8px;
+  }
+
+  /* Slice I.1 — Kick banner variants (mirrors the burn). */
+  .nc-pv-banner--kick_repost_page {
+    background: #000;
+    color: #fff;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    height: 32px;
+  }
+  .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
+    color: var(--pv-banner-color, #53FC18);
+    font-size: 18px;
+    font-weight: 900;
+    margin-right: 12px;
+  }
+  .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
+    color: #fff;
+    font-size: 11px;
+    opacity: 1;
+    flex: 1;
+    text-align: center;
+  }
+  .nc-pv-banner--kick_green_block {
+    background: #000;
+    color: #fff;
+    padding: 0;
+    height: 30px;
+    overflow: hidden;
+  }
+  .nc-pv-banner--kick_green_block .nc-pv-banner__platform {
+    background: var(--pv-banner-color, #53FC18);
+    color: #000;
+    padding: 0 16px;
+    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    font-weight: 900;
+    font-size: 13px;
+  }
+  .nc-pv-banner--kick_green_block .nc-pv-banner__url {
+    padding: 0 12px;
+    color: #fff;
+    font-size: 10px;
+    flex: 1;
+  }
+  .nc-pv-banner--kick_minimal_url {
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    height: auto;
+    bottom: 14px;
+  }
+  .nc-pv-banner--kick_minimal_url .nc-pv-banner__platform { display: none; }
+  .nc-pv-banner--kick_minimal_url .nc-pv-banner__url {
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    padding: 4px 8px;
+    font-size: 10px;
+    border-radius: 4px;
+  }
+
+  /* Slice I.1 — top hook white-rounded headline box. */
+  .nc-pv-top-hook {
+    position: absolute;
+    top: 8%;
+    left: 8%;
+    right: 8%;
+    text-align: center;
+    font-family: var(--nc-font-sans), "Inter", sans-serif;
+    font-weight: 900;
+    font-size: 13px;
+    line-height: 1.2;
+    padding: 6px 10px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    max-height: 18%;
+    overflow: hidden;
+  }
+  .nc-pv-top-hook--white_rounded {
+    background: rgba(255, 255, 255, 0.96);
+    color: #000;
+  }
+  .nc-pv-top-hook--black_solid {
+    background: rgba(0, 0, 0, 0.92);
+    color: #fff;
+  }
+  .nc-pv-top-hook--subtle {
+    background: rgba(255, 255, 255, 0.75);
+    color: #000;
+    backdrop-filter: blur(4px);
+  }
+
+  /* Slice I.1 — Clip Style preset cards grid. */
+  .nc-clip-style-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .nc-clip-style-card {
+    text-align: left;
+    background: var(--nc-bg-elevated);
+    border: 1px solid var(--nc-border);
+    border-radius: 8px;
+    padding: 10px;
+    color: var(--nc-text);
+    cursor: pointer;
+    transition: all 120ms ease;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .nc-clip-style-card:hover {
+    border-color: var(--nc-blue);
+    transform: translateY(-1px);
+  }
+  .nc-clip-style-card.is-selected {
+    border-color: var(--nc-blue-bright, #4f8bff);
+    background: linear-gradient(180deg,
+      rgba(79, 139, 255, 0.12),
+      var(--nc-bg-elevated));
+    box-shadow: 0 0 0 1px var(--nc-blue-bright, #4f8bff) inset;
+  }
+  .nc-clip-style-card__name {
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .nc-clip-style-card__desc {
+    color: var(--nc-text-muted);
+    font-size: 10px;
+    line-height: 1.3;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
 
   /* Editor controls (right column) */
   .nc-editor-controls .nc-panel { margin-bottom: 12px; }
@@ -240,6 +388,9 @@
 {% set banner = ov.get('banner') or {} %}
 {% set captions = ov.get('captions') or {} %}
 {% set comments = ov.get('comments') or {} %}
+{# Slice I.1 — clip style + top hook live at top level of overlay_config. #}
+{% set top_hook = ov.get('top_hook') or {} %}
+{% set _current_clip_style = ov.get('clip_style') or (brand_kit.clip_style if (brand_kit and brand_kit.clip_style) else 'repost_page_viral') %}
 
 {# Promote brand_kit user-level prefs onto `banner` / `captions`
    wherever the operator hasn't explicitly overridden them for THIS
@@ -259,6 +410,19 @@
   {% endif %}
   {% if not banner.get('platform') and _bk.default_platform %}
     {% set _ = banner.update({'platform': _bk.default_platform}) %}
+  {% endif %}
+  {# Slice I.1 — banner variant + LIVE badge + top hook from brand_kit. #}
+  {% if not banner.get('variant') and _bk.bottom_banner_style %}
+    {% set _ = banner.update({'variant': _bk.bottom_banner_style}) %}
+  {% endif %}
+  {% if 'live_badge' not in banner and _bk.banner_live_badge_default %}
+    {% set _ = banner.update({'live_badge': True}) %}
+  {% endif %}
+  {% if 'enabled' not in top_hook and _bk.top_hook_enabled_default %}
+    {% set _ = top_hook.update({'enabled': True}) %}
+  {% endif %}
+  {% if not top_hook.get('style') and _bk.top_hook_style_default %}
+    {% set _ = top_hook.update({'style': _bk.top_hook_style_default}) %}
   {% endif %}
   {# Caption knobs live inside caption_style JSON. #}
   {% set _bks = _bk.caption_style or {} %}
@@ -484,10 +648,22 @@
               <source src="/dashboard/clips/{{ clip.id }}/media">
             </video>
 
-            <div class="nc-preview__layer" aria-hidden="true">
+            <div class="nc-preview__layer"
+                 aria-hidden="true"
+                 data-clip-style="{{ _current_clip_style }}"
+                 data-banner-variant="{{ banner.get('variant') or 'kick_repost_page' }}">
               <div id="pv-title"
                    class="nc-pv-title{% if not ov.get('title_text') %} is-empty{% endif %}">
                 {{ ov.get('title_text') or '' }}
+              </div>
+
+              {# Slice I.1 — top hook white-rounded headline box.
+                 Sits above the face. Rendered into the live preview
+                 AND burned into the MP4 via _top_hook_filter. #}
+              <div id="pv-top-hook"
+                   class="nc-pv-top-hook nc-pv-top-hook--{{ top_hook.get('style') or 'white_rounded' }}"
+                   {% if not top_hook.get('enabled', False) %}style="display:none;"{% endif %}>
+                {{ top_hook.get('text') or '' }}
               </div>
 
               {# Word-level live captions (slice F.7-F). Populated
@@ -540,12 +716,20 @@
               </div>
 
               <div id="pv-banner"
-                   class="nc-pv-banner{% if not (banner.get('enabled', False)) %} is-hidden{% endif %}">
+                   class="nc-pv-banner nc-pv-banner--{{ banner.get('variant') or 'kick_repost_page' }}{% if not (banner.get('enabled', False)) %} is-hidden{% endif %}"
+                   data-variant="{{ banner.get('variant') or 'kick_repost_page' }}">
+                {# Slice I.1 — variant-aware preview. The renderer's
+                   _banner_filters_by_variant draws the matching chrome
+                   into the burned MP4; the CSS below mirrors it 1:1. #}
                 <span class="nc-pv-banner__platform" id="pv-banner-platform">
                   {{ (banner.platform or 'kick')|upper }}
                 </span>
                 <span class="nc-pv-banner__url" id="pv-banner-url">
                   {{ banner.url or ((banner.platform or 'kick') ~ '.com/' ~ (_default_handle|replace('@', '') or 'yourhandle')) }}
+                </span>
+                <span class="nc-pv-banner__live-pill" id="pv-banner-live-pill"
+                      {% if not banner.get('live_badge', False) %}style="display:none;"{% endif %}>
+                  LIVE NOW
                 </span>
               </div>
 
@@ -645,6 +829,35 @@
        hierarchy redesign. Section 4 is collapsible by default
        so the primary surface stays low on cognitive load. #}
     <div class="nc-editor-controls">
+
+      {# ---- Slice I.1 — Clip Style preset cards ----
+         The keystone editor abstraction. Picking a style flips banner
+         variant + top hook + caption preset + animation intensity
+         in one click. The user shouldn't be configuring 12 dropdowns
+         to get a viral-looking clip — they pick "Repost Page Viral"
+         and the system handles the rest. #}
+      <div class="nc-panel">
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">0</span>
+          <span class="nc-panel__title">Clip style</span>
+          <small>— one click to flip banner / hook / captions to a viral look</small>
+        </div>
+        <div class="nc-panel__body">
+          <input type="hidden" name="clip_style" id="ctl-clip-style"
+                 value="{{ _current_clip_style }}">
+          <div class="nc-clip-style-grid">
+            {% for style_id, style_name, style_desc in clip_style_choices %}
+            <button type="button"
+                    class="nc-clip-style-card{% if _current_clip_style == style_id %} is-selected{% endif %}"
+                    data-style-id="{{ style_id }}"
+                    title="{{ style_desc }}">
+              <span class="nc-clip-style-card__name">{{ style_name }}</span>
+              <span class="nc-clip-style-card__desc">{{ style_desc }}</span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
 
       <div class="nc-panel">
         <div class="nc-panel__header nc-panel__header--editor">
@@ -836,6 +1049,64 @@
             <input type="checkbox" name="banner_show_safezones" value="1" id="ctl-safezones-on"
                    {% if banner.get('show_safezones', False) %}checked{% endif %}>
             <span>Show platform safe zones (TikTok / Reels UI bands)</span>
+          </label>
+
+          {# Slice I.1 — Kick banner variant + LIVE badge. #}
+          <label class="nc-label" style="margin-top: 10px;">Banner variant
+            <select class="nc-select" name="banner_variant" id="ctl-banner-variant">
+              {% set _cur_variant = banner.get('variant') or 'kick_repost_page' %}
+              {% for opt_id, opt_label in [
+                ('kick_repost_page',      'Repost page — black bar + huge KICK + URL (default)'),
+                ('kick_black_bar_classic','Classic — colored band, platform left + URL right'),
+                ('kick_green_block',      'Green block — chunky gaming overlay'),
+                ('kick_minimal_url',      'Minimal — URL only, no banner box'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_variant == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="nc-checkbox">
+            <input type="checkbox" name="banner_live_badge" value="1" id="ctl-live-badge"
+                   {% if banner.get('live_badge', False) %}checked{% endif %}>
+            <span>Show LIVE NOW pill (repost-page banner only)</span>
+          </label>
+        </div>
+      </div>
+
+      {# ---- Slice I.1 — Top hook title box ----
+         The white rounded headline that sits above the subject's face
+         on viral repost-page clips. Two lines max, big bold text. #}
+      <div class="nc-panel">
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">4</span>
+          <span class="nc-panel__title">Top hook box</span>
+          <small>— white rounded headline above the face</small>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="top_hook_enabled" value="1" id="ctl-top-hook-on"
+                   {% if top_hook.get('enabled', False) %}checked{% endif %}>
+            <span>Show top hook box on the clip</span>
+          </label>
+          <label class="nc-label">Headline text
+            <textarea class="nc-textarea"
+                      name="top_hook_text"
+                      id="ctl-top-hook-text"
+                      rows="2"
+                      maxlength="120"
+                      placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again 😭💀">{{ top_hook.get('text', '') }}</textarea>
+          </label>
+          <label class="nc-label">Box style
+            <select class="nc-select" name="top_hook_style" id="ctl-top-hook-style">
+              {% set _cur_hook_style = top_hook.get('style') or 'white_rounded' %}
+              {% for opt_id, opt_label in [
+                ('white_rounded', 'White rounded — viral default'),
+                ('black_solid',   'Black solid — moody / serious'),
+                ('subtle',        'Subtle — translucent'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_hook_style == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
           </label>
         </div>
       </div>
@@ -1263,6 +1534,19 @@
     [ctlCaptionsAnim,  function (el) { return el.value; },                "captions_animation"],
     [ctlCaptionsLead,  function (el) { return parseInt(el.value, 10) || 0; },
                                                                           "captions_lead_ms"],
+    // Slice I.1 — clip style + Kick banner variant + top hook.
+    [document.getElementById("ctl-banner-variant"),
+                       function (el) { return el.value; },                "banner_variant"],
+    [document.getElementById("ctl-live-badge"),
+                       function (el) { return el.checked; },              "banner_live_badge"],
+    [document.getElementById("ctl-top-hook-on"),
+                       function (el) { return el.checked; },              "top_hook_enabled"],
+    [document.getElementById("ctl-top-hook-text"),
+                       function (el) { return el.value; },                "top_hook_text"],
+    [document.getElementById("ctl-top-hook-style"),
+                       function (el) { return el.value; },                "top_hook_style"],
+    [document.getElementById("ctl-clip-style"),
+                       function (el) { return el.value; },                "clip_style"],
   ];
   _autoSavePrefs.forEach(function (row) {
     var el = row[0];
@@ -1274,6 +1558,148 @@
       autoSavePref(field, getValue(el));
     });
   });
+
+  // ---- Slice I.1: Clip Style preset cards + top hook live preview ----
+  //
+  // Each preset card flips a coordinated bundle of fields in one click:
+  // banner variant + top-hook enabled + caption preset + position + anim.
+  // The user picks "Repost Page Viral" and the editor self-configures to
+  // produce that look without them touching individual dropdowns.
+  //
+  // The preset definitions live server-side (nexoclip.branding.clip_styles).
+  // We mirror just the field projection here so the editor doesn't need
+  // an extra round-trip to apply a preset. Keep this in sync with
+  // BUILTIN_STYLES in clip_styles.py.
+  var CLIP_STYLE_PRESETS = {
+    repost_page_viral: {
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      top_hook_enabled: true,    top_hook_style: "white_rounded",
+      captions_preset: "karaoke_pop",  captions_position: "upper_third",
+      captions_animation: "pop",       captions_font_size: "medium",
+    },
+    clean_creator: {
+      banner_variant: "kick_minimal_url", banner_enabled: true,
+      top_hook_enabled: false,   top_hook_style: "white_rounded",
+      captions_preset: "subtle",       captions_position: "lower_third",
+      captions_animation: "fade",      captions_font_size: "small",
+    },
+    gaming_chaos: {
+      banner_variant: "kick_green_block", banner_enabled: true,
+      top_hook_enabled: true,    top_hook_style: "white_rounded",
+      captions_preset: "bold_block",   captions_position: "centered",
+      captions_animation: "pop",       captions_font_size: "large",
+    },
+    documentary: {
+      banner_variant: "kick_black_bar_classic", banner_enabled: true,
+      top_hook_enabled: false,   top_hook_style: "subtle",
+      captions_preset: "typewriter",   captions_position: "bottom",
+      captions_animation: "typewriter", captions_font_size: "medium",
+    },
+    minimal_native: {
+      banner_variant: "kick_minimal_url", banner_enabled: false,
+      top_hook_enabled: false,   top_hook_style: "subtle",
+      captions_preset: "subtle",       captions_position: "lower_third",
+      captions_animation: "fade",      captions_font_size: "small",
+    },
+  };
+
+  function applyClipStylePreset(styleId) {
+    var preset = CLIP_STYLE_PRESETS[styleId];
+    if (!preset) return;
+    // Write the hidden clip_style input + persist it.
+    var hidden = document.getElementById("ctl-clip-style");
+    if (hidden) { hidden.value = styleId; }
+    autoSavePref("clip_style", styleId);
+    // Update each downstream control + persist it. The auto-save chain
+    // is the source of truth — the preview re-reads from these controls
+    // via the existing sync functions.
+    function setVal(id, value, field) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === "checkbox") {
+        if (el.checked !== !!value) {
+          el.checked = !!value;
+          el.dispatchEvent(new Event("change"));
+        }
+      } else {
+        if (el.value !== String(value)) {
+          el.value = String(value);
+          var ev = (el.tagName === "SELECT") ? "change" : "input";
+          el.dispatchEvent(new Event(ev));
+        }
+      }
+      autoSavePref(field, value);
+    }
+    setVal("ctl-banner-variant",       preset.banner_variant,    "banner_variant");
+    setVal("ctl-banner-on",             preset.banner_enabled,    "banner_enabled");
+    setVal("ctl-top-hook-on",           preset.top_hook_enabled,  "top_hook_enabled");
+    setVal("ctl-top-hook-style",        preset.top_hook_style,    "top_hook_style");
+    setVal("ctl-captions-preset",       preset.captions_preset,   "captions_preset");
+    setVal("ctl-captions-position",     preset.captions_position, "captions_position");
+    setVal("ctl-captions-animation",    preset.captions_animation,"captions_animation");
+    setVal("ctl-captions-font-size",    preset.captions_font_size,"captions_font_size");
+    // Mark the chosen card visually.
+    document.querySelectorAll(".nc-clip-style-card").forEach(function (c) {
+      c.classList.toggle("is-selected", c.getAttribute("data-style-id") === styleId);
+    });
+    // Mark the preview surface with the new clip style for any
+    // future CSS hooks that want to switch wholesale layouts.
+    var layer = document.querySelector(".nc-preview__layer");
+    if (layer) layer.setAttribute("data-clip-style", styleId);
+  }
+
+  document.querySelectorAll(".nc-clip-style-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var id = card.getAttribute("data-style-id");
+      if (id) applyClipStylePreset(id);
+    });
+  });
+
+  // ---- Top hook live preview ----
+  var ctlTopHookOn   = document.getElementById("ctl-top-hook-on");
+  var ctlTopHookText = document.getElementById("ctl-top-hook-text");
+  var ctlTopHookStyle = document.getElementById("ctl-top-hook-style");
+  var pvTopHook      = document.getElementById("pv-top-hook");
+  function syncTopHook() {
+    if (!pvTopHook) return;
+    var on = ctlTopHookOn && ctlTopHookOn.checked;
+    var text = ctlTopHookText ? ctlTopHookText.value.trim() : "";
+    pvTopHook.style.display = (on && text) ? "" : "none";
+    pvTopHook.textContent = text;
+    if (ctlTopHookStyle) {
+      pvTopHook.className =
+        "nc-pv-top-hook nc-pv-top-hook--" + (ctlTopHookStyle.value || "white_rounded");
+    }
+  }
+  if (ctlTopHookOn)    ctlTopHookOn.addEventListener("change", syncTopHook);
+  if (ctlTopHookText)  ctlTopHookText.addEventListener("input", syncTopHook);
+  if (ctlTopHookStyle) ctlTopHookStyle.addEventListener("change", syncTopHook);
+  syncTopHook();
+
+  // ---- Banner variant live preview ----
+  var ctlBannerVariant = document.getElementById("ctl-banner-variant");
+  var ctlLiveBadge     = document.getElementById("ctl-live-badge");
+  var pvBanner         = document.getElementById("pv-banner");
+  var pvBannerLivePill = document.getElementById("pv-banner-live-pill");
+  function syncBannerVariant() {
+    if (pvBanner && ctlBannerVariant) {
+      pvBanner.className = pvBanner.className
+        .replace(/nc-pv-banner--\S+/g, "")
+        .trim() + " nc-pv-banner nc-pv-banner--" + ctlBannerVariant.value;
+      pvBanner.setAttribute("data-variant", ctlBannerVariant.value);
+      if (!ctlBannerOn.checked) {
+        pvBanner.classList.add("is-hidden");
+      } else {
+        pvBanner.classList.remove("is-hidden");
+      }
+    }
+    if (pvBannerLivePill && ctlLiveBadge) {
+      pvBannerLivePill.style.display = ctlLiveBadge.checked ? "" : "none";
+    }
+  }
+  if (ctlBannerVariant) ctlBannerVariant.addEventListener("change", syncBannerVariant);
+  if (ctlLiveBadge)     ctlLiveBadge.addEventListener("change", syncBannerVariant);
+  syncBannerVariant();
 
   // Caption animation: cycle the active word through the four words
   // every 600ms while the video is playing. Approximates the karaoke

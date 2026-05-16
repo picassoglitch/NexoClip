@@ -513,6 +513,7 @@ async def clip_detail(
     from nexoclip.branding import (
         caption_style_or_default,
         preset_choices,
+        style_choices,
         resolve_brand_kit_for_candidate,
     )
     from nexoclip.clip import clip_breakdown, compute_ai_scores
@@ -603,6 +604,9 @@ async def clip_detail(
             "brand_kit": brand_kit,
             "caption_style": caption_style,
             "caption_preset_choices": preset_choices(),
+            # Slice I.1 — Clip Style preset cards (Repost Page Viral /
+            # Clean Creator / Gaming Chaos / Documentary / Minimal Native).
+            "clip_style_choices": style_choices(),
             # Slice F.7-G — passed through so the template's form-
             # prefill block can fall back to the previous clip's
             # overlay when this clip's overlay_config is still null.
@@ -632,6 +636,13 @@ def _parse_overlay_form(
     captions_lead_ms: int = 120,
     comments_show: str,
     comments_fake_likes: int,
+    # Slice I.1 — clip style + banner variant + top hook.
+    clip_style: str = "",
+    banner_variant: str = "",
+    banner_live_badge: str = "",
+    top_hook_enabled: str = "",
+    top_hook_text: str = "",
+    top_hook_style: str = "",
 ) -> dict[str, object]:
     """Coerce the editor form's flat key/value submission into the
     nested overlay_config shape the renderer reads.
@@ -645,6 +656,8 @@ def _parse_overlay_form(
 
     return {
         "title_text": title_text.strip() or None,
+        # Slice I.1 — clip style preset (Repost Page Viral / etc).
+        "clip_style": (clip_style or "").strip().lower() or None,
         "banner": {
             "enabled": _bool(banner_enabled),
             "platform": (banner_platform or "kick").strip().lower(),
@@ -660,6 +673,16 @@ def _parse_overlay_form(
             # never affects the burned MP4. Tells the operator which
             # regions of the frame get covered by TikTok/Reels chrome.
             "show_safezones": _bool(banner_show_safezones),
+            # Slice I.1 — Kick banner variant (repost_page / classic /
+            # green_block / minimal_url) + LIVE NOW pill toggle.
+            "variant": (banner_variant or "").strip().lower() or None,
+            "live_badge": _bool(banner_live_badge),
+        },
+        # Slice I.1 — top hook box (white rounded headline above face).
+        "top_hook": {
+            "enabled": _bool(top_hook_enabled),
+            "text": top_hook_text.strip(),
+            "style": (top_hook_style or "white_rounded").strip().lower(),
         },
         "captions": {
             "enabled": _bool(captions_enabled),
@@ -737,8 +760,36 @@ async def _persist_branding_to_brand_kit(
 
     banner = cfg.get("banner") or {}
     captions = cfg.get("captions") or {}
+    top_hook = cfg.get("top_hook") or {}
     if not isinstance(banner, dict) or not isinstance(captions, dict):
         return
+    if not isinstance(top_hook, dict):
+        top_hook = {}
+
+    # Slice I.1 — clip style preset (Repost Page Viral / etc) +
+    # banner variant + top hook are all user-level prefs.
+    clip_style_raw = cfg.get("clip_style")
+    clip_style = (
+        str(clip_style_raw).strip().lower() if isinstance(clip_style_raw, str) else ""
+    )
+    banner_variant_raw = banner.get("variant")
+    banner_variant = (
+        str(banner_variant_raw).strip().lower()
+        if isinstance(banner_variant_raw, str)
+        else ""
+    )
+    banner_live_badge_val = (
+        bool(banner.get("live_badge")) if "live_badge" in banner else None
+    )
+    top_hook_enabled_val = (
+        bool(top_hook.get("enabled")) if "enabled" in top_hook else None
+    )
+    top_hook_style_raw = top_hook.get("style")
+    top_hook_style = (
+        str(top_hook_style_raw).strip().lower()
+        if isinstance(top_hook_style_raw, str)
+        else ""
+    )
 
     platform_raw = banner.get("platform")
     platform = str(platform_raw).lower() if isinstance(platform_raw, str) else ""
@@ -825,6 +876,8 @@ async def _persist_branding_to_brand_kit(
         if any(v is not None for v in [
             platform or None, banner_enabled_val,
             banner_show_context_val, banner_show_safezones_val,
+            clip_style or None, banner_variant or None,
+            banner_live_badge_val, top_hook_enabled_val, top_hook_style or None,
         ]):
             try:
                 await repo.update(
@@ -833,6 +886,12 @@ async def _persist_branding_to_brand_kit(
                     banner_enabled_default=banner_enabled_val,
                     banner_show_context_default=banner_show_context_val,
                     banner_show_safezones_default=banner_show_safezones_val,
+                    # Slice I.1.
+                    clip_style=clip_style or None,
+                    bottom_banner_style=banner_variant or None,
+                    banner_live_badge_default=banner_live_badge_val,
+                    top_hook_enabled_default=top_hook_enabled_val,
+                    top_hook_style_default=top_hook_style or None,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -847,6 +906,10 @@ async def _persist_branding_to_brand_kit(
         banner_enabled_val is not None,
         banner_show_context_val is not None,
         banner_show_safezones_val is not None,
+        clip_style, banner_variant,
+        banner_live_badge_val is not None,
+        top_hook_enabled_val is not None,
+        top_hook_style,
     ])
     if not has_change:
         return
@@ -863,6 +926,12 @@ async def _persist_branding_to_brand_kit(
             banner_enabled_default=banner_enabled_val,
             banner_show_context_default=banner_show_context_val,
             banner_show_safezones_default=banner_show_safezones_val,
+            # Slice I.1.
+            clip_style=clip_style or None,
+            bottom_banner_style=banner_variant or None,
+            banner_live_badge_default=banner_live_badge_val,
+            top_hook_enabled_default=top_hook_enabled_val,
+            top_hook_style_default=top_hook_style or None,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -918,9 +987,10 @@ async def me_brand_kit_prefs(
     # Wrap the single-field patch into the same `cfg` shape that
     # `_persist_branding_to_brand_kit` already knows how to consume.
     # That keeps the brand-kit-write logic in exactly one place.
-    cfg: dict[str, object] = {"banner": {}, "captions": {}}
+    cfg: dict[str, object] = {"banner": {}, "captions": {}, "top_hook": {}}
     banner_block: dict[str, object] = cfg["banner"]   # type: ignore[assignment]
     captions_block: dict[str, object] = cfg["captions"]  # type: ignore[assignment]
+    top_hook_block: dict[str, object] = cfg["top_hook"]  # type: ignore[assignment]
 
     _BANNER_FIELDS = {
         "banner_enabled": ("enabled", bool),
@@ -929,6 +999,9 @@ async def me_brand_kit_prefs(
         "banner_color": ("color", str),
         "banner_show_context": ("show_context", bool),
         "banner_show_safezones": ("show_safezones", bool),
+        # Slice I.1.
+        "banner_variant": ("variant", str),
+        "banner_live_badge": ("live_badge", bool),
     }
     _CAPTION_FIELDS = {
         "captions_preset": ("preset", str),
@@ -938,13 +1011,25 @@ async def me_brand_kit_prefs(
         "captions_animation": ("animation", str),
         "captions_lead_ms": ("lead_ms", int),
     }
+    # Slice I.1 — top hook + clip_style live at the top level / their
+    # own block. clip_style is a flat top-level key on the cfg dict.
+    _TOP_HOOK_FIELDS = {
+        "top_hook_enabled": ("enabled", bool),
+        "top_hook_text": ("text", str),
+        "top_hook_style": ("style", str),
+    }
 
-    if field in _BANNER_FIELDS:
+    if field == "clip_style":
+        cfg["clip_style"] = _coerce(value, str)
+    elif field in _BANNER_FIELDS:
         key, kind = _BANNER_FIELDS[field]
         banner_block[key] = _coerce(value, kind)
     elif field in _CAPTION_FIELDS:
         key, kind = _CAPTION_FIELDS[field]
         captions_block[key] = _coerce(value, kind)
+    elif field in _TOP_HOOK_FIELDS:
+        key, kind = _TOP_HOOK_FIELDS[field]
+        top_hook_block[key] = _coerce(value, kind)
     else:
         raise HTTPException(status_code=400, detail=f"unknown field {field!r}")
 
@@ -999,6 +1084,13 @@ async def clip_overlay_save(
     captions_font_size: str = Form(""),
     captions_animation: str = Form(""),
     captions_lead_ms: int = Form(120),
+    # Slice I.1 — clip style + Kick banner variant + top hook.
+    clip_style: str = Form(""),
+    banner_variant: str = Form(""),
+    banner_live_badge: str = Form(""),
+    top_hook_enabled: str = Form(""),
+    top_hook_text: str = Form(""),
+    top_hook_style: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1023,6 +1115,12 @@ async def clip_overlay_save(
         captions_font_size=captions_font_size,
         captions_animation=captions_animation,
         captions_lead_ms=captions_lead_ms,
+        clip_style=clip_style,
+        banner_variant=banner_variant,
+        banner_live_badge=banner_live_badge,
+        top_hook_enabled=top_hook_enabled,
+        top_hook_text=top_hook_text,
+        top_hook_style=top_hook_style,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
@@ -1054,6 +1152,13 @@ async def clip_overlay_finalize(
     captions_font_size: str = Form(""),
     captions_animation: str = Form(""),
     captions_lead_ms: int = Form(120),
+    # Slice I.1 — clip style + Kick banner variant + top hook.
+    clip_style: str = Form(""),
+    banner_variant: str = Form(""),
+    banner_live_badge: str = Form(""),
+    top_hook_enabled: str = Form(""),
+    top_hook_text: str = Form(""),
+    top_hook_style: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1101,6 +1206,12 @@ async def clip_overlay_finalize(
         captions_font_size=captions_font_size,
         captions_animation=captions_animation,
         captions_lead_ms=captions_lead_ms,
+        clip_style=clip_style,
+        banner_variant=banner_variant,
+        banner_live_badge=banner_live_badge,
+        top_hook_enabled=top_hook_enabled,
+        top_hook_text=top_hook_text,
+        top_hook_style=top_hook_style,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )

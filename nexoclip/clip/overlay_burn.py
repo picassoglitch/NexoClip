@@ -81,6 +81,13 @@ class _OverlaySpec(NamedTuple):
     banner_url: str
     banner_color: str
     captions_enabled: bool
+    # Slice I.1 — clip style + Kick banner variant + top hook box.
+    clip_style: str = "repost_page_viral"
+    banner_variant: str = "kick_repost_page"
+    banner_live_badge: bool = False
+    top_hook_enabled: bool = False
+    top_hook_text: str = ""
+    top_hook_style: str = "white_rounded"
 
 
 def _spec_from_overlay_config(
@@ -101,8 +108,13 @@ def _spec_from_overlay_config(
     title = overlay.get("title_text")
     banner = overlay.get("banner") if isinstance(overlay.get("banner"), dict) else {}
     captions = overlay.get("captions") if isinstance(overlay.get("captions"), dict) else {}
+    top_hook = overlay.get("top_hook") if isinstance(overlay.get("top_hook"), dict) else {}
     assert isinstance(banner, dict)
     assert isinstance(captions, dict)
+    assert isinstance(top_hook, dict)
+    # Slice I.1 — clip_style + banner_variant + top hook overlay.
+    clip_style = str(overlay.get("clip_style") or "repost_page_viral")
+    banner_variant = str(banner.get("variant") or "kick_repost_page")
     return _OverlaySpec(
         title_text=(title.strip() if isinstance(title, str) and title.strip() else None),
         banner_enabled=bool(banner.get("enabled", False)),
@@ -110,6 +122,12 @@ def _spec_from_overlay_config(
         banner_url=str(banner.get("url") or "").strip(),
         banner_color=str(banner.get("color") or "").strip(),
         captions_enabled=bool(captions.get("enabled", True)),
+        clip_style=clip_style,
+        banner_variant=banner_variant,
+        banner_live_badge=bool(banner.get("live_badge", False)),
+        top_hook_enabled=bool(top_hook.get("enabled", False)),
+        top_hook_text=str(top_hook.get("text") or "").strip(),
+        top_hook_style=str(top_hook.get("style") or "white_rounded"),
     )
 
 
@@ -531,9 +549,23 @@ def build_filter_graph(
     """
     chunks: list[str] = []
 
-    # 1. Title overlay — top, white box, dark text.
+    # 1. Title overlay (legacy "title_text" — kept for backward compat).
+    #    Slice I.1's `top_hook` is its own renderer below.
     if spec.title_text and fontfile is not None:
         chunks.append(_title_filter(spec.title_text, output_w=output_w, fontfile=fontfile))
+
+    # 1b. Top hook box — Slice I.1 white-rounded headline overlay.
+    #     Lives ABOVE the subject's face, below the platform top safe zone.
+    if spec.top_hook_enabled and spec.top_hook_text and fontfile is not None:
+        chunks.append(
+            _top_hook_filter(
+                text=spec.top_hook_text,
+                style=spec.top_hook_style,
+                output_w=output_w,
+                output_h=output_h,
+                fontfile=fontfile,
+            )
+        )
 
     # 2. Captions — subtitles= filter against an ASS (word-level
     # karaoke, slice F.7-F) or SRT (segment-level fallback) file we
@@ -544,16 +576,22 @@ def build_filter_graph(
     if spec.captions_enabled and cap_path is not None and cap_path.exists():
         chunks.append(_captions_filter(cap_path))
 
-    # 3. Platform banner — drawbox + drawtext (platform left, URL right).
+    # 3. Platform banner — variant-dispatched. The chosen Kick banner
+    #    variant (repost_page / black_bar_classic / green_block /
+    #    minimal_url) renders a slightly different chrome. Falls back
+    #    to the legacy renderer for unknown variants so older clips
+    #    that don't carry banner.variant still publish identically.
     if spec.banner_enabled and fontfile is not None:
         chunks.extend(
-            _banner_filters(
+            _banner_filters_by_variant(
+                variant=spec.banner_variant,
                 platform=spec.banner_platform,
                 url=spec.banner_url,
                 color_hex=(
                     spec.banner_color
                     or PLATFORM_COLORS.get(spec.banner_platform, "#53FC18")
                 ),
+                live_badge=spec.banner_live_badge,
                 output_w=output_w,
                 output_h=output_h,
                 fontfile=fontfile,
@@ -653,6 +691,243 @@ def _banner_filters(
         )
 
     return chunks
+
+
+# ---- Slice I.1 — variant-aware banner dispatcher --------------
+
+
+def _banner_filters_by_variant(
+    *,
+    variant: str,
+    platform: str,
+    url: str,
+    color_hex: str,
+    live_badge: bool,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> list[str]:
+    """Dispatch to the right Kick banner renderer.
+
+    Falls back to the legacy `_banner_filters` for any unknown variant
+    so clips saved before slice I.1 (no `banner.variant` set) keep
+    publishing identically — non-breaking.
+    """
+    if variant == "kick_repost_page":
+        return _banner_repost_page(
+            url=url, color_hex=color_hex, live_badge=live_badge,
+            output_w=output_w, output_h=output_h, fontfile=fontfile,
+        )
+    if variant == "kick_green_block":
+        return _banner_green_block(
+            url=url, color_hex=color_hex,
+            output_w=output_w, output_h=output_h, fontfile=fontfile,
+        )
+    if variant == "kick_minimal_url":
+        return _banner_minimal_url(
+            url=url,
+            output_w=output_w, output_h=output_h, fontfile=fontfile,
+        )
+    # "kick_black_bar_classic" + unknown → legacy renderer.
+    return _banner_filters(
+        platform=platform, url=url, color_hex=color_hex,
+        output_w=output_w, output_h=output_h, fontfile=fontfile,
+    )
+
+
+def _banner_repost_page(
+    *,
+    url: str,
+    color_hex: str,
+    live_badge: bool,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> list[str]:
+    """Repost-page Kick banner — short BLACK bottom bar with a huge
+    accent-color "KICK" wordmark on the left, blocky URL center, and
+    an optional LIVE NOW pill on the right. Matches the look operators
+    actually see when their clip ricochets through repost pages.
+    """
+    band_h = max(56, int(output_h * 0.07))
+    band_y = output_h - band_h
+    accent = _hex_to_ff_color(color_hex, fallback="0x53FC18")
+
+    # The black bottom bar itself.
+    chunks: list[str] = [
+        f"drawbox=x=0:y={band_y}"
+        f":w={output_w}:h={band_h}"
+        f":color=black@0.98:t=fill"
+    ]
+
+    # Huge accent-colored "KICK" wordmark on the left.
+    logo_size = max(28, int(output_w * 0.058))
+    chunks.append(
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='KICK'"
+        f":fontcolor={accent}"
+        f":fontsize={logo_size}"
+        f":x=24"
+        f":y={band_y}+({band_h}-text_h)/2"
+    )
+
+    # Centered URL — defaults to "KICK.COM/USERNAME" when blank.
+    if url:
+        display_url = url if "." in url else f"kick.com/{url}".upper()
+        url_text = display_url.upper()
+    else:
+        url_text = "KICK.COM/YOURHANDLE"
+    url_size = max(20, int(output_w * 0.034))
+    chunks.append(
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='{_ff_escape_text(url_text)}'"
+        f":fontcolor=white"
+        f":fontsize={url_size}"
+        f":x=(w-text_w)/2"
+        f":y={band_y}+({band_h}-text_h)/2"
+    )
+
+    # Optional LIVE NOW pill on the right.
+    if live_badge:
+        pill_h = max(22, int(band_h * 0.55))
+        pill_w = max(120, int(output_w * 0.13))
+        pill_y = band_y + (band_h - pill_h) // 2
+        pill_x = output_w - pill_w - 24
+        chunks.append(
+            f"drawbox=x={pill_x}:y={pill_y}"
+            f":w={pill_w}:h={pill_h}"
+            f":color=red@0.95:t=fill"
+        )
+        live_size = max(14, int(output_w * 0.022))
+        chunks.append(
+            f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+            f":text='LIVE NOW'"
+            f":fontcolor=white"
+            f":fontsize={live_size}"
+            f":x={pill_x}+({pill_w}-text_w)/2"
+            f":y={pill_y}+({pill_h}-text_h)/2"
+        )
+
+    return chunks
+
+
+def _banner_green_block(
+    *,
+    url: str,
+    color_hex: str,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> list[str]:
+    """Gaming Chaos variant — wide colored block on the LEFT carrying
+    the platform name, URL flows to the right of it on a black bar.
+    Looks like an esports/gaming overlay rather than a SaaS export.
+    """
+    band_h = max(60, int(output_h * 0.08))
+    band_y = output_h - band_h
+    block_w = max(140, int(output_w * 0.20))
+    accent = _hex_to_ff_color(color_hex, fallback="0x53FC18")
+
+    chunks: list[str] = [
+        # Black backing bar.
+        f"drawbox=x=0:y={band_y}"
+        f":w={output_w}:h={band_h}"
+        f":color=black@0.95:t=fill",
+        # Accent block.
+        f"drawbox=x=0:y={band_y}"
+        f":w={block_w}:h={band_h}"
+        f":color={accent}@0.98:t=fill",
+    ]
+    plat_size = max(20, int(output_w * 0.036))
+    chunks.append(
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='KICK'"
+        f":fontcolor=black"
+        f":fontsize={plat_size}"
+        f":x=({block_w}-text_w)/2"
+        f":y={band_y}+({band_h}-text_h)/2"
+    )
+    if url:
+        url_size = max(16, int(output_w * 0.028))
+        chunks.append(
+            f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+            f":text='{_ff_escape_text(url.upper())}'"
+            f":fontcolor=white"
+            f":fontsize={url_size}"
+            f":x={block_w}+24"
+            f":y={band_y}+({band_h}-text_h)/2"
+        )
+    return chunks
+
+
+def _banner_minimal_url(
+    *,
+    url: str,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> list[str]:
+    """Clean Creator / Minimal Native variant — no banner box, just a
+    small URL stamped in the bottom-left over a subtle dark gradient
+    for legibility."""
+    if not url:
+        return []
+    # Subtle shadow box behind the URL for legibility on bright frames.
+    pad = 8
+    url_size = max(16, int(output_w * 0.026))
+    text = url.upper() if "." in url else f"kick.com/{url}".upper()
+    # No full-width band — just the text with its own outline box.
+    return [
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='{_ff_escape_text(text)}'"
+        f":fontcolor=white"
+        f":fontsize={url_size}"
+        f":x=24"
+        f":y=h-text_h-24"
+        f":box=1:boxcolor=black@0.55:boxborderw={pad}"
+    ]
+
+
+# ---- Slice I.1 — top hook title box (white rounded headline) ----
+
+
+def _top_hook_filter(
+    *,
+    text: str,
+    style: str,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> str:
+    """White-rounded headline box above the subject's face.
+
+    Sits below the platform top safe zone (~8% from top) so TikTok /
+    Reels chrome doesn't cover it. The "rounded corners" are emulated
+    via a chunky `boxborderw` — ffmpeg drawtext doesn't natively render
+    rounded box corners, but a fat padded box reads as a chip badge.
+
+    `style` toggles fill / text color combos. White-rounded is the
+    viral repost-page default.
+    """
+    if style == "black_solid":
+        fill, fg = "black@0.92", "white"
+    elif style == "subtle":
+        fill, fg = "white@0.75", "black"
+    else:  # white_rounded
+        fill, fg = "white@0.96", "black"
+    fontsize = max(20, int(output_w * 0.040))
+    padding = max(14, int(output_w * 0.020))
+    # Position: ~8% from top so we clear the platform's status / nav.
+    top_y = max(40, int(output_h * 0.08))
+    return (
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='{_ff_escape_text(text)}'"
+        f":fontcolor={fg}"
+        f":fontsize={fontsize}"
+        f":x=(w-text_w)/2"
+        f":y={top_y}"
+        f":box=1:boxcolor={fill}:boxborderw={padding}"
+    )
 
 
 # ---- driver ---------------------------------------------------

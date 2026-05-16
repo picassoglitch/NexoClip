@@ -422,6 +422,17 @@ class BrandKitRow(BaseModel):
     banner_show_context_default: bool = False
     banner_show_safezones_default: bool = False
 
+    # Slice I.1 — Clip Style preset + Kick banner variant + top hook.
+    # `clip_style` is the keystone editor abstraction (Repost Page Viral
+    # / Clean Creator / Gaming Chaos / Documentary / Minimal Native).
+    # Picking a clip style flips banner_variant + top_hook + caption
+    # preset in one shot. None → falls back to "repost_page_viral".
+    clip_style: str | None = None
+    bottom_banner_style: str | None = None
+    banner_live_badge_default: bool = False
+    top_hook_enabled_default: bool = False
+    top_hook_style_default: str | None = None
+
     created_at: str
     updated_at: str
 

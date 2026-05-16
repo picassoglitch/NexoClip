@@ -77,8 +77,23 @@ _MANIFEST_SCHEMA_VERSION = 1
 _log = get_logger("nexoclip.pipeline")
 
 
+@dataclass
+class _StepCtx:
+    """Mutable handle yielded by `_step` so inner code can mark a step
+    skipped + add a one-line `note`. Surfaces in the dashboard as
+    "(skipped — reason)" rather than misleading "0.0s".
+
+    The default state is `skipped=False, note=""` → behaves like the
+    pre-handle version. Steps that hit cached / disabled / no-op paths
+    set `ctx.skipped = True` and a short reason in `ctx.note`.
+    """
+
+    skipped: bool = False
+    note: str = ""
+
+
 @contextmanager
-def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[None]:
+def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[_StepCtx]:
     """Time + log one pipeline step. Re-raises typed errors with the bound context.
 
     Each step is wrapped to:
@@ -91,13 +106,19 @@ def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[N
     live progress without scraping logs. The DB write is synchronous via
     sqlite3 to keep the context manager sync — the dashboard doesn't need
     millisecond freshness, just "this step is running" / "this step finished".
+
+    Yields a `_StepCtx` that inner code can mark `.skipped = True` (with
+    an optional `.note`) when a step is a cached / disabled / no-op
+    run. The done event then carries those fields and the dashboard
+    renders "(skipped — note)" instead of confusing "0.0s" durations.
     """
     _log.info(f"step.{name}.start", **fields)
     t0 = time.perf_counter()
     stream_id = structlog.contextvars.get_contextvars().get("stream_id")
     _record_step_event(db, "pipeline.step.start", name, stream_id, fields)
+    ctx = _StepCtx()
     try:
-        yield
+        yield ctx
     except NexoClipError as e:
         duration_s = time.perf_counter() - t0
         _log.error(
@@ -116,19 +137,30 @@ def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[N
         )
         # Append every contextvar (stream_id, tenant_id, persona_id) into the
         # error message so the CLI / log readers see it without inspection.
-        ctx = structlog.contextvars.get_contextvars()
-        if ctx:
-            ctx_str = " ".join(f"{k}={v}" for k, v in ctx.items())
+        cv = structlog.contextvars.get_contextvars()
+        if cv:
+            ctx_str = " ".join(f"{k}={v}" for k, v in cv.items())
             raise type(e)(f"{e} [{ctx_str}]") from e
         raise
     duration_s = time.perf_counter() - t0
-    _log.info(f"step.{name}.done", duration_s=duration_s, **fields)
+    _log.info(
+        f"step.{name}.done",
+        duration_s=duration_s,
+        skipped=ctx.skipped,
+        note=ctx.note or None,
+        **fields,
+    )
     _record_step_event(
         db,
         "pipeline.step.done",
         name,
         stream_id,
-        {**fields, "duration_s": duration_s},
+        {
+            **fields,
+            "duration_s": duration_s,
+            "skipped": ctx.skipped,
+            "note": ctx.note,
+        },
     )
 
 
@@ -390,8 +422,10 @@ async def _run_pipeline(
     #       VisualConfig.timeout_s. The pipeline moves on with no visual
     #       signals; downstream merges happen with whatever voice / audio
     #       / viral candidates were already found.
-    with _step("analyze_video", db=db):
+    with _step("analyze_video", db=db) as step_ctx:
         if not config.detection.visual.enabled:
+            step_ctx.skipped = True
+            step_ctx.note = "visual detector disabled in config"
             _log.info(
                 "analyze_video.skipped",
                 reason="visual detector disabled; nothing downstream consumes the output",
@@ -410,8 +444,12 @@ async def _run_pipeline(
                     timeout=timeout_s,
                 )
             except DetectionError as e:
+                step_ctx.skipped = True
+                step_ctx.note = f"video not decodable: {e}"
                 _log.warning("analyze_video.skipped", reason=str(e))
             except asyncio.TimeoutError:
+                step_ctx.skipped = True
+                step_ctx.note = f"exceeded {timeout_s:.0f}s timeout"
                 _log.warning(
                     "analyze_video.timeout",
                     timeout_s=timeout_s,
@@ -431,7 +469,7 @@ async def _run_pipeline(
     diarization: Diarization = Diarization(
         stream_id=stream.id, tenant_id=tenant_id, skipped=True
     )
-    with _step("diarize", db=db, model=config.detection.diarization.model):
+    with _step("diarize", db=db, model=config.detection.diarization.model) as step_ctx:
         diarization = await diarize(
             tenant_id=tenant_id,
             stream=stream,
@@ -439,6 +477,8 @@ async def _run_pipeline(
             force=force,
         )
         if diarization.skipped:
+            step_ctx.skipped = True
+            step_ctx.note = diarization.skip_reason or "diarization disabled"
             _log.info(
                 "diarize.skipped",
                 reason=diarization.skip_reason,
@@ -478,7 +518,15 @@ async def _run_pipeline(
     # TranscriptionError so the dashboard's progress card flips to
     # "Pipeline failed" with an actionable message instead of staring at
     # a pulsing dot forever.
-    whisper_lang = language or "es"
+    #
+    # Slice F.7-G — language is now AUTO-DETECTED by Whisper when the
+    # caller didn't pin one. The previous hardcoded "es" fallback meant
+    # English / Portuguese / silent test clips got transcribed AS IF
+    # they were Spanish, producing garbage segments that VAD then
+    # filtered to empty → "no captions" on the editor preview. Passing
+    # `language=None` lets faster-whisper run its 30-sample language
+    # detector and pick the right tokenizer.
+    whisper_lang: str | None = language if (language and language != "auto") else None
     with _step("transcribe", db=db, model=settings.whisper_model, device=settings.whisper_device):
         try:
             transcript = await asyncio.wait_for(

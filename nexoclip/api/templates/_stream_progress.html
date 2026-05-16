@@ -37,11 +37,24 @@
           {% if s.status == "done" %}
             <span class="nc-steps__icon nc-steps__icon--done"><i class="ti ti-check" aria-hidden="true"></i></span>
             <span>{{ s.name }}</span>
-            {% if s.duration_s %}
-            <span class="nc-steps__time">
-              {% if s.duration_s < 60 %}{{ "%.1f"|format(s.duration_s) }}s
-              {% else %}{{ "%.1f"|format(s.duration_s / 60.0) }}m{% endif %}
-            </span>
+            {# Render the right-side time label. Three modes:
+                 - skipped → "(skipped)" with the reason as a tooltip,
+                   so the user knows the step was a no-op (disabled,
+                   cached, missing HF_TOKEN diarization, etc.) rather
+                   than thinking it took 0 seconds because it broke.
+                 - sub-second (cached ingest, fast no-op) → ms so
+                   "0.0s" doesn't make the user think nothing happened.
+                 - everything else → seconds / minutes as before. #}
+            {% if s.skipped %}
+              <span class="nc-steps__time" title="{{ s.note }}">
+                (skipped{% if s.note %} — {{ s.note }}{% endif %})
+              </span>
+            {% elif s.duration_s is not none %}
+              <span class="nc-steps__time">
+                {% if s.duration_s < 1 %}{{ "%.0f"|format(s.duration_s * 1000) }}ms
+                {% elif s.duration_s < 60 %}{{ "%.1f"|format(s.duration_s) }}s
+                {% else %}{{ "%.1f"|format(s.duration_s / 60.0) }}m{% endif %}
+              </span>
             {% endif %}
           {% elif s.status == "running" %}
             <span class="nc-steps__icon nc-steps__icon--running">

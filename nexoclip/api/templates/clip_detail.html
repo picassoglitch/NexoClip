@@ -205,7 +205,11 @@
    partial deploy, etc.) the page still renders sensible values
    instead of crashing. The handler IS correct — these defaults are
    belt-and-suspenders. #}
-{% set ov = clip.overlay_config or {} %}
+{# Slice F.7-G — when this clip has no overlay yet, fall back to the
+   most-recently-edited sibling clip on the same stream so the
+   operator doesn't re-type URL / banner color / preset on every
+   clip. `inherited_overlay` is set by the dashboard router. #}
+{% set ov = clip.overlay_config or inherited_overlay|default(None) or {} %}
 {% set banner = ov.get('banner') or {} %}
 {% set captions = ov.get('captions') or {} %}
 {% set comments = ov.get('comments') or {} %}
@@ -1206,12 +1210,61 @@
     });
   }
 
+  var captionsLoaded = false;
+  var captionDiagnostics = null;   // {reason, language, transcript_*, clip_window_s}
+
+  function emptyStateMessage(diag) {
+    // Map the captions.json diagnostic to a one-line operator hint.
+    // The user's complaint that triggered this:
+    //   "i keep getting this error even though im talking in spanish"
+    // -> we now distinguish "no transcript at all" from "transcript
+    //    in wrong language" from "this clip is outside the transcribed
+    //    span" so the operator knows what to do next.
+    if (!diag) return "loading captions…";
+    var reason = diag.reason || "";
+    var lang = diag.language || "?";
+    var win = diag.clip_window_s || [];
+    var span = diag.transcript_span_s || null;
+    if (reason === "no_transcript")
+      return "no transcript yet — run the pipeline on this stream";
+    if (reason === "transcript_empty")
+      return "whisper found no speech in this stream — check the audio extract or re-run on GPU";
+    if (reason === "no_word_timestamps")
+      return "transcript is pre-F.7-F (no word timings) — re-run the pipeline to refresh";
+    if (reason === "window_outside_transcript") {
+      var spanLabel = span ? (span[0].toFixed(1) + "s – " + span[1].toFixed(1) + "s") : "?";
+      var winLabel  = win.length === 2 ? (win[0].toFixed(1) + "s – " + win[1].toFixed(1) + "s") : "?";
+      return "clip window " + winLabel + " is outside the transcribed span (" + spanLabel + ", lang=" + lang + ")";
+    }
+    return "no captions in this window";
+  }
+
+  function renderCaptionsEmptyState() {
+    var msg = emptyStateMessage(captionDiagnostics);
+    pvCaptionEl.innerHTML =
+      '<span class="nc-pv-caption__empty" '
+      + 'style="opacity: 0.55; font-size: 0.48em; font-weight: 500; '
+      + 'letter-spacing: 0.04em; text-transform: uppercase; '
+      + 'max-width: 90%; line-height: 1.3; text-align: center; '
+      + 'display: inline-block;">'
+      + escapeHTML(msg)
+      + '</span>';
+  }
+
   function syncCaptionFrame() {
-    if (!captionsEnabled() || !captionLines.length) {
-      // If captions toggled off mid-play, clear the surface.
-      if (pvCaptionEl.children.length && !captionsEnabled()) {
+    if (!captionsEnabled()) {
+      if (pvCaptionEl.children.length) {
         pvCaptionEl.innerHTML = "";
         captionActiveLineIdx = -1;
+      }
+      return;
+    }
+    if (!captionLines.length) {
+      // Only paint the empty-state once we know the fetch resolved;
+      // before that, leave the box blank so we don't flash a misleading
+      // "no transcript" hint while the data is still loading.
+      if (captionsLoaded && !pvCaptionEl.querySelector(".nc-pv-caption__empty")) {
+        renderCaptionsEmptyState();
       }
       return;
     }
@@ -1230,19 +1283,30 @@
         if (captionLines[j].end_ts <= t) { newIdx = j; break; }
       }
     }
+    // Slice F.7-G — when no line has fired yet (video paused at t=0,
+    // or before the first word's ts), show the FIRST upcoming line at
+    // reduced opacity so the operator sees what's coming instead of
+    // an empty preview that looks broken.
+    var isUpcomingPreview = false;
+    if (newIdx === -1 && captionLines.length) {
+      newIdx = 0;
+      isUpcomingPreview = true;
+    }
     if (newIdx !== captionActiveLineIdx) {
       captionActiveLineIdx = newIdx;
       if (newIdx >= 0) renderCaptionLine(captionLines[newIdx]);
       else pvCaptionEl.innerHTML = "";
     }
     // Per-word active state inside the current line.
+    pvCaptionEl.style.opacity = isUpcomingPreview ? "0.55" : "1";
     pvCaptionEl.querySelectorAll(".nc-pv-caption__word").forEach(function (w) {
       var ws = parseFloat(w.getAttribute("data-ts"));
       var we = parseFloat(w.getAttribute("data-end-ts"));
       w.classList.remove("is-active", "is-past", "is-upcoming");
-      if (t >= ws && t < we) w.classList.add("is-active");
-      else if (we <= t)     w.classList.add("is-past");
-      else                  w.classList.add("is-upcoming");
+      if (isUpcomingPreview)  w.classList.add("is-upcoming");
+      else if (t >= ws && t < we) w.classList.add("is-active");
+      else if (we <= t)       w.classList.add("is-past");
+      else                    w.classList.add("is-upcoming");
     });
   }
   // Run the caption sync alongside the existing playhead sync.
@@ -1258,10 +1322,18 @@
     .then(function (r) { return r.ok ? r.json() : { lines: [] }; })
     .then(function (data) {
       captionLines = (data && Array.isArray(data.lines)) ? data.lines : [];
-      // Initial paint — show the first line if the video is at t=0.
+      captionDiagnostics = (data && data.diagnostics) || null;
+      captionsLoaded = true;
+      // Surface the diagnostic in the dev console too — operators often
+      // tail console while debugging "where are my captions" cases.
+      if (captionDiagnostics && !captionLines.length) {
+        console.warn("[captions] empty —", captionDiagnostics);
+      }
+      // Initial paint — show either the upcoming-line preview or the
+      // empty-state hint so the preview never sits silently blank.
       syncCaptionFrame();
     })
-    .catch(function () { captionLines = []; });
+    .catch(function () { captionLines = []; captionsLoaded = true; syncCaptionFrame(); });
 
   // ---- Intelligence timeline (slice F.7-C) ----
   // Per-clip markers (audio peak / scene cut / reaction / chat

@@ -304,6 +304,12 @@ async def stream_progress(
             "duration_s": None,
             "elapsed_s": None,
             "error": None,
+            # Slice F.7-G — surface "skipped" + a one-line reason so
+            # near-zero durations (cached ingest, disabled visual,
+            # missing HF_TOKEN diarization) don't render as the
+            # confusing "0.0s" that the user thought meant "broken".
+            "skipped": False,
+            "note": "",
         }
         for name in step_order
     }
@@ -318,6 +324,8 @@ async def stream_progress(
         elif ev.type == "pipeline.step.done":
             step_state[step_name]["status"] = "done"
             step_state[step_name]["duration_s"] = ev.payload.get("duration_s")
+            step_state[step_name]["skipped"] = bool(ev.payload.get("skipped"))
+            step_state[step_name]["note"] = str(ev.payload.get("note") or "")
         elif ev.type == "pipeline.step.failed":
             step_state[step_name]["status"] = "failed"
             step_state[step_name]["error"] = ev.payload.get("error")
@@ -465,6 +473,16 @@ async def streams_rerun(
             ),
         ) from e
 
+    # Slice F.7-G — pass the persona's primary_language into the runner
+    # so Whisper transcribes in the right language. The pipeline default
+    # used to be a hardcoded "es" fallback, which silently produced
+    # garbage transcripts on English/Portuguese/etc clips. Now: the
+    # persona's language wins; if none, faster-whisper auto-detects.
+    persona_language: str | None = None
+    persona_row = await PersonasRepo(db).get(persona_id)
+    if persona_row is not None and persona_row.primary_language:
+        persona_language = persona_row.primary_language
+
     runner = request.app.state.pipeline_runner
     background_tasks.add_task(
         runner,
@@ -473,6 +491,7 @@ async def streams_rerun(
             stream=stream,
             persona_id=persona_id,
             output_dir=output_dir,
+            language=persona_language,
         ),
     )
     await EventsRepo(db).emit(
@@ -531,6 +550,29 @@ async def clip_detail(
         brand_kit.caption_style if brand_kit is not None else None
     )
 
+    # Slice F.7-G — branding stickiness across clips.
+    # When THIS clip has no overlay_config yet, prefill from the most-
+    # recently-edited sibling clip on the same stream. The operator
+    # types "kick.com/aldovillanueva" on clip 1, opens clip 2, and
+    # the URL is already filled in. The brand_kit covers the
+    # cross-stream case (different VODs from the same channel); this
+    # covers the in-stream case where the brand_kit hasn't been
+    # populated yet (e.g. first-time user, didn't visit Brand Kits).
+    inherited_overlay: dict[str, object] | None = None
+    if not clip.overlay_config:
+        siblings = await ClipsRepo(db).list_for_stream(clip.stream_id)
+        # Walk newest-first by created_at; .list_for_stream returns in
+        # insertion order — sort defensively.
+        siblings_sorted = sorted(
+            (c for c in siblings if c.id != clip.id and c.overlay_config),
+            key=lambda c: c.created_at,
+            reverse=True,
+        )
+        if siblings_sorted:
+            inherited = siblings_sorted[0].overlay_config
+            if isinstance(inherited, dict):
+                inherited_overlay = inherited
+
     # Phase 3: surface engagement outcomes per published job. One row per
     # publish_job with the latest metric reading next to the platform +
     # external URL. Dashboard shows "not yet measured" rows for jobs that
@@ -561,6 +603,10 @@ async def clip_detail(
             "brand_kit": brand_kit,
             "caption_style": caption_style,
             "caption_preset_choices": preset_choices(),
+            # Slice F.7-G — passed through so the template's form-
+            # prefill block can fall back to the previous clip's
+            # overlay when this clip's overlay_config is still null.
+            "inherited_overlay": inherited_overlay,
         },
     )
 
@@ -623,6 +669,120 @@ def _parse_overlay_form(
     }
 
 
+# ---- Branding persistence helpers (slice F.7-G) ----
+#
+# On every clip-overlay save the operator's branding choices (platform
+# handle, banner color, caption preset + highlight color) get mirrored
+# back into the tenant's default brand_kit. The next clip the operator
+# opens then prefills from the brand_kit fallback path in clip_detail.html.
+#
+# Why a *brand-kit* write rather than a sticky-defaults table:
+#   - the kit ALREADY drives the renderer's fallback path when
+#     overlay_config_json is null (see clip_detail.html ~232).
+#     mirroring there means there's a single source of truth.
+#   - operators editing brand kits in /dashboard/brand_kits see the
+#     latest "live" handle / color without an extra migration screen.
+#
+# We auto-create a brand_kit with `name="Default"` and `is_default=1`
+# when none exists, so first-time users don't need a kit-create UI
+# detour before their second clip inherits their first clip's URL.
+
+
+def _platform_handle_field(platform: str) -> str | None:
+    """Map the dropdown platform → brand_kit handle column. Returns
+    `None` for platforms we don't have a column for (so the caller
+    doesn't fabricate a write for an unknown column)."""
+    return {
+        "kick": "handle_kick",
+        "tiktok": "handle_tiktok",
+        "youtube": "handle_youtube",
+        "instagram": "handle_instagram",
+    }.get(platform.lower())
+
+
+async def _persist_branding_to_brand_kit(
+    db: Database,
+    cfg: Mapping[str, object],
+) -> None:
+    """Mirror the operator's editor choices back to the tenant's
+    default brand_kit. Best-effort — a missing field or repo failure
+    must not break the overlay save (publishers don't depend on this).
+    """
+    from nexoclip.branding import caption_style_or_default
+
+    repo = BrandKitsRepo(db)
+    try:
+        kit = await repo.get_default()
+    except Exception:  # noqa: BLE001 — best-effort
+        return
+
+    banner = cfg.get("banner") or {}
+    captions = cfg.get("captions") or {}
+    if not isinstance(banner, dict) or not isinstance(captions, dict):
+        return
+
+    platform_raw = banner.get("platform")
+    platform = str(platform_raw).lower() if isinstance(platform_raw, str) else ""
+    url_raw = banner.get("url")
+    url = str(url_raw).strip() if isinstance(url_raw, str) else ""
+    color_raw = banner.get("color")
+    color = str(color_raw).strip() if isinstance(color_raw, str) else ""
+    preset_raw = captions.get("preset")
+    preset = str(preset_raw).strip() if isinstance(preset_raw, str) else ""
+    hilite_raw = captions.get("highlight_color")
+    hilite = str(hilite_raw).strip() if isinstance(hilite_raw, str) else ""
+
+    if kit is None:
+        # Auto-create the tenant's default kit on first save so
+        # subsequent clips inherit the chosen branding even if the
+        # operator never visits /dashboard/brand_kits.
+        kwargs: dict[str, object] = {
+            "name": "Default",
+            "primary_color": color or "#53FC18",
+            "accent_color": "#FFD700",
+            "is_default": True,
+        }
+        if preset or hilite:
+            base = caption_style_or_default(None).model_dump()
+            if preset:
+                base["preset_id"] = preset
+            if hilite:
+                base["highlight_color"] = hilite
+            kwargs["caption_style"] = base
+        handle_field = _platform_handle_field(platform)
+        if handle_field and url:
+            kwargs[handle_field] = url
+        try:
+            await repo.create(**kwargs)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    # Existing default kit — partial update of just the fields the
+    # operator changed in the editor. None-valued args are ignored by
+    # BrandKitsRepo.update so we only touch what was provided.
+    update_kwargs: dict[str, object] = {}
+    if color:
+        update_kwargs["primary_color"] = color
+    handle_field = _platform_handle_field(platform)
+    if handle_field and url:
+        update_kwargs[handle_field] = url
+    if preset or hilite:
+        style = (kit.caption_style or {}).copy() if kit.caption_style else {}
+        if preset:
+            style["preset_id"] = preset
+        if hilite:
+            style["highlight_color"] = hilite
+        if style:
+            update_kwargs["caption_style"] = style
+    if not update_kwargs:
+        return
+    try:
+        await repo.update(kit.id, **update_kwargs)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post(
     "/clips/{clip_id}/overlay",
     dependencies=[Depends(require_full_scope)],
@@ -664,6 +824,9 @@ async def clip_overlay_save(
         comments_fake_likes=comments_fake_likes,
     )
     await ClipsRepo(db).set_overlay_config(clip_id, overlay_config=cfg)
+    # Slice F.7-G — mirror branding choices to the tenant brand_kit
+    # so the operator doesn't re-type URL / color on every clip.
+    await _persist_branding_to_brand_kit(db, cfg)
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
@@ -731,6 +894,9 @@ async def clip_overlay_finalize(
         comments_fake_likes=comments_fake_likes,
     )
     await repo.set_overlay_config(clip_id, overlay_config=cfg)
+    # Slice F.7-G — see note in clip_overlay_save: persists branding
+    # to the tenant brand_kit so the *next* clip prefills it.
+    await _persist_branding_to_brand_kit(db, cfg)
     if target != clip.status:
         await repo.update_status(clip_id, status=target)
 
@@ -1116,15 +1282,83 @@ async def clip_captions(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     transcript = await TranscriptsRepo(db).get(clip.stream_id)
+
+    # Slice F.7-G — diagnostics block so the editor's empty-state can
+    # explain *why* no captions are showing instead of just hinting
+    # "re-run the pipeline" (the user asked: "i keep getting this
+    # error even though im talking in spanish"). The four real
+    # failure modes we want to distinguish:
+    #
+    #   1. transcript hasn't been written yet  → run pipeline
+    #   2. transcript is present but EMPTY     → VAD ate everything,
+    #                                            or audio extract was silent
+    #   3. transcript has segments but no word-level data
+    #                                          → pre-F.7-F run, re-transcribe
+    #   4. words exist but none overlap THIS clip window
+    #                                          → clip cut outside the
+    #                                            transcribed span
+    #
+    # The editor's JS turns the diagnostics into a one-line empty-state.
+    diag: dict[str, object] = {
+        "transcript_present": transcript is not None,
+        "language": transcript.language if transcript else None,
+        "transcript_segment_count": 0,
+        "transcript_word_count": 0,
+        "transcript_span_s": None,
+        "clip_window_s": [clip.start_s, clip.end_s],
+        "reason": "no_transcript",
+    }
     if transcript is None:
-        body = {"lines": [], "duration_s": clip.duration_s}
+        body = {"lines": [], "duration_s": clip.duration_s, "diagnostics": diag}
     else:
+        # Inspect the raw transcript shape without re-running the chunker
+        # so the diagnostics survive even when captions_for_clip returns [].
+        try:
+            raw_segments = _json.loads(transcript.segments_json or "[]")
+        except _json.JSONDecodeError:
+            raw_segments = []
+        if isinstance(raw_segments, list):
+            diag["transcript_segment_count"] = len(raw_segments)
+            total_words = 0
+            min_ts: float | None = None
+            max_ts: float | None = None
+            for seg in raw_segments:
+                if not isinstance(seg, dict):
+                    continue
+                seg_words = seg.get("words")
+                if isinstance(seg_words, list):
+                    total_words += len(seg_words)
+                # transcript timestamps are stream-relative ("ts"/"end_ts"
+                # from Pydantic, "start"/"end" from legacy fixtures).
+                start_v = seg.get("ts", seg.get("start"))
+                end_v = seg.get("end_ts", seg.get("end"))
+                if isinstance(start_v, int | float):
+                    min_ts = float(start_v) if min_ts is None else min(min_ts, float(start_v))
+                if isinstance(end_v, int | float):
+                    max_ts = float(end_v) if max_ts is None else max(max_ts, float(end_v))
+            diag["transcript_word_count"] = total_words
+            if min_ts is not None and max_ts is not None:
+                diag["transcript_span_s"] = [min_ts, max_ts]
+
         lines = captions_for_clip(
             transcript.segments_json or "",
             clip_start_s=clip.start_s,
             clip_end_s=clip.end_s,
         )
-        body = {"lines": lines_to_json(lines), "duration_s": clip.duration_s}
+        # Classify the failure mode for the empty-state hint.
+        if lines:
+            diag["reason"] = "ok"
+        elif diag["transcript_segment_count"] == 0:
+            diag["reason"] = "transcript_empty"
+        elif diag["transcript_word_count"] == 0:
+            diag["reason"] = "no_word_timestamps"
+        else:
+            diag["reason"] = "window_outside_transcript"
+        body = {
+            "lines": lines_to_json(lines),
+            "duration_s": clip.duration_s,
+            "diagnostics": diag,
+        }
     return Response(
         content=_json.dumps(body),
         media_type="application/json",

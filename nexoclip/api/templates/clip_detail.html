@@ -959,19 +959,90 @@
   }
 
   /* Editor controls (right column) */
-  .nc-editor-controls .nc-panel { margin-bottom: 12px; }
-  .nc-editor-controls .nc-panel__body { padding: 12px 14px; }
-  .nc-editor-controls .nc-label { margin-bottom: 8px; }
+  .nc-editor-controls .nc-panel { margin-bottom: 14px; }
+  .nc-editor-controls .nc-panel__body { padding: 14px 16px; }
+  .nc-editor-controls .nc-label { margin-bottom: 10px; }
 
+  /* Slice I.5 — softer section rhythm + confident dark-cinematic feel.
+     Subtle border, slightly bigger radius, hover-lift on panels. */
+  .nc-editor-controls .nc-panel {
+    border-radius: 10px;
+    border-color: rgba(255, 255, 255, 0.06);
+    transition: border-color 120ms ease;
+  }
+  .nc-editor-controls .nc-panel:hover {
+    border-color: rgba(255, 255, 255, 0.10);
+  }
+  .nc-editor-controls .nc-panel__header--editor {
+    padding: 10px 14px;
+    background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.03),
+      transparent);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .nc-editor-controls .nc-panel__step {
+    font-family: var(--nc-font-mono);
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--nc-blue-bright, #4f8bff);
+    background: rgba(79, 139, 255, 0.14);
+    padding: 2px 7px;
+    border-radius: 999px;
+  }
+
+  /* Sticky action bar — slice I.5.
+     Desktop: sticks inside the right column with a backdrop blur so
+       buttons stay visible while the operator scrolls through panels.
+     Mobile  (<900px): fixed to the viewport bottom so Ship is always
+       within thumb reach, with safe-area-inset padding for
+       notched / gesture devices. The body grows extra bottom padding
+       to avoid the bar covering the last panel. */
   .nc-editor-actions {
     position: sticky;
-    bottom: 16px;
+    bottom: 12px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    background: var(--nc-bg-base);
-    padding-top: 12px;
-    border-top: var(--nc-hairline);
+    background: linear-gradient(180deg,
+      rgba(8, 10, 16, 0.55) 0%,
+      rgba(8, 10, 16, 0.92) 30%,
+      var(--nc-bg-base) 100%);
+    backdrop-filter: blur(10px);
+    padding: 14px 12px;
+    margin: 12px -4px -4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+    z-index: 5;
+  }
+
+  @media (max-width: 900px) {
+    .nc-editor-actions {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: max(12px, env(safe-area-inset-bottom, 0));
+      margin: 0;
+      z-index: 50;
+    }
+    /* Push every content area up so the fixed bar never traps a panel. */
+    .nc-editor-controls { padding-bottom: 220px; }
+    body { padding-bottom: 240px; }
+    /* Tighten the AI Director ring on phone — saves 120px of vertical. */
+    .nc-director__confidence { width: 96px; height: 96px; }
+    .nc-director__confidence-pct { font-size: 28px; }
+    /* Variant cards already use auto-fill at 260px — they collapse to
+       single column under 360px-wide screens naturally. Just a touch
+       more breathing room between them on phone. */
+    .nc-variant-grid { gap: 14px; }
+    /* Filter tabs scroll horizontally rather than wrapping into 3 rows. */
+    .nc-variant-filters {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 14px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .nc-variant-filter { flex-shrink: 0; }
   }
 </style>
 {% endblock %}
@@ -1700,17 +1771,9 @@
             </select>
           </label>
 
-          <label class="nc-label">Lead-time (ms before said)
-            <input class="nc-input"
-                   type="number"
-                   min="0" max="500" step="10"
-                   name="captions_lead_ms"
-                   id="ctl-captions-lead-ms"
-                   value="{{ captions.get('lead_ms', 120) }}">
-            <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
-              0 = caption appears as the word is spoken · 120ms = reads slightly ahead (recommended) · 250ms+ = strong anticipation
-            </small>
-          </label>
+          {# Slice I.5 — Lead-time moved into Advanced.
+             Captions section stays scannable for normal use; the
+             technical knob lives one click away. #}
         </div>
       </div>
 
@@ -1845,13 +1908,29 @@
       <details class="nc-panel" id="advanced-section">
         <summary class="nc-panel__header nc-panel__header--editor"
                  style="cursor: pointer; list-style: none;">
-          <span class="nc-panel__step">4</span>
+          <span class="nc-panel__step">5</span>
           <span class="nc-panel__title">Advanced</span>
-          <small>— reactions rail · low-frequency overrides</small>
+          <small>— caption timing · reactions rail · low-frequency overrides</small>
           <i class="ti ti-chevron-down" aria-hidden="true" style="margin-left: auto; color: var(--nc-text-muted);"></i>
         </summary>
         <div class="nc-panel__body">
-          <label class="nc-checkbox">
+          {# Slice I.5 — Lead-time lives here (was in Captions section).
+             The 120ms recommended default is what 99% of clips ship
+             with, so making the operator scroll past it on every clip
+             added noise without value. #}
+          <label class="nc-label">Caption lead-time (ms before said)
+            <input class="nc-input"
+                   type="number"
+                   min="0" max="500" step="10"
+                   name="captions_lead_ms"
+                   id="ctl-captions-lead-ms"
+                   value="{{ captions.get('lead_ms', 120) }}">
+            <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
+              0 = caption appears as the word is spoken · 120ms = reads slightly ahead (recommended) · 250ms+ = strong anticipation
+            </small>
+          </label>
+
+          <label class="nc-checkbox" style="margin-top: 10px;">
             <input type="checkbox" name="comments_show" value="1" id="ctl-comments-on"
                    {% if comments.get('show_overlay', False) %}checked{% endif %}>
             <span>Show platform-style reactions rail</span>

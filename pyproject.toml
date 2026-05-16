@@ -94,10 +94,14 @@ diarize = [
     # Pinned to 3.3.2: 3.4.0 references torchaudio.AudioMetaData which
     # was removed in torchaudio 2.8+. Likewise huggingface_hub<1.0
     # because hub 1.0 dropped the `use_auth_token` kwarg pyannote still
-    # passes. Until upstream pyannote ships a fix these pins are the
-    # known-good combo. Tested with torch==2.4.1+cu121.
+    # passes. And speechbrain<1.1 because 1.1 added a lazy
+    # `speechbrain.integrations.k2_fsa` import that pyannote's
+    # pipeline construction trips, requiring the `k2` package which
+    # is effectively Linux-only. Until upstream pyannote ships a fix
+    # these pins are the known-good combo. Tested with torch==2.4.1+cu121.
     "pyannote.audio==3.3.2",
     "huggingface_hub>=0.23,<1.0",
+    "speechbrain>=1.0,<1.1",
 ]
 
 [project.scripts]

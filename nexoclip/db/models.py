@@ -413,6 +413,15 @@ class BrandKitRow(BaseModel):
         default_factory=CustomTriggerPhrases
     )
 
+    # Slice H.1 — user-level editor preferences. The clip editor's
+    # right panel auto-saves to these so re-opening any clip prefills
+    # the operator's last choices instead of resetting to "off" /
+    # platform defaults / placeholder URL.
+    default_platform: str | None = None
+    banner_enabled_default: bool = False
+    banner_show_context_default: bool = False
+    banner_show_safezones_default: bool = False
+
     created_at: str
     updated_at: str
 

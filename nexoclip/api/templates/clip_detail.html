@@ -229,14 +229,52 @@
    partial deploy, etc.) the page still renders sensible values
    instead of crashing. The handler IS correct — these defaults are
    belt-and-suspenders. #}
-{# Slice F.7-G — when this clip has no overlay yet, fall back to the
-   most-recently-edited sibling clip on the same stream so the
-   operator doesn't re-type URL / banner color / preset on every
-   clip. `inherited_overlay` is set by the dashboard router. #}
+{# Slice H.1 — fallback chain for editor prefill:
+     1. This clip's own overlay_config (per-clip override)
+     2. inherited_overlay (most-recently-edited sibling clip)
+     3. brand_kit-derived defaults (user-level setup persisted via
+        the /me/brand-kit-prefs auto-save endpoint)
+   Operator changes auto-save to the brand_kit immediately, so on
+   the next clip's render this chain finds them at step 3. #}
 {% set ov = clip.overlay_config or inherited_overlay|default(None) or {} %}
 {% set banner = ov.get('banner') or {} %}
 {% set captions = ov.get('captions') or {} %}
 {% set comments = ov.get('comments') or {} %}
+
+{# Promote brand_kit user-level prefs onto `banner` / `captions`
+   wherever the operator hasn't explicitly overridden them for THIS
+   clip. We deep-copy each block to avoid mutating the dict the
+   renderer reads further down. #}
+{% set _bk = brand_kit if brand_kit else None %}
+{% if _bk %}
+  {# Banner toggles + default platform live as columns. #}
+  {% if 'enabled' not in banner and _bk.banner_enabled_default %}
+    {% set _ = banner.update({'enabled': True}) %}
+  {% endif %}
+  {% if 'show_context' not in banner and _bk.banner_show_context_default %}
+    {% set _ = banner.update({'show_context': True}) %}
+  {% endif %}
+  {% if 'show_safezones' not in banner and _bk.banner_show_safezones_default %}
+    {% set _ = banner.update({'show_safezones': True}) %}
+  {% endif %}
+  {% if not banner.get('platform') and _bk.default_platform %}
+    {% set _ = banner.update({'platform': _bk.default_platform}) %}
+  {% endif %}
+  {# Caption knobs live inside caption_style JSON. #}
+  {% set _bks = _bk.caption_style or {} %}
+  {% if not captions.get('position') and _bks.get('position') %}
+    {% set _ = captions.update({'position': _bks.get('position')}) %}
+  {% endif %}
+  {% if not captions.get('font_size') and _bks.get('font_size') %}
+    {% set _ = captions.update({'font_size': _bks.get('font_size')}) %}
+  {% endif %}
+  {% if not captions.get('animation') and _bks.get('animation') %}
+    {% set _ = captions.update({'animation': _bks.get('animation')}) %}
+  {% endif %}
+  {% if 'lead_ms' not in captions and _bks.get('lead_ms') is not none %}
+    {% set _ = captions.update({'lead_ms': _bks.get('lead_ms')}) %}
+  {% endif %}
+{% endif %}
 
 {% set _caption_default = {
     'preset': 'karaoke_pop',
@@ -593,31 +631,13 @@
         </div>
       </div>
 
-      {# Existing reviewer-only context (variants, status transitions,
-         "why this clip", outcomes) lives below the preview/editor. #}
-
-      {% if valid_transitions %}
-      <div class="nc-panel">
-        <div class="nc-panel__header">
-          <i class="ti ti-toggle-right" aria-hidden="true"></i>
-          <span class="nc-panel__title">Manual status transitions</span>
-          <small>— bypass the editor's Complete flow</small>
-        </div>
-        <div class="nc-panel__body">
-          <div hx-target="#clip-status" hx-swap="outerHTML" class="nc-row">
-            {% for target in valid_transitions %}
-            <button type="button"
-                    hx-patch="/dashboard/clips/{{ clip.id }}/status?to={{ target }}"
-                    class="nc-btn nc-btn--sm {% if target == 'rejected' %}nc-btn--danger{% endif %}">
-              <i class="ti ti-{{ {'approved':'check','rejected':'x','ready_for_review':'eye','published':'rocket'}.get(target, 'arrow-right') }}"
-                 aria-hidden="true"></i>
-              <span>Mark {{ target }}</span>
-            </button>
-            {% endfor %}
-          </div>
-        </div>
-      </div>
-      {% endif %}
+      {# Slice H.1 — manual status transitions panel removed.
+         Status now derives entirely from lifecycle handlers:
+           Ship to platforms → approved (via /finalize)
+           Reject & close    → rejected (via /reject)
+           publish worker    → published (after platform post)
+         The dashboard never needs the manual clicker; headless
+         automations can still hit PATCH /api/clips/{id}/status. #}
     </div>
 
     {# ---- RIGHT: editor controls — four sections (Viral hook /
@@ -1194,6 +1214,66 @@
   if (ctlContextOn) ctlContextOn.addEventListener("change", syncContext);
   var ctlSafezonesOn = document.getElementById("ctl-safezones-on");
   if (ctlSafezonesOn) ctlSafezonesOn.addEventListener("change", syncSafezones);
+
+  // ---- Slice H.1: auto-save user-level prefs to the brand_kit ----
+  //
+  // Every editor input below is a USER SETUP value, not per-page state.
+  // The first time the operator types their URL / flips the banner
+  // toggle / picks a caption position, it lands in the tenant brand_kit
+  // immediately (debounced 250ms). The next clip they open prefills
+  // from the brand_kit — they never re-enter the same value.
+  //
+  // The same /me/brand-kit-prefs endpoint is hit on every change. Per-
+  // clip overrides still happen via the existing Save Draft / Finalize
+  // flow; this is purely about user-level setup persistence.
+  var _autoSaveTimers = {};
+  function autoSavePref(field, value) {
+    // Debounce per-field so dragging the lead-time number doesn't
+    // hammer the server with 30 writes/second.
+    if (_autoSaveTimers[field]) clearTimeout(_autoSaveTimers[field]);
+    _autoSaveTimers[field] = setTimeout(function () {
+      fetch("/dashboard/me/brand-kit-prefs", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        credentials: "same-origin",
+        body: JSON.stringify({field: field, value: value}),
+      }).catch(function () {
+        // Silent — auto-save is best-effort. If the network drops the
+        // change still lives in the form; Save Draft / Finalize still
+        // persist it the legacy way.
+      });
+    }, 250);
+  }
+
+  // Map every editor control → its brand-kit-prefs field name. Each
+  // entry: [DOM element, getter returning the value, field name].
+  // Adding a new control? Append a row here and that's all.
+  var _autoSavePrefs = [
+    [ctlBannerOn,      function (el) { return el.checked; },              "banner_enabled"],
+    [ctlBannerPlat,    function (el) { return el.value; },                "banner_platform"],
+    [ctlBannerUrl,     function (el) { return el.value.trim(); },         "banner_url"],
+    [ctlBannerColor,   function (el) { return el.value; },                "banner_color"],
+    [ctlContextOn,     function (el) { return el.checked; },              "banner_show_context"],
+    [ctlSafezonesOn,   function (el) { return el.checked; },              "banner_show_safezones"],
+    [document.getElementById("ctl-captions-preset"),
+                       function (el) { return el.value; },                "captions_preset"],
+    [ctlCaptionsHl,    function (el) { return el.value; },                "captions_highlight_color"],
+    [ctlCaptionsPos,   function (el) { return el.value; },                "captions_position"],
+    [ctlCaptionsSize,  function (el) { return el.value; },                "captions_font_size"],
+    [ctlCaptionsAnim,  function (el) { return el.value; },                "captions_animation"],
+    [ctlCaptionsLead,  function (el) { return parseInt(el.value, 10) || 0; },
+                                                                          "captions_lead_ms"],
+  ];
+  _autoSavePrefs.forEach(function (row) {
+    var el = row[0];
+    if (!el) return;
+    var getValue = row[1];
+    var field = row[2];
+    var evtName = (el.type === "checkbox" || el.tagName === "SELECT") ? "change" : "input";
+    el.addEventListener(evtName, function () {
+      autoSavePref(field, getValue(el));
+    });
+  });
 
   // Caption animation: cycle the active word through the four words
   // every 600ms while the video is playing. Approximates the karaoke

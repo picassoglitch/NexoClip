@@ -1903,7 +1903,11 @@ _BRAND_KIT_COLS = (
     "handle_tiktok, handle_youtube, handle_instagram, handle_kick, "
     "ai_generated, ai_prompt, ai_provider, "
     "auto_publish_enabled, auto_publish_platforms_json, auto_publish_delay_min, "
-    "custom_trigger_phrases_json, created_at, updated_at"
+    "custom_trigger_phrases_json, "
+    # Slice H.1 — user-level editor prefs (migration 010).
+    "default_platform, banner_enabled_default, "
+    "banner_show_context_default, banner_show_safezones_default, "
+    "created_at, updated_at"
 )
 
 
@@ -1912,6 +1916,10 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     d["is_default"] = bool(d["is_default"])
     d["ai_generated"] = bool(d["ai_generated"])
     d["auto_publish_enabled"] = bool(d["auto_publish_enabled"])
+    # Slice H.1 — new boolean cols from migration 010.
+    d["banner_enabled_default"] = bool(d.get("banner_enabled_default", 0))
+    d["banner_show_context_default"] = bool(d.get("banner_show_context_default", 0))
+    d["banner_show_safezones_default"] = bool(d.get("banner_show_safezones_default", 0))
 
     raw_caption = d.pop("caption_style_json", None)
     d["caption_style"] = json.loads(raw_caption) if raw_caption else None
@@ -1983,7 +1991,7 @@ class BrandKitsRepo:
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -1998,6 +2006,13 @@ class BrandKitsRepo:
                 json.dumps(
                     (custom_trigger_phrases or CustomTriggerPhrases()).model_dump()
                 ),
+                # Slice H.1 — user-level editor prefs. New rows start
+                # with platform/toggles unset; the dashboard's auto-save
+                # endpoint fills them as the operator interacts.
+                None,    # default_platform
+                0,       # banner_enabled_default
+                0,       # banner_show_context_default
+                0,       # banner_show_safezones_default
                 now, now,
             ),
         )
@@ -2085,6 +2100,11 @@ class BrandKitsRepo:
         ai_generated: bool | None = None,
         ai_prompt: str | None = None,
         ai_provider: str | None = None,
+        # Slice H.1 — user-level editor prefs.
+        default_platform: str | None = None,
+        banner_enabled_default: bool | None = None,
+        banner_show_context_default: bool | None = None,
+        banner_show_safezones_default: bool | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -2149,6 +2169,19 @@ class BrandKitsRepo:
         if ai_provider is not None:
             sets.append("ai_provider = ?")
             values.append(ai_provider if ai_provider else None)
+        # Slice H.1 — user-level editor prefs partial-update.
+        if default_platform is not None:
+            sets.append("default_platform = ?")
+            values.append(default_platform if default_platform else None)
+        if banner_enabled_default is not None:
+            sets.append("banner_enabled_default = ?")
+            values.append(1 if banner_enabled_default else 0)
+        if banner_show_context_default is not None:
+            sets.append("banner_show_context_default = ?")
+            values.append(1 if banner_show_context_default else 0)
+        if banner_show_safezones_default is not None:
+            sets.append("banner_show_safezones_default = ?")
+            values.append(1 if banner_show_safezones_default else 0)
         if not sets:
             return existing
         sets.append("updated_at = ?")

@@ -750,11 +750,33 @@ async def _persist_branding_to_brand_kit(
     preset = str(preset_raw).strip() if isinstance(preset_raw, str) else ""
     hilite_raw = captions.get("highlight_color")
     hilite = str(hilite_raw).strip() if isinstance(hilite_raw, str) else ""
+    # Slice H.1 — caption knobs from F.7-H + banner toggles now also
+    # persist to the brand_kit so they survive across clips.
+    position_raw = captions.get("position")
+    position = str(position_raw).strip() if isinstance(position_raw, str) else ""
+    font_size_raw = captions.get("font_size")
+    font_size = str(font_size_raw).strip() if isinstance(font_size_raw, str) else ""
+    animation_raw = captions.get("animation")
+    animation = str(animation_raw).strip() if isinstance(animation_raw, str) else ""
+    lead_ms_raw = captions.get("lead_ms")
+    lead_ms_val: int | None = None
+    if isinstance(lead_ms_raw, int | float):
+        lead_ms_val = int(lead_ms_raw)
+    elif isinstance(lead_ms_raw, str) and lead_ms_raw.strip().lstrip("-").isdigit():
+        lead_ms_val = int(lead_ms_raw)
+    banner_enabled_val = bool(banner.get("enabled")) if "enabled" in banner else None
+    banner_show_context_val = (
+        bool(banner.get("show_context")) if "show_context" in banner else None
+    )
+    banner_show_safezones_val = (
+        bool(banner.get("show_safezones")) if "show_safezones" in banner else None
+    )
 
-    # Build the caption_style dict once (used by both create and update
-    # branches). None when neither preset nor highlight color changed.
+    # Build the caption_style dict — now carries ALL four F.7-H knobs
+    # plus the legacy preset/highlight_color. The renderer + preview
+    # JS both read from this same dict via caption_style_or_default.
     caption_style_patch: dict[str, object] | None = None
-    if preset or hilite:
+    if preset or hilite or position or font_size or animation or lead_ms_val is not None:
         base = (
             caption_style_or_default(kit.caption_style).model_dump()
             if kit is not None
@@ -764,6 +786,14 @@ async def _persist_branding_to_brand_kit(
             base["preset_id"] = preset
         if hilite:
             base["highlight_color"] = hilite
+        if position:
+            base["position"] = position
+        if font_size:
+            base["font_size"] = font_size
+        if animation:
+            base["animation"] = animation
+        if lead_ms_val is not None:
+            base["lead_ms"] = lead_ms_val
         caption_style_patch = base
 
     handle_field = _platform_handle_field(platform)
@@ -777,7 +807,7 @@ async def _persist_branding_to_brand_kit(
         # subsequent clips inherit the chosen branding even if the
         # operator never visits /dashboard/brand_kits.
         try:
-            await repo.create(
+            new_kit = await repo.create(
                 name="Default",
                 primary_color=color or "#53FC18",
                 accent_color="#FFD700",
@@ -789,16 +819,36 @@ async def _persist_branding_to_brand_kit(
                 handle_instagram=handle_instagram,
             )
         except Exception:  # noqa: BLE001
-            pass
+            return
+        # The new toggle/platform fields aren't in `create()`'s signature
+        # (they're update-only). Apply them on the fresh row immediately.
+        if any(v is not None for v in [
+            platform or None, banner_enabled_val,
+            banner_show_context_val, banner_show_safezones_val,
+        ]):
+            try:
+                await repo.update(
+                    new_kit.id,
+                    default_platform=platform or None,
+                    banner_enabled_default=banner_enabled_val,
+                    banner_show_context_default=banner_show_context_val,
+                    banner_show_safezones_default=banner_show_safezones_val,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return
 
     # Existing default kit — partial update of just the fields the
     # operator changed in the editor. None-valued args are ignored by
     # BrandKitsRepo.update so we only touch what was provided.
-    if not any([
+    has_change = any([
         color, handle_kick, handle_tiktok, handle_youtube, handle_instagram,
-        caption_style_patch,
-    ]):
+        caption_style_patch, platform,
+        banner_enabled_val is not None,
+        banner_show_context_val is not None,
+        banner_show_safezones_val is not None,
+    ])
+    if not has_change:
         return
     try:
         await repo.update(
@@ -809,9 +859,123 @@ async def _persist_branding_to_brand_kit(
             handle_youtube=handle_youtube,
             handle_instagram=handle_instagram,
             caption_style=caption_style_patch,
+            default_platform=platform or None,
+            banner_enabled_default=banner_enabled_val,
+            banner_show_context_default=banner_show_context_val,
+            banner_show_safezones_default=banner_show_safezones_val,
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+@router.post(
+    "/me/brand-kit-prefs",
+    dependencies=[Depends(require_full_scope)],
+)
+async def me_brand_kit_prefs(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice H.1 — auto-save endpoint for the editor's right panel.
+
+    The clip-editor JS debounce-calls this on every form change so the
+    operator's setup (URL, banner toggle, caption position / font size
+    / animation / lead-time, etc.) lands in the tenant's default
+    brand_kit immediately. The brand_kit becomes the canonical source
+    of truth for user-level setup; every new clip's editor reads from
+    it on render.
+
+    Body is a single-field JSON patch:
+
+        { "field": "banner_url",  "value": "aldovillanueva" }
+        { "field": "banner_enabled", "value": true }
+        { "field": "captions_lead_ms", "value": 150 }
+
+    Returns `{"ok": true}` on success. Failures return a 400 so the JS
+    can surface the error inline without breaking the page.
+
+    SINGLE source of truth: this endpoint and the existing
+    `_persist_branding_to_brand_kit` (which fires on Save Draft /
+    Finalize) both write to the same brand_kit columns — no risk of
+    drift because the brand_kit row is the only writer destination.
+    """
+    import json as _json
+
+    body_bytes = await request.body()
+    try:
+        body = _json.loads(body_bytes or b"{}")
+    except _json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    field = str(body.get("field") or "").strip()
+    value: object = body.get("value")
+    if not field:
+        raise HTTPException(status_code=400, detail="missing 'field'")
+
+    # Wrap the single-field patch into the same `cfg` shape that
+    # `_persist_branding_to_brand_kit` already knows how to consume.
+    # That keeps the brand-kit-write logic in exactly one place.
+    cfg: dict[str, object] = {"banner": {}, "captions": {}}
+    banner_block: dict[str, object] = cfg["banner"]   # type: ignore[assignment]
+    captions_block: dict[str, object] = cfg["captions"]  # type: ignore[assignment]
+
+    _BANNER_FIELDS = {
+        "banner_enabled": ("enabled", bool),
+        "banner_platform": ("platform", str),
+        "banner_url": ("url", str),
+        "banner_color": ("color", str),
+        "banner_show_context": ("show_context", bool),
+        "banner_show_safezones": ("show_safezones", bool),
+    }
+    _CAPTION_FIELDS = {
+        "captions_preset": ("preset", str),
+        "captions_highlight_color": ("highlight_color", str),
+        "captions_position": ("position", str),
+        "captions_font_size": ("font_size", str),
+        "captions_animation": ("animation", str),
+        "captions_lead_ms": ("lead_ms", int),
+    }
+
+    if field in _BANNER_FIELDS:
+        key, kind = _BANNER_FIELDS[field]
+        banner_block[key] = _coerce(value, kind)
+    elif field in _CAPTION_FIELDS:
+        key, kind = _CAPTION_FIELDS[field]
+        captions_block[key] = _coerce(value, kind)
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown field {field!r}")
+
+    await _persist_branding_to_brand_kit(db, cfg)
+    return Response(
+        content='{"ok": true}',
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _coerce(value: object, kind: type) -> object:
+    """Best-effort JSON value → target type. Falsy strings collapse to
+    None so an empty input clears a setting instead of writing ''."""
+    if kind is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "on", "yes")
+        return bool(value)
+    if kind is int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int | float):
+            return int(value)
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+        return 0
+    if kind is str:
+        return str(value).strip() if value is not None else ""
+    return value
 
 
 @router.post(
@@ -1542,41 +1706,18 @@ async def calibration_view(
     )
 
 
-@router.patch(
-    "/clips/{clip_id}/status",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_full_scope)],
-)
-async def clip_status_patch(
-    request: Request,
-    clip_id: str,
-    to: str,
-    tenant_id: str = Depends(tenant_binder),
-    db: Database = Depends(get_db),
-) -> Response:
-    """HTMX target - returns just the status badge so the page updates in place."""
-    clip = await ClipsRepo(db).get(clip_id)
-    if clip is None:
-        raise HTTPException(status_code=404, detail="clip not found")
-    allowed = _VALID_STATUS_TRANSITIONS.get(clip.status, set())
-    if to not in allowed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"cannot transition from {clip.status!r} to {to!r}",
-        )
-    conn = await db.connect()
-    await conn.execute(
-        "UPDATE clips SET status = ? WHERE id = ? AND tenant_id = ?",
-        (to, clip_id, tenant_id),
-    )
-    await conn.commit()
-    await EventsRepo(db).emit(
-        type=f"clip.{to}",
-        payload={"clip_id": clip_id, "from": clip.status, "to": to},
-    )
-    return HTMLResponse(
-        f'<span class="status-badge status-{to}" id="clip-status">{to}</span>'
-    )
+# Slice H.1 — manual status transitions removed.
+# Status now derives entirely from the lifecycle handlers:
+#   - cut/ready_for_review → approved : via clip_overlay_finalize ("Ship")
+#   - any              → rejected : via clip_reject ("Reject & close")
+#   - approved         → published: via the publish worker after a
+#                                   successful platform post
+# The legacy PATCH /clips/{id}/status endpoint + dashboard panel are
+# gone. The full lifecycle table still lives in
+# nexoclip.api.routers.clips._VALID_STATUS_TRANSITIONS for the
+# bearer-token JSON API path (PATCH /api/clips/{id}/status) — that
+# stays available for headless automations; only the dashboard's
+# manual-clicker is removed.
 
 
 @router.post(

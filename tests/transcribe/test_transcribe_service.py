@@ -1,4 +1,9 @@
-"""Tests for `transcribe()` with WhisperModel stubbed out."""
+"""Tests for `transcribe()` with WhisperModel stubbed out.
+
+Slice F.8 — `transcribe()` now routes through a `TranscribeProvider`.
+For tests we still monkeypatch the in-process Whisper call, but the
+hook moved into `nexoclip.transcribe.providers.local_whisper`.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,6 @@ import pytest
 from nexoclip.errors import TranscriptionError
 from nexoclip.ingest import Stream
 from nexoclip.transcribe import Transcript, transcribe
-from nexoclip.transcribe import service as transcribe_service
 
 from ._fakes import FakeInfo, FakeSegment, FakeWhisperModel, FakeWord
 
@@ -40,12 +44,25 @@ def _make_stream(tmp_path: Path, *, tenant_id: str = "default") -> Stream:
 
 @pytest.fixture(autouse=True)
 def _patch_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Force in-process Whisper so the FakeWhisperModel monkeypatch below
-    # actually intercepts the call. Production default is subprocess-
-    # isolated; tests need to bypass that to inject the fake.
-    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
+    # Slice F.8 — patch `faster_whisper.WhisperModel` directly since
+    # the local provider lazy-imports it inside `_run_inprocess`.
+    # Force the provider's subprocess flag off so the fake intercepts.
+    import sys
+    import types
+
+    fw = sys.modules.get("faster_whisper")
+    if fw is None:
+        fw = types.ModuleType("faster_whisper")
+        sys.modules["faster_whisper"] = fw
     FakeWhisperModel.reset()
-    monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
+    monkeypatch.setattr(fw, "WhisperModel", FakeWhisperModel, raising=False)
+    # Force the provider into in-process mode for the test.
+    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_INPROCESS", "1")
+    # Defensive: invalidate the Settings singleton so the env-var pick-up
+    # actually happens (tests share a cached Settings instance).
+    from nexoclip.settings import get_settings
+
+    get_settings.cache_clear()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=10.5)
     FakeWhisperModel.canned_segments = [
         FakeSegment(
@@ -162,6 +179,9 @@ def test_transcribe_wraps_whisper_failure(
         def __init__(self, *_a: object, **_k: object) -> None:
             raise RuntimeError("CUDA out of memory")
 
-    monkeypatch.setattr(transcribe_service, "WhisperModel", BoomModel)
+    import sys
+
+    fw = sys.modules["faster_whisper"]
+    monkeypatch.setattr(fw, "WhisperModel", BoomModel, raising=False)
     with pytest.raises(TranscriptionError, match="Whisper failed to start"):
         asyncio.run(transcribe(tenant_id="default", stream=stream))

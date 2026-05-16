@@ -82,7 +82,7 @@ async def create_stream(
     row = await StreamsRepo(db).upsert(stream_to_row(stream))
     await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
 
-    runner = request.app.state.pipeline_runner
+    dispatcher = request.app.state.job_dispatcher
     kickoff = PipelineKickoff(
         tenant_id=tenant_id,
         stream=stream,
@@ -90,7 +90,7 @@ async def create_stream(
         output_dir=output_dir,
         language=payload.language,
     )
-    background_tasks.add_task(runner, kickoff)
+    await dispatcher.dispatch_pipeline(kickoff, background_tasks=background_tasks)
     return StreamResponse.model_validate(row.model_dump())
 
 
@@ -157,7 +157,7 @@ async def upload_stream(
     row = await StreamsRepo(db).upsert(stream_to_row(stream))
     await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
 
-    runner = request.app.state.pipeline_runner
+    dispatcher = request.app.state.job_dispatcher
     kickoff = PipelineKickoff(
         tenant_id=tenant_id,
         stream=stream,
@@ -165,7 +165,7 @@ async def upload_stream(
         output_dir=output_dir,
         language=language,
     )
-    background_tasks.add_task(runner, kickoff)
+    await dispatcher.dispatch_pipeline(kickoff, background_tasks=background_tasks)
     return StreamResponse.model_validate(row.model_dump())
 
 

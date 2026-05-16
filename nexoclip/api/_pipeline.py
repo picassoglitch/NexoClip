@@ -1,36 +1,14 @@
-"""PipelineKickoff bundle + default runner.
+"""PipelineKickoff bundle + default runner — re-export shim.
 
-Lives in its own module so `nexoclip.api.app` and the streams router can
-both import it without forming a circular dependency.
+The canonical home for these types is `nexoclip.jobs` (slice F.8).
+Existing imports `from nexoclip.api._pipeline import PipelineKickoff`
+keep working via the re-exports below; new code should import from
+`nexoclip.jobs` directly.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from nexoclip.ingest import Stream
-
-
-@dataclass(frozen=True)
-class PipelineKickoff:
-    """Inputs the API endpoint hands to `pipeline_runner` after ingest.
-
-    The stream is already on disk + persisted; the runner finishes the
-    pipeline (transcribe, detect, cut, variants).
-    """
-
-    tenant_id: str
-    stream: Stream
-    persona_id: str
-    output_dir: Path
-    language: str | None = None
-
-
-PipelineRunner = Callable[[PipelineKickoff], Awaitable[None]]
+from nexoclip.jobs import PipelineKickoff, PipelineRunner
 
 
 async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
@@ -57,3 +35,6 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
         language=kickoff.language,
         db_path=db_path,
     )
+
+
+__all__ = ["PipelineKickoff", "PipelineRunner", "default_pipeline_runner"]

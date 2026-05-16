@@ -178,15 +178,15 @@ async def streams_create(
 
     row = await StreamsRepo(db).upsert(stream_to_row(stream))
     await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
-    runner = request.app.state.pipeline_runner
-    background_tasks.add_task(
-        runner,
+    dispatcher = request.app.state.job_dispatcher
+    await dispatcher.dispatch_pipeline(
         PipelineKickoff(
             tenant_id=tenant_id,
             stream=stream,
             persona_id=persona_id,
             output_dir=output_dir,
         ),
+        background_tasks=background_tasks,
     )
     return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
 
@@ -240,15 +240,15 @@ async def streams_upload(
 
     row = await StreamsRepo(db).upsert(stream_to_row(stream))
     await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
-    runner = request.app.state.pipeline_runner
-    background_tasks.add_task(
-        runner,
+    dispatcher = request.app.state.job_dispatcher
+    await dispatcher.dispatch_pipeline(
         PipelineKickoff(
             tenant_id=tenant_id,
             stream=stream,
             persona_id=persona_id,
             output_dir=output_dir,
         ),
+        background_tasks=background_tasks,
     )
     return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
 
@@ -483,9 +483,8 @@ async def streams_rerun(
     if persona_row is not None and persona_row.primary_language:
         persona_language = persona_row.primary_language
 
-    runner = request.app.state.pipeline_runner
-    background_tasks.add_task(
-        runner,
+    dispatcher = request.app.state.job_dispatcher
+    await dispatcher.dispatch_pipeline(
         PipelineKickoff(
             tenant_id=tenant_id,
             stream=stream,
@@ -493,6 +492,7 @@ async def streams_rerun(
             output_dir=output_dir,
             language=persona_language,
         ),
+        background_tasks=background_tasks,
     )
     await EventsRepo(db).emit(
         type="stream.rerun_requested", payload={"stream_id": stream_id}

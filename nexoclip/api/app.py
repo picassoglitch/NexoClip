@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import Database
+from nexoclip.jobs import InProcessJobDispatcher, JobDispatcher, get_dispatcher
 
 from ._pipeline import PipelineKickoff, PipelineRunner, default_pipeline_runner
 from .auth import BearerAuthMiddleware
@@ -42,6 +43,7 @@ def create_app(
     *,
     db: Database,
     pipeline_runner: PipelineRunner | None = None,
+    job_dispatcher: JobDispatcher | None = None,
     enable_background_drains: bool = False,
     publish_interval_s: float = 60.0,
     webhook_interval_s: float = 30.0,
@@ -51,7 +53,11 @@ def create_app(
 
     Args:
         db: Pre-opened DB.
-        pipeline_runner: Override `process_vod` for tests.
+        pipeline_runner: Override `process_vod` for tests. Used to
+            construct the default in-process dispatcher when
+            `job_dispatcher` isn't supplied.
+        job_dispatcher: Override the JobDispatcher for tests. Production
+            picks one via `Settings.job_dispatcher` (slice F.8).
         enable_background_drains: When True, the lifespan starts three
             drain loops (publish_jobs, webhook dispatch, metrics ingest)
             for every active tenant. Tests leave this off so the loops
@@ -76,7 +82,21 @@ def create_app(
 
     app = FastAPI(title="NexoClip API", version="0.1.0", lifespan=lifespan)
     app.state.db = db
-    app.state.pipeline_runner = pipeline_runner or default_pipeline_runner
+
+    # Slice F.8 — JobDispatcher abstraction. The legacy
+    # `app.state.pipeline_runner` callable stays for backward-compat
+    # with tests + the old `from nexoclip.api._pipeline import ...`
+    # imports; new code reads `app.state.job_dispatcher`.
+    runner = pipeline_runner or default_pipeline_runner
+    app.state.pipeline_runner = runner
+    if job_dispatcher is None:
+        # Honor the Settings-driven choice; fall back to in-process if
+        # the configured impl raises (e.g. Modal stub not wired yet).
+        try:
+            job_dispatcher = get_dispatcher(runner=runner)
+        except Exception:  # noqa: BLE001 — defensive boot
+            job_dispatcher = InProcessJobDispatcher(runner)
+    app.state.job_dispatcher = job_dispatcher
 
     app.add_middleware(BearerAuthMiddleware, db=db)
 

@@ -1,0 +1,149 @@
+"""Unit tests for the F.8 JobDispatcher abstraction."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from nexoclip.errors import NexoClipError
+from nexoclip.jobs import (
+    InProcessJobDispatcher,
+    ModalJobDispatcher,
+    PipelineKickoff,
+    get_dispatcher,
+)
+from nexoclip.settings import get_settings
+
+
+@dataclass
+class _FakeStream:
+    """Duck-typed stand-in for nexoclip.ingest.Stream that PipelineKickoff
+    only needs as an opaque attribute — the dispatcher never inspects it."""
+
+    id: str = "str_TEST"
+    vod_url: str = "upload://test.mp4"
+
+
+@dataclass
+class _RunnerProbe:
+    """Captures everything the dispatcher passes to the runner."""
+
+    calls: list[PipelineKickoff] = field(default_factory=list)
+
+    async def __call__(self, kickoff: PipelineKickoff) -> None:
+        self.calls.append(kickoff)
+
+
+class _FakeBackgroundTasks:
+    """Mimics FastAPI.BackgroundTasks.add_task — captures the coro
+    instead of scheduling it so the test can inspect deferral."""
+
+    def __init__(self) -> None:
+        self.deferred: list[tuple[object, tuple[object, ...]]] = []
+
+    def add_task(self, func: object, *args: object) -> None:
+        self.deferred.append((func, args))
+
+
+def _make_kickoff() -> PipelineKickoff:
+    return PipelineKickoff(
+        tenant_id="ten_TEST",
+        stream=cast("object", _FakeStream()),  # type: ignore[arg-type]
+        persona_id="per_TEST",
+        output_dir=Path("./out"),
+        language="es",
+    )
+
+
+# ---- InProcessJobDispatcher ----
+
+
+def test_in_process_with_background_tasks_defers_call() -> None:
+    """API path: when BackgroundTasks is provided, the dispatcher must
+    NOT run the runner inline — it defers via add_task so the HTTP
+    response goes out first."""
+    probe = _RunnerProbe()
+    bt = _FakeBackgroundTasks()
+    dispatcher = InProcessJobDispatcher(probe)
+    kickoff = _make_kickoff()
+
+    asyncio.run(dispatcher.dispatch_pipeline(kickoff, background_tasks=bt))  # type: ignore[arg-type]
+
+    assert len(probe.calls) == 0, "runner ran inline; should have been deferred"
+    assert len(bt.deferred) == 1
+    func, args = bt.deferred[0]
+    assert func is probe
+    assert args == (kickoff,)
+
+
+def test_in_process_without_background_tasks_runs_inline() -> None:
+    """CLI / test path: without BackgroundTasks the dispatcher awaits
+    the runner directly so callers can synchronously verify the run."""
+    probe = _RunnerProbe()
+    dispatcher = InProcessJobDispatcher(probe)
+    kickoff = _make_kickoff()
+
+    asyncio.run(dispatcher.dispatch_pipeline(kickoff, background_tasks=None))
+
+    assert probe.calls == [kickoff]
+
+
+def test_in_process_name_is_stable() -> None:
+    """Logs + telemetry depend on a stable name."""
+    assert InProcessJobDispatcher(lambda _: asyncio.sleep(0)).name == "in-process"
+
+
+# ---- ModalJobDispatcher (stub) ----
+
+
+def test_modal_raises_until_wired() -> None:
+    """Modal dispatcher is a stub; trying to use it before F.10+ must
+    fail loudly with an actionable message, not silently drop the job."""
+    dispatcher = ModalJobDispatcher()
+    with pytest.raises(NexoClipError, match="ModalJobDispatcher is a stub"):
+        asyncio.run(dispatcher.dispatch_pipeline(_make_kickoff()))
+
+
+def test_modal_name_is_stable() -> None:
+    assert ModalJobDispatcher().name == "modal"
+
+
+# ---- factory.get_dispatcher ----
+
+
+def test_factory_defaults_to_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No env override → in-process dispatcher."""
+    monkeypatch.delenv("NEXOCLIP_JOB_DISPATCHER", raising=False)
+    get_settings.cache_clear()
+    probe = _RunnerProbe()
+    d = get_dispatcher(runner=probe)
+    assert isinstance(d, InProcessJobDispatcher)
+
+
+def test_factory_picks_modal_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """NEXOCLIP_JOB_DISPATCHER=modal → ModalJobDispatcher (still raises
+    on dispatch, but the factory must return the right impl)."""
+    monkeypatch.setenv("NEXOCLIP_JOB_DISPATCHER", "modal")
+    get_settings.cache_clear()
+    d = get_dispatcher(runner=None)
+    assert isinstance(d, ModalJobDispatcher)
+
+
+def test_factory_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXOCLIP_JOB_DISPATCHER", "kubernetes")
+    get_settings.cache_clear()
+    with pytest.raises(NexoClipError, match="unknown job_dispatcher"):
+        get_dispatcher(runner=None)
+
+
+def test_factory_requires_runner_for_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-process needs an actual runner to wrap; calling without one
+    is a programmer error and should error early, not at dispatch time."""
+    monkeypatch.delenv("NEXOCLIP_JOB_DISPATCHER", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(NexoClipError, match="runner"):
+        get_dispatcher(runner=None)

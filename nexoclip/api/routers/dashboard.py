@@ -626,6 +626,10 @@ def _parse_overlay_form(
     captions_enabled: str,
     captions_preset: str,
     captions_highlight_color: str,
+    captions_position: str = "",
+    captions_font_size: str = "",
+    captions_animation: str = "",
+    captions_lead_ms: int = 120,
     comments_show: str,
     comments_fake_likes: int,
 ) -> dict[str, object]:
@@ -661,6 +665,21 @@ def _parse_overlay_form(
             "enabled": _bool(captions_enabled),
             "preset": captions_preset.strip() or None,
             "highlight_color": captions_highlight_color.strip() or None,
+            # Slice F.7-H — read-ahead + visual knobs. Each is None when
+            # blank so the renderer/template falls back to the brand-kit
+            # caption_style defaults (no overlapping sources of truth).
+            "position": (captions_position.strip().lower() or None)
+                if captions_position in (
+                    "upper_third", "centered", "lower_third", "bottom"
+                ) else None,
+            "font_size": (captions_font_size.strip().lower() or None)
+                if captions_font_size in ("small", "medium", "large", "xl") else None,
+            "animation": (captions_animation.strip().lower() or None)
+                if captions_animation in ("pop", "slide", "typewriter", "fade") else None,
+            # Clamp 0..500ms — beyond 500ms the read-ahead is so far
+            # ahead it stops being "anticipation" and starts being
+            # "spoiler"; pre-roll captions are no longer in sync.
+            "lead_ms": max(0, min(500, int(captions_lead_ms))),
         },
         "comments": {
             "show_overlay": _bool(comments_show),
@@ -732,28 +751,43 @@ async def _persist_branding_to_brand_kit(
     hilite_raw = captions.get("highlight_color")
     hilite = str(hilite_raw).strip() if isinstance(hilite_raw, str) else ""
 
+    # Build the caption_style dict once (used by both create and update
+    # branches). None when neither preset nor highlight color changed.
+    caption_style_patch: dict[str, object] | None = None
+    if preset or hilite:
+        base = (
+            caption_style_or_default(kit.caption_style).model_dump()
+            if kit is not None
+            else caption_style_or_default(None).model_dump()
+        )
+        if preset:
+            base["preset_id"] = preset
+        if hilite:
+            base["highlight_color"] = hilite
+        caption_style_patch = base
+
+    handle_field = _platform_handle_field(platform)
+    handle_kick = url if handle_field == "handle_kick" and url else None
+    handle_tiktok = url if handle_field == "handle_tiktok" and url else None
+    handle_youtube = url if handle_field == "handle_youtube" and url else None
+    handle_instagram = url if handle_field == "handle_instagram" and url else None
+
     if kit is None:
         # Auto-create the tenant's default kit on first save so
         # subsequent clips inherit the chosen branding even if the
         # operator never visits /dashboard/brand_kits.
-        kwargs: dict[str, object] = {
-            "name": "Default",
-            "primary_color": color or "#53FC18",
-            "accent_color": "#FFD700",
-            "is_default": True,
-        }
-        if preset or hilite:
-            base = caption_style_or_default(None).model_dump()
-            if preset:
-                base["preset_id"] = preset
-            if hilite:
-                base["highlight_color"] = hilite
-            kwargs["caption_style"] = base
-        handle_field = _platform_handle_field(platform)
-        if handle_field and url:
-            kwargs[handle_field] = url
         try:
-            await repo.create(**kwargs)
+            await repo.create(
+                name="Default",
+                primary_color=color or "#53FC18",
+                accent_color="#FFD700",
+                is_default=True,
+                caption_style=caption_style_patch,
+                handle_kick=handle_kick,
+                handle_tiktok=handle_tiktok,
+                handle_youtube=handle_youtube,
+                handle_instagram=handle_instagram,
+            )
         except Exception:  # noqa: BLE001
             pass
         return
@@ -761,24 +795,21 @@ async def _persist_branding_to_brand_kit(
     # Existing default kit — partial update of just the fields the
     # operator changed in the editor. None-valued args are ignored by
     # BrandKitsRepo.update so we only touch what was provided.
-    update_kwargs: dict[str, object] = {}
-    if color:
-        update_kwargs["primary_color"] = color
-    handle_field = _platform_handle_field(platform)
-    if handle_field and url:
-        update_kwargs[handle_field] = url
-    if preset or hilite:
-        style = (kit.caption_style or {}).copy() if kit.caption_style else {}
-        if preset:
-            style["preset_id"] = preset
-        if hilite:
-            style["highlight_color"] = hilite
-        if style:
-            update_kwargs["caption_style"] = style
-    if not update_kwargs:
+    if not any([
+        color, handle_kick, handle_tiktok, handle_youtube, handle_instagram,
+        caption_style_patch,
+    ]):
         return
     try:
-        await repo.update(kit.id, **update_kwargs)
+        await repo.update(
+            kit.id,
+            primary_color=color or None,
+            handle_kick=handle_kick,
+            handle_tiktok=handle_tiktok,
+            handle_youtube=handle_youtube,
+            handle_instagram=handle_instagram,
+            caption_style=caption_style_patch,
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -800,6 +831,10 @@ async def clip_overlay_save(
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
+    captions_position: str = Form(""),
+    captions_font_size: str = Form(""),
+    captions_animation: str = Form(""),
+    captions_lead_ms: int = Form(120),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -820,6 +855,10 @@ async def clip_overlay_save(
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,
+        captions_position=captions_position,
+        captions_font_size=captions_font_size,
+        captions_animation=captions_animation,
+        captions_lead_ms=captions_lead_ms,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
@@ -847,6 +886,10 @@ async def clip_overlay_finalize(
     captions_enabled: str = Form(""),
     captions_preset: str = Form(""),
     captions_highlight_color: str = Form(""),
+    captions_position: str = Form(""),
+    captions_font_size: str = Form(""),
+    captions_animation: str = Form(""),
+    captions_lead_ms: int = Form(120),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -890,6 +933,10 @@ async def clip_overlay_finalize(
         captions_enabled=captions_enabled,
         captions_preset=captions_preset,
         captions_highlight_color=captions_highlight_color,
+        captions_position=captions_position,
+        captions_font_size=captions_font_size,
+        captions_animation=captions_animation,
+        captions_lead_ms=captions_lead_ms,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
@@ -917,6 +964,49 @@ async def clip_overlay_finalize(
         },
     )
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
+
+
+@router.post(
+    "/clips/{clip_id}/reject",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_reject(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice F.7-H — one-click reject + close editor.
+
+    Forces the clip into `rejected` (any valid in-bound transition is
+    accepted; we don't fight the operator's intent), emits the
+    `clip.rejected` event for the audit trail, and redirects the
+    browser back to the stream page so the editor closes immediately.
+    The stream-page clip card shows the REJECTED stamp via its
+    `data-status="rejected"` overlay.
+    """
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if clip.status != "rejected":
+        # Skip the strict transition map — reject from ANY state is a
+        # destination, not an intermediate step. The transitions table
+        # only allows `cut -> rejected` and `ready_for_review -> rejected`
+        # today; we extend that for the operator's one-click flow.
+        conn = await db.connect()
+        await conn.execute(
+            "UPDATE clips SET status = ? WHERE id = ? AND tenant_id = ?",
+            ("rejected", clip_id, tenant_id),
+        )
+        await conn.commit()
+        await EventsRepo(db).emit(
+            type="clip.rejected",
+            payload={"clip_id": clip_id, "from": clip.status, "to": "rejected"},
+        )
+    return RedirectResponse(
+        url=f"/dashboard/streams/{clip.stream_id}", status_code=303
+    )
 
 
 async def _burn_overlays_for_clip(

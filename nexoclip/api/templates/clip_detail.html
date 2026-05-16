@@ -121,6 +121,30 @@
   .nc-pv-caption__word.is-past { opacity: 0.40; }
   .nc-pv-caption__word.is-upcoming { opacity: 0.85; }
 
+  /* Slice F.7-H — operator-set font-size scaling. JS writes a CSS
+     custom property `--pv-caption-scale` (0.78 / 1.0 / 1.24 / 1.5)
+     that multiplies the base font size. Letterspacing widens at XL
+     so the captions feel intentional, not just zoomed. */
+  .nc-pv-caption { font-size: calc(22px * var(--pv-caption-scale, 1)); }
+  .nc-pv-caption[data-animation="slide"] .nc-pv-caption__word.is-active {
+    animation: nc-caption-slide 0.18s ease-out;
+  }
+  .nc-pv-caption[data-animation="typewriter"] .nc-pv-caption__word.is-active {
+    animation: none;
+    border-right: 2px solid var(--pv-highlight, #FFD700);
+  }
+  .nc-pv-caption[data-animation="fade"] .nc-pv-caption__word.is-active {
+    animation: nc-caption-fade 0.25s ease-in;
+  }
+  @keyframes nc-caption-slide {
+    from { transform: translateY(8px) scale(1.0); opacity: 0; }
+    to   { transform: translateY(0)    scale(1.15); opacity: 1; }
+  }
+  @keyframes nc-caption-fade {
+    from { opacity: 0.2; }
+    to   { opacity: 1; }
+  }
+
   /* Right-side rail (likes / comments / share — the Reels reference) */
   .nc-pv-rail {
     position: absolute;
@@ -680,6 +704,72 @@
                    id="ctl-captions-highlight"
                    value="{{ captions.get('highlight_color') or caption_style.highlight_color }}">
           </label>
+
+          {# Slice F.7-H — operator controls for caption presentation.
+             These four knobs together cover ~all CapCut / Submagic
+             surface area we care about:
+               - position: where on the frame
+               - font_size: visual weight
+               - animation: per-word entrance motion
+               - lead_ms: read-ahead anticipation (positive = words
+                 pop in BEFORE they're spoken; 80–150ms is the
+                 industry default for "kinetic feel")
+             All four flow into both the live preview (CSS classes
+             + JS time offset) AND the ASS burn (\fs / \fad / shifted
+             \kf), so the operator sees what publishes. #}
+          <label class="nc-label">Position
+            <select class="nc-select" name="captions_position" id="ctl-captions-position">
+              {% set _cur_pos = captions.get('position') or caption_style.position %}
+              {% for opt_id, opt_label in [
+                ('upper_third', 'Upper third — top of subject'),
+                ('centered',    'Centered — middle of frame'),
+                ('lower_third', 'Lower third — under face'),
+                ('bottom',      'Bottom — above platform UI'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_pos == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="nc-label">Font size
+            <select class="nc-select" name="captions_font_size" id="ctl-captions-font-size">
+              {% set _cur_size = captions.get('font_size') or 'medium' %}
+              {% for opt_id, opt_label in [
+                ('small',  'S — subtle subtitle'),
+                ('medium', 'M — default (balanced)'),
+                ('large',  'L — punchy'),
+                ('xl',     'XL — full-frame impact'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_size == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="nc-label">Animation
+            <select class="nc-select" name="captions_animation" id="ctl-captions-animation">
+              {% set _cur_anim = captions.get('animation') or caption_style.animation or 'pop' %}
+              {% for opt_id, opt_label in [
+                ('pop',        'Pop — scale bounce on active word'),
+                ('slide',      'Slide — words slide up into place'),
+                ('typewriter', 'Typewriter — letter-by-letter reveal'),
+                ('fade',       'Fade — soft cross-fade between words'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_anim == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="nc-label">Lead-time (ms before said)
+            <input class="nc-input"
+                   type="number"
+                   min="0" max="500" step="10"
+                   name="captions_lead_ms"
+                   id="ctl-captions-lead-ms"
+                   value="{{ captions.get('lead_ms', 120) }}">
+            <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
+              0 = caption appears as the word is spoken · 120ms = reads slightly ahead (recommended) · 250ms+ = strong anticipation
+            </small>
+          </label>
         </div>
       </div>
 
@@ -767,12 +857,27 @@
           <i class="ti ti-device-floppy" aria-hidden="true"></i>
           <span>Save draft</span>
         </button>
+        {# Slice F.7-H — one-click reject. Lives in its OWN form
+           (`formaction` would inherit the outer form's many caption /
+           branding fields and re-save them on a reject, which the
+           operator definitely doesn't want). The endpoint flips
+           status=rejected and 303-redirects to the stream page so the
+           editor closes itself. #}
+        <button type="button"
+                onclick="document.getElementById('reject-form').submit();"
+                class="nc-btn nc-btn--danger nc-btn--full"
+                style="margin-top: 8px;">
+          <i class="ti ti-x" aria-hidden="true"></i>
+          <span>Reject &amp; close</span>
+        </button>
       </div>
 
     </div>
 
   </div>
 </form>
+
+<form id="reject-form" action="/dashboard/clips/{{ clip.id }}/reject" method="post" style="display: none;"></form>
 
 {# ---- Variants picker (kept from the old layout) -------------- #}
 <div class="nc-panel">
@@ -982,6 +1087,13 @@
   var ctlBannerColor  = document.getElementById("ctl-banner-color");
   var ctlCaptionsOn   = document.getElementById("ctl-captions-on");
   var ctlCaptionsHl   = document.getElementById("ctl-captions-highlight");
+  // Slice F.7-H — new caption surface knobs. All optional; missing
+  // controls fall back to sensible defaults so the editor doesn't
+  // hard-fail on a stale partial template.
+  var ctlCaptionsPos  = document.getElementById("ctl-captions-position");
+  var ctlCaptionsSize = document.getElementById("ctl-captions-font-size");
+  var ctlCaptionsAnim = document.getElementById("ctl-captions-animation");
+  var ctlCaptionsLead = document.getElementById("ctl-captions-lead-ms");
   var ctlCommentsOn   = document.getElementById("ctl-comments-on");
   var ctlCommentsLk   = document.getElementById("ctl-comments-likes");
   var ctlContextOn    = document.getElementById("ctl-context-on");
@@ -1008,6 +1120,31 @@
   function syncCaptions() {
     pvCaption.style.display = ctlCaptionsOn.checked ? "" : "none";
     preview.style.setProperty("--pv-highlight", ctlCaptionsHl.value);
+    // Slice F.7-H — push position / font-size / animation knobs onto
+    // the live preview so the operator sees their tweaks immediately
+    // instead of waiting for a save round-trip. Position swaps the
+    // pv-caption class (each --upper_third / --centered / --lower_third /
+    // --bottom is already in the stylesheet from F.7-F). Font-size is a
+    // multiplier on the base scale via a CSS custom property; animation
+    // is a data attribute the CSS hooks for keyframes.
+    if (ctlCaptionsPos && pvCaption) {
+      var pos = ctlCaptionsPos.value || "lower_third";
+      pvCaption.className = pvCaption.className
+        .replace(/nc-pv-caption--\S+/g, "")
+        .trim() + " nc-pv-caption nc-pv-caption--" + pos;
+      pvCaption.setAttribute("data-position", pos);
+    }
+    if (ctlCaptionsSize && pvCaption) {
+      var sizeScale = ({small: 0.78, medium: 1.0, large: 1.24, xl: 1.5}
+        )[ctlCaptionsSize.value] || 1.0;
+      pvCaption.style.setProperty("--pv-caption-scale", String(sizeScale));
+    }
+    if (ctlCaptionsAnim && pvCaption) {
+      pvCaption.setAttribute("data-animation", ctlCaptionsAnim.value || "pop");
+    }
+    // Re-paint the current frame immediately so e.g. dragging the
+    // lead-time slider scrubs the active word forward/back live.
+    if (typeof syncCaptionFrame === "function") syncCaptionFrame();
   }
   function syncComments() {
     pvRail.style.display = ctlCommentsOn.checked ? "" : "none";
@@ -1046,6 +1183,12 @@
   });
   ctlCaptionsOn.addEventListener("change", syncCaptions);
   ctlCaptionsHl.addEventListener("input", syncCaptions);
+  if (ctlCaptionsPos)  ctlCaptionsPos.addEventListener("change", syncCaptions);
+  if (ctlCaptionsSize) ctlCaptionsSize.addEventListener("change", syncCaptions);
+  if (ctlCaptionsAnim) ctlCaptionsAnim.addEventListener("change", syncCaptions);
+  if (ctlCaptionsLead) ctlCaptionsLead.addEventListener("input", function () {
+    if (typeof syncCaptionFrame === "function") syncCaptionFrame();
+  });
   ctlCommentsOn.addEventListener("change", syncComments);
   ctlCommentsLk.addEventListener("input", syncComments);
   if (ctlContextOn) ctlContextOn.addEventListener("change", syncContext);
@@ -1268,7 +1411,18 @@
       }
       return;
     }
-    var t = video.currentTime;
+    // Slice F.7-H — lead-time: the operator wants words to APPEAR
+    // a few hundred ms before they're spoken so viewers can read
+    // ahead. We implement this by shifting the lookup time FORWARD —
+    // at clock time t, render the word whose ts is `lead_ms` from now.
+    // Equivalent to subtracting `lead_ms` from each word's ts but
+    // doesn't require rebuilding the line array on every drag.
+    var leadMs = 0;
+    if (ctlCaptionsLead) {
+      var parsed = parseInt(ctlCaptionsLead.value, 10);
+      if (isFinite(parsed)) leadMs = Math.max(0, Math.min(500, parsed));
+    }
+    var t = video.currentTime + (leadMs / 1000);
     // Find the line whose window contains t. Linear scan is fine —
     // a clip has at most ~50 lines.
     var newIdx = -1;

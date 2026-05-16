@@ -800,6 +800,35 @@ hr {
      * the page. The card width tops out at 180px (nc-clip-card max),
      * so 9:16 height = ~320px max — still very readable. */
     max-height: 280px;
+    position: relative;   /* anchor for the REJECTED stamp */
+}
+
+/* Slice F.7-H — rejected state on the stream-page clip card.
+ * The thumbnail desaturates so a rejected clip reads at a glance,
+ * and a diagonal REJECTED stamp sits across it. Matches the visual
+ * language of physical "VOID" / "DECLINED" stamps so the operator
+ * doesn't have to read the small status chip below. */
+.nc-clip-card--rejected .nc-clip-card__thumb img {
+    filter: grayscale(0.85) brightness(0.55);
+}
+.nc-clip-card__stamp {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-14deg);
+    padding: 6px 14px;
+    font-family: var(--nc-font-mono);
+    font-weight: 900;
+    font-size: 18px;
+    letter-spacing: 0.16em;
+    color: #ff3b30;
+    border: 3px solid #ff3b30;
+    background: rgba(20, 0, 0, 0.55);
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 0 0 1px rgba(255, 59, 48, 0.4);
+    pointer-events: none;
+    user-select: none;
+    z-index: 2;
 }
 .nc-clip-card__thumb img {
     width: 100%;

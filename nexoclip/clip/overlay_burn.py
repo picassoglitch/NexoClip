@@ -288,11 +288,33 @@ def _ass_escape(text: str) -> str:
     )
 
 
+_ASS_FONT_SIZE_SCALE: dict[str, float] = {
+    "small": 0.78,
+    "medium": 1.0,
+    "large": 1.24,
+    "xl": 1.5,
+}
+
+# Maps the editor's position dropdown → ASS MarginV. The values are
+# tuned for a 1080×1920 vertical canvas (`_ASS_PLAYRES_H = 1920`).
+# Larger MarginV = more space from the bottom = caption sits higher.
+_ASS_MARGIN_V_BY_POSITION: dict[str, int] = {
+    "bottom":      220,    # above the platform UI band, default
+    "lower_third": 700,    # ~63% from top — under the face
+    "centered":    960,    # dead center
+    "upper_third": 1280,   # ~33% from top
+}
+
+
 def build_ass(
     lines: Iterable[CaptionLine],
     *,
     playres_w: int = _ASS_PLAYRES_W,
     playres_h: int = _ASS_PLAYRES_H,
+    lead_ms: int = 0,
+    position: str = "bottom",
+    font_size: str = "medium",
+    animation: str = "pop",
 ) -> str:
     """Generate an ASS subtitle file with per-word karaoke + emphasis.
 
@@ -313,6 +335,25 @@ def build_ass(
     if not lines:
         return ""
 
+    # Slice F.7-H — operator-controlled rendering knobs.
+    lead_s = max(0, min(500, int(lead_ms))) / 1000.0
+    size_scale = _ASS_FONT_SIZE_SCALE.get(font_size, 1.0)
+    base_fontsize = round(_ASS_BASE_FONTSIZE * size_scale)
+    margin_v = _ASS_MARGIN_V_BY_POSITION.get(position, _ASS_BOTTOM_SAFE_MARGIN_V)
+    # Alignment 2 = bottom-center for "bottom" / "lower_third"; 5 = mid
+    # for "centered"; 8 = top-center for "upper_third". Anchor matters
+    # because MarginV is measured FROM the anchor — wrong anchor and
+    # the caption flips off-frame.
+    alignment = {"bottom": 2, "lower_third": 2, "centered": 5, "upper_third": 8}.get(
+        position, 2
+    )
+    # \fad(in_ms, out_ms) gives the "fade" animation per Dialogue.
+    # "pop" / "slide" / "typewriter" stay with the default \kf karaoke
+    # (the per-word fill animation handles "pop" implicitly; the
+    # template's CSS handles "slide" + "typewriter" for the preview;
+    # the burned MP4 keeps the karaoke fill as a sensible fallback).
+    line_fad = "{\\fad(180,0)}" if animation == "fade" else ""
+
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -326,11 +367,11 @@ def build_ass(
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
         "MarginL, MarginR, MarginV, Encoding",
-        # Base style: white-fill, black-outline, alignment 2 (bottom-
-        # center), high MarginV so captions sit above platform UI.
-        f"Style: Default,Arial,{_ASS_BASE_FONTSIZE},&H00FFFFFF,"
-        f"&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,"
-        f"40,40,{_ASS_BOTTOM_SAFE_MARGIN_V},1",
+        # Base style: white-fill, black-outline, alignment from above,
+        # MarginV from above.
+        f"Style: Default,Arial,{base_fontsize},&H00FFFFFF,"
+        f"&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,{alignment},"
+        f"40,40,{margin_v},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
@@ -339,32 +380,50 @@ def build_ass(
 
     events: list[str] = []
     for line in lines:
-        text = _ass_line_text(line)
+        # Shift all timings BACKWARD by lead_s so the caption appears
+        # `lead_s` seconds before the word is spoken (matches the
+        # preview's `t + lead/1000` lookup). Clamp to 0 so we never
+        # produce negative ASS timestamps.
+        ts = max(0.0, line.ts - lead_s)
+        end_ts = max(ts + 0.05, line.end_ts - lead_s)
+        text = _ass_line_text(line, base_fontsize=base_fontsize, lead_s=lead_s)
         events.append(
-            f"Dialogue: 0,{_ass_ts(line.ts)},{_ass_ts(line.end_ts)},"
-            f"Default,,0,0,0,,{text}"
+            f"Dialogue: 0,{_ass_ts(ts)},{_ass_ts(end_ts)},"
+            f"Default,,0,0,0,,{line_fad}{text}"
         )
 
     return "\n".join(header + events) + "\n"
 
 
-def _ass_line_text(line: CaptionLine) -> str:
+def _ass_line_text(
+    line: CaptionLine,
+    *,
+    base_fontsize: int = _ASS_BASE_FONTSIZE,
+    lead_s: float = 0.0,
+) -> str:
     """Compose the ASS dialogue text for one line — per-word
-    karaoke timings + emphasis-driven overrides."""
+    karaoke timings + emphasis-driven overrides.
+
+    `base_fontsize` is the after-scale base (font_size knob has
+    already been applied at the caller). `lead_s` matches the
+    Dialogue-level shift so the per-word \\kf values stay in
+    sync with the shifted line start.
+    """
     pieces: list[str] = []
-    line_start = line.ts
+    line_start = max(0.0, line.ts - lead_s)
     for i, w in enumerate(line.words):
         # Centiseconds the word holds (used by \kf for fill duration).
         cs = max(1, round((w.end_ts - w.ts) * 100))
         scale = _ASS_EMPHASIS_SCALE.get(w.emphasis, 1.0)
-        fontsize = round(_ASS_BASE_FONTSIZE * scale)
+        fontsize = round(base_fontsize * scale)
         color = _ASS_EMPHASIS_FILL.get(w.emphasis, "&H00FFFFFF")
         text = _ass_escape(w.text)
         # \kf needs to advance through the entire dialogue's duration.
         # Insert a leading silent-skip if there's a gap between the
         # line start and the word start (rare but happens).
-        if i == 0 and w.ts > line_start:
-            gap_cs = max(0, round((w.ts - line_start) * 100))
+        w_start = max(0.0, w.ts - lead_s)
+        if i == 0 and w_start > line_start:
+            gap_cs = max(0, round((w_start - line_start) * 100))
             if gap_cs > 0:
                 pieces.append(f"{{\\kf{gap_cs}}}")
         pieces.append(f"{{\\kf{cs}\\fs{fontsize}\\c{color}}}{text} ")
@@ -376,6 +435,10 @@ def captions_artifact_for_clip(
     *,
     clip_start_s: float,
     clip_end_s: float,
+    lead_ms: int = 0,
+    position: str = "bottom",
+    font_size: str = "medium",
+    animation: str = "pop",
 ) -> tuple[str, str]:
     """Return `(ass_or_srt_body, extension)` for the captions file
     the burn-in should write.
@@ -384,6 +447,10 @@ def captions_artifact_for_clip(
     has word-level data; falls back to SRT (segment-level only) when
     it doesn't. The ASS / SRT filter is identical from ffmpeg's
     perspective — same `subtitles=` directive.
+
+    Slice F.7-H — the four caption knobs (`lead_ms`, `position`,
+    `font_size`, `animation`) flow through to `build_ass` so the
+    burned MP4 matches what the operator sees in the editor preview.
     """
     if not transcript_segments_json:
         return "", "srt"
@@ -400,7 +467,13 @@ def captions_artifact_for_clip(
         for line in lines
     )
     if has_words:
-        return build_ass(lines), "ass"
+        return build_ass(
+            lines,
+            lead_ms=lead_ms,
+            position=position,
+            font_size=font_size,
+            animation=animation,
+        ), "ass"
 
     # Fall back to SRT (legacy segment-level) by going through the
     # same JSON the build_srt function consumes.
@@ -621,11 +694,27 @@ def burn_overlays(
 
         segments_list = [s for s in transcript_segments if isinstance(s, dict)]
         if segments_list:
+            # Slice F.7-H — pull the four caption knobs out of the
+            # overlay_config so the burn matches the editor preview
+            # (lead_ms shifts timings, position/font_size adjust the
+            # ASS style header, animation controls the entrance).
+            captions_cfg = overlay_config.get("captions") if isinstance(overlay_config, dict) else {}
+            captions_cfg = captions_cfg if isinstance(captions_cfg, dict) else {}
+            lead_ms_raw = captions_cfg.get("lead_ms", 0)
+            lead_ms_int = int(lead_ms_raw) if isinstance(lead_ms_raw, int | float | str) and str(lead_ms_raw).strip() else 0
+            position_str = str(captions_cfg.get("position") or "bottom")
+            font_size_str = str(captions_cfg.get("font_size") or "medium")
+            animation_str = str(captions_cfg.get("animation") or "pop")
+
             segments_json = _json.dumps(segments_list)
             body, ext = captions_artifact_for_clip(
                 segments_json,
                 clip_start_s=clip_start_s,
                 clip_end_s=clip_end_s,
+                lead_ms=lead_ms_int,
+                position=position_str,
+                font_size=font_size_str,
+                animation=animation_str,
             )
             if body:
                 captions_path = target_path.parent / f".captions.{ext}"

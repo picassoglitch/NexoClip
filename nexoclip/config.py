@@ -88,7 +88,14 @@ class VisualConfig(BaseModel):
     spikes (from `analyze-video`'s VisualSignalTrack) into Candidates.
     """
 
-    enabled: bool = False
+    # Slice F.7-H — flipped to True by default. The detector adds
+    # scene-cut + motion + face-emotion signals to the candidate set,
+    # which is essential for clips that are visually dramatic but
+    # don't have a loud voice / chat moment (silent dunks, jumpscares,
+    # reaction shots). It's a one-time-per-stream CPU cost capped by
+    # `timeout_s`, and the operator can set this False in nexoclip.yaml
+    # if they're running on an underpowered host.
+    enabled: bool = True
     weight: float = Field(default=0.6, ge=0.0, description="Outer multiplier on the visual score.")
     cut_weight: float = Field(default=1.0, ge=0.0)
     emotion_weight: float = Field(default=0.7, ge=0.0)

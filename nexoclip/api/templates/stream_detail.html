@@ -140,12 +140,19 @@
     {% if clips %}
     <div class="nc-inbox-grid">
       {% for c in clips %}
-      <div class="nc-clip-card">
+      <div class="nc-clip-card{% if c.status == 'rejected' %} nc-clip-card--rejected{% endif %}">
         <div class="nc-clip-card__thumb">
           {% if c.thumbnail_frame_path %}
           <img src="/dashboard/clips/{{ c.id }}/thumbnail" alt="thumb">
           {% else %}
           <i class="ti ti-photo-off" aria-hidden="true"></i>
+          {% endif %}
+          {# Slice F.7-H — REJECTED stamp diagonal across the thumb,
+             same visual language as "VOID" / "DECLINED" stamps. The
+             thumbnail also gets desaturated so a rejected clip reads
+             at a glance even without zooming in. #}
+          {% if c.status == 'rejected' %}
+          <div class="nc-clip-card__stamp">REJECTED</div>
           {% endif %}
         </div>
         <div class="nc-clip-card__time">

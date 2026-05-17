@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Render · {{ clip.id }}</title>
+  {#- Slice O.19 — dedicated render route.
+      Stripped-down page that renders ONLY the .nc-preview frame at
+      1080×1920 native, no editor chrome (nav, sidebar, tabs, controls).
+      Playwright opens this URL headless to record the preview as MP4
+      bytes (slice O.20). What you see here is what gets exported. -#}
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    /* ============================================================
+       Embedded fonts — same OFL set as clip_detail.html so the
+       worker's Chromium renders with IDENTICAL glyphs.
+       (Inter Black/ExtraBold, Inter Tight Black, Archivo Black.)
+       font-display: block prevents the FOUT frame from being
+       captured during the recording window.
+       ============================================================ */
+    @font-face {
+      font-family: "Inter";
+      src: url("/static/fonts/Inter-Black.ttf") format("truetype");
+      font-weight: 900;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("/static/fonts/Inter-ExtraBold.ttf") format("truetype");
+      font-weight: 800;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter Tight";
+      src: url("/static/fonts/InterTight-Black.ttf") format("truetype");
+      font-weight: 900;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Archivo Black";
+      src: url("/static/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+      font-weight: 900;
+      font-style: normal;
+      font-display: block;
+    }
+
+    /* Page reset: pure black background, zero margins, no scrollbars,
+       no smoothing artifacts. Body itself is the recording surface. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 1080px;
+      height: 1920px;
+      background: #000;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    /* Render-mode override of .nc-preview: drop max-width / aspect-ratio
+       / border-radius / box-shadow. Fixed 1080×1920 explicitly so the
+       container resolves cqw=10.8px / cqh=19.2px in every overlay. */
+    .nc-preview {
+      position: relative;
+      width: 1080px;
+      height: 1920px;
+      max-width: none;
+      margin: 0;
+      background: #000;
+      border-radius: 0;
+      overflow: hidden;
+      box-shadow: none;
+      container-type: size;
+      container-name: clipframe;
+    }
+    .nc-preview video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: 50% 28%;
+      z-index: 1;
+    }
+    .nc-preview[data-fit-mode="letterbox"] video {
+      object-fit: contain;
+      background: #000;
+    }
+    .nc-preview[data-fit-mode="blurred_bg"] video {
+      object-fit: contain;
+      object-position: 50% 38%;
+    }
+
+    /* In render mode, suppress every preview-only simulation layer.
+       Export carries: video + banner + captions + title hook + top
+       hook + watermark. NOT: safe-zone bands, heart counter, mute
+       icon, iPhone status bar, IG description chrome. */
+    [data-render-mode="export"] .nc-pv-zones,
+    [data-render-mode="export"] .nc-pv-ambient,
+    [data-render-mode="export"] .nc-pv-platform-sim,
+    [data-render-mode="export"] .nc-pv-rail {
+      display: none !important;
+    }
+
+    /* ============================================================
+       Identical overlay rules to clip_detail.html (slice O.18b
+       cqw/cqh values). When we evolve the editor's CSS we must
+       mirror those changes here — or factor into a shared partial.
+       For now: copy of the rules verbatim.
+       ============================================================ */
+
+    /* Title hook */
+    .nc-pv-title {
+      position: absolute;
+      top: 18%;
+      left: 10%;
+      right: 10%;
+      background: rgba(255, 255, 255, 0.96);
+      color: #000;
+      font-family: "Inter", sans-serif;
+      font-weight: 800;
+      font-size: 3.269cqw;
+      line-height: 1.22;
+      padding: 1.082cqh 2.692cqw;
+      border-radius: 2.308cqw;
+      text-align: center;
+      box-shadow:
+        0 0.325cqh 1.923cqw rgba(0, 0, 0, 0.55),
+        0 0.108cqh 0 rgba(0, 0, 0, 0.18) inset;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      z-index: 3;
+      pointer-events: none;
+    }
+    .nc-pv-title.is-empty { display: none; }
+    [data-zone-profile="kick"] .nc-pv-title { top: 14%; }
+    [data-face-zone="top"] .nc-pv-title { top: 46%; }
+
+    /* Top hook (secondary) */
+    .nc-pv-top-hook {
+      position: absolute;
+      top: 11%;
+      left: 14%;
+      right: 14%;
+      text-align: center;
+      font-family: "Inter", sans-serif;
+      font-weight: 800;
+      font-size: 2.115cqw;
+      letter-spacing: 0.02em;
+      line-height: 1.15;
+      padding: 0.433cqh 1.923cqw;
+      border-radius: 999px;
+      box-shadow: 0 0.216cqh 1.154cqw rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      z-index: 3;
+    }
+    [data-zone-profile="kick"] .nc-pv-top-hook { top: 8%; }
+    .nc-pv-top-hook--white_rounded {
+      background: rgba(255, 255, 255, 0.72);
+      color: #000;
+      backdrop-filter: blur(0.769cqw);
+    }
+    .nc-pv-top-hook--black_solid {
+      background: rgba(0, 0, 0, 0.62);
+      color: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(0.769cqw);
+    }
+    .nc-pv-top-hook--subtle {
+      background: rgba(255, 255, 255, 0.55);
+      color: #111;
+      backdrop-filter: blur(1.154cqw);
+    }
+
+    /* Banner (Kick repost variant) */
+    .nc-pv-banner {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 4.113cqh;
+      background: var(--pv-banner-color, #53FC18);
+      color: #000;
+      display: flex;
+      align-items: center;
+      z-index: 4;
+    }
+    .nc-pv-banner.is-hidden { display: none; }
+    .nc-pv-banner--kick_repost_page {
+      top: auto;
+      bottom: 18%;
+      transform: none;
+      left: 0;
+      right: 0;
+      background: #000;
+      color: #fff;
+      padding: 0;
+      height: 3.896cqh;
+      min-height: 3.896cqh;
+      max-height: 3.896cqh;
+      border-radius: 0;
+      border: none;
+      box-shadow: none;
+      overflow: visible;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
+      position: absolute;
+      left: 1.538cqw;
+      top: 50%;
+      transform: translateY(-62%);
+      width: 26.923cqw;
+      height: 4.762cqh;
+      color: transparent;
+      font-size: 0;
+      line-height: 0;
+      overflow: visible;
+      flex: none;
+      padding: 0;
+      background-image: url("/static/kick-logo.svg");
+      background-repeat: no-repeat;
+      background-position: left center;
+      background-size: contain;
+      filter:
+        drop-shadow(0.385cqw 0 0 #000)
+        drop-shadow(-0.385cqw 0 0 #000)
+        drop-shadow(0 0.216cqh 0 #000)
+        drop-shadow(0 -0.216cqh 0 #000)
+        drop-shadow(0 0.325cqh 0.769cqw rgba(0, 0, 0, 0.55));
+    }
+    .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
+      position: relative;
+      color: #fff;
+      font-family: "Inter Tight", "Inter", sans-serif;
+      font-size: 2.115cqw;
+      font-weight: 900;
+      letter-spacing: 0.038cqw;
+      line-height: 1;
+      text-transform: uppercase;
+      text-shadow: 0 0.108cqh 0.192cqw rgba(0, 0, 0, 0.9);
+      flex: none;
+      overflow: visible;
+      white-space: nowrap;
+      padding: 0;
+      opacity: 1;
+      text-align: center;
+    }
+
+    /* Captions */
+    .nc-pv-caption {
+      position: absolute;
+      left: 8%;
+      right: 8%;
+      text-align: center;
+      font-family: "Inter", sans-serif;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      color: #fff;
+      -webkit-text-stroke: 0.481cqw #000;
+      paint-order: stroke fill;
+      text-shadow:
+        0 0.325cqh 1.538cqw rgba(0, 0, 0, 0.85),
+        0 0.108cqh 0 rgba(0, 0, 0, 0.6);
+      font-size: calc(4.231cqw * var(--pv-caption-scale, 1));
+      line-height: 1.05;
+      pointer-events: none;
+      z-index: 3;
+    }
+    .nc-pv-caption--upper_third  { top: 24%; transform: translateY(0); }
+    .nc-pv-caption--centered     { top: 50%; transform: translateY(-50%); }
+    .nc-pv-caption--lower_third  { top: 68%; transform: translateY(-50%); }
+    .nc-pv-caption--bottom       { top: 78%; transform: translateY(-50%); }
+    [data-face-zone="lower"] .nc-pv-caption--lower_third { top: 52%; }
+    .nc-pv-caption__word {
+      display: inline-block;
+      margin: 0 0.12em;
+      color: #fff;
+      opacity: 0.55;
+    }
+    .nc-pv-caption__word.is-active {
+      color: var(--pv-highlight, #ffd84a);
+      transform: scale(1.10);
+      opacity: 1;
+    }
+    .nc-pv-caption__word[data-emphasis="shout"].is-active {
+      font-size: 1.35em;
+      color: #ff3b30;
+      -webkit-text-stroke-width: 0.673cqw;
+      transform: scale(1.25);
+    }
+    .nc-pv-caption__word[data-emphasis="reaction"].is-active {
+      font-size: 1.18em;
+      color: #ffd66b;
+      transform: scale(1.15);
+    }
+    .nc-pv-caption__word[data-emphasis="emphasis"].is-active {
+      font-size: 1.10em;
+      color: var(--pv-highlight, #ffd84a);
+      transform: scale(1.12);
+    }
+    .nc-pv-caption__word.is-past { opacity: 0.40; }
+    .nc-pv-caption__word.is-upcoming { opacity: 0.85; }
+
+    /* Watermark */
+    .nc-pv-watermark {
+      position: absolute;
+      top: 2.4%;
+      right: 3.0%;
+      z-index: 5;
+      pointer-events: none;
+      font-family: "Archivo Black", "Inter", sans-serif;
+      font-weight: 900;
+      font-size: 3.2cqw;
+      line-height: 1;
+      letter-spacing: 0.04em;
+      color: rgba(200, 255, 92, 0.78);
+      text-shadow: 0.385cqw 0.216cqh 0 rgba(0, 0, 0, 0.55);
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  {#- The single .nc-preview element. Same data-attrs that the editor
+      preview uses, so the same CSS rules cascade. preview_mode + fit
+      mode + zone profile + face zone all come from the saved
+      overlay_config. The renderer code (slice O.20) flips
+      data-render-mode="export" once the page is ready so the
+      simulation layers vanish before the recording window opens. -#}
+  {%- set ov = (clip.overlay_config or {}) -%}
+  {%- set _captions = ov.get('captions') or {} -%}
+  {%- set _banner = ov.get('banner') or {} -%}
+  {%- set _top_hook = ov.get('top_hook') or {} -%}
+  {%- set _preview_mode = ov.get('preview_mode') or 'platform' -%}
+  {#- O.14 retro-compat: if a stale 'final' value persists, coerce. -#}
+  {%- if _preview_mode == 'final' %}{% set _preview_mode = 'platform' %}{% endif -%}
+  {%- set _fit_mode = ov.get('fit_mode') or 'smart_crop' -%}
+  {%- set _zone_profile = ov.get('target_platform') or 'all' -%}
+
+  <div class="nc-preview"
+       id="preview"
+       data-preview-mode="{{ _preview_mode }}"
+       data-fit-mode="{{ _fit_mode }}"
+       data-zone-profile="{{ _zone_profile }}"
+       data-render-mode="export"
+       style="--pv-highlight: {{ _captions.get('highlight_color') or '#ffd84a' }};
+              --pv-banner-color: {{ _banner.get('color') or '#53FC18' }};
+              --pv-caption-scale: {{ {'small':0.78,'medium':1.0,'large':1.24,'xl':1.5}.get(_captions.get('font_size') or 'medium', 1.0) }};">
+
+    <video id="preview-video" preload="auto" muted autoplay playsinline crossorigin="anonymous">
+      <source src="/dashboard/clips/{{ clip.id }}/media?source=original">
+    </video>
+
+    {% if ov.get('title_text') %}
+    <div class="nc-pv-title" id="pv-title">{{ ov.title_text }}</div>
+    {% endif %}
+
+    {% if _top_hook.get('enabled') and _top_hook.get('text') %}
+    <div class="nc-pv-top-hook nc-pv-top-hook--{{ _top_hook.get('style') or 'white_rounded' }}">
+      {{ _top_hook.text }}
+    </div>
+    {% endif %}
+
+    {% if _banner.get('enabled', False) %}
+    <div class="nc-pv-banner nc-pv-banner--{{ _banner.get('variant') or 'kick_repost_page' }}">
+      <span class="nc-pv-banner__platform"></span>
+      <span class="nc-pv-banner__url">{{ banner_url_display }}</span>
+    </div>
+    {% endif %}
+
+    {% if _captions.get('enabled', True) %}
+    <div class="nc-pv-caption nc-pv-caption--{{ _captions.get('position') or 'bottom' }}"
+         id="pv-caption"
+         data-animation="{{ _captions.get('animation') or 'pop' }}"></div>
+    {% endif %}
+
+    {% if render_watermark %}
+    <div class="nc-pv-watermark">NEXOCLIP</div>
+    {% endif %}
+  </div>
+
+  <script>
+    // Slice O.19 — minimal client wiring for the render route.
+    // The recorder (slice O.20) reads window.__nexoclipRender state
+    // to coordinate playback timing with frame capture.
+    window.__nexoclipRender = {
+      ready: false,            // metadata loaded
+      playing: false,          // 'playing' event fired
+      duration_s: {{ clip.duration_s | float }},
+      clip_id: "{{ clip.id }}",
+    };
+
+    {% if _captions.get('enabled', True) %}
+    // Caption lines are fetched from /dashboard/clips/<id>/captions.json
+    // (same endpoint the editor uses) so the karaoke render is
+    // byte-identical between editor preview and headless render.
+    fetch("/dashboard/clips/{{ clip.id }}/captions.json",
+          { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        window.__nexoclipRender.captions = data;
+        // The editor's caption animator runs off requestAnimationFrame.
+        // We replicate the minimal version here: build word spans once,
+        // then per-tick mark active/past/upcoming based on video.currentTime.
+        var captionEl = document.getElementById("pv-caption");
+        if (!captionEl || !data || !data.lines) return;
+        // Hidden initially — JS toggles visibility based on time.
+        captionEl.style.visibility = "hidden";
+      })
+      .catch(function () {});
+    {% endif %}
+
+    var video = document.getElementById("preview-video");
+    if (video) {
+      video.addEventListener("loadedmetadata", function () {
+        window.__nexoclipRender.ready = true;
+      });
+      // Multiple events imply playback has started — be liberal so the
+      // recorder's wait_for_function flips quickly. 'playing' is the
+      // canonical one but some Chromium headless builds fire 'play'
+      // and 'timeupdate' before 'playing'; any of them is sufficient.
+      function _markPlaying() { window.__nexoclipRender.playing = true; }
+      video.addEventListener("playing", _markPlaying);
+      video.addEventListener("play", _markPlaying);
+      video.addEventListener("timeupdate", function () {
+        if (video.currentTime > 0) _markPlaying();
+      });
+      // Belt-and-braces: kick off playback explicitly. The `autoplay`
+      // attribute usually handles this but Chromium's autoplay policy
+      // can block silently in headless even with our launch flag, so
+      // we also call .play() ourselves with the muted setter.
+      video.muted = true;
+      var p = video.play();
+      if (p && p.catch) p.catch(function () { /* fall through; recorder retries */ });
+    }
+  </script>
+</body>
+</html>

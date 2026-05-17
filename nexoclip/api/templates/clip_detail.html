@@ -2,6 +2,57 @@
 {% block title %}Clip {{ clip.id }} - NexoClip{% endblock %}
 {% block head %}
 <style>
+  /* ============================================================
+     Slice O.18a — Embedded OFL fonts.
+     ============================================================
+     The preview and the headless-Chrome render route (O.19+) must
+     paint with IDENTICAL glyphs. Relying on system fonts (Arial,
+     Helvetica Neue, Segoe UI, -apple-system) means the worker's
+     Chromium falls back to whatever's installed there, which drifts
+     from what the operator sees in their browser.
+
+     Files live in /static/fonts/, served as regular static assets.
+
+     `font-display: block` — blocks first-paint of text until the
+     font is loaded. Cheap on local files (<50ms); prevents the
+     FOUT frame from being captured by Playwright when recording.
+
+     License notes:
+       - Inter / Inter Tight → OFL (rsms/inter)
+       - Archivo Black → OFL (Omnibus-Type/Archivo)
+     We replaced the previously-listed proprietary fallbacks
+     (Arial Narrow, Arial Black, Helvetica Neue, Segoe UI) with
+     these three OFL families. See font stack rewrites below.
+  */
+  @font-face {
+    font-family: "Inter";
+    src: url("/static/fonts/Inter-Black.ttf") format("truetype");
+    font-weight: 900;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Inter";
+    src: url("/static/fonts/Inter-ExtraBold.ttf") format("truetype");
+    font-weight: 800;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Inter Tight";
+    src: url("/static/fonts/InterTight-Black.ttf") format("truetype");
+    font-weight: 900;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Archivo Black";
+    src: url("/static/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+    font-weight: 900;
+    font-style: normal;
+    font-display: block;
+  }
+
   /* ---- Clip editor: split-pane live preview -----------------
      Slice K.2 — the preview is the HERO. Operators decide "would I
      post this?" from the preview, not from a checklist. Made it
@@ -33,6 +84,16 @@
     border-radius: 14px;
     overflow: hidden;
     contain: layout paint;
+    /* Slice O.18b — declare container so descendants resolve cqw/cqh
+       relative to .nc-preview, not the viewport. With this set:
+         1cqw = 1% of .nc-preview width
+         1cqh = 1% of .nc-preview height
+       The editor renders the preview at ~520px wide; the render route
+       (O.19) renders it at 1080px. cqw/cqh make every overlay scale
+       proportionally regardless of container size — the same CSS
+       produces pixel-identical layouts at both scales. */
+    container-type: size;
+    container-name: clipframe;
     box-shadow:
       0 0 0 1px rgba(200, 255, 92, 0.12),
       0 12px 36px -12px rgba(0, 0, 0, 0.55);
@@ -182,17 +243,24 @@
     right: 10%;
     background: rgba(255, 255, 255, 0.96);
     color: #000;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    /* Slice O.18a — Inter embedded OFL; previous stack relied on
+       OS-specific fallbacks (Segoe UI on Win, -apple-system on Mac)
+       which drifted between editor + headless render worker. */
+    font-family: "Inter", sans-serif;
     font-weight: 800;
-    font-size: 17px;
+    /* Slice O.18b — px→cqw/cqh: 17/520*100 = 3.269cqw */
+    font-size: 3.269cqw;
     line-height: 1.22;
-    padding: 10px 14px;
-    border-radius: 12px;
+    /* 10/924*100 = 1.082cqh ; 14/520*100 = 2.692cqw */
+    padding: 1.082cqh 2.692cqw;
+    /* 12/520*100 = 2.308cqw */
+    border-radius: 2.308cqw;
     text-align: center;
-    /* Heavy shadow for the "repost page" feel the spec asks for. */
+    /* Heavy shadow for the "repost page" feel the spec asks for.
+       3/924*100=0.325cqh ; 10/520*100=1.923cqw ; 1/924*100=0.108cqh */
     box-shadow:
-      0 3px 10px rgba(0, 0, 0, 0.55),
-      0 1px 0 rgba(0, 0, 0, 0.18) inset;
+      0 0.325cqh 1.923cqw rgba(0, 0, 0, 0.55),
+      0 0.108cqh 0 rgba(0, 0, 0, 0.18) inset;
     /* Max 2 lines — anything longer ellipsizes. */
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -253,8 +321,10 @@
     animation: nc-face-aware-flash 1.4s ease-out 1;
   }
   @keyframes nc-face-aware-flash {
-    0%   { box-shadow: 0 0 0 2px rgba(200, 255, 92, 0.85), 0 3px 10px rgba(0,0,0,0.55); }
-    100% { box-shadow: 0 3px 10px rgba(0,0,0,0.55); }
+    /* Slice O.18b — 2/520*100=0.385cqw spread; 3/924*100=0.325cqh y;
+       10/520*100=1.923cqw blur. */
+    0%   { box-shadow: 0 0 0 0.385cqw rgba(200, 255, 92, 0.85), 0 0.325cqh 1.923cqw rgba(0,0,0,0.55); }
+    100% { box-shadow: 0 0.325cqh 1.923cqw rgba(0,0,0,0.55); }
   }
 
   /* ============================================================
@@ -273,18 +343,23 @@
     left: 8%;
     right: 8%;
     text-align: center;
-    font-family: "Inter", -apple-system, sans-serif;
+    /* Slice O.18a — Inter embedded OFL (Black 900); previous stack's
+       -apple-system fallback drifted between OSes in the worker. */
+    font-family: "Inter", sans-serif;
     font-weight: 900;
     /* L.4 — Adin Ross / Kick-clip caption style is all-caps. */
     text-transform: uppercase;
     letter-spacing: 0.02em;
     color: #fff;
-    -webkit-text-stroke: 2.5px #000;
+    /* Slice O.18b — 2.5/520*100 = 0.481cqw */
+    -webkit-text-stroke: 0.481cqw #000;
     paint-order: stroke fill;
+    /* 3/924*100=0.325cqh ; 8/520*100=1.538cqw ; 1/924*100=0.108cqh */
     text-shadow:
-      0 3px 8px rgba(0, 0, 0, 0.85),
-      0 1px 0 rgba(0, 0, 0, 0.6);
-    font-size: 26px;
+      0 0.325cqh 1.538cqw rgba(0, 0, 0, 0.85),
+      0 0.108cqh 0 rgba(0, 0, 0, 0.6);
+    /* 26/520*100 = 5cqw (base, before --pv-caption-scale multiplier) */
+    font-size: 5cqw;
     line-height: 1.05;
     pointer-events: none;
     z-index: 3;
@@ -320,7 +395,8 @@
   .nc-pv-caption__word[data-emphasis="shout"].is-active {
     font-size: 1.35em;
     color: #ff3b30;
-    -webkit-text-stroke-width: 3.5px;
+    /* Slice O.18b — 3.5/520*100 = 0.673cqw */
+    -webkit-text-stroke-width: 0.673cqw;
     transform: scale(1.25);
   }
   .nc-pv-caption__word[data-emphasis="reaction"].is-active {
@@ -340,21 +416,24 @@
   /* Slice F.7-H — operator-set font-size scaling. JS writes a CSS
      custom property `--pv-caption-scale` (0.78 / 1.0 / 1.24 / 1.5)
      that multiplies the base font size. Letterspacing widens at XL
-     so the captions feel intentional, not just zoomed. */
-  .nc-pv-caption { font-size: calc(22px * var(--pv-caption-scale, 1)); }
+     so the captions feel intentional, not just zoomed.
+     Slice O.18b — 22/520*100 = 4.231cqw base. */
+  .nc-pv-caption { font-size: calc(4.231cqw * var(--pv-caption-scale, 1)); }
   .nc-pv-caption[data-animation="slide"] .nc-pv-caption__word.is-active {
     animation: nc-caption-slide 0.18s ease-out;
   }
   .nc-pv-caption[data-animation="typewriter"] .nc-pv-caption__word.is-active {
     animation: none;
-    border-right: 2px solid var(--pv-highlight, #FFD700);
+    /* 2/520*100 = 0.385cqw */
+    border-right: 0.385cqw solid var(--pv-highlight, #FFD700);
   }
   .nc-pv-caption[data-animation="fade"] .nc-pv-caption__word.is-active {
     animation: nc-caption-fade 0.25s ease-in;
   }
   @keyframes nc-caption-slide {
-    from { transform: translateY(8px) scale(1.0); opacity: 0; }
-    to   { transform: translateY(0)    scale(1.15); opacity: 1; }
+    /* 8/924*100 = 0.866cqh */
+    from { transform: translateY(0.866cqh) scale(1.0); opacity: 0; }
+    to   { transform: translateY(0)        scale(1.15); opacity: 1; }
   }
   @keyframes nc-caption-fade {
     from { opacity: 0.2; }
@@ -407,7 +486,8 @@
     left: 0;
     right: 0;
     bottom: 0;
-    height: 38px;
+    /* Slice O.18b — 38/924*100 = 4.113cqh */
+    height: 4.113cqh;
     background: var(--pv-banner-color, #53FC18);
     color: #000;
     display: flex;
@@ -433,10 +513,13 @@
     background: #e62b20;
     color: #fff;
     font-weight: 800;
-    font-size: 9px;
+    /* Slice O.18b — 9/520*100 = 1.731cqw */
+    font-size: 1.731cqw;
     letter-spacing: 0.04em;
-    padding: 2px 6px;
-    border-radius: 3px;
+    /* 2/924*100 = 0.216cqh ; 6/520*100 = 1.154cqw */
+    padding: 0.216cqh 1.154cqw;
+    /* 3/520*100 = 0.577cqw */
+    border-radius: 0.577cqw;
     margin-left: 0;
   }
 
@@ -503,9 +586,10 @@
     -webkit-backdrop-filter: none;
     color: #fff;
     padding: 0;
-    height: 36px;
-    min-height: 36px;
-    max-height: 36px;
+    /* Slice O.18b — 36/924*100 = 3.896cqh */
+    height: 3.896cqh;
+    min-height: 3.896cqh;
+    max-height: 3.896cqh;
     border-radius: 0;
     border: none;
     box-shadow: none;
@@ -532,12 +616,14 @@
      outline). Cheap, GPU-friendly, no SVG filter required. */
   .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
     position: absolute;
-    left: 8px;
+    /* Slice O.18b — 8/520*100 = 1.538cqw */
+    left: 1.538cqw;
     top: 50%;
     /* Lifted ~7px upward from dead-center within the bar. */
     transform: translateY(-62%);
-    width: 140px;
-    height: 44px;
+    /* 140/520*100 = 26.923cqw ; 44/924*100 = 4.762cqh */
+    width: 26.923cqw;
+    height: 4.762cqh;
     color: transparent;
     font-size: 0;
     line-height: 0;
@@ -551,29 +637,31 @@
     image-rendering: auto;
     /* Black 2px outline via 4 directional drop-shadows + 1 soft
        atmospheric shadow underneath so the wordmark also reads
-       on the video pixels showing above the bar. */
+       on the video pixels showing above the bar.
+       Slice O.18b — 2/520*100=0.385cqw (x), 2/924*100=0.216cqh (y);
+       3/924*100=0.325cqh ; 4/520*100=0.769cqw (blur uses width axis). */
     filter:
-      drop-shadow(2px 0 0 #000)
-      drop-shadow(-2px 0 0 #000)
-      drop-shadow(0 2px 0 #000)
-      drop-shadow(0 -2px 0 #000)
-      drop-shadow(0 3px 4px rgba(0, 0, 0, 0.55));
+      drop-shadow(0.385cqw 0 0 #000)
+      drop-shadow(-0.385cqw 0 0 #000)
+      drop-shadow(0 0.216cqh 0 #000)
+      drop-shadow(0 -0.216cqh 0 #000)
+      drop-shadow(0 0.325cqh 0.769cqw rgba(0, 0, 0, 0.55));
   }
   .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
     position: relative;
     color: #fff;
-    font-family:
-      "Arial Narrow",
-      "Roboto Condensed",
-      "Inter Tight",
-      "Inter",
-      -apple-system, sans-serif;
-    font-size: 11px;
+    /* Slice O.18a — Inter Tight Black 900 (OFL) embedded. Replaces
+       proprietary "Arial Narrow"; same condensed-blackface role. */
+    font-family: "Inter Tight", "Inter", sans-serif;
+    /* Slice O.18b — 11/520*100 = 2.115cqw */
+    font-size: 2.115cqw;
     font-weight: 900;
-    letter-spacing: 0.2px;
+    /* 0.2/520*100 = 0.038cqw */
+    letter-spacing: 0.038cqw;
     line-height: 1;
     text-transform: uppercase;
-    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+    /* 1/924*100=0.108cqh ; 1/520*100=0.192cqw */
+    text-shadow: 0 0.108cqh 0.192cqw rgba(0, 0, 0, 0.9);
     flex: none;
     overflow: visible;
     white-space: nowrap;
@@ -585,22 +673,11 @@
     display: none !important;
   }
 
-  /* Mobile preview breakpoint — bar + wordmark shrink. */
-  @media (max-width: 768px) {
-    .nc-pv-banner--kick_repost_page {
-      height: 30px;
-      min-height: 30px;
-      max-height: 30px;
-    }
-    .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
-      width: 112px;
-      height: 36px;
-      left: 6px;
-    }
-    .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
-      font-size: 10px;
-    }
-  }
+  /* Slice O.18b — mobile @media breakpoint REMOVED. With cqw/cqh
+     the bar/wordmark/URL scale uniformly with the container, so a
+     viewport-width breakpoint is no longer necessary (and would
+     actually introduce drift between editor preview at smaller
+     widths vs the render route at 1080cqw). */
 
   /* kick_green_block: solid-green KICK badge stuck to the bar's left
      edge with the URL on a black field next to it. Toned down from
@@ -611,26 +688,29 @@
     color: #fff;
     padding: 0;
     height: 8%;
-    min-height: 44px;
-    max-height: 68px;
+    /* Slice O.18b — 44/924*100=4.762cqh ; 68/924*100=7.359cqh */
+    min-height: 4.762cqh;
+    max-height: 7.359cqh;
     overflow: hidden;
     box-shadow: none;
   }
   .nc-pv-banner--kick_green_block .nc-pv-banner__platform {
     background: var(--pv-banner-color, #53FC18);
     color: #000;
-    padding: 0 16px;
+    /* 16/520*100 = 3.077cqw */
+    padding: 0 3.077cqw;
     height: 100%;
     display: inline-flex;
     align-items: center;
     font-weight: 900;
-    font-size: 16px;
+    font-size: 3.077cqw;
     letter-spacing: 0.02em;
   }
   .nc-pv-banner--kick_green_block .nc-pv-banner__url {
-    padding: 0 12px;
+    /* 12/520*100 = 2.308cqw */
+    padding: 0 2.308cqw;
     color: #fff;
-    font-size: 12px;
+    font-size: 2.308cqw;
     font-weight: 700;
     flex: 1;
     /* L.1 — center the URL on the remaining black field for balance. */
@@ -642,15 +722,19 @@
     box-shadow: none;
     padding: 0;
     height: auto;
-    bottom: 14px;
+    /* 14/924*100 = 1.515cqh */
+    bottom: 1.515cqh;
   }
   .nc-pv-banner--kick_minimal_url .nc-pv-banner__platform { display: none; }
   .nc-pv-banner--kick_minimal_url .nc-pv-banner__url {
     background: rgba(0, 0, 0, 0.55);
     color: #fff;
-    padding: 4px 8px;
-    font-size: 10px;
-    border-radius: 4px;
+    /* 4/924*100=0.433cqh ; 8/520*100=1.538cqw */
+    padding: 0.433cqh 1.538cqw;
+    /* 10/520*100 = 1.923cqw */
+    font-size: 1.923cqw;
+    /* 4/520*100 = 0.769cqw */
+    border-radius: 0.769cqw;
   }
 
   /* Slice K.4 — banner lift rule REMOVED in M.1.
@@ -687,14 +771,19 @@
     left: 14%;
     right: 14%;
     text-align: center;
-    font-family: var(--nc-font-sans), "Inter", sans-serif;
+    /* Slice O.18a — Inter embedded OFL (ExtraBold 800). */
+    font-family: "Inter", sans-serif;
     font-weight: 800;
-    font-size: 11px;
+    /* Slice O.18b — 11/520*100 = 2.115cqw */
+    font-size: 2.115cqw;
     letter-spacing: 0.02em;
     line-height: 1.15;
-    padding: 4px 10px;
+    /* 4/924*100 = 0.433cqh ; 10/520*100 = 1.923cqw */
+    padding: 0.433cqh 1.923cqw;
+    /* 999px kept — "pill infinity" semantic, no scale needed */
     border-radius: 999px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    /* 2/924*100=0.216cqh ; 6/520*100=1.154cqw */
+    box-shadow: 0 0.216cqh 1.154cqw rgba(0, 0, 0, 0.35);
     pointer-events: none;
     /* Max 1 line — secondary hooks should be a short context tag
        ("EARLIER ON STREAM…"), not a second paragraph. */
@@ -703,21 +792,23 @@
     text-overflow: ellipsis;
     z-index: 3;
   }
-  /* All three flavors are now muted vs the main hook below. */
+  /* All three flavors are now muted vs the main hook below.
+     Slice O.18b — backdrop-filter blur converted: 4/520*100=0.769cqw,
+     6/520*100=1.154cqw. */
   .nc-pv-top-hook--white_rounded {
     background: rgba(255, 255, 255, 0.72);
     color: #000;
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(0.769cqw);
   }
   .nc-pv-top-hook--black_solid {
     background: rgba(0, 0, 0, 0.62);
     color: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(0.769cqw);
   }
   .nc-pv-top-hook--subtle {
     background: rgba(255, 255, 255, 0.55);
     color: #111;
-    backdrop-filter: blur(6px);
+    backdrop-filter: blur(1.154cqw);
   }
   /* Kick zone profile: shorter top unsafe band → secondary hook
      can sit a little higher. */
@@ -1401,13 +1492,18 @@
     right: 3.0%;
     z-index: 5;
     pointer-events: none;
-    font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+    /* Slice O.18a — Archivo Black 900 (OFL) embedded. Replaces
+       proprietary "Arial Black"; designed as a blackface display
+       face purpose-built for this role. */
+    font-family: "Archivo Black", "Inter", sans-serif;
     font-weight: 900;
-    font-size: 3.2cqi;  /* container-query-relative so it tracks the preview width */
+    /* Slice O.18b — standardize cqi → cqw (same value LTR mode). */
+    font-size: 3.2cqw;
     line-height: 1;
     letter-spacing: 0.04em;
     color: rgba(200, 255, 92, 0.78);
-    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+    /* 2/520*100=0.385cqw (x); 2/924*100=0.216cqh (y) */
+    text-shadow: 0.385cqw 0.216cqh 0 rgba(0, 0, 0, 0.55);
     user-select: none;
   }
   .nc-preview[data-preview-mode="raw"] .nc-pv-watermark,

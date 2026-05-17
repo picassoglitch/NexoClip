@@ -49,6 +49,27 @@
     --nc-ai-bg:        rgba(181, 143, 255, 0.10);
     --nc-ai-dim:       rgba(181, 143, 255, 0.30);
 
+    /* Slice J.3 — Cyberpunk accent tokens (nexo-ai visual alignment).
+     * Cyan + magenta layered glows applied to:
+     *   - panel headers
+     *   - primary buttons
+     *   - page header section
+     *   - active/selected cards
+     *   - tables (header glow)
+     * Tokens kept here so the whole site picks them up without
+     * touching individual page templates. */
+    --nc-cyan:         #00d9ff;
+    --nc-cyan-soft:    rgba(0, 217, 255, 0.18);
+    --nc-cyan-dim:     rgba(0, 217, 255, 0.35);
+    --nc-magenta:      #ff3cc8;
+    --nc-magenta-soft: rgba(255, 60, 200, 0.15);
+    --nc-magenta-dim:  rgba(255, 60, 200, 0.30);
+    --nc-cyber-edge:   1px solid var(--nc-cyan-dim);
+    --nc-cyber-glow:   0 0 24px -8px rgba(0, 217, 255, 0.45);
+    --nc-cyber-grad:   linear-gradient(135deg,
+                         rgba(0, 217, 255, 0.10),
+                         rgba(255, 60, 200, 0.06));
+
     /* Borders / radius */
     --nc-hairline:     0.5px solid var(--nc-blue-dim);
     --nc-radius:       8px;
@@ -168,9 +189,28 @@ hr {
     gap: 1rem;
     margin: 0 0 1.25rem 0;
     flex-wrap: wrap;
+    /* Slice J.3 — page-level title strip gets a cyan underline glow
+     * so every page (streams / inbox / personas / brand kits) carries
+     * the same cyberpunk signature the editor has. */
+    position: relative;
+    padding-bottom: 12px;
+}
+.nc-page-header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(0, 217, 255, 0.55) 25%,
+      rgba(255, 60, 200, 0.45) 75%,
+      transparent 100%);
+    box-shadow: 0 0 8px rgba(0, 217, 255, 0.35);
 }
 .nc-page-header h2 {
     margin: 0;
+    /* Subtle cyan text-shadow for the cyberpunk title glow. */
+    text-shadow: 0 0 12px rgba(0, 217, 255, 0.18);
 }
 .nc-page-header .nc-page-summary {
     color: var(--nc-text-muted);
@@ -240,8 +280,12 @@ hr {
     text-decoration: none;
 }
 .nc-nav__link.is-active {
-    color: var(--nc-blue-bright);
-    border-bottom-color: var(--nc-blue);
+    color: var(--nc-cyan);
+    border-bottom-color: var(--nc-cyan);
+    /* Slice J.3 — active nav link gets a soft cyan glow so the
+     * current page is obvious without reading the label. */
+    text-shadow: 0 0 8px rgba(0, 217, 255, 0.45);
+    box-shadow: 0 1px 0 rgba(0, 217, 255, 0.45);
 }
 
 .nc-nav__right {
@@ -328,10 +372,17 @@ hr {
 
 .nc-panel {
     background: var(--nc-bg-panel);
-    border: var(--nc-hairline);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: var(--nc-radius-lg);
     overflow: hidden;
     margin-bottom: var(--nc-gap);
+    /* Slice J.3 — every panel picks up a subtle cyan-tinted edge
+     * that brightens on hover. Replaces the cold hairline that read
+     * like a SaaS settings page. */
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.nc-panel:hover {
+    border-color: rgba(0, 217, 255, 0.18);
 }
 
 .nc-panel__header {
@@ -339,11 +390,19 @@ hr {
     align-items: center;
     gap: 0.5rem;
     padding: 12px 16px;
-    border-bottom: var(--nc-hairline);
     color: var(--nc-text);
     font-weight: 500;
     font-size: 13px;
     flex-wrap: wrap;
+    /* Slice J.3 — panel headers get a cyan→magenta corner radial
+     * + soft underline glow to match the editor's J.1 treatment.
+     * One CSS change → every page (streams / inbox / personas /
+     * brand kits / LLM-calls) picks it up. */
+    background:
+      radial-gradient(circle at top right, rgba(255, 60, 200, 0.06), transparent 60%),
+      linear-gradient(180deg, rgba(0, 217, 255, 0.05), transparent);
+    border-bottom: 1px solid rgba(0, 217, 255, 0.16);
+    box-shadow: inset 0 -1px 0 rgba(0, 217, 255, 0.10);
 }
 .nc-panel__header .nc-panel__title {
     flex: 1;
@@ -436,14 +495,26 @@ hr {
 }
 
 .nc-btn--primary {
-    background: var(--nc-blue);
-    border-color: var(--nc-blue);
+    background: linear-gradient(135deg, #00d9ff 0%, #5fcfff 100%);
+    border-color: rgba(0, 217, 255, 0.55);
     color: var(--nc-bg-base);
+    /* Slice J.3 — neon cyan glow with subtle magenta inner.
+     * Picked up by every primary CTA across the dashboard. */
+    box-shadow:
+      0 0 18px -4px rgba(0, 217, 255, 0.50),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+    font-weight: 700;
+    letter-spacing: 0.02em;
 }
 .nc-btn--primary:hover {
-    background: var(--nc-blue-bright);
-    border-color: var(--nc-blue-bright);
+    background: linear-gradient(135deg, #00e9ff 0%, #80e0ff 100%);
+    border-color: rgba(0, 217, 255, 0.80);
     color: var(--nc-bg-base);
+    box-shadow:
+      0 0 24px -2px rgba(0, 217, 255, 0.70),
+      0 0 32px -8px rgba(255, 60, 200, 0.45),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    transform: translateY(-1px);
 }
 
 .nc-btn--ghost {
@@ -586,15 +657,20 @@ hr {
     font-size: 13px;
 }
 .nc-table thead th {
-    color: var(--nc-text-muted);
-    font-weight: 500;
-    font-size: 11px;
-    text-transform: none;
-    letter-spacing: 0.02em;
+    color: var(--nc-cyan);
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     text-align: left;
     padding: 10px 12px;
-    border-bottom: var(--nc-hairline);
-    background: transparent;
+    /* Slice J.3 — cyan neon underline on the table header row, used
+     * by every dashboard list (streams, inbox, brand kits, LLM calls,
+     * publish outcomes). */
+    border-bottom: 1px solid rgba(0, 217, 255, 0.25);
+    background:
+      linear-gradient(180deg, rgba(0, 217, 255, 0.04), transparent);
+    box-shadow: inset 0 -1px 0 rgba(0, 217, 255, 0.18);
 }
 .nc-table tbody td {
     padding: 10px 12px;
@@ -773,17 +849,25 @@ hr {
 }
 .nc-clip-card {
     background: var(--nc-bg-raised);
-    border: var(--nc-hairline);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: var(--nc-radius);
     padding: 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    transition: border-color 120ms ease;
+    transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
     max-width: 180px;
 }
 .nc-clip-card:hover {
-    border-color: var(--nc-blue);
+    /* Slice J.3 — cyan neon edge + soft magenta corner on hover.
+     * Replaces the cold "border-color: blue" lift with the cyberpunk
+     * glow used throughout the editor. */
+    border-color: rgba(0, 217, 255, 0.45);
+    box-shadow:
+      0 0 0 1px rgba(0, 217, 255, 0.25) inset,
+      0 0 16px -4px rgba(0, 217, 255, 0.40),
+      0 0 24px -10px rgba(255, 60, 200, 0.30);
+    transform: translateY(-2px);
 }
 .nc-clip-card__thumb {
     background: var(--nc-bg-base);

@@ -987,6 +987,71 @@
   .nc-editor-controls .nc-panel__body { padding: 14px 16px; }
   .nc-editor-controls .nc-label { margin-bottom: 10px; }
 
+  /* Slice G.3 — framing intelligence label panel. Mirrors the AI
+     Director cyberpunk look so the operator reads it as part of the
+     same "AI told me what to do" surface. */
+  .nc-framing {
+    background:
+      radial-gradient(circle at top right, rgba(255, 60, 200, 0.08), transparent 60%),
+      linear-gradient(180deg, rgba(0, 217, 255, 0.06), transparent);
+    border: 1px solid rgba(0, 217, 255, 0.22);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    box-shadow:
+      0 0 0 1px rgba(0, 217, 255, 0.10) inset,
+      0 0 18px -8px rgba(0, 217, 255, 0.30);
+  }
+  .nc-framing__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--nc-text);
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .nc-framing__pill {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .nc-framing__pill--full_screen_horizontal,
+  .nc-framing__pill--reject_crop {
+    background: rgba(255, 60, 60, 0.18);
+    color: #ff8a8a;
+  }
+  .nc-framing__pill--mobile_crop_static,
+  .nc-framing__pill--already_mobile {
+    background: rgba(0, 217, 122, 0.18);
+    color: #00d97a;
+  }
+  .nc-framing__pill--mobile_crop_tracking {
+    background: rgba(255, 184, 0, 0.18);
+    color: #ffb800;
+  }
+  .nc-framing__confidence {
+    margin-left: auto;
+    font-family: var(--nc-font-mono);
+    color: var(--nc-text-muted);
+    font-size: 10px;
+  }
+  .nc-framing__reason {
+    color: var(--nc-text-body);
+    font-size: 12px;
+    line-height: 1.4;
+    margin: 8px 0 10px 0;
+  }
+  .nc-framing__overrides {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 11px;
+  }
+  .nc-framing__overrides .nc-checkbox { font-size: 11px; }
+
   /* Slice I.5 — softer section rhythm + confident dark-cinematic feel.
      Subtle border, slightly bigger radius, hover-lift on panels. */
   .nc-editor-controls .nc-panel {
@@ -1337,6 +1402,50 @@
       <span>Apply AI fixes</span>
     </button>
     <div id="apply-ai-fixes-feedback" class="nc-director__feedback"></div>
+  </div>
+</div>
+{% endif %}
+
+{# ---- Slice G.3 — Framing intelligence label ----
+   Shows what kind of export the system decided is right for THIS
+   clip: full-screen horizontal / mobile static crop / mobile tracking
+   crop / already mobile / reject crop. Pulled from
+   `clip.candidate.evidence.framing` which the cut step stamps via
+   _framing_evidence. Operator can also OVERRIDE here (toggles wired
+   in G.5's export wiring slice). #}
+{% set _framing = (clip.candidate.evidence or {}).get('framing') if clip.candidate else None %}
+{% if _framing %}
+<div class="nc-framing">
+  <div class="nc-framing__head">
+    <i class="ti ti-crop-1-1" aria-hidden="true"></i>
+    <span>Framing</span>
+    <span class="nc-framing__pill nc-framing__pill--{{ _framing.recommended_output }}">
+      {% if _framing.recommended_output == 'full_screen_horizontal' %}Full screen required
+      {% elif _framing.recommended_output == 'mobile_crop_static' %}Mobile ready · static crop
+      {% elif _framing.recommended_output == 'mobile_crop_tracking' %}Mobile · tracking crop
+      {% elif _framing.recommended_output == 'already_mobile' %}Already mobile
+      {% elif _framing.recommended_output == 'reject_crop' %}Manual edit required
+      {% else %}{{ _framing.recommended_output }}
+      {% endif %}
+    </span>
+    <span class="nc-framing__confidence" title="Framing detector confidence">
+      {{ "%.0f"|format((_framing.confidence or 0) * 100) }}% conf
+    </span>
+  </div>
+  <p class="nc-framing__reason">{{ _framing.reason or '' }}</p>
+  <div class="nc-framing__overrides">
+    <label class="nc-checkbox">
+      <input type="checkbox" name="framing_force_vertical_crop" value="1" id="ctl-framing-force-vertical">
+      <span>Force mobile crop anyway</span>
+    </label>
+    <label class="nc-checkbox">
+      <input type="checkbox" name="framing_export_horizontal" value="1" id="ctl-framing-export-horizontal">
+      <span>Export full horizontal</span>
+    </label>
+    <label class="nc-checkbox">
+      <input type="checkbox" name="framing_export_blurred_bg" value="1" id="ctl-framing-export-blurred-bg">
+      <span>Export blurred-background mobile version</span>
+    </label>
   </div>
 </div>
 {% endif %}

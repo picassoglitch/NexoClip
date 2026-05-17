@@ -6,6 +6,14 @@ loud-but-empty heuristic hits.
 
 from .audio_energy import detect_audio_energy
 from .chat_heat import detect_chat_heat
+from .framing import (
+    FramingVerdict,
+    RecommendedOutput,
+    SourceOrientation,
+    SubjectBox,
+    analyze_framing,
+    to_smart_crop_box,
+)
 from .fusion import FusionBonuses, FusionConfig, FusionWeights, fuse_candidates
 from .models import Candidate, CandidateBatch, CandidateReason
 from .service import (
@@ -22,12 +30,17 @@ __all__ = [
     "Candidate",
     "CandidateBatch",
     "CandidateReason",
+    "FramingVerdict",
     "FusionBonuses",
     "FusionConfig",
     "FusionWeights",
+    "RecommendedOutput",
     "RescoreOutcome",
+    "SourceOrientation",
+    "SubjectBox",
     "ViralMoment",
     "ViralMomentList",
+    "analyze_framing",
     "detect_audio_energy",
     "detect_candidates",
     "detect_chat_heat",
@@ -38,4 +51,5 @@ __all__ = [
     "load_candidates",
     "rescore_candidates",
     "save_candidates",
+    "to_smart_crop_box",
 ]

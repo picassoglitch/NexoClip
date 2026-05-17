@@ -33,6 +33,7 @@ from nexoclip.ingest import Stream
 from nexoclip.logging import get_logger
 
 if TYPE_CHECKING:
+    from nexoclip.detect.framing import FramingVerdict
     from nexoclip.transcribe import Transcript
 
 from .models import Clip, ClipManifest, SmartCropBox
@@ -208,6 +209,15 @@ def _cut_all(
         smart_box = _safe_smart_crop(
             video_path=stream.source_video_path, start_s=start, end_s=end
         )
+
+        # Slice G.3 — framing intelligence. Decides whether this clip
+        # should ship as 9:16 static crop / 9:16 tracking crop /
+        # full-screen horizontal / already-mobile recenter / rejected.
+        # Wrapped so opencv failures fall through to a conservative
+        # default (mobile_crop_static centered) — never breaks cut.
+        framing_verdict = _safe_analyze_framing(
+            video_path=stream.source_video_path, start_s=start, end_s=end
+        )
         thumbnail_path, raw_jpeg = _safe_thumbnail(
             video_path=stream.source_video_path,
             start_s=start,
@@ -244,15 +254,16 @@ def _cut_all(
         # boundaries, stamp the plan's metadata onto the candidate's
         # evidence so it persists with the clip and the dashboard can
         # display "reaction band 10-22s; snapped end to sentence boundary".
+        # Slice G.3 — same pattern for the framing verdict: persisted
+        # under `evidence.framing` so the dashboard renders the chosen
+        # export-output label and G.5 reads it to drive the renderer.
+        updated_evidence: dict[str, object] = dict(candidate.evidence or {})
         if window_plan_evidence is not None:
-            candidate = candidate.model_copy(
-                update={
-                    "evidence": {
-                        **(candidate.evidence or {}),
-                        "window_plan": window_plan_evidence,
-                    }
-                }
-            )
+            updated_evidence["window_plan"] = window_plan_evidence
+        if framing_verdict is not None:
+            updated_evidence["framing"] = _framing_evidence(framing_verdict)
+        if updated_evidence != (candidate.evidence or {}):
+            candidate = candidate.model_copy(update={"evidence": updated_evidence})
 
         clip = Clip(
             id=clip_id,
@@ -285,6 +296,45 @@ def _safe_smart_crop(
     except ClipError as e:
         _log.warning("smart_crop.skipped", reason=str(e))
         return None
+
+
+def _safe_analyze_framing(
+    *, video_path: Path, start_s: float, end_s: float
+) -> "FramingVerdict | None":
+    """Slice G.3 — run analyze_framing inside a guard so unreadable
+    test-stub videos / missing opencv never break the cut step. The
+    framing module's own internal guards already return a conservative
+    fallback; this layer just adds a belt-and-suspenders catch."""
+    try:
+        from nexoclip.detect.framing import analyze_framing
+
+        return analyze_framing(
+            video_path=video_path, start_s=start_s, end_s=end_s,
+        )
+    except Exception as e:  # noqa: BLE001 — never break cut
+        _log.warning("framing.skipped", reason=str(e))
+        return None
+
+
+def _framing_evidence(verdict: "FramingVerdict") -> dict[str, object]:
+    """Compact JSON-friendly representation of the framing verdict
+    to stash under `candidate.evidence.framing`. The dashboard renders
+    `recommended_output` / `confidence` / `reason` for the operator;
+    G.5 reads `recommended_output` + `safe_crop_box` to drive export."""
+    crop = verdict.safe_crop_box
+    crop_dict: dict[str, float] | None = (
+        {"x": crop.x, "y": crop.y, "w": crop.w, "h": crop.h}
+        if crop is not None
+        else None
+    )
+    return {
+        "source_orientation": verdict.source_orientation,
+        "recommended_output": verdict.recommended_output,
+        "confidence": round(verdict.confidence, 3),
+        "safe_crop_box": crop_dict,
+        "subject_count": len(verdict.subject_boxes),
+        "reason": verdict.reason,
+    }
 
 
 def _safe_thumbnail(

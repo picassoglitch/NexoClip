@@ -125,45 +125,25 @@ async def _merged_personas(db: Database) -> list[object]:
     return out
 
 
-# ---------- Login / logout (public; auth is via this form) ----------
-
-
-@router.get("/login", response_class=HTMLResponse)
-async def login_form(request: Request, error: str | None = None) -> Response:
-    return templates.TemplateResponse(
-        request, "login.html", {"error": error}
-    )
-
-
-@router.post("/login")
-async def login_submit(
-    request: Request,
-    token: str = Form(...),
-) -> Response:
-    """Validate the token, set a cookie, redirect to /dashboard/streams."""
-    db: Database = request.app.state.db
-    try:
-        token_hash = hash_token(token.strip())
-    except Exception:
-        return templates.TemplateResponse(
-            request, "login.html", {"error": "invalid token"}, status_code=400
-        )
-    row = await ApiTokensRepo(db).lookup_by_hash(token_hash)
-    if row is None:
-        return templates.TemplateResponse(
-            request, "login.html", {"error": "unknown token"}, status_code=401
-        )
-    response = RedirectResponse(url="/dashboard/streams", status_code=303)
-    # httponly + samesite=lax: the dashboard is same-origin, no JS needs the cookie.
-    response.set_cookie(
-        _COOKIE_NAME, token.strip(), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 7
-    )
-    return response
+# ---------- Logout ----------
+#
+# Slice O.23 — Login removed entirely. nexo-ai is the only gatekeeper.
+# No GET /login (the page is gone), no POST /login (no token form).
+# Access in: GET /auth/sso?token=<jwt-from-nexo-ai> sets a session
+# cookie + redirects to /dashboard/streams. Anyone hitting any
+# /dashboard/* page without that cookie gets bounced to nexo-ai's
+# login URL by the auth middleware. Roles/tiers come straight from
+# the SSO token's `tier` claim, synced into the tenant row on each
+# login (see nexo_ai.sso_finalize).
 
 
 @router.post("/logout")
 async def logout() -> Response:
-    response = RedirectResponse(url="/dashboard/login", status_code=303)
+    """Clear our session cookie + bounce to nexo-ai. No in-house login
+    page exists anymore for the redirect to land on."""
+    from nexoclip.settings import get_settings
+    target = (get_settings().nexo_ai_login_url or "https://nexo-ai.world/login").strip()
+    response = RedirectResponse(url=target, status_code=303)
     response.delete_cookie(_COOKIE_NAME)
     return response
 
@@ -2052,15 +2032,17 @@ async def clip_overlay_save(
     # happens exactly when an MP4 is actually about to leave the
     # system.
     #
-    # We MUST nuke any existing clip_final.mp4 here though — otherwise
-    # the download endpoint sees a file on disk + skips the lazy
-    # regen + serves an MP4 burned with the OLD overlay config.
-    # Deleting it forces a fresh burn on next download.
+    # We MUST nuke any cached export here — otherwise the download
+    # endpoint sees a file on disk + skips the lazy regen + serves
+    # an MP4 produced with the OLD overlay config. Both the new
+    # Playwright-rendered cache AND the legacy ffmpeg burn cache get
+    # invalidated.
     if clip_before is not None:
         try:
-            stale_final = Path(clip_before.path).parent / "clip_final.mp4"
-            if stale_final.exists():
-                stale_final.unlink()
+            clip_dir = Path(clip_before.path).parent
+            for stale in (clip_dir / "clip_render.mp4", clip_dir / "clip_final.mp4"):
+                if stale.exists():
+                    stale.unlink()
         except Exception:  # noqa: BLE001 — invalidation is best-effort
             pass
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
@@ -2559,62 +2541,150 @@ async def stream_download_approved(
 
 @router.get("/clips/{clip_id}/download")
 async def clip_download(
+    request: Request,
     clip_id: str,
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> FileResponse:
-    """Slice O.1 — extract / save the final clip MP4.
+    """Slice O.21 — download the clip's headless-Chrome rendered MP4.
 
-    Returns the burned `clip_final.mp4` (the version with overlays +
-    captions + the nexoclip.com watermark when applicable) with
-    `Content-Disposition: attachment` so the browser triggers a save
-    dialog instead of inline playback.
+    Replaces the previous overlay_burn.py pipeline. The exported MP4 is
+    now produced by Playwright recording the `/clips/<id>/render` page
+    at 1080×1920 native, then muxing the source clip's audio track
+    lossless. By construction the output is pixel-identical to the
+    editor preview — same browser engine renders both.
 
-    The watermark itself is baked into `clip_final.mp4` at finalize
-    time per the tenant's tier — this endpoint just hands the file
-    over. If the clip has never been finalized (no clip_final.mp4
-    on disk), fall back to the original `clip.mp4` so the operator
-    still gets SOMETHING to download.
+    `overlay_burn.py` is intentionally kept in the repo (slice O.21
+    decision) but no longer called from any endpoint. We retain it as
+    a fallback option in case Playwright fails at runtime — see the
+    except branch below.
+
+    Cache: the recorder writes `clip_render.mp4` next to the source
+    clip; subsequent downloads serve the cached file unless the
+    operator saved new overlay settings (which deletes the cache via
+    `clip_overlay_save`).
     """
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     original = Path(clip.path)
-    final = original.parent / "clip_final.mp4"
+    rendered = original.parent / "clip_render.mp4"
 
-    # Slice O.12 — parity fix backstop. If clip_final.mp4 doesn't exist
-    # (clip was approved before this slice landed, or the burn failed
-    # earlier), synthesize one NOW using whatever overlay_config the
-    # operator has saved. Guarantees the download always has the
-    # current preview's overlays + watermark, not a raw cut.
-    #
-    # We run the burn synchronously here even though it can take a few
-    # seconds — the user already clicked Download and is waiting on the
-    # response anyway. Better a 4-second pause with a correct file than
-    # an instant download of the wrong one.
-    if not final.exists() and original.exists():
+    # Generate on-demand if we don't have a cache. The cache is
+    # invalidated by `clip_overlay_save` (slice O.17), so this regen
+    # only happens once per (clip × overlay_config) pair.
+    if not rendered.exists() and original.exists():
+        # Pass the same session cookie the operator just used so the
+        # render page (which sits behind the dashboard auth middleware)
+        # loads correctly. Cookie value comes from the inbound request.
+        from nexoclip.settings import get_settings
+        from nexoclip.clip.preview_recorder import (
+            record_clip_to_mp4, PreviewRecordingError,
+        )
+        settings = get_settings()
+        cookie_val = request.cookies.get("nexoclip_token", "")
         try:
-            cfg = clip.overlay_config or {}
-            await _burn_overlays_for_clip(
-                db=db, clip_id=clip_id, overlay_config=cfg
+            await record_clip_to_mp4(
+                clip_id=clip_id,
+                duration_s=float(clip.duration_s),
+                audio_source_path=original,
+                output_path=rendered,
+                base_url=settings.public_url,
+                auth_cookie_value=cookie_val or None,
             )
-        except Exception:  # noqa: BLE001 — non-fatal, we fall back below
-            pass
+        except PreviewRecordingError as e:
+            # Surface the recorder's error to the operator but keep
+            # the legacy burn as a graceful fallback so they still get
+            # SOMETHING to download.
+            import structlog
+            structlog.get_logger("nexoclip.api.dashboard").warning(
+                "clip_download.recorder_failed",
+                clip_id=clip_id, error=str(e),
+            )
+            legacy_final = original.parent / "clip_final.mp4"
+            if not legacy_final.exists():
+                try:
+                    cfg = clip.overlay_config or {}
+                    await _burn_overlays_for_clip(
+                        db=db, clip_id=clip_id, overlay_config=cfg,
+                    )
+                except Exception:  # noqa: BLE001 — best-effort fallback
+                    pass
+            rendered = legacy_final  # serve burned MP4 if it exists
 
-    clip_path = final if final.exists() else original
+    clip_path = rendered if rendered.exists() else original
     if not clip_path.exists():
         raise HTTPException(
             status_code=404,
             detail=f"clip file missing from disk: {clip_path}",
         )
-    # Pretty filename for the download — operators want
-    # "stream-name__clip-001.mp4" not "clip_final.mp4".
     pretty = f"nexoclip_{clip_id}.mp4"
     return FileResponse(
         path=clip_path,
         media_type="video/mp4",
         filename=pretty,
         headers={"Content-Disposition": f'attachment; filename="{pretty}"'},
+    )
+
+
+@router.get("/clips/{clip_id}/render", response_class=HTMLResponse)
+async def clip_render_view(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.19 — minimal render-mode page for headless capture.
+
+    Returns a stripped-down HTML page rendering ONLY the .nc-preview
+    frame at 1080×1920 native. No editor chrome (nav, sidebar, tabs,
+    controls). Playwright (slice O.20) opens this URL at viewport
+    1080×1920 and screen-records the playback. What you see here IS
+    what gets exported — by construction, no separate burn pipeline.
+
+    Tenant-scoped: the underlying ClipsRepo.get filters by current
+    tenant context, so cross-tenant clip-id guessing 404s.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    # Resolve banner URL like the editor template does, so the chrome
+    # banner shows the canonical "KICK.COM/HANDLE" form.
+    ov = clip.overlay_config or {}
+    banner = ov.get("banner") if isinstance(ov.get("banner"), dict) else {}
+    banner_url_display = ""
+    if isinstance(banner, dict) and banner.get("enabled", False):
+        from nexoclip.clip.overlay_burn import _format_kick_url  # type: ignore[attr-defined]
+        try:
+            banner_url_display = _format_kick_url(str(banner.get("url") or ""))
+        except Exception:  # noqa: BLE001
+            banner_url_display = str(banner.get("url") or "").upper()
+
+    # Tier-aware watermark: free always; pro+ honors brand_kit toggle.
+    render_watermark = True
+    try:
+        from nexoclip.db import TenantsRepo
+        tenant = await TenantsRepo(db).get(clip.tenant_id)
+        tier = (tenant.tier if tenant else "free") or "free"
+        if tier != "free":
+            from nexoclip.branding import resolve_brand_kit_for_candidate
+            kit = await resolve_brand_kit_for_candidate(
+                db, stream_id=clip.stream_id, speaker_label=None
+            )
+            if kit is not None and not getattr(kit, "show_nexoclip_credit", True):
+                render_watermark = False
+    except Exception:  # noqa: BLE001 — best-effort
+        render_watermark = True
+
+    return templates.TemplateResponse(
+        request,
+        "clip_render.html",
+        {
+            "clip": clip,
+            "banner_url_display": banner_url_display,
+            "render_watermark": render_watermark,
+        },
     )
 
 

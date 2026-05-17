@@ -161,11 +161,22 @@ def _extract_token(request: Request) -> str:
 
 
 def _unauthorized(request: Request, detail: str) -> Response:
-    """Dashboard pages get an HTML redirect to /dashboard/login; API JSON otherwise."""
+    """Dashboard pages get an HTML redirect to nexo-ai; API JSON otherwise.
+
+    Slice O.23 — login removed. nexo-ai is the only gatekeeper. Any
+    /dashboard/* hit without a valid session cookie bounces straight
+    to nexo-ai's login. There is no in-house fallback page anymore.
+    """
     if request.url.path.startswith("/dashboard"):
         from starlette.responses import RedirectResponse
 
-        return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_303_SEE_OTHER)
+        try:
+            from nexoclip.settings import get_settings
+            login_url = (get_settings().nexo_ai_login_url or "").strip()
+        except Exception:  # noqa: BLE001 — settings unreachable, hardcode default
+            login_url = ""
+        target = login_url or "https://nexo-ai.world/login"
+        return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"detail": detail},

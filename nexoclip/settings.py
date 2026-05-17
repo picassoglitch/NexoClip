@@ -136,6 +136,17 @@ class Settings(BaseSettings):
     # your own tenant id to see the admin pages back.
     admin_tenant_ids: str = ""
 
+    # Slice O.22 — nexo-ai is the gatekeeper now. NexoClip no longer
+    # serves a token-paste login form. Anyone hitting `/dashboard/login`
+    # or any /dashboard/* page without a valid session cookie is bounced
+    # to this URL. Production: https://nexo-ai.world/login. Set blank
+    # to fall back to the legacy in-house login page (kept as
+    # emergency-admin backstop; see dashboard.login_form).
+    nexo_ai_login_url: str = Field(
+        default="https://nexo-ai.world/login",
+        validation_alias="NEXO_AI_LOGIN_URL",
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

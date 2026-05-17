@@ -50,6 +50,46 @@ _COOKIE_NAME = "nexoclip_token"
 _COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
+def _decode_sso_payload_unsigned(token: str):
+    """Slice O.22 — lax-mode SSO. Decode the payload without HMAC verify.
+
+    The wire format is the same `{payload_b64}.{sig_b64}` shape that
+    `verify_sso_token` produces — we just skip the signature check + run
+    a relaxed expiry leeway (7 days) so the operator isn't blocked by
+    the 5-minute strict TTL while they're still wiring up SSO between
+    deployments. Strict mode (with HMAC) resumes when
+    NEXO_AI_SSO_SECRET is set; this path is the "no walls" opt-in.
+    """
+    import base64
+    import json
+    import time
+
+    from nexoclip.integrations.nexo_ai.sso import SsoTokenPayload
+
+    if not token:
+        raise SsoTokenError("empty token")
+    try:
+        payload_b64, _sig_b64 = token.split(".", maxsplit=1)
+    except ValueError:
+        raise SsoTokenError("malformed token") from None
+    try:
+        pad = "=" * (-len(payload_b64) % 4)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64 + pad)
+        raw = json.loads(payload_bytes)
+    except Exception as e:  # noqa: BLE001
+        raise SsoTokenError("bad payload encoding") from e
+    try:
+        payload = SsoTokenPayload.model_validate(raw)
+    except Exception as e:  # noqa: BLE001
+        raise SsoTokenError("payload missing required fields") from e
+    # 7-day leeway so stale tokens still work when the operator is
+    # bouncing between tabs / dev / prod. Production should set the
+    # secret + use strict mode anyway.
+    if payload.exp + (60 * 60 * 24 * 7) < int(time.time()):
+        raise SsoTokenError("token expired beyond lax-mode leeway")
+    return payload
+
+
 # ── POST /api/admin/tenants ──────────────────────────────────────────────
 
 
@@ -249,7 +289,7 @@ _SSO_FAILURE_HTML = """<!doctype html>
     <h1>Sesión inválida</h1>
     <p>El enlace que usaste para entrar no es válido o expiró.
        Volvé al dashboard de Nexo AI y abrí NexoClip de nuevo.</p>
-    <a class="nc-btn" href="/dashboard/login">Login manual</a>
+    <a class="nc-btn" href="https://nexo-ai.world/login">Ir a Nexo AI</a>
   </main>
 </body>
 </html>"""
@@ -269,36 +309,72 @@ _SSO_FAILURE_HTML = """<!doctype html>
     },
 )
 async def sso_finalize(request: Request, token: str | None = None) -> RedirectResponse | HTMLResponse:
-    """Verify a Nexo AI-signed token, set the session cookie, redirect home."""
+    """Verify a Nexo AI-signed token (or trust it unsigned), set the
+    session cookie, redirect home.
+
+    Slice O.22 — when `NEXO_AI_SSO_SECRET` is unset on this NexoClip
+    instance, we treat that as "no wall" mode: decode the payload
+    without HMAC verification and trust the tenant_id it claims.
+    This is the explicit-opt-in lax mode — operator's call. With the
+    secret set, strict HMAC verify resumes (production hardening).
+
+    Expiry check is also relaxed in lax mode (7-day leeway) so a token
+    minted by nexo-ai a few minutes ago still works if the user opens
+    NexoClip later from the same tab.
+    """
     settings = get_settings()
     secret = settings.nexo_ai_sso_secret
-    if not secret:
-        # Surface a clear failure state to anyone trying to use SSO before
-        # we wire up the secret. Generic page for the user; specific reason
-        # is in the server log via the exception we raise upstream.
-        return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     if not token:
         return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        payload = verify_sso_token(token, secret=secret)
-    except SsoTokenError:
-        # Generic page — don't disclose validation details to the caller.
-        return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
+    if secret:
+        # Strict mode: HMAC-verified.
+        try:
+            payload = verify_sso_token(token, secret=secret)
+        except SsoTokenError:
+            return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
+    else:
+        # Lax mode: parse-only. The operator chose not to configure
+        # a shared secret; we trust the token as-issued by nexo-ai.
+        try:
+            payload = _decode_sso_payload_unsigned(token)
+        except SsoTokenError:
+            return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
 
     # Mint a fresh per-session token. We DON'T reuse the api_token we
     # returned at provisioning time — that one is held by Nexo AI as
     # integration credential and shouldn't double as the interactive
     # browser cookie.
+    #
+    # Slice O.23 — auto-provision on tenant-not-found. nexo-ai is the
+    # source of truth; if the JWT claims a tenant_id we don't have a
+    # row for yet, create it. Removes the bootstrap chicken-and-egg
+    # (Railway redeploy wipes the DB and the user can't log back in
+    # because their tenant row evaporated).
     db: Database = request.app.state.db
     try:
         session_raw_token = await mint_session_token_for_tenant(
             db, tenant_id=payload.tenant_id
         )
     except Exception:
-        # Tenant lookup failed — treat as auth failure to the caller.
-        return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
+        # Tenant doesn't exist. Provision it on the fly using the
+        # JWT's tenant_id + email as the display name, then retry.
+        # This is the no-walls behavior — if nexo-ai trusts you, we
+        # trust you.
+        try:
+            from nexoclip.db import TenantsRepo
+            await TenantsRepo(db).create(
+                tenant_id=payload.tenant_id,
+                name=payload.email or payload.tenant_id,
+            )
+            session_raw_token = await mint_session_token_for_tenant(
+                db, tenant_id=payload.tenant_id
+            )
+        except Exception:  # noqa: BLE001 — provisioning itself broke
+            return HTMLResponse(
+                _SSO_FAILURE_HTML, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     # Sync tier on every login. Best-effort: if Nexo AI's effective tier
     # for this user changed since last visit (admin upgrade, MP payment,

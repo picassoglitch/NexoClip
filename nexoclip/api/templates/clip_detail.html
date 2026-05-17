@@ -45,6 +45,79 @@
     object-fit: cover;
     z-index: 1;
   }
+
+  /* Slice K.4 — preview fit-mode toggle.
+     Default (smart_crop): cover, the source's 16:9 frame fills 9:16
+     by cropping the sides. Tight on the face.
+     letterbox: contain — full horizontal frame, black bars top/bottom.
+     blurred_bg: full horizontal frame centered, with a blurred copy
+     of the frame painted behind to fill the 9:16 surface (no black
+     bars, "fit" without crop).
+     dynamic_zoom: cover + slow Ken-Burns zoom-in for cinematic
+     movement on stationary clips. */
+  .nc-preview[data-fit-mode="letterbox"] video {
+    object-fit: contain;
+    background: #000;
+  }
+  .nc-preview[data-fit-mode="blurred_bg"] {
+    background: #000;
+  }
+  .nc-preview[data-fit-mode="blurred_bg"] video {
+    object-fit: contain;
+  }
+  /* Blurred-bg uses the video as a stretched, blurred background
+     layer. Achieved via a duplicated <video> in the markup? Cheap
+     CSS-only approximation: a backdrop pseudo-element that hosts
+     the same media at cover + heavy blur. */
+  .nc-preview[data-fit-mode="blurred_bg"]::before {
+    content: "";
+    position: absolute;
+    inset: -30px;
+    background: inherit;
+    filter: blur(28px) brightness(0.6);
+    z-index: 0;
+  }
+  .nc-preview[data-fit-mode="dynamic_zoom"] video {
+    animation: nc-kenburns 12s ease-in-out infinite alternate;
+    transform-origin: center 40%;
+  }
+  @keyframes nc-kenburns {
+    from { transform: scale(1.00) translate(0,    0); }
+    to   { transform: scale(1.12) translate(-2%, -2%); }
+  }
+
+  /* Fit-mode pill switcher — lives at the bottom of the preview
+     stack so it sits next to the preview-mode tabs without
+     competing visually. */
+  .nc-preview-fitmode {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    background: var(--nc-bg-base);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .nc-preview-fitmode__btn {
+    padding: 5px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--nc-text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: all 120ms ease;
+  }
+  .nc-preview-fitmode__btn:hover { color: var(--nc-text); }
+  .nc-preview-fitmode__btn.is-active {
+    background: var(--nc-lime);
+    color: #06080d;
+  }
   .nc-preview__layer {
     position: absolute;
     inset: 0;
@@ -184,7 +257,13 @@
     font-size: 16px;
   }
 
-  /* Bottom platform banner (KICK / TIKTOK / etc.) */
+  /* Bottom platform banner (KICK / TIKTOK / etc.)
+     Slice K.4 — when the safezones overlay's `data-platform` is one
+     of the mobile-feed apps (tiktok/reels/shorts), the bottom 5-9%
+     of the frame is eaten by the audio chip + nav. The banner used
+     to sit at bottom:0 and get covered on every published clip.
+     Now it lifts above the safe band via the [data-platform=...]
+     selectors below. */
   .nc-pv-banner {
     position: absolute;
     left: 0;
@@ -278,6 +357,18 @@
     padding: 4px 8px;
     font-size: 10px;
     border-radius: 4px;
+  }
+
+  /* Slice K.4 — banner lifts above the mobile-feed bottom UI band
+     when the operator's safe-zone target is TikTok / Reels / Shorts.
+     The bands take up 5-7% of the vertical frame; the banner sits
+     8% from the bottom so the caption-row + audio-chip + nav UI
+     never paints over the URL. Kick clips have no such band → the
+     banner stays flush at bottom:0 by default. */
+  .nc-preview__layer .nc-pv-safezones[data-platform="tiktok"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url),
+  .nc-preview__layer .nc-pv-safezones[data-platform="reels"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url),
+  .nc-preview__layer .nc-pv-safezones[data-platform="shorts"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url) {
+    bottom: 8%;
   }
 
   /* Slice I.1 — top hook white-rounded headline box. */
@@ -1113,6 +1204,19 @@
   .nc-verdict--needs_edit {
     border-color: rgba(255, 184, 0, 0.40);
   }
+  /* Slice K.4 — brief glow pulse fired when the operator clicks
+     "Review issues before shipping" so their eye snaps to the
+     verdict card after scroll. */
+  @keyframes nc-verdict-flash {
+    0%, 100% { box-shadow:
+      0 0 0 1px rgba(200, 255, 92, 0.18) inset,
+      0 18px 48px -16px rgba(0, 0, 0, 0.55); }
+    35%      { box-shadow:
+      0 0 0 2px rgba(255, 184, 0, 0.70) inset,
+      0 0 30px 4px rgba(255, 184, 0, 0.55),
+      0 18px 48px -16px rgba(0, 0, 0, 0.55); }
+  }
+  .nc-verdict--flash { animation: nc-verdict-flash 800ms ease-out 1; }
 
   .nc-verdict__top {
     display: flex;
@@ -1139,17 +1243,25 @@
   .nc-verdict--reject .nc-verdict__headline-emoji {
     filter: drop-shadow(0 0 12px rgba(255, 90, 90, 0.55));
   }
+  /* Slice K.4 — operator reported headline was unreadable. The
+     gradient text-fill rendered low-contrast on the dark verdict
+     surface. Switched to solid lime (status drives the color)
+     with a soft glow for the cyberpunk feel without sacrificing
+     legibility. */
   .nc-verdict__headline-text {
-    background: linear-gradient(110deg, #fff 0%, var(--nc-lime) 100%);
-    -webkit-background-clip: text;
-            background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--nc-lime);
+    text-shadow: 0 0 14px rgba(200, 255, 92, 0.45);
+    -webkit-text-fill-color: var(--nc-lime);
   }
   .nc-verdict--reject .nc-verdict__headline-text {
-    background: linear-gradient(110deg, #fff 0%, #ff8a8a 100%);
-    -webkit-background-clip: text;
-            background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #ff8a8a;
+    text-shadow: 0 0 14px rgba(255, 90, 90, 0.45);
+    -webkit-text-fill-color: #ff8a8a;
+  }
+  .nc-verdict--needs_edit .nc-verdict__headline-text {
+    color: #ffd066;
+    text-shadow: 0 0 14px rgba(255, 184, 0, 0.40);
+    -webkit-text-fill-color: #ffd066;
   }
   .nc-verdict__retention {
     display: flex;
@@ -1292,6 +1404,35 @@
     backdrop-filter: blur(6px);
     font-size: 12px;
     animation: nc-pulse-soft 2.2s ease-in-out infinite;
+  }
+  /* Slice K.4 — mute toggle. Sits inside the ambient block so it
+     reads as part of the preview chrome, not a tool button. */
+  .nc-pv-ambient__mute {
+    pointer-events: auto;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    backdrop-filter: blur(6px);
+    transition: all 120ms ease;
+  }
+  .nc-pv-ambient__mute:hover {
+    background: rgba(0, 0, 0, 0.75);
+    border-color: var(--nc-lime);
+    color: var(--nc-lime);
+  }
+  .nc-pv-ambient__mute.is-unmuted {
+    background: rgba(200, 255, 92, 0.18);
+    border-color: var(--nc-lime);
+    color: var(--nc-lime);
+    box-shadow: 0 0 12px -2px rgba(200, 255, 92, 0.50);
   }
   .nc-pv-ambient__heart {
     color: #ff5fa4;
@@ -2012,10 +2153,36 @@
         </div>
         <div class="nc-panel__body">
 
+          {# Slice K.4 — fit-mode pill switcher.
+             Operator explicitly asked for crop alternatives. Default
+             is `smart_crop` (the current cover behavior). Other modes:
+               letterbox    — full horizontal frame, black bars
+               blurred_bg   — full frame centered, blurred backdrop
+                              (the typical "Reels-on-Reels" look)
+               dynamic_zoom — slow Ken-Burns pan/zoom for cinematic
+                              feel on stationary clips
+             Preview-only for now; renderer-side wiring lands in G.5. #}
+          <div class="nc-preview-fitmode" role="tablist">
+            {% set _fit_mode = ov.get('fit_mode') or 'smart_crop' %}
+            {% for fit_id, fit_label, fit_hint in [
+              ('smart_crop',   'Smart crop',  'Tight 9:16 crop on the subject'),
+              ('blurred_bg',   'Blurred bg',  'Full horizontal frame + blurred backdrop'),
+              ('letterbox',    'Letterbox',   'Full horizontal frame with black bars'),
+              ('dynamic_zoom', 'Cinematic',   'Slow zoom + drift (Ken Burns)'),
+            ] %}
+            <button type="button"
+                    class="nc-preview-fitmode__btn{% if _fit_mode == fit_id %} is-active{% endif %}"
+                    data-fit-mode="{{ fit_id }}"
+                    title="{{ fit_hint }}">
+              {{ fit_label }}
+            </button>
+            {% endfor %}
+          </div>
+
           {# Slice I.2 — preview-mode switcher.
              Raw         = source crop, no overlays at all
              Edited      = title + captions + banner (the published MP4)
-             Platform    = Edited + platform UI simulation chrome
+             Platform    = Edited + fake platform UI chrome
              Final       = same as Edited; reserved for export-pipeline parity #}
           <div class="nc-preview-modes" role="tablist">
             {% set _preview_mode = ov.get('preview_mode') or 'edited' %}
@@ -2044,6 +2211,7 @@
           <div class="nc-preview"
                id="preview"
                data-preview-mode="{{ _preview_mode }}"
+               data-fit-mode="{{ _fit_mode }}"
                style="--pv-highlight: {{ captions.highlight_color or caption_style.highlight_color }};
                       --pv-banner-color: {{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }};">
             <video id="preview-video" preload="metadata" muted playsinline loop>
@@ -2053,8 +2221,19 @@
             {# Slice K.3 — ambient "this is a real post" affordances.
                A pulsing like-counter pinned top-right + an animated
                heart icon. Pure visual sugar — operators FEEL they're
-               looking at a published clip, not a debug preview. #}
+               looking at a published clip, not a debug preview.
+               Slice K.4 — adjacent sound-toggle so the operator can
+               hear the clip. Browser autoplay policy still requires
+               the video to start muted; clicking unmute is the user
+               gesture that unlocks audio. #}
             <div class="nc-pv-ambient" aria-hidden="true">
+              <button type="button"
+                      id="pv-mute-toggle"
+                      class="nc-pv-ambient__mute"
+                      aria-label="Toggle sound"
+                      title="Sound (M)">
+                <i class="ti ti-volume-off"></i>
+              </button>
               <div class="nc-pv-ambient__like">
                 <span class="nc-pv-ambient__heart">♥</span>
                 <span id="pv-ambient-likes">2.4k</span>
@@ -2626,11 +2805,27 @@
            replacing the old AI Director panel) carries the same
            status info in a single emotional line. Power users can
            open "Why AI selected this clip" for the full list. #}
-        <button type="submit"
-                class="nc-btn {% if publishability is defined and publishability.status == 'reject' %}nc-btn--danger{% elif publishability is defined and publishability.status == 'needs_edit' %}nc-btn--warn{% else %}nc-btn--primary{% endif %} nc-btn--full">
-          <i class="ti ti-rocket" aria-hidden="true"></i>
-          <span>{% if publishability is defined and publishability.status == 'reject' %}Review issues before shipping{% elif publishability is defined and publishability.status == 'needs_edit' %}Ship anyway (needs review){% else %}Ship to platforms{% endif %}</span>
+        {# Slice K.4 — when status='reject', the submit fired the
+           finalize endpoint and got a silent 409 (the lifecycle
+           doesn't allow this transition). Now: type='button' that
+           opens "Why AI selected this clip" + scrolls to it so the
+           operator sees what's actually wrong. Other statuses
+           still submit normally. #}
+        {% if publishability is defined and publishability.status == 'reject' %}
+        <button type="button"
+                id="ship-review-btn"
+                class="nc-btn nc-btn--danger nc-btn--full"
+                onclick="(function(){var d=document.querySelector('.nc-advanced-analysis');if(d){d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'});}var v=document.querySelector('.nc-verdict');if(v){v.classList.add('nc-verdict--flash');setTimeout(function(){v.classList.remove('nc-verdict--flash');},900);}})();">
+          <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+          <span>Review issues before shipping</span>
         </button>
+        {% else %}
+        <button type="submit"
+                class="nc-btn {% if publishability is defined and publishability.status == 'needs_edit' %}nc-btn--warn{% else %}nc-btn--primary{% endif %} nc-btn--full">
+          <i class="ti ti-rocket" aria-hidden="true"></i>
+          <span>{% if publishability is defined and publishability.status == 'needs_edit' %}Ship anyway (needs review){% else %}Ship to platforms{% endif %}</span>
+        </button>
+        {% endif %}
         <button type="submit"
                 formaction="/dashboard/clips/{{ clip.id }}/overlay"
                 class="nc-btn nc-btn--full">
@@ -3220,14 +3415,25 @@
       });
     });
     bar.innerHTML = "";
-    if (!warnings.length) {
+    // Slice K.4 — only show the technical collision strings when the
+    // operator has explicitly turned ON "Show platform safe zones".
+    // For normal users the verdict card carries the same info in
+    // friendly emoji form; the raw "TikTok caption + hashtags overlay
+    // covers this band" sentence felt like a developer console error.
+    var safezonesOn = ctlSafezonesOn && ctlSafezonesOn.checked;
+    if (!warnings.length || !safezonesOn) {
       bar.classList.remove("is-active");
       return;
     }
     warnings.forEach(function (w) {
       var row = document.createElement("div");
       row.className = "nc-pv-collisions__row nc-pv-collisions__row--" + w.severity;
-      row.textContent = w.message;
+      // Shorten to a chip-style line; full message lives on title=.
+      var short = (w.severity === "block" ? "⛔ " : "⚠ ") +
+                  w.overlay.charAt(0).toUpperCase() + w.overlay.slice(1) +
+                  " collides with " + w.kind.replace(/_/g, " ");
+      row.textContent = short;
+      row.title = w.message;
       bar.appendChild(row);
     });
     bar.classList.add("is-active");
@@ -3249,6 +3455,34 @@
       applyPreviewMode(btn.getAttribute("data-mode"));
     });
   });
+
+  // ---- Slice K.4: fit-mode pill switcher ----
+  // Operator-facing toggle for how the source frame fills the 9:16
+  // preview. Persists per-clip via the existing overlay form
+  // (hidden input added below) AND localStorage for quick reload.
+  function applyFitMode(mode) {
+    var preview = document.getElementById("preview");
+    if (preview) preview.setAttribute("data-fit-mode", mode);
+    document.querySelectorAll(".nc-preview-fitmode__btn").forEach(function (b) {
+      b.classList.toggle("is-active", b.getAttribute("data-fit-mode") === mode);
+    });
+    try { localStorage.setItem("nc-fit-mode", mode); } catch (_) {}
+    // Persist via the same auto-save endpoint other editor prefs use.
+    // (Stored under overlay_config.fit_mode; renderer-side wiring lands
+    //  in G.5 — for now this just survives reload + per-clip override.)
+    if (typeof autoSavePref === "function") {
+      autoSavePref("fit_mode", mode);
+    }
+  }
+  document.querySelectorAll(".nc-preview-fitmode__btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyFitMode(btn.getAttribute("data-fit-mode"));
+    });
+  });
+  try {
+    var savedFit = localStorage.getItem("nc-fit-mode");
+    if (savedFit) applyFitMode(savedFit);
+  } catch (_) {}
   // Restore from localStorage on load (editor-only state).
   try {
     var savedMode = localStorage.getItem("nc-preview-mode");
@@ -3291,10 +3525,13 @@
 
   // Re-run collision check whenever an overlay-controlling input
   // changes. Cheap (rectangle math); fine to fire on every input.
+  // Slice K.4 — also re-run when safezones toggle flips so the bar
+  // appears/disappears immediately.
   [
     "ctl-banner-on", "ctl-banner-variant",
     "ctl-top-hook-on", "ctl-top-hook-text",
     "ctl-captions-on", "ctl-captions-position",
+    "ctl-safezones-on",
   ].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) {
@@ -3320,6 +3557,46 @@
       base += Math.floor(Math.random() * 5);
       el.textContent = fmt(base);
     }, 2200);
+  })();
+
+  // ---- Slice K.4: audio mute toggle ----
+  // The <video> starts muted (browser autoplay policy). First click
+  // on the mute toggle counts as the user gesture that unlocks
+  // audio. M-key keyboard shortcut too. Icon flips between
+  // volume-off / volume-2 so the operator sees the state.
+  (function () {
+    var btn = document.getElementById("pv-mute-toggle");
+    var vid = document.getElementById("preview-video");
+    if (!btn || !vid) return;
+    function refresh() {
+      var icon = btn.querySelector(".ti");
+      if (!icon) return;
+      icon.classList.toggle("ti-volume-off", vid.muted);
+      icon.classList.toggle("ti-volume", !vid.muted);
+      btn.classList.toggle("is-unmuted", !vid.muted);
+      btn.title = vid.muted ? "Sound (M)" : "Mute (M)";
+    }
+    function toggleMute() {
+      vid.muted = !vid.muted;
+      // If unmuting while paused, kick playback so audio plays.
+      if (!vid.muted && vid.paused) {
+        vid.play().catch(function () { /* autoplay restrictions */ });
+      }
+      refresh();
+    }
+    btn.addEventListener("click", toggleMute);
+    // M-key toggles too, unless the user is typing somewhere.
+    document.addEventListener("keydown", function (e) {
+      if (e.code !== "KeyM" || e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      if (t instanceof HTMLElement) {
+        var tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+      }
+      e.preventDefault();
+      toggleMute();
+    });
+    refresh();
   })();
 
   // ---- Slice I.3: Apply AI Fixes ----

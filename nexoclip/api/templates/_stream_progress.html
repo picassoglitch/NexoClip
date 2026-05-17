@@ -9,6 +9,43 @@
      hx-swap="outerHTML"
      {% endif %}>
 
+  {# Slice NX.5 — top-level failure banner. Renders only when the pipeline
+     raised an exception BEFORE entering any step (e.g. unknown persona at
+     boot), so the per-step rows below all stay 'pending'. Without this,
+     the user would see a perpetual spinner on a dead pipeline. #}
+  {% if pipeline_failure %}
+  <div class="nc-panel" style="border-color: var(--nc-danger); background: rgba(229, 72, 77, 0.06); margin-bottom: 14px;">
+    <div class="nc-panel__header" style="border-color: rgba(229, 72, 77, 0.25);">
+      <i class="ti ti-alert-octagon" aria-hidden="true" style="color: var(--nc-danger);"></i>
+      <span class="nc-panel__title" style="color: var(--nc-danger);">El pipeline no pudo arrancar</span>
+    </div>
+    <div class="nc-panel__body">
+      <div style="font-size: 13.5px; color: var(--nc-text); line-height: 1.5; margin-bottom: 10px;">
+        <strong>{{ pipeline_failure.error_type }}:</strong> {{ pipeline_failure.error }}
+      </div>
+      {% if "unknown persona" in pipeline_failure.error|lower %}
+      <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; padding: 10px 12px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+        <strong>Causa típica:</strong> el slug de persona que se envió en el upload
+        no coincide con ninguna persona registrada. Crea o renombra una en
+        <a href="/dashboard/personas" style="color: var(--nc-accent);">/dashboard/personas</a>,
+        después re-sube el video.
+      </div>
+      {% elif "ingest" in pipeline_failure.error|lower or "yt-dlp" in pipeline_failure.error|lower %}
+      <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; padding: 10px 12px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+        <strong>Causa típica:</strong> el VOD source es inaccesible (URL privada,
+        plataforma requiere cookies, archivo movido). Revisa la URL o el archivo
+        subido.
+      </div>
+      {% else %}
+      <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55;">
+        El traceback completo está en los logs del servidor.
+        Re-corre el pipeline con <strong>Run pipeline</strong> una vez resuelto.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
   <div class="nc-panel">
     <div class="nc-panel__header">
       {% if is_done %}

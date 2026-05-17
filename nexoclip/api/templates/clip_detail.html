@@ -709,14 +709,14 @@
       0 0 0 1px var(--nc-lime-bright),
       0 0 32px -2px rgba(200, 255, 92, 0.70);
   }
-  .nc-director__feedback {
+  .nc-verdict__feedback {
     font-size: 11px;
     color: var(--nc-text-muted);
     font-style: italic;
     min-height: 14px;
   }
-  .nc-director__feedback--ok { color: #00d97a; font-style: normal; }
-  .nc-director__feedback--err { color: #ff8a8a; }
+  .nc-verdict__feedback--ok { color: #00d97a; font-style: normal; }
+  .nc-verdict__feedback--err { color: #ff8a8a; }
 
   @media (max-width: 720px) {
     .nc-director { grid-template-columns: 1fr; }
@@ -1051,6 +1051,264 @@
   .nc-editor-controls .nc-panel { margin-bottom: 14px; }
   .nc-editor-controls .nc-panel__body { padding: 14px 16px; }
   .nc-editor-controls .nc-label { margin-bottom: 10px; }
+
+  /* Slice K.3 — AI Verdict Card. Replaces the chatty AI Director +
+     export checklist with ONE emotional headline + retention % +
+     platform check chips + two hero CTAs. Operators decide from this
+     card alone; everything else is collapsed. */
+  .nc-verdict {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 22px 24px 20px;
+    margin-bottom: 18px;
+    border-radius: 18px;
+    background:
+      radial-gradient(circle at top right, rgba(200, 255, 92, 0.10), transparent 60%),
+      radial-gradient(circle at bottom left, rgba(155, 79, 255, 0.06), transparent 65%),
+      linear-gradient(180deg, rgba(200, 255, 92, 0.06), rgba(255, 255, 255, 0.02));
+    border: 1px solid rgba(200, 255, 92, 0.30);
+    box-shadow:
+      0 0 0 1px rgba(200, 255, 92, 0.18) inset,
+      0 18px 48px -16px rgba(0, 0, 0, 0.55),
+      0 0 36px -10px rgba(200, 255, 92, 0.30);
+    overflow: hidden;
+    isolation: isolate;
+  }
+  /* Slice K.3 — animated lime gradient sweep on the verdict ring. */
+  .nc-verdict::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(110deg,
+      rgba(200, 255, 92, 0.0) 0%,
+      rgba(200, 255, 92, 0.55) 45%,
+      rgba(255, 60, 200, 0.30) 55%,
+      rgba(200, 255, 92, 0.0) 100%);
+    background-size: 220% 100%;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    animation: nc-verdict-sweep 7s linear infinite;
+    pointer-events: none;
+    z-index: 1;
+  }
+  @keyframes nc-verdict-sweep {
+    0%   { background-position: 200% 0%; }
+    100% { background-position: -100% 0%; }
+  }
+  .nc-verdict--reject {
+    border-color: rgba(255, 90, 90, 0.40);
+    background:
+      radial-gradient(circle at top right, rgba(255, 90, 90, 0.10), transparent 60%),
+      linear-gradient(180deg, rgba(255, 90, 90, 0.06), rgba(255, 255, 255, 0.02));
+    box-shadow:
+      0 0 0 1px rgba(255, 90, 90, 0.22) inset,
+      0 18px 48px -16px rgba(0, 0, 0, 0.55);
+  }
+  .nc-verdict--reject::before { display: none; }
+  .nc-verdict--needs_edit {
+    border-color: rgba(255, 184, 0, 0.40);
+  }
+
+  .nc-verdict__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+    position: relative; z-index: 2;
+  }
+  .nc-verdict__headline {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    color: #fff;
+    line-height: 1.05;
+  }
+  .nc-verdict__headline-emoji {
+    font-size: 36px;
+    filter: drop-shadow(0 0 12px rgba(200, 255, 92, 0.45));
+  }
+  .nc-verdict--reject .nc-verdict__headline-emoji {
+    filter: drop-shadow(0 0 12px rgba(255, 90, 90, 0.55));
+  }
+  .nc-verdict__headline-text {
+    background: linear-gradient(110deg, #fff 0%, var(--nc-lime) 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .nc-verdict--reject .nc-verdict__headline-text {
+    background: linear-gradient(110deg, #fff 0%, #ff8a8a 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .nc-verdict__retention {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    min-width: 100px;
+  }
+  .nc-verdict__retention-label {
+    color: var(--nc-text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .nc-verdict__retention-pct {
+    font-family: var(--nc-font-mono);
+    font-size: 32px;
+    font-weight: 900;
+    color: var(--nc-lime);
+    line-height: 1;
+    text-shadow: 0 0 18px rgba(200, 255, 92, 0.45);
+  }
+  .nc-verdict--reject .nc-verdict__retention-pct { color: #ff8a8a; text-shadow: 0 0 18px rgba(255, 90, 90, 0.40); }
+  .nc-verdict--needs_edit .nc-verdict__retention-pct { color: #ffb800; text-shadow: 0 0 18px rgba(255, 184, 0, 0.40); }
+
+  .nc-verdict__intel {
+    position: relative; z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .nc-verdict__intel-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--nc-text);
+    font-size: 13px;
+  }
+  .nc-verdict__intel-sparkle {
+    font-size: 14px;
+    filter: drop-shadow(0 0 6px rgba(200, 255, 92, 0.45));
+  }
+
+  .nc-verdict__platforms {
+    position: relative; z-index: 2;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .nc-verdict__plat-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px 5px 9px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: var(--nc-text);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .nc-verdict__plat-chip.is-ok {
+    border-color: rgba(200, 255, 92, 0.35);
+    color: #d8ff7a;
+  }
+  .nc-verdict__plat-chip.is-block {
+    border-color: rgba(255, 90, 90, 0.40);
+    color: #ff8a8a;
+  }
+  .nc-verdict__plat-icon { font-size: 11px; }
+
+  .nc-verdict__cta-row {
+    position: relative; z-index: 2;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .nc-verdict__cta-primary,
+  .nc-verdict__cta-secondary {
+    flex: 1 1 220px;
+    min-height: 46px;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+  .nc-verdict__cta-primary {
+    /* Magnetic-hover treatment — small but felt */
+    transition: transform 140ms ease, box-shadow 140ms ease;
+  }
+  .nc-verdict__cta-primary:hover {
+    transform: translateY(-2px) scale(1.01);
+  }
+  .nc-verdict__cta-secondary {
+    background: transparent;
+    color: var(--nc-lime);
+    border: 1.5px solid var(--nc-lime);
+    box-shadow: 0 0 18px -8px rgba(200, 255, 92, 0.45);
+  }
+  .nc-verdict__cta-secondary:hover {
+    background: var(--nc-lime);
+    color: #06080d;
+    box-shadow: 0 0 28px -4px rgba(200, 255, 92, 0.70);
+    transform: translateY(-2px) scale(1.01);
+  }
+
+  .nc-verdict__feedback {
+    font-size: 12px;
+    color: var(--nc-text-muted);
+    font-style: italic;
+    min-height: 14px;
+  }
+  .nc-verdict__feedback--ok { color: var(--nc-lime); font-style: normal; }
+  .nc-verdict__feedback--err { color: #ff8a8a; }
+
+  /* Slice K.3 — preview ambient pulse. Floating like-counter that
+     ticks gently and a soft engagement glow, so the preview FEELS
+     like a real post instead of a debug surface. */
+  .nc-pv-ambient {
+    position: absolute;
+    right: 14px;
+    top: 14px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    pointer-events: none;
+    color: #fff;
+    font-weight: 700;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+  }
+  .nc-pv-ambient__like {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    font-size: 12px;
+    animation: nc-pulse-soft 2.2s ease-in-out infinite;
+  }
+  .nc-pv-ambient__heart {
+    color: #ff5fa4;
+    filter: drop-shadow(0 0 8px rgba(255, 95, 164, 0.55));
+    animation: nc-heart-beat 1.6s ease-in-out infinite;
+  }
+  @keyframes nc-heart-beat {
+    0%, 100% { transform: scale(1);   }
+    14%      { transform: scale(1.15); }
+    28%      { transform: scale(1);   }
+    42%      { transform: scale(1.12); }
+    70%      { transform: scale(1);   }
+  }
+  @keyframes nc-pulse-soft {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(200, 255, 92, 0.30); }
+    50%      { box-shadow: 0 0 0 8px rgba(200, 255, 92, 0.00); }
+  }
 
   /* Slice K.2 — Advanced analysis accordion. Wraps the diagnostic
      surfaces (AI insights chips, why-this-clip table, outcomes table,
@@ -1469,60 +1727,93 @@
    Replaces the cold "AI insights" chip strip with a human-readable
    recommendation panel + Publish Confidence ring + Apply AI fixes CTA.
    This is what the operator reads at a glance to answer "do I trust
-   this clip enough to ship?". The old chips still render below for
-   evidence drill-down. #}
+   this clip enough to ship?".
+
+   Slice K.3 — the chatty 6-bullet body got replaced with a
+   minimal Verdict Card: ONE emotional headline, the retention %,
+   platform-check chips, and TWO hero CTAs. The old director-line
+   list moves into "Why AI selected this clip" with the rest of the
+   diagnostics. #}
 {% if publishability is defined %}
-<div class="nc-director">
-  <div class="nc-director__score">
-    <div class="nc-director__confidence nc-director__confidence--{{ publishability.status }}"
-         style="--nc-confidence: {{ publishability.score }};">
-      <div class="nc-director__confidence-pct">{{ publishability.score }}</div>
-      <div class="nc-director__confidence-label">Publish<br>Confidence</div>
+{% set _viral_score = ai_scores.viral_score if ai_scores is defined else publishability.score %}
+{% set _headline_emoji = (
+  '🔥' if publishability.status == 'publish_ready' and _viral_score >= 75
+  else '⚠'  if publishability.status == 'needs_edit'
+  else '🛑' if publishability.status == 'reject'
+  else '✅'
+) %}
+{% set _headline_text = (
+  'HIGH VIRAL POTENTIAL'      if publishability.status == 'publish_ready' and _viral_score >= 75
+  else 'READY TO POST'        if publishability.status == 'publish_ready'
+  else 'NEEDS A QUICK FIX'    if publishability.status == 'needs_edit'
+  else 'NOT READY FOR AUTO-PUBLISH'
+) %}
+<div class="nc-verdict nc-verdict--{{ publishability.status }}">
+  <div class="nc-verdict__top">
+    <div class="nc-verdict__headline">
+      <span class="nc-verdict__headline-emoji">{{ _headline_emoji }}</span>
+      <span class="nc-verdict__headline-text">{{ _headline_text }}</span>
     </div>
-    <div class="nc-director__status nc-director__status--{{ publishability.status }}">
-      {% if publishability.status == 'publish_ready' %}
-        <i class="ti ti-rocket"></i> Ready to publish
-      {% elif publishability.status == 'needs_edit' %}
-        <i class="ti ti-edit"></i> Needs review
-      {% else %}
-        <i class="ti ti-alert-triangle"></i> Unsafe for auto-publish
-      {% endif %}
+    <div class="nc-verdict__retention" title="Publish confidence — based on hook, captions, face, safezones, dead-air, audio">
+      <span class="nc-verdict__retention-label">Est. retention</span>
+      <span class="nc-verdict__retention-pct">{{ publishability.score }}%</span>
     </div>
   </div>
 
-  <div class="nc-director__body">
-    <div class="nc-director__header">
-      <i class="ti ti-sparkles" aria-hidden="true"></i>
-      <span>AI Director</span>
-      <small>· human-readable recommendations</small>
+  {# Slice K.3 — ✨ AI-intelligence sparkle line. Pulled from the
+     existing breakdown so the operator FEELS the AI noticed real
+     stuff in the clip, not just scored boxes. #}
+  {% set _ai_evidence_lines = [] %}
+  {% if breakdown.heuristic_reason %}
+    {% set _ = _ai_evidence_lines.append('Detected: ' ~ breakdown.heuristic_reason|replace('_', ' ')) %}
+  {% endif %}
+  {% if breakdown.reaction_confidence is not none and breakdown.reaction_confidence >= 0.6 %}
+    {% set _ = _ai_evidence_lines.append('Strong on-screen reaction at the anchor') %}
+  {% endif %}
+  {% if breakdown.face_presence is not none and breakdown.face_presence >= 0.55 %}
+    {% set _ = _ai_evidence_lines.append('Subject visible ' ~ (breakdown.face_presence * 100)|int ~ '% of the clip') %}
+  {% endif %}
+  {% if _ai_evidence_lines %}
+  <div class="nc-verdict__intel">
+    {% for line in _ai_evidence_lines[:2] %}
+    <div class="nc-verdict__intel-line">
+      <span class="nc-verdict__intel-sparkle">✨</span>
+      <span>{{ line }}</span>
     </div>
-    <ul class="nc-director__lines">
-      {% for line in director_lines %}
-      <li class="nc-director__line nc-director__line--{{ line.kind }}">
-        <span class="nc-director__line-icon">
-          {% if line.kind == 'good' %}<i class="ti ti-check"></i>
-          {% elif line.kind == 'warn' %}<i class="ti ti-alert-circle"></i>
-          {% elif line.kind == 'block' %}<i class="ti ti-x"></i>
-          {% else %}<i class="ti ti-info-circle"></i>
-          {% endif %}
-        </span>
-        <span class="nc-director__line-text">{{ line.text }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    {# Slice K.2 — Apply AI fixes is the HERO CTA on the verdict card.
-       Bigger, brighter, lime-fill primary. Operators feel "make this
-       viral automatically" rather than hunting for a small wand
-       button. #}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# Platform-check chips — three platforms, derived from the
+     safe-zone collision detector's verdict. TikTok is the strictest;
+     if no critical warnings, every short-form passes. #}
+  <div class="nc-verdict__platforms">
+    {% set _has_block = publishability.blocking | length > 0 %}
+    {% set _has_warn  = publishability.warnings | length > 0 %}
+    {% for plat in ['TikTok', 'Reels', 'Shorts', 'Kick'] %}
+    {% set _ok = not _has_block %}
+    {% set _icon = '✅' if _ok and not _has_warn else ('⚠' if _ok else '🛑') %}
+    <span class="nc-verdict__plat-chip{% if _ok %} is-ok{% else %} is-block{% endif %}">
+      <span class="nc-verdict__plat-icon">{{ _icon }}</span>{{ plat }}
+    </span>
+    {% endfor %}
+  </div>
+
+  <div class="nc-verdict__cta-row">
     <button type="button"
-            class="nc-btn nc-btn--primary nc-director__apply-btn nc-director__apply-btn--hero"
+            class="nc-btn nc-btn--primary nc-verdict__cta-primary"
             id="apply-ai-fixes-btn"
             data-clip-id="{{ clip.id }}">
       <i class="ti ti-wand" aria-hidden="true"></i>
-      <span>Make this viral automatically</span>
+      <span>Auto fix &amp; optimize</span>
     </button>
-    <div id="apply-ai-fixes-feedback" class="nc-director__feedback"></div>
+    <button type="submit" form="overlay-form"
+            class="nc-btn nc-btn--primary nc-verdict__cta-secondary">
+      <i class="ti ti-rocket" aria-hidden="true"></i>
+      <span>{% if publishability.status == 'reject' %}Review &amp; publish{% else %}Publish now{% endif %}</span>
+    </button>
   </div>
+  <div id="apply-ai-fixes-feedback" class="nc-verdict__feedback"></div>
 </div>
 {% endif %}
 
@@ -1758,6 +2049,17 @@
             <video id="preview-video" preload="metadata" muted playsinline loop>
               <source src="/dashboard/clips/{{ clip.id }}/media">
             </video>
+
+            {# Slice K.3 — ambient "this is a real post" affordances.
+               A pulsing like-counter pinned top-right + an animated
+               heart icon. Pure visual sugar — operators FEEL they're
+               looking at a published clip, not a debug preview. #}
+            <div class="nc-pv-ambient" aria-hidden="true">
+              <div class="nc-pv-ambient__like">
+                <span class="nc-pv-ambient__heart">♥</span>
+                <span id="pv-ambient-likes">2.4k</span>
+              </div>
+            </div>
 
             {# Slice J.1 — Giant inline play/pause overlay.
                The bottom "Play preview" / "Pause" buttons used to be the
@@ -2317,38 +2619,13 @@
               needs_edit    → yellow "Ship anyway (needs review)"
               reject        → red    "Review issues before shipping"
            Submit is never disabled — the operator can force-ship if
-           they really want to. The label change is informational. #}
-        {% if publishability is defined %}
-        <details class="nc-export-checklist nc-export-checklist--{{ publishability.status }}" open>
-          <summary>
-            <i class="ti ti-list-check"></i>
-            <span>Export checklist</span>
-            <span class="nc-export-checklist__score">{{ publishability.score }}/100</span>
-          </summary>
-          <ul>
-            {% for r in publishability.reasons %}
-            <li class="nc-export-checklist__row nc-export-checklist__row--good">
-              <i class="ti ti-check"></i>{{ r }}
-            </li>
-            {% endfor %}
-            {% for w in publishability.blocking %}
-            <li class="nc-export-checklist__row nc-export-checklist__row--block">
-              <i class="ti ti-x"></i>{{ w }}
-            </li>
-            {% endfor %}
-            {% for w in publishability.warnings %}
-            <li class="nc-export-checklist__row nc-export-checklist__row--warn">
-              <i class="ti ti-alert-circle"></i>{{ w }}
-            </li>
-            {% endfor %}
-          </ul>
-          {% if publishability.recommended_action %}
-          <div class="nc-export-checklist__rec">
-            <i class="ti ti-sparkles"></i>{{ publishability.recommended_action }}
-          </div>
-          {% endif %}
-        </details>
-        {% endif %}
+           they really want to. The label change is informational.
+
+           Slice K.3 — the long Export-checklist was removed.
+           The hero AI Verdict Card (rendered at the top of the page,
+           replacing the old AI Director panel) carries the same
+           status info in a single emotional line. Power users can
+           open "Why AI selected this clip" for the full list. #}
         <button type="submit"
                 class="nc-btn {% if publishability is defined and publishability.status == 'reject' %}nc-btn--danger{% elif publishability is defined and publishability.status == 'needs_edit' %}nc-btn--warn{% else %}nc-btn--primary{% endif %} nc-btn--full">
           <i class="ti ti-rocket" aria-hidden="true"></i>
@@ -3027,6 +3304,24 @@
     }
   });
 
+  // ---- Slice K.3: ambient like-counter ticker ----
+  // Slow drift so the number FEELS alive without being distracting.
+  // Resets on every page load — purely decorative.
+  (function () {
+    var el = document.getElementById("pv-ambient-likes");
+    if (!el) return;
+    var base = 2400 + Math.floor(Math.random() * 800);
+    function fmt(n) {
+      if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+      return String(n);
+    }
+    el.textContent = fmt(base);
+    setInterval(function () {
+      base += Math.floor(Math.random() * 5);
+      el.textContent = fmt(base);
+    }, 2200);
+  })();
+
   // ---- Slice I.3: Apply AI Fixes ----
   // POSTs to /clips/{id}/apply-ai-fixes which runs the safe non-
   // destructive fix engine, persists the new overlay_config, and
@@ -3042,7 +3337,7 @@
       applyBtn.disabled = true;
       if (applyFb) {
         applyFb.textContent = "Applying fixes…";
-        applyFb.className = "nc-director__feedback";
+        applyFb.className = "nc-verdict__feedback";
       }
       fetch("/dashboard/clips/" + clipId + "/apply-ai-fixes", {
         method: "POST",
@@ -3059,14 +3354,14 @@
           if (n === 0) {
             if (applyFb) {
               applyFb.textContent = "Nothing to fix — the clip is already in good shape";
-              applyFb.className = "nc-director__feedback nc-director__feedback--ok";
+              applyFb.className = "nc-verdict__feedback nc-verdict__feedback--ok";
             }
             applyBtn.disabled = false;
             return;
           }
           if (applyFb) {
             applyFb.textContent = "Fixed " + n + " issue" + (n === 1 ? "" : "s") + " — refreshing…";
-            applyFb.className = "nc-director__feedback nc-director__feedback--ok";
+            applyFb.className = "nc-verdict__feedback nc-verdict__feedback--ok";
           }
           // Reload so the form repopulates from the new overlay_config.
           setTimeout(function () { window.location.reload(); }, 600);
@@ -3074,7 +3369,7 @@
         .catch(function (err) {
           if (applyFb) {
             applyFb.textContent = "Couldn't apply fixes (" + err.message + ")";
-            applyFb.className = "nc-director__feedback nc-director__feedback--err";
+            applyFb.className = "nc-verdict__feedback nc-verdict__feedback--err";
           }
           applyBtn.disabled = false;
         });

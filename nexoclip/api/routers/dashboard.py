@@ -50,6 +50,11 @@ from .clips import _VALID_STATUS_TRANSITIONS
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+# Slice O.24 — i18n globals (`t`, `locale`) for dashboard templates.
+# Same registry as the landing page; pages opt in by calling
+# `{{ t('nav.publish') }}` etc.
+from ..i18n import install_globals as _install_i18n  # noqa: E402
+_install_i18n(templates)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -381,8 +386,39 @@ async def stream_progress(
                 pass
 
     steps = [step_state[n] for n in step_order]
-    is_running = any(s["status"] == "running" for s in steps) or all(
-        s["status"] == "pending" for s in steps
+
+    # Slice NX.5 — top-level pipeline failure surfacing. If a `pipeline.failed`
+    # event exists for this stream, the runner caught an exception OUTSIDE
+    # any individual step (typically: bad persona_id, missing config, db
+    # open error). The per-step events are all 'pending' in this case, so
+    # without this check the UI would spin forever. We pull the most-recent
+    # such event and:
+    #   1) Flip the first pending step to a synthetic 'failed' state so the
+    #      progress row renders red with the error message.
+    #   2) Set has_failed=True so the parent template stops polling.
+    pipeline_failed_events = [
+        e
+        for e in all_events
+        if e.type == "pipeline.failed" and e.payload.get("stream_id") == stream_id
+    ]
+    pipeline_failure: dict[str, object] | None = None
+    if pipeline_failed_events:
+        latest = max(pipeline_failed_events, key=lambda e: e.ts)
+        pipeline_failure = {
+            "error": str(latest.payload.get("error") or "pipeline aborted"),
+            "error_type": str(latest.payload.get("error_type") or "Exception"),
+        }
+        # Mark the first pending step as failed so the progress card has
+        # SOMETHING to point at. Walk in order so the user sees the failure
+        # at the earliest stage that didn't get to run.
+        for s in steps:
+            if s["status"] == "pending":
+                s["status"] = "failed"
+                s["error"] = pipeline_failure["error"]
+                break
+
+    is_running = any(s["status"] == "running" for s in steps) or (
+        all(s["status"] == "pending" for s in steps) and pipeline_failure is None
     )
     is_done = all(s["status"] == "done" for s in steps)
     has_failed = any(s["status"] == "failed" for s in steps)
@@ -398,6 +434,7 @@ async def stream_progress(
             "is_done": is_done,
             "has_failed": has_failed,
             "is_abandoned": is_abandoned,
+            "pipeline_failure": pipeline_failure,
             "candidate_count": len(candidates),
             "clip_count": len(clips),
         },

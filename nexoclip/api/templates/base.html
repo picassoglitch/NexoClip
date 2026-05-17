@@ -18,7 +18,7 @@
   </li>
 {%- endmacro %}
 <!doctype html>
-<html lang="en">
+<html lang="{{ locale() }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -52,19 +52,20 @@
             language matches what creators actually think they're
             managing: clips, not raw streams. The underlying route
             still lives at /dashboard/streams (a rename of the route
-            would break bookmarks + every internal link). -#}
-        {{ nav_link("/dashboard/streams", "Clips") }}
-        {{ nav_link("/dashboard/inbox", "Inbox") }}
-        {{ nav_link("/dashboard/personas", "Personas") }}
-        {{ nav_link("/dashboard/brand-kits", "Brand kits") }}
-        {{ nav_link("/dashboard/publish", "Publish") }}
+            would break bookmarks + every internal link).
+            Slice O.24 — labels go through t() so es/en switch. -#}
+        {{ nav_link("/dashboard/streams", t("nav.clips")) }}
+        {{ nav_link("/dashboard/inbox", t("nav.inbox")) }}
+        {{ nav_link("/dashboard/personas", t("nav.personas")) }}
+        {{ nav_link("/dashboard/brand-kits", t("nav.brand_kits")) }}
+        {{ nav_link("/dashboard/publish", t("nav.publish")) }}
         {#- Slice O.9 — LLM spend + LLM settings are operator-only.
             Driven by NEXOCLIP_ADMIN_TENANT_IDS env var (see auth
             middleware). Regular creators never see them. -#}
         {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
         {% if _is_admin %}
-        {{ nav_link("/dashboard/llm-calls", "LLM spend") }}
-        {{ nav_link("/dashboard/settings/llm", "LLM settings", prefix="/dashboard/settings/llm") }}
+        {{ nav_link("/dashboard/llm-calls", t("nav.llm_spend")) }}
+        {{ nav_link("/dashboard/settings/llm", t("nav.llm_settings"), prefix="/dashboard/settings/llm") }}
         {% endif %}
       </ul>
       <div class="nc-nav__right">
@@ -130,7 +131,7 @@
         <form action="/dashboard/logout" method="post" style="margin: 0;">
           <button type="submit" class="nc-btn nc-btn--sm">
             <i class="ti ti-logout" aria-hidden="true"></i>
-            <span>Logout</span>
+            <span>{{ t('nav.logout') }}</span>
           </button>
         </form>
       </div>

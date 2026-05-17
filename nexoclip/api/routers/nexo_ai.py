@@ -277,22 +277,37 @@ async def set_tenant_status(
 # Plain-HTML error page (no template — keeps this router self-contained).
 # Generic copy on purpose: don't tell an attacker whether the token was
 # malformed, expired, or had a bad signature.
-_SSO_FAILURE_HTML = """<!doctype html>
-<html lang="en">
+# Slice O.24 — bilingual SSO failure page. We can't use Jinja's t()
+# function here because this HTML is emitted as a plain string from
+# inside the route handler (not a template render). Instead we inline
+# both en + es and pick at request time via _render_sso_failure().
+_SSO_FAILURE_HTML_TEMPLATE = """<!doctype html>
+<html lang="{lang}">
 <head>
   <meta charset="utf-8">
-  <title>NexoClip — Sesión inválida</title>
+  <title>NexoClip — {title}</title>
   <link rel="stylesheet" href="/static/nexoclip-theme.css">
 </head>
 <body>
   <main class="nc-page" style="max-width: 520px; margin: 80px auto; text-align: center;">
-    <h1>Sesión inválida</h1>
-    <p>El enlace que usaste para entrar no es válido o expiró.
-       Volvé al dashboard de Nexo AI y abrí NexoClip de nuevo.</p>
-    <a class="nc-btn" href="https://nexo-ai.world/login">Ir a Nexo AI</a>
+    <h1>{title}</h1>
+    <p>{body}</p>
+    <a class="nc-btn" href="https://nexo-ai.world/login">{cta}</a>
   </main>
 </body>
 </html>"""
+
+
+def _render_sso_failure(request: Request) -> str:
+    """Render the SSO failure page in the user's detected locale."""
+    from nexoclip.api.i18n import t
+    locale = getattr(request.state, "locale", "en")
+    return _SSO_FAILURE_HTML_TEMPLATE.format(
+        lang=locale,
+        title=t("sso.fail.title", locale),
+        body=t("sso.fail.body", locale),
+        cta=t("sso.fail.cta", locale),
+    )
 
 
 @router.get(
@@ -326,21 +341,21 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
     secret = settings.nexo_ai_sso_secret
 
     if not token:
-        return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_400_BAD_REQUEST)
+        return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_400_BAD_REQUEST)
 
     if secret:
         # Strict mode: HMAC-verified.
         try:
             payload = verify_sso_token(token, secret=secret)
         except SsoTokenError:
-            return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
+            return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_401_UNAUTHORIZED)
     else:
         # Lax mode: parse-only. The operator chose not to configure
         # a shared secret; we trust the token as-issued by nexo-ai.
         try:
             payload = _decode_sso_payload_unsigned(token)
         except SsoTokenError:
-            return HTMLResponse(_SSO_FAILURE_HTML, status_code=status.HTTP_401_UNAUTHORIZED)
+            return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_401_UNAUTHORIZED)
 
     # Mint a fresh per-session token. We DON'T reuse the api_token we
     # returned at provisioning time — that one is held by Nexo AI as
@@ -373,7 +388,7 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
             )
         except Exception:  # noqa: BLE001 — provisioning itself broke
             return HTMLResponse(
-                _SSO_FAILURE_HTML, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+                _render_sso_failure(request), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     # Sync tier on every login. Best-effort: if Nexo AI's effective tier

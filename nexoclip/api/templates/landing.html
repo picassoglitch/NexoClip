@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ locale() }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NexoClip — the AI growth engine for streamers</title>
+  <title>{{ t('landing.title_tag') }}</title>
 
   {# ---- Crawler / search-LLM metadata --------------------------- #}
   <meta name="description"
@@ -275,26 +275,21 @@
 </head>
 <body>
   <header class="nc-hero">
-    <span class="nc-hero__brand">NEXOCLIP</span>
-    <h1>The <strong>AI growth engine</strong> for streamers.</h1>
-    <p>
-      Drop a VOD. AI scores every clip on virality, generates the hook,
-      routes it to the right streamer's brand, and queues publish with
-      an undo window. The editor's still there when you need it — most
-      mornings you won't.
-    </p>
+    <span class="nc-hero__brand">{{ t('landing.hero.brand') }}</span>
+    <h1>{{ t('landing.hero.headline_html') | safe }}</h1>
+    <p>{{ t('landing.hero.subhead') }}</p>
     <div class="nc-hero__cta">
       <a href="/dashboard/login" class="nc-btn nc-btn--primary">
         <i class="ti ti-login" aria-hidden="true"></i>
-        <span>Sign in</span>
+        <span>{{ t('landing.hero.cta_sign_in') }}</span>
       </a>
       <a href="/docs" class="nc-btn">
         <i class="ti ti-book" aria-hidden="true"></i>
-        <span>API docs</span>
+        <span>{{ t('landing.hero.cta_api_docs') }}</span>
       </a>
       <a href="/llms.txt" class="nc-btn">
         <i class="ti ti-robot" aria-hidden="true"></i>
-        <span>For LLMs</span>
+        <span>{{ t('landing.hero.cta_for_llms') }}</span>
       </a>
     </div>
   </header>
@@ -302,92 +297,55 @@
   <main class="nc-landing">
 
     <section>
-      <h2>Why it's different</h2>
+      <h2>{{ t('landing.why.heading') }}</h2>
       <div class="nc-features">
 
         <div class="nc-feature">
           <i class="ti ti-trending-up nc-feature__icon" aria-hidden="true"></i>
-          <h3>AI scoring on every clip</h3>
-          <p>
-            Viral score, hook strength, caption readability, dead-air risk —
-            computed from the multimodal signals NexoClip already collects
-            (rescore, motion, face presence, words-per-sec). The operator
-            picks the AI's top 3 and ships.
-          </p>
+          <h3>{{ t('landing.why.scoring.title') }}</h3>
+          <p>{{ t('landing.why.scoring.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
-          <h3>Hook generator, 5 tones</h3>
-          <p>
-            One click, 5 viral title candidates in the streamer's voice.
-            Tone presets: aggressive, Gen Z, corporate, curious, default.
-            Click a candidate to drop it into the title overlay.
-          </p>
+          <h3>{{ t('landing.why.hook.title') }}</h3>
+          <p>{{ t('landing.why.hook.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-chart-line nc-feature__icon" aria-hidden="true"></i>
-          <h3>Intelligence timeline</h3>
-          <p>
-            Per-second markers under the preview: audio peaks, scene cuts,
-            laughter reactions, chat-heat spikes, face-emotion changes.
-            Click any marker to seek. Spot the moment that goes viral
-            before you watch the clip.
-          </p>
+          <h3>{{ t('landing.why.intel.title') }}</h3>
+          <p>{{ t('landing.why.intel.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-microphone-2 nc-feature__icon" aria-hidden="true"></i>
-          <h3>Voice-marker triggers</h3>
-          <p>
-            Streamers say <code>clipea esto</code> (clip the next 30s) or
-            <code>clipeaste eso</code> (clip the previous 60s) as natural
-            verbal bookmarks. Custom phrases per brand kit.
-          </p>
+          <h3>{{ t('landing.why.voice.title') }}</h3>
+          <p>{{ t('landing.why.voice.body_html') | safe }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-users nc-feature__icon" aria-hidden="true"></i>
-          <h3>Per-speaker brand kits</h3>
-          <p>
-            Multi-streamer VOD? Speaker diarization routes each clip to the
-            right host's colors, fonts, handles, and captions. Speaker
-            identities persist across VODs via embedding match. The
-            differentiator most clipping tools don't ship.
-          </p>
+          <h3>{{ t('landing.why.brandkits.title') }}</h3>
+          <p>{{ t('landing.why.brandkits.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-cpu nc-feature__icon" aria-hidden="true"></i>
-          <h3>Local GPU transcription</h3>
-          <p>
-            faster-whisper runs on your own GPU. Stream audio never leaves
-            your machine for transcription — only the LLM caption-generation
-            step calls out to Anthropic.
-          </p>
+          <h3>{{ t('landing.why.gpu.title') }}</h3>
+          <p>{{ t('landing.why.gpu.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-rocket nc-feature__icon" aria-hidden="true"></i>
-          <h3>Auto-publish with undo</h3>
-          <p>
-            Per-kit opt-in. Clips queue with a scheduled-for timestamp;
-            cancel from the inbox before the worker fires. Combined with
-            AI scoring, high-confidence clips ship without you ever
-            opening the editor.
-          </p>
+          <h3>{{ t('landing.why.publish.title') }}</h3>
+          <p>{{ t('landing.why.publish.body') }}</p>
         </div>
 
         <div class="nc-feature">
           <i class="ti ti-robot nc-feature__icon" aria-hidden="true"></i>
-          <h3>Native to AI agents</h3>
-          <p>
-            MCP server — drive NexoClip from Claude Code, Cursor, or any
-            LLM client. The agent lists streams, kicks off pipelines,
-            fetches clips, manages brand kits. The only stream-growth OS
-            built agent-first.
-          </p>
+          <h3>{{ t('landing.why.agents.title') }}</h3>
+          <p>{{ t('landing.why.agents.body') }}</p>
         </div>
 
       </div>

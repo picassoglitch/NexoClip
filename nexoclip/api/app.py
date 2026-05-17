@@ -115,6 +115,10 @@ def create_app(
     # is one click away via /dashboard/login.
     _templates_dir = Path(__file__).resolve().parent / "templates"
     _landing_templates = Jinja2Templates(directory=str(_templates_dir))
+    # Slice O.24 — install i18n globals (`t`, `locale`) on the landing
+    # template env so `{{ t('landing.hero.title') }}` works.
+    from nexoclip.api.i18n import install_globals as _install_i18n
+    _install_i18n(_landing_templates)
 
     @app.get("/", include_in_schema=False, response_class=HTMLResponse)
     async def root(request: Request) -> Response:

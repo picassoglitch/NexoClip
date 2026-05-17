@@ -78,6 +78,15 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        # Slice O.24 — detect locale FIRST (even for public paths), so
+        # the landing page + login form render in the user's language.
+        # Cheap: parses a single header string, no I/O.
+        try:
+            from nexoclip.api.i18n import detect_locale
+            request.state.locale = detect_locale(request)
+        except Exception:  # noqa: BLE001 — i18n is non-essential
+            request.state.locale = "en"
+
         path = request.url.path
         if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)

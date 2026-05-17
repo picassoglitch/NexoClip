@@ -15,6 +15,7 @@ from nexoclip.db import (
 from nexoclip.errors import TenancyError
 
 from ..deps import get_db, require_full_scope, tenant_binder
+from ..status_gate import require_active_tenant, require_paid_tier
 from ..schemas import (
     ClipResponse,
     ClipUpdateRequest,
@@ -92,7 +93,11 @@ async def update_clip(
     "/{clip_id}/publish",
     response_model=list[PublishJobResponse],
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_full_scope)],
+    dependencies=[
+        Depends(require_full_scope),
+        Depends(require_active_tenant),
+        Depends(require_paid_tier),
+    ],
 )
 async def publish_clip(
     clip_id: str,

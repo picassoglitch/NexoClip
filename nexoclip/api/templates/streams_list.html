@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Streams - NexoClip{% endblock %}
+{% block title %}Clips - NexoClip{% endblock %}
 {% block content %}
 
 {% macro mid_trunc(text, head=10, tail=10) -%}
@@ -227,6 +227,18 @@
   </div>
 </details>
 
+{#- Slice O.11 — flash banner after a successful delete. The
+    POST handler redirects to /dashboard/streams?deleted=1 so the
+    user gets confirmation that the row + files are gone. -#}
+{% if request.query_params.get('deleted') %}
+<div class="nc-panel" style="margin-bottom:14px;border-color:rgba(200,255,92,0.45);">
+  <div class="nc-panel__body" style="padding:14px;color:var(--nc-lime, #c8ff5c);font-weight:700;">
+    <i class="ti ti-trash" aria-hidden="true"></i>
+    Stream deleted. Its clips, candidates, variants, and on-disk files were removed.
+  </div>
+</div>
+{% endif %}
+
 {# ---- Streams list table ---------------------------------------- #}
 <div class="nc-panel">
   <div class="nc-panel__header">
@@ -267,10 +279,32 @@
           </td>
           <td><span class="nc-mono nc-mono--muted">{{ s.created_at[:19] }}</span></td>
           <td class="nc-cell-actions">
-            <a href="/dashboard/streams/{{ s.id }}" class="nc-btn nc-btn--sm">
-              <i class="ti ti-arrow-right" aria-hidden="true"></i>
-              <span>Open</span>
-            </a>
+            <div style="display:inline-flex;gap:6px;">
+              <a href="/dashboard/streams/{{ s.id }}" class="nc-btn nc-btn--sm">
+                <i class="ti ti-arrow-right" aria-hidden="true"></i>
+                <span>Open</span>
+              </a>
+              {#- Slice O.11 — per-row delete. Inline form so it's
+                  a real POST (not a fetch we'd need to hand-roll
+                  CSRF for); the JS just intercepts to confirm. The
+                  `running` status disables the button — deleting
+                  mid-pipeline yanks rows the worker is still writing
+                  to and corrupts the run. -#}
+              <form method="post"
+                    action="/dashboard/streams/{{ s.id }}/delete"
+                    style="display:inline;margin:0;"
+                    onsubmit="return confirm('Delete ' + {{ (s.title or s.id)|tojson }} + '?\nThis removes the video file, all clips, variants, and publish history. There is no undo.');">
+                <button type="submit"
+                        class="nc-btn nc-btn--sm js-delete-stream"
+                        {% if s.status == 'running' %}disabled
+                           title="Wait for the pipeline to finish before deleting"{% else %}
+                           title="Delete this stream + its clips + on-disk files"{% endif %}
+                        style="color:var(--nc-danger, #ff6b6b);border-color:rgba(255,107,107,0.45);">
+                  <i class="ti ti-trash" aria-hidden="true"></i>
+                  <span>Delete</span>
+                </button>
+              </form>
+            </div>
           </td>
         </tr>
         {% endfor %}

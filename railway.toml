@@ -1,0 +1,22 @@
+# Railway deployment config — config-as-code companion to the dashboard.
+# Reference: https://docs.railway.com/reference/config-as-code
+#
+# Volume mount and env vars live on the Railway dashboard (those are
+# project-level config, not repo-level). This file pins the build +
+# healthcheck behavior.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# /healthz is exempt from BearerAuthMiddleware (see nexoclip/api/auth.py
+# _PUBLIC_PATHS). Returns {"status": "ok"} — zero deps, no DB query.
+healthcheckPath = "/healthz"
+# 30s gives Whisper model warm-up + DB migration time on cold start.
+healthcheckTimeout = 30
+# Restart loops on failure. After 3 attempts Railway flags the deploy
+# as failed and stops trying — we'd rather see a hard fail than burn
+# Railway minutes on a permanently-broken image.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

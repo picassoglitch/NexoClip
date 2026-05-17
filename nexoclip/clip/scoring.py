@@ -55,42 +55,72 @@ class AIScoreCard(NamedTuple):
 
 
 def _viral_score(b: ClipBreakdown) -> tuple[int, str]:
-    """Composite 0-100 score weighted toward the strongest signal we have.
+    """Composite 0-100 viral score.
 
-    Priority order:
-      1. vision-LLM rescore (`reaction_confidence`) — the most accurate
-         single signal when present
-      2. heuristic_score — what the trigger scanner produced
-      3. face_presence boost — up to +10 when a face is in frame for
-         most of the clip (talking-head clips publish better)
+    Slice N.5 — softened. Operator pushback: previous formula was
+    `heuristic_score × 90` which produced a "2/100" score for clips
+    where the heuristic was weak (e.g. clips picked up via visual or
+    chat signals, not voice triggers). That number killed trust.
+
+    Now the score draws on MULTIPLE signals so a clip with low heuristic
+    but strong face / speaking / reaction still scores reasonably.
+
+    Slice N.7 — baseline lifted 30 → 55 to match the publishability
+    rewrite. The AI ALREADY decided this moment was worth clipping
+    when it became a candidate; the viral floor should reflect that
+    instead of starting at "barely worth ranking". Bonuses still
+    stack for clips that earn them.
+
+       - baseline                   55   (the AI's vote of confidence)
+       - reaction_confidence × 30   primary signal when present
+       - heuristic_score × 20       fallback when no rescore
+       - face_presence × 10         talking-head bump
+       - speaking_intensity bonus   capped at +6 for active speech
     """
+    base = 55.0
+    bits: list[str] = ["baseline 55"]
+
     if b.reaction_confidence is not None:
-        # Rescore is the truth when present. Heuristic gets half-weight.
-        base = b.reaction_confidence * 70 + b.heuristic_score * 30
-        why = f"vision-LLM rescore = {b.reaction_confidence:.2f}, heuristic = {b.heuristic_score:.2f}"
+        rc = b.reaction_confidence * 30
+        base += rc
+        bits.append(f"reaction {b.reaction_confidence:.2f} → +{rc:.0f}")
     else:
-        base = b.heuristic_score * 90  # leave 10pt headroom for the face boost
-        why = f"heuristic ({b.heuristic_reason}) = {b.heuristic_score:.2f}; not yet vision-rescored"
+        # No rescore → lean on the heuristic at a softer weight.
+        h = b.heuristic_score * 20
+        base += h
+        bits.append(f"heuristic ({b.heuristic_reason}) {b.heuristic_score:.2f} → +{h:.0f}")
 
-    if b.face_presence is not None and b.face_presence > 0.4:
-        boost = min(10, int((b.face_presence - 0.4) * 20))
-        base += boost
-        why += f" · face-presence boost +{boost}"
+    if b.face_presence is not None and b.face_presence > 0.3:
+        fb = min(10, int((b.face_presence - 0.3) * 18))
+        base += fb
+        bits.append(f"face {b.face_presence:.2f} → +{fb}")
 
-    return int(max(0, min(100, round(base)))), why
+    if b.speaking_intensity is not None:
+        if b.speaking_intensity >= 0.8:
+            base += 6
+            bits.append("speaking active → +6")
+        elif b.speaking_intensity >= 0.4:
+            base += 3
+            bits.append("some speech → +3")
+
+    return int(max(0, min(100, round(base)))), " · ".join(bits)
 
 
 # ---- hook strength ----
 
 
 def _hook_strength(viral: int) -> tuple[HookStrength, str]:
-    """Banded label for the viral score — operator-facing label that
-    reads as "should I write a strong hook?" rather than as a raw number."""
-    if viral >= 75:
-        return "HIGH", f"viral {viral} ≥ 75 — push this clip first"
-    if viral >= 55:
-        return "MEDIUM", f"viral {viral} in 55-74 — solid mid-tier candidate"
-    return "DEVELOPING", f"viral {viral} < 55 — needs a strong title to lift it"
+    """Banded label for the viral score.
+    Slice N.7 — bands lowered again 65/40 → 60/40. Combined with
+    the N.7 baseline lift (30 → 55), this means clips that the AI
+    flagged as candidates START at MEDIUM ("solid candidate") instead
+    of DEVELOPING. DEVELOPING is now reserved for the very rare clip
+    with no real signals."""
+    if viral >= 60:
+        return "HIGH", f"viral {viral} ≥ 60 — push this clip first"
+    if viral >= 40:
+        return "MEDIUM", f"viral {viral} in 40-59 — solid candidate"
+    return "DEVELOPING", f"viral {viral} < 40 — a strong hook can lift it"
 
 
 # ---- caption readability ----

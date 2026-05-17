@@ -38,6 +38,25 @@ class Tenant(BaseModel):
     retention_vod_days: int | None = None
     retention_clip_days: int | None = None
     retention_transcript_days: int | None = None
+    # Slice O.1 — subscription tier. Drives watermark presence on
+    # exported clips + (future J.2) token allowances and billing.
+    # Existing tenants land on "free" via migration 013 default.
+    tier: str = "free"
+    # Slice NX.2 — Nexo AI mutual exclusion. When PRO subscribers swap
+    # their live engine, Nexo AI POSTs /api/admin/tenants/{id}/status to
+    # set this to 'paused' here. The pipeline + publish workers gate on
+    # status='active' before doing real work; paused tenants surface a
+    # clear "paused by Nexo AI" message on the dashboard instead of jobs
+    # silently failing.
+    status: str = "active"
+    # Slice NX.4 — cached Nexo AI token balance. Updated by the outbound
+    # usage reporter after each LLM call. Templates render these directly
+    # in the nav chip without making any network call. NULL until the
+    # tenant's first LLM call gets reported.
+    cached_balance_remaining: int | None = None
+    cached_balance_unlimited: int = 0   # 0/1 in SQLite; cast to bool when reading
+    cached_balance_monthly_used: int | None = None
+    cached_balance_at: str | None = None
 
 
 class User(BaseModel):
@@ -432,6 +451,16 @@ class BrandKitRow(BaseModel):
     banner_live_badge_default: bool = False
     top_hook_enabled_default: bool = False
     top_hook_style_default: str | None = None
+
+    # Slice K.5 — operator's default target platform. Picking one
+    # (TikTok / Reels / Shorts / Kick / All) auto-configures every
+    # downstream editor setting via PLATFORM_PRESETS.
+    target_platform: str | None = None
+    # Slice O.1 — pro-tier toggle for the bottom-right "nexoclip.com"
+    # credit. Free tier ALWAYS gets the credit burned regardless of
+    # this value; pro+ tiers respect it (default ON so newly-upgraded
+    # tenants keep crediting until they explicitly opt out).
+    show_nexoclip_credit: bool = True
 
     created_at: str
     updated_at: str

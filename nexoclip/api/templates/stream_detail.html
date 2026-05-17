@@ -130,11 +130,27 @@
   </div>
 </div>
 
+{#- Slice O.1 — count of approved/published clips drives whether the
+    "Download all approved" CTA renders. The bulk endpoint 404s with
+    no approved clips; we hide the button instead to skip that path. -#}
+{%- set _ready_count = (clips | selectattr('status', 'in', ['approved', 'published']) | list | length) if clips else 0 -%}
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-scissors" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
     <span class="nc-panel__title">Clips</span>
-    <small>— {{ clips|length }} cut</small>
+    <small>— {{ clips|length }} cut{% if _ready_count %} · {{ _ready_count }} ready{% endif %}</small>
+    {% if _ready_count %}
+    {# Bulk extract — zips up every approved/published clip with the
+       burned overlays + watermark and serves as one attachment. #}
+    <a href="/dashboard/streams/{{ stream.id }}/download-approved"
+       class="nc-btn nc-btn--primary"
+       download
+       style="margin-left: auto;"
+       title="Save every approved + published clip as a zip">
+      <i class="ti ti-package-export" aria-hidden="true"></i>
+      <span>Download {{ _ready_count }} approved</span>
+    </a>
+    {% endif %}
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     {% if clips %}
@@ -166,6 +182,20 @@
             <i class="ti ti-cut" aria-hidden="true"></i>
             <span>Review</span>
           </a>
+          {# Slice O.1 — Download link surfaces on approved + published
+             clips only (drafts in `cut` / `ready_for_review` haven't
+             been finalized yet so there's no clip_final.mp4 with the
+             burned overlays). #}
+          {% if c.status in ('approved', 'published') %}
+          <a href="/dashboard/clips/{{ c.id }}/download"
+             class="nc-btn"
+             download
+             title="Save the final MP4 to your machine"
+             style="margin-top: 6px;">
+            <i class="ti ti-download" aria-hidden="true"></i>
+            <span>Download</span>
+          </a>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -215,4 +245,30 @@
     {% endif %}
   </div>
 </div>
+
+{#- Slice O.2 — "Send to publishing" CTA at the end of the stream
+    page. Surfaces only when there's at least one approved clip
+    ready to ship. Routes to /streams/{id}/publish where the operator
+    picks which connected accounts each clip ships to. -#}
+{% if _ready_count %}
+<div class="nc-panel nc-panel--cta-rail" style="margin-top: 16px;">
+  <div class="nc-panel__body" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px;">
+    <div>
+      <div style="font-size:14px;font-weight:800;color:var(--nc-lime, #c8ff5c);letter-spacing:0.02em;">
+        <i class="ti ti-rocket" aria-hidden="true"></i>
+        Ready to publish · {{ _ready_count }} clip{% if _ready_count != 1 %}s{% endif %}
+      </div>
+      <small style="color:var(--nc-text-muted);">
+        Push approved clips to your connected TikTok / Reels / Shorts / Kick accounts.
+      </small>
+    </div>
+    <a href="/dashboard/streams/{{ stream.id }}/publish"
+       class="nc-btn nc-btn--primary"
+       style="white-space:nowrap;">
+      <i class="ti ti-arrow-right" aria-hidden="true"></i>
+      <span>Go to publishing</span>
+    </a>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

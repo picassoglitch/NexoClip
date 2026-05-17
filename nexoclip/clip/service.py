@@ -486,55 +486,23 @@ def _ffmpeg_reformat_9_16(
 def _brand_kit_drawtext_filter(
     brand_kit: object | None, *, output_w: int
 ) -> str | None:
-    """Build the ffmpeg `drawtext` filter chunk for a brand kit's handle.
+    """Slice N.5 — DISABLED.
 
-    Returns the filter expression (without leading comma) or None when:
-      * no kit was supplied
-      * the kit has no primary handle on any platform
-      * we can't locate a system font (drawtext requires a file path on
-        most ffmpeg builds; bundling a font is a slice E upgrade)
+    Was: burned the brand_kit's @handle into the top-left corner of
+    every clip.mp4 during the cut step (D.1-era branding intent).
 
-    Handle resolution priority (matches the renderer's spec §3.5):
-      tiktok > youtube > instagram > kick
+    Why it's off now: the L.2 platform-sim chrome + M.14 official
+    Kick banner overlay both render the operator's handle in better
+    typography, at better positions, with platform-specific styling.
+    The cut-step drawtext was redundant AND visually conflicting —
+    operator-reported "second bad kick banner" was THIS burn-in.
+
+    Clips cut from this point forward won't have the redundant
+    drawtext. Existing clips that already shipped through the old
+    cut path will still show it until they're re-cut.
     """
-    if brand_kit is None:
-        return None
-    handle = (
-        getattr(brand_kit, "handle_tiktok", None)
-        or getattr(brand_kit, "handle_youtube", None)
-        or getattr(brand_kit, "handle_instagram", None)
-        or getattr(brand_kit, "handle_kick", None)
-    )
-    if not handle:
-        return None
-
-    fontfile = _find_system_font()
-    if fontfile is None:
-        _log.warning(
-            "brand_kit.drawtext_skipped",
-            reason="no system font found",
-            handle=handle,
-        )
-        return None
-
-    accent = getattr(brand_kit, "accent_color", "#FFD700") or "#FFD700"
-    # ffmpeg drawtext needs a path with forward slashes + escaped colons on
-    # Windows. The escape rules: literal colons in the filter graph value
-    # delimit filter options, so `C:` becomes `C\\:`. Forward slashes survive.
-    fontfile_ff = str(fontfile).replace("\\", "/").replace(":", "\\:")
-    # Single quotes inside the value need their own dance. Stripping them
-    # from the handle is fine — handles rarely have them.
-    safe_handle = (handle or "").replace("'", "")
-    fontsize = max(24, int(output_w * 0.028))
-    margin = max(12, int(output_w * 0.022))
-    return (
-        f"drawtext=fontfile='{fontfile_ff}'"
-        f":text='{safe_handle}'"
-        f":fontcolor={accent}"
-        f":fontsize={fontsize}"
-        f":x={margin}:y={margin}"
-        f":box=1:boxcolor=black@0.45:boxborderw=8"
-    )
+    _ = (brand_kit, output_w)  # unused — disabled per N.5
+    return None
 
 
 def _find_system_font() -> Path | None:

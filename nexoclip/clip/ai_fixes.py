@@ -54,10 +54,19 @@ def apply_ai_fixes(
     *,
     overlay_config: dict[str, object] | None,
     safe_zone_platform: str = "tiktok",
+    brand_kit_url: str | None = None,
 ) -> AIFixesResult:
     """Apply non-destructive fixes to the overlay config. Returns the
     updated dict + a list of what was changed (for the dashboard's
-    "Here's what AI fixed" feedback)."""
+    "Here's what AI fixed" feedback).
+
+    Slice N.1 — added more impactful fixes so the post-fix retention
+    score moves up noticeably:
+      - enable captions if disabled (+ ~12 score from caption-pacing
+        bonus when speaking_intensity falls in the sweet spot)
+      - fill banner.url from the operator's brand_kit_url (passed by
+        caller) when the banner has no URL yet
+    """
     out: dict[str, Any] = dict(overlay_config or {})
     banner: dict[str, Any] = dict(out.get("banner") or {})
     captions: dict[str, Any] = dict(out.get("captions") or {})
@@ -68,27 +77,44 @@ def apply_ai_fixes(
 
     fixes: list[FixOutcome] = []
 
-    # ---- Fix 1: lead_ms default --------------------------------
-    # The H.2 timing rewrite shows captions exactly as words are
-    # spoken with lead_ms=0; 120ms is the industry "read-ahead" default
-    # that materially improves retention. If the operator hasn't set
-    # one yet, nudge it to 120.
-    if captions.get("lead_ms") in (None, 0):
-        before = captions.get("lead_ms")
-        captions["lead_ms"] = 120
+    # ---- Fix 1a: enable captions if disabled -------------------
+    # Captions disabled = the publishability scorer dings the clip
+    # with "no on-screen text, lowers retention". Flipping on is
+    # always safe — the renderer already knows how to NOT burn
+    # captions when there's no transcript.
+    if captions.get("enabled") is False:
+        captions["enabled"] = True
         fixes.append(FixOutcome(
-            field="captions.lead_ms", before=before, after=120,
-            why="Set caption lead-time to recommended 120ms",
+            field="captions.enabled", before=False, after=True,
+            why="Enabled captions — retention drops without on-screen text",
         ))
 
-    # ---- Fix 2: enable safe_zone_platform --------------------------
-    if not out.get("safe_zone_platform"):
-        before = out.get("safe_zone_platform")
-        out["safe_zone_platform"] = safe_zone_platform
+    # ---- Fix 1b: lead_ms — DELETED in slice N.2 -----------------
+    # Was: nudge lead_ms 0/None → 120ms ("recommended read-ahead").
+    # Operator pushback: 120ms is arbitrary and the auto-fix surfaced
+    # it as a checkmark even when nothing visible changed for them.
+    # Caption lead-time stays at whatever the operator picked (or the
+    # brand-kit default, which we no longer override). Removed in
+    # both places: this engine + the renderer's word_captions module.
+
+    # ---- Fix 1c: fill banner URL from brand kit -----------------
+    # Operator's brand kit usually has a kick URL/handle saved. If
+    # banner.url is empty and we have one to use, fill it. This
+    # unblocks Fix 3 below (auto-enable banner when URL exists).
+    if brand_kit_url and not (banner.get("url") or "").strip():
+        before = banner.get("url")
+        banner["url"] = brand_kit_url
         fixes.append(FixOutcome(
-            field="safe_zone_platform", before=before, after=safe_zone_platform,
-            why=f"Locked safe-zone target to {safe_zone_platform.title()}",
+            field="banner.url", before=before, after=brand_kit_url,
+            why="Filled banner URL from your brand kit",
         ))
+
+    # ---- Fix 2: silently set safe_zone_platform if missing -------
+    # Slice N.2 — set the value but DON'T surface as a fix to the
+    # operator. The picked target is invisible scoring config and
+    # listing it as a fix made the diff feel like padding.
+    if not out.get("safe_zone_platform"):
+        out["safe_zone_platform"] = safe_zone_platform
 
     # ---- Fix 3: enable banner when URL exists but toggle is off ---
     url = (banner.get("url") or "").strip() if isinstance(banner.get("url"), str) else ""

@@ -410,6 +410,45 @@ async def _run_pipeline(
     stream_dir = output_dir / stream.id
     call_log_path = stream_dir / "llm_calls.jsonl"
 
+    # Slice O.12 — adaptive timeouts. Long-form VODs need proportionally
+    # more time for transcribe + analyze_video; a fixed 30-min whisper
+    # cap that worked for 5-min spikes fails the first time someone
+    # uploads a 3-hour stream. Each step's ceiling is now
+    #   max(static_floor, duration_s * multiplier)
+    # with admin tenants optionally bypassing the cap entirely. The
+    # `_is_admin_tenant` lookup is best-effort + cached at process
+    # boot via lru_cache so it doesn't hit the db per step.
+    def _is_admin_tenant(tid: str) -> bool:
+        raw = (settings.admin_tenant_ids or "").strip()
+        if not raw:
+            return False
+        ids = {p.strip() for p in raw.split(",") if p.strip()}
+        return tid in ids
+
+    _admin_uncapped = settings.admin_uncapped_pipeline and _is_admin_tenant(tenant_id)
+    _whisper_timeout = (
+        None if _admin_uncapped
+        else max(
+            settings.whisper_timeout_s,
+            stream.duration_s * settings.whisper_timeout_multiplier,
+        )
+    )
+    _analyze_video_timeout = (
+        None if _admin_uncapped
+        else max(
+            config.detection.visual.timeout_s,
+            stream.duration_s * settings.analyze_video_timeout_multiplier,
+        )
+    )
+    _log.info(
+        "pipeline.timeouts_resolved",
+        stream_id=stream.id,
+        duration_s=stream.duration_s,
+        whisper_timeout=_whisper_timeout,
+        analyze_timeout=_analyze_video_timeout,
+        admin_uncapped=_admin_uncapped,
+    )
+
     # 2a) analyze video — local CV pipeline. Skip silently if:
     #   (a) the visual signals it produces aren't consumed by anything
     #       (visual detector disabled + no vision_rescore in the default
@@ -431,18 +470,30 @@ async def _run_pipeline(
                 reason="visual detector disabled; nothing downstream consumes the output",
             )
         else:
-            timeout_s = config.detection.visual.timeout_s
+            # Slice O.12 — duration-scaled timeout. `_analyze_video_timeout`
+            # is None when admin bypass is on; we run unbounded in that
+            # case (admin only — paying users always get a cap).
+            timeout_s = _analyze_video_timeout
             try:
-                await asyncio.wait_for(
-                    _analyze_video(
+                if timeout_s is None:
+                    await _analyze_video(
                         tenant_id=tenant_id,
                         stream=stream,
                         output_dir=output_dir,
                         db=db,
                         force=force,
-                    ),
-                    timeout=timeout_s,
-                )
+                    )
+                else:
+                    await asyncio.wait_for(
+                        _analyze_video(
+                            tenant_id=tenant_id,
+                            stream=stream,
+                            output_dir=output_dir,
+                            db=db,
+                            force=force,
+                        ),
+                        timeout=timeout_s,
+                    )
             except DetectionError as e:
                 step_ctx.skipped = True
                 step_ctx.note = f"video not decodable: {e}"
@@ -529,8 +580,11 @@ async def _run_pipeline(
     whisper_lang: str | None = language if (language and language != "auto") else None
     with _step("transcribe", db=db, model=settings.whisper_model, device=settings.whisper_device):
         try:
-            transcript = await asyncio.wait_for(
-                transcribe(
+            # Slice O.12 — duration-scaled whisper timeout. Same admin
+            # bypass as analyze_video — `_whisper_timeout=None` skips
+            # the asyncio.wait_for wrapper entirely.
+            if _whisper_timeout is None:
+                transcript = await transcribe(
                     tenant_id=tenant_id,
                     stream=stream,
                     model_size=settings.whisper_model,
@@ -538,21 +592,34 @@ async def _run_pipeline(
                     compute_type=settings.whisper_compute_type,
                     language=whisper_lang,
                     force=force,
-                ),
-                timeout=settings.whisper_timeout_s,
-            )
+                )
+            else:
+                transcript = await asyncio.wait_for(
+                    transcribe(
+                        tenant_id=tenant_id,
+                        stream=stream,
+                        model_size=settings.whisper_model,
+                        device=settings.whisper_device,
+                        compute_type=settings.whisper_compute_type,
+                        language=whisper_lang,
+                        force=force,
+                    ),
+                    timeout=_whisper_timeout,
+                )
         except asyncio.TimeoutError as e:
             from nexoclip.errors import TranscriptionError
 
             raise TranscriptionError(
-                f"Whisper transcribe exceeded {settings.whisper_timeout_s:.0f}s "
+                f"Whisper transcribe exceeded {_whisper_timeout:.0f}s "
+                f"(scaled from {stream.duration_s:.0f}s VOD × "
+                f"{settings.whisper_timeout_multiplier}× multiplier) "
                 f"and was abandoned. Common causes on Windows: CUDA OOM (run "
                 f"`nvidia-smi` — if VRAM is full, restart the dashboard); a "
                 f"corrupted audio extract; or a stuck CTranslate2 worker. "
                 f"Fix: restart `python run.py`, click 'Run pipeline' on the "
                 f"stream again. If it hangs twice in a row, set "
                 f"NEXOCLIP_WHISPER_MODEL=base in .env (smaller model, faster, "
-                f"less VRAM)."
+                f"less VRAM), or bump NEXOCLIP_WHISPER_TIMEOUT_MULTIPLIER."
             ) from e
         if db is not None:
             await TranscriptsRepo(db).upsert(transcript_to_row(transcript))

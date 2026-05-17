@@ -1,0 +1,52 @@
+# Anything that doesn't need to ride along into the image.
+# Cuts build time + image size + avoids leaking local secrets / dev databases.
+
+# venv — we install fresh inside the image
+.venv/
+venv/
+
+# Local DBs (these are SQLite files from dev runs)
+*.db
+*.db-shm
+*.db-wal
+
+# Local pipeline outputs (clips, frames, VODs). The image starts with empty /data
+# and the persistent volume populates it at runtime.
+out/
+out_debug/
+export/
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git + dev tooling
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+
+# Env files — NEVER ship these. Railway env-var dashboard is the source of truth in prod.
+.env
+.env.*
+
+# Docs + tests + scripts don't run in production
+docs/
+tests/
+scripts/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc
+*.zip
+nexoclip-starter.zip
+*.log

@@ -32,6 +32,7 @@ from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
 from .routers import llm_calls as llm_calls_router
+from .routers import nexo_ai as nexo_ai_router
 from .routers import overlay as overlay_router
 from .routers import personas as personas_router
 from .routers import streams as streams_router
@@ -183,5 +184,9 @@ def create_app(
     # auth-protected (OBS Browser Source can't carry credentials).
     # Each route reads its config from query-string params.
     app.include_router(overlay_router.router)
+    # Slice NX.1 — Nexo AI integration. Routes carry their own auth
+    # (shared admin bearer + HMAC SSO); see routers/nexo_ai.py and
+    # docs/nexo_ai_integration.md.
+    app.include_router(nexo_ai_router.router)
 
     return app

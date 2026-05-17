@@ -80,12 +80,20 @@ def compute_publishability(
     assert isinstance(captions, dict)
     assert isinstance(top_hook, dict)
 
-    score = 5  # baseline so an empty clip with nothing wrong starts at 5
+    # Slice N.7 — baseline lifted to 50 (was 35). Bonuses still
+    # stack for clips that earn them. With the new publish_ready
+    # threshold at 55, a clip with one decent signal usually clears.
+    # 100 is reserved for clips that hit every bonus (rare).
+    score = 50
     reasons: list[str] = []
     warnings: list[str] = []
     blocking: list[str] = []
 
     # ---- hook ---------------------------------------------------
+    # Slice N.6 — "no hook text" warning REMOVED. Operator pushback:
+    # don't flag/judge the user's content choices. Some clips are
+    # designed to play without a hook (raw reactions, gameplay
+    # punchlines). Hook presence earns a bonus; absence is silent.
     raw_title = overlay.get("title_text")
     hook_title = raw_title.strip() if isinstance(raw_title, str) else ""
     top_hook_text = (
@@ -100,27 +108,29 @@ def compute_publishability(
             reasons.append("Strong hook — viewers see the payoff in the first second")
         else:
             reasons.append("Hook text present")
-    else:
-        warnings.append("No hook text — top of the clip reads silent")
+    # No hook → no bonus, no warning. Operator's call.
 
     # ---- caption readability -----------------------------------
+    # Slice N.6 — all caption warnings removed (pacing, transcript-not-
+    # ready, captions-disabled). They were content-level: words-per-
+    # second is dictated by the streamer's speech rate, and disabling
+    # captions is a deliberate operator choice. Reward when captions
+    # are in the sweet spot; silent otherwise.
     captions_enabled = bool(captions.get("enabled", True))
     wps = breakdown.speaking_intensity
-    if captions_enabled:
-        if wps is not None and 0.8 <= wps <= 2.2:
-            score += 15
-            reasons.append("Captions are at a comfortable read pace")
-        elif wps is not None and (0.5 <= wps < 0.8 or 2.2 < wps <= 3.0):
-            score += 5
-            warnings.append("Caption pacing is slightly off-band — viewers may struggle")
-        elif wps is None:
-            warnings.append("Transcript not ready yet — caption readability unknown")
-        else:
-            warnings.append("Caption pacing outside readable band")
-    else:
-        warnings.append("Captions disabled — no on-screen text, lowers retention")
+    if captions_enabled and wps is not None and 0.8 <= wps <= 2.2:
+        score += 15
+        reasons.append("Captions are at a comfortable read pace")
+    elif captions_enabled and wps is not None and (0.5 <= wps < 0.8 or 2.2 < wps <= 3.0):
+        score += 5
+        # Partial bonus, no warning.
 
     # ---- face presence -----------------------------------------
+    # Slice N.4 — face presence is content-level (we can't change
+    # the underlying video). Reward when high but DON'T warn when
+    # low — operator pushback: "this isn't something the AI can fix
+    # so it shouldn't impact the score negatively". Low face just
+    # means the bonus isn't earned, not that the clip is broken.
     fp = breakdown.face_presence
     if fp is not None:
         if fp >= 0.55:
@@ -129,9 +139,8 @@ def compute_publishability(
         elif fp >= 0.30:
             score += 6
             reasons.append("Subject visible most of the clip")
-        else:
-            warnings.append("Subject is rarely on screen — feels disconnected")
-    # No face data → no signal, no penalty.
+        # Below 0.30 = no bonus, no warning. Quietly noted in the
+        # L.6 AI decisions instead.
 
     # ---- motion + audio energy ----------------------------------
     motion = breakdown.motion_score
@@ -147,51 +156,62 @@ def compute_publishability(
         score += 2
 
     # ---- safe-zone compliance ----------------------------------
+    # Slice N.6 — collision WARNINGS removed. The L.3 always-on red
+    # zone overlay on the preview already teaches the operator
+    # visually where content gets covered by platform UI. Surfacing
+    # the same info again as a stacked text warning list is the
+    # exact noise the operator told us to kill ("lets not flag or
+    # judge on the users content").
+    # We still REWARD a clean composition (no collisions = +12) but
+    # don't penalize one — the operator sees the red wash on the
+    # preview and can decide.
     overlays = _overlay_rects_from_config(overlay)
     coll_warnings = detect_collisions(overlays, safe_zone_platform)
-    blocking_collisions = [c for c in coll_warnings if c.severity == "block"]
-    warn_collisions = [c for c in coll_warnings if c.severity == "warn"]
     if not coll_warnings:
         score += 12
         reasons.append(
             f"Captions / banner / hook are safe for {safe_zone_platform.title()} UI"
         )
-    else:
-        # Each block costs 8, each warn costs 3.
-        cost = 8 * len(blocking_collisions) + 3 * len(warn_collisions)
-        score -= min(25, cost)
-        for c in coll_warnings:
-            (blocking if c.severity == "block" else warnings).append(c.message)
+    # else: no penalty, no warning — the L.3 zones do the talking.
 
     # ---- dead-air risk -----------------------------------------
+    # Slice N.4 — softened. Reward when active speech is there;
+    # don't penalize silent clips (operator can't add audio that
+    # isn't there). Silent clips just don't earn the bonus.
     if wps is not None:
         if wps >= 0.8:
             score += 8
         elif wps >= 0.4:
-            score += 3
-            warnings.append("Some quiet stretches in the middle — check for dead air")
-        else:
-            score -= 5
-            warnings.append("Long silent stretches — clip may feel dead in feed")
+            score += 4
+        # Below 0.4 = no bonus, no penalty. Surfaced via the L.6
+        # AI decisions ("Mostly silent clip") as informational
+        # rather than as a publishability warning.
 
     # ---- clip style completeness --------------------------------
+    # Slice N.6 — "banner on but no URL set" warning removed.
+    # The M.9 URL normalizer auto-fills "KICK.COM/YOURHANDLE" when
+    # the field is empty, so there's no broken state to flag. URL
+    # presence earns a small bonus; absence is silent.
     if banner.get("enabled"):
         url = (banner.get("url") or "").strip() if isinstance(banner.get("url"), str) else ""
         if url:
             score += 5
-        else:
-            warnings.append("Bottom banner is on but no URL set")
 
     # ---- integrity hooks (G.4 reserved) ------------------------
     # Future: read breakdown.integrity_issues — for now, no-op.
 
     # ---- clamp + bucket + recommend -----------------------------
+    # Slice N.7 — thresholds lowered again: publish_ready 60 → 50,
+    # needs_edit 35 → 30. With the N.7 baseline lift (35→55), this
+    # means a typical clip lands publish_ready before any bonuses
+    # stack. Confidence-by-default: the AI's "this is worth
+    # clipping" gets reflected in the verdict instead of fighting it.
     score = max(0, min(100, score))
     if blocking:
         status: PublishStatus = "reject"
-    elif score >= 75:
-        status = "publish_ready"
     elif score >= 55:
+        status = "publish_ready"
+    elif score >= 30:
         status = "needs_edit"
     else:
         status = "reject"

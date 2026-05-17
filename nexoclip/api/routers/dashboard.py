@@ -39,12 +39,13 @@ from nexoclip.db import (
     StreamsRepo,
     VariantsRepo,
 )
-from nexoclip.db.models import CustomTriggerPhrases
+from nexoclip.db.models import ConnectedAccount, CustomTriggerPhrases
 from nexoclip.errors import NexoClipError
 from nexoclip.tenancy import hash_token
 
 from .._pipeline import PipelineKickoff
 from ..deps import get_db, require_full_scope, tenant_binder
+from ..status_gate import require_active_tenant, require_paid_tier
 from .clips import _VALID_STATUS_TRANSITIONS
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -64,6 +65,32 @@ async def dashboard_root() -> Response:
     redirect there. The bearer-auth middleware will bounce them on to
     /dashboard/login if they're not authenticated."""
     return RedirectResponse(url="/dashboard/streams", status_code=303)
+
+
+@router.get("/_balance/refresh", include_in_schema=False)
+async def refresh_balance(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Force-fetch the current Nexo AI token balance + update the local cache.
+
+    Triggered by clicking the balance chip in the nav. Useful when:
+      - The tenant just signed in and hasn't run any LLM calls yet (cache is
+        empty so the chip shows '— tokens').
+      - The operator wants to confirm the cross-engine balance reflects a
+        recent top-up purchase that happened on another device.
+
+    Best-effort: any failure leaves the cache as it was. The page that
+    redirects back here either shows the new number or the old placeholder.
+    """
+    from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+
+    await fetch_balance_now(db, tenant_id=tenant_id)
+    # Bounce back to wherever the user clicked from. Falls back to streams
+    # list if no Referer (direct hit, curl, etc).
+    referer = request.headers.get("referer") or "/dashboard/streams"
+    return RedirectResponse(url=referer, status_code=303)
 
 
 def _split_csv(value: str) -> list[str]:
@@ -166,7 +193,10 @@ async def streams_list(
     )
 
 
-@router.post("/streams", dependencies=[Depends(require_full_scope)])
+@router.post(
+    "/streams",
+    dependencies=[Depends(require_full_scope), Depends(require_active_tenant)],
+)
 async def streams_create(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -202,7 +232,10 @@ async def streams_create(
     return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
 
 
-@router.post("/streams/upload", dependencies=[Depends(require_full_scope)])
+@router.post(
+    "/streams/upload",
+    dependencies=[Depends(require_full_scope), Depends(require_active_tenant)],
+)
 async def streams_upload(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -416,9 +449,478 @@ async def stream_detail(
     )
 
 
+@router.get("/publish", response_class=HTMLResponse)
+async def publish_view(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.8 — global Publish page.
+
+    Aggregates every approved (or published) clip across every stream
+    for the current tenant into one matrix. Replaces the legacy
+    Accounts nav tab; account management still happens inline via the
+    chip strip + modal at the top.
+    """
+    clips = await ClipsRepo(db).list_for_tenant_with_status(
+        ["approved", "published"], limit=300
+    )
+
+    # Need each clip's stream so we can group by stream and show the
+    # stream title as a row header. Cache StreamsRepo.get() per id to
+    # avoid N+1.
+    streams_repo = StreamsRepo(db)
+    streams_by_id: dict[str, object] = {}
+    for c in clips:
+        if c.stream_id not in streams_by_id:
+            stm = await streams_repo.get(c.stream_id)
+            if stm is not None:
+                streams_by_id[c.stream_id] = stm
+
+    # Order: clips appear in the order they were returned (newest first),
+    # but we group them by stream so all clips from the same stream
+    # render consecutively. The template walks `clip_groups` which is
+    # a list of {stream, clips} dicts preserving first-seen order.
+    clip_groups_dict: dict[str, dict[str, object]] = {}
+    for c in clips:
+        if c.stream_id not in clip_groups_dict:
+            stm = streams_by_id.get(c.stream_id)
+            if stm is None:
+                continue
+            clip_groups_dict[c.stream_id] = {"stream": stm, "clips": []}
+        clip_groups_dict[c.stream_id]["clips"].append(c)  # type: ignore[index]
+    clip_groups = list(clip_groups_dict.values())
+
+    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
+    accounts_by_platform: dict[str, list[ConnectedAccount]] = {}
+    for a in accounts:
+        if a.status != "active":
+            continue
+        accounts_by_platform.setdefault(a.platform.lower(), []).append(a)
+
+    pj_repo = PublishJobsRepo(db)
+    existing_jobs: dict[tuple[str, str], str] = {}
+    variants_by_clip: dict[str, str] = {}
+    lead_variant_meta: dict[str, dict[str, object]] = {}
+    for c in clips:
+        for j in await pj_repo.list_for_clip(c.id):
+            existing_jobs[(c.id, j.platform.lower())] = j.status
+        vs = await VariantsRepo(db).list_for_clip(c.id)
+        if vs:
+            variants_by_clip[c.id] = vs[0].id
+            lead_variant_meta[c.id] = {
+                "title": vs[0].title_card_text or "",
+                "caption": vs[0].caption or "",
+                "hashtags": " ".join(vs[0].hashtags or []),
+            }
+
+    return templates.TemplateResponse(
+        request,
+        "publish.html",
+        {
+            "clip_groups": clip_groups,
+            "total_clips": len(clips),
+            "accounts_by_platform": accounts_by_platform,
+            "existing_jobs": existing_jobs,
+            "variants_by_clip": variants_by_clip,
+            "lead_variant_meta": lead_variant_meta,
+            "supported_platforms": [
+                ("tiktok",     "TikTok",  "ti-brand-tiktok"),
+                ("reels",      "Reels",   "ti-brand-instagram"),
+                ("shorts",     "Shorts",  "ti-brand-youtube"),
+                ("kick",       "Kick",    "ti-flame"),
+                ("twitch",     "Twitch",  "ti-brand-twitch"),
+            ],
+        },
+    )
+
+
+@router.get("/publish/status.json")
+async def publish_status_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.8 — tenant-wide publish status feed for the global page.
+
+    Same payload shape as the per-stream endpoint so the JS poller
+    can be shared verbatim — same `cells` dict keyed `<clip>__<platform>`,
+    same `failures` list, same `summary` counts.
+    """
+    import json as _json
+
+    clips = await ClipsRepo(db).list_for_tenant_with_status(
+        ["approved", "published"], limit=300
+    )
+    clip_by_id = {c.id: c for c in clips}
+    pj_repo = PublishJobsRepo(db)
+    cells: dict[str, dict[str, object]] = {}
+    failures: list[dict[str, object]] = []
+    summary: dict[str, int] = {"pending": 0, "running": 0, "sent": 0, "failed": 0}
+    for c in clips:
+        for j in await pj_repo.list_for_clip(c.id):
+            key = f"{c.id}__{j.platform.lower()}"
+            cells[key] = {
+                "status": j.status,
+                "job_id": j.id,
+                "last_error": j.last_error,
+                "external_url": j.external_url,
+                "attempts": j.attempts,
+            }
+            summary[j.status] = summary.get(j.status, 0) + 1
+            if j.status == "failed":
+                clp = clip_by_id.get(c.id)
+                failures.append({
+                    "job_id": j.id,
+                    "clip_id": c.id,
+                    "clip_label": (
+                        f"{clp.start_s:.1f}s → {clp.end_s:.1f}s" if clp else c.id
+                    ),
+                    "platform": j.platform,
+                    "error": j.last_error or "(no error message recorded)",
+                    "attempts": j.attempts,
+                })
+
+    return Response(
+        content=_json.dumps({
+            "cells": cells,
+            "summary": summary,
+            "failures": failures,
+        }),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post(
+    "/publish",
+    dependencies=[
+        Depends(require_full_scope),
+        Depends(require_active_tenant),
+        Depends(require_paid_tier),
+    ],
+)
+async def publish_submit(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.8 — accept the global publish form.
+
+    Same form shape as the per-stream POST: `clip_<id>_<platform>=1`
+    ticks + `meta_<id>_<platform>_<field>` overrides. We just look up
+    each clip's stream on demand instead of getting it from the URL.
+    """
+    form = await request.form()
+    pj_repo = PublishJobsRepo(db)
+    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
+    active_by_platform: dict[str, str] = {}
+    for a in accounts:
+        if a.status == "active":
+            active_by_platform.setdefault(a.platform.lower(), a.id)
+
+    all_clips = await ClipsRepo(db).list_for_tenant_with_status(
+        ["approved", "published"], limit=500
+    )
+    eligible_ids = {c.id for c in all_clips}
+
+    def _gather_meta(clip_id: str, platform: str) -> dict[str, str]:
+        prefix = f"meta_{clip_id}_{platform}_"
+        bundle: dict[str, str] = {}
+        for fld in ("title", "description", "hashtags"):
+            raw = form.get(prefix + fld)
+            if isinstance(raw, str) and raw.strip():
+                bundle[fld] = raw.strip()
+        return bundle
+
+    created = 0
+    for key, value in form.items():
+        if value != "1" or not key.startswith("clip_"):
+            continue
+        parts = key[len("clip_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        clip_id, platform = parts
+        if clip_id not in eligible_ids:
+            continue
+        account_id = active_by_platform.get(platform.lower())
+        if account_id is None:
+            continue
+        variants = await VariantsRepo(db).list_for_clip(clip_id)
+        if not variants:
+            continue
+        meta = _gather_meta(clip_id, platform.lower())
+        try:
+            await pj_repo.enqueue(
+                clip_id=clip_id,
+                variant_id=variants[0].id,
+                account_id=account_id,
+                platform=platform.lower(),
+                platform_metadata=meta or None,
+            )
+            created += 1
+        except Exception:  # noqa: BLE001
+            continue
+
+    await EventsRepo(db).emit(
+        type="publish.batch_enqueued",
+        payload={"scope": "global", "job_count": created},
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish?queued={created}",
+        status_code=303,
+    )
+
+
+@router.get("/streams/{stream_id}/publish", response_class=HTMLResponse)
+async def stream_publish_view(
+    request: Request,
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.2 — publishing page.
+
+    The page after Approve. Shows every approved/published clip on
+    this stream alongside the tenant's connected social accounts,
+    and lets the operator pick which clips ship to which platforms.
+
+    Lists pre-existing publish_jobs per clip so the operator sees
+    what's already queued / sent / failed — `Publish to TikTok`
+    becomes greyed out for clips that already have a TikTok job.
+    """
+    stream = await StreamsRepo(db).get(stream_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+
+    all_clips = await ClipsRepo(db).list_for_stream(stream_id)
+    # Only ship clips the operator has approved (or already published).
+    clips = [c for c in all_clips if c.status in ("approved", "published")]
+
+    # Connected accounts → group by platform so the editor can render
+    # one section per platform with the account it'd post to.
+    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
+    accounts_by_platform: dict[str, list[ConnectedAccount]] = {}
+    for a in accounts:
+        if a.status != "active":
+            continue
+        accounts_by_platform.setdefault(a.platform.lower(), []).append(a)
+
+    # Existing publish jobs per clip → operator sees what's already
+    # queued. Keyed (clip_id, platform) → status.
+    pj_repo = PublishJobsRepo(db)
+    existing_jobs: dict[tuple[str, str], str] = {}
+    for c in clips:
+        for j in await pj_repo.list_for_clip(c.id):
+            existing_jobs[(c.id, j.platform.lower())] = j.status
+
+    # Pull the first variant per clip so we have a variant_id ready
+    # for the enqueue path (publish_jobs requires a variant_id).
+    # Operators can refine variant choice in the per-clip editor;
+    # the bulk page uses the lead variant by default.
+    variants_by_clip: dict[str, str] = {}
+    # Slice O.6 — also surface the lead variant's title / caption /
+    # hashtags so the per-platform overrides editor can prefill its
+    # fields. Operator typed a great caption in the variant editor →
+    # the publish page should reuse it instead of forcing a re-type.
+    lead_variant_meta: dict[str, dict[str, object]] = {}
+    for c in clips:
+        vs = await VariantsRepo(db).list_for_clip(c.id)
+        if vs:
+            variants_by_clip[c.id] = vs[0].id
+            lead_variant_meta[c.id] = {
+                "title": vs[0].title_card_text or "",
+                "caption": vs[0].caption or "",
+                "hashtags": " ".join(vs[0].hashtags or []),
+            }
+
+    return templates.TemplateResponse(
+        request,
+        "stream_publish.html",
+        {
+            "stream": stream,
+            "clips": clips,
+            "accounts_by_platform": accounts_by_platform,
+            "existing_jobs": existing_jobs,
+            "variants_by_clip": variants_by_clip,
+            "lead_variant_meta": lead_variant_meta,
+            # Convenience: the five platforms we support today, in the
+            # order we want to render them. Account presence drives
+            # whether each section is enabled or shows a "connect" CTA.
+            # Slice O.3 — Twitch joined the list. Clips routed to
+            # Twitch ship as channel highlights / clip uploads via the
+            # Helix API (operator pastes a user access token w/
+            # clips:edit + channel:manage:videos scopes).
+            "supported_platforms": [
+                ("tiktok",     "TikTok",  "ti-brand-tiktok"),
+                ("reels",      "Reels",   "ti-brand-instagram"),
+                ("shorts",     "Shorts",  "ti-brand-youtube"),
+                ("kick",       "Kick",    "ti-flame"),
+                ("twitch",     "Twitch",  "ti-brand-twitch"),
+            ],
+        },
+    )
+
+
+@router.get("/streams/{stream_id}/publish-status.json")
+async def stream_publish_status_json(
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.5 — live publish-status polling for the matrix view.
+
+    Returns a flat dict keyed `<clip_id>__<platform>` → job status
+    string ("pending" / "running" / "sent" / "failed"). The publish
+    page polls this every few seconds and rewrites the matrix cells
+    in place so the operator sees progress without a hard refresh.
+
+    Also returns `summary` (counts per status) so the page header
+    can show "3 sent · 1 failed · 2 pending" rolling totals.
+    """
+    import json as _json
+
+    clips = await ClipsRepo(db).list_for_stream(stream_id)
+    clip_by_id = {c.id: c for c in clips}
+    pj_repo = PublishJobsRepo(db)
+    cells: dict[str, dict[str, object]] = {}
+    # Slice O.7 — `failures` is a flat list of {job_id, clip_id,
+    # clip_label, platform, error} the publish page renders in a panel
+    # below the matrix. Lets the operator see WHY something failed
+    # without bouncing into the clip detail screen.
+    failures: list[dict[str, object]] = []
+    summary: dict[str, int] = {"pending": 0, "running": 0, "sent": 0, "failed": 0}
+    for c in clips:
+        if c.status not in ("approved", "published"):
+            continue
+        for j in await pj_repo.list_for_clip(c.id):
+            key = f"{c.id}__{j.platform.lower()}"
+            cells[key] = {
+                "status": j.status,
+                "job_id": j.id,
+                "last_error": j.last_error,
+                "external_url": j.external_url,
+                "attempts": j.attempts,
+            }
+            summary[j.status] = summary.get(j.status, 0) + 1
+            if j.status == "failed":
+                clp = clip_by_id.get(c.id)
+                failures.append({
+                    "job_id": j.id,
+                    "clip_id": c.id,
+                    "clip_label": (
+                        f"{clp.start_s:.1f}s → {clp.end_s:.1f}s" if clp else c.id
+                    ),
+                    "platform": j.platform,
+                    "error": j.last_error or "(no error message recorded)",
+                    "attempts": j.attempts,
+                })
+
+    return Response(
+        content=_json.dumps({
+            "cells": cells,
+            "summary": summary,
+            "failures": failures,
+        }),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post(
+    "/streams/{stream_id}/publish",
+    dependencies=[
+        Depends(require_full_scope),
+        Depends(require_active_tenant),
+        Depends(require_paid_tier),
+    ],
+)
+async def stream_publish_submit(
+    request: Request,
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.2 — accept the publish form.
+
+    The form posts a flat list of `clip_<clip_id>_<platform>=1` flags
+    (one per checkbox the operator ticked). For each tick we create
+    a `publish_jobs` row in `pending` state; the existing publish
+    worker drains them on its next pass.
+    """
+    form = await request.form()
+    pj_repo = PublishJobsRepo(db)
+    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
+    active_by_platform: dict[str, str] = {}
+    for a in accounts:
+        if a.status == "active":
+            # If multiple accounts per platform, the first wins for now.
+            active_by_platform.setdefault(a.platform.lower(), a.id)
+
+    clips = await ClipsRepo(db).list_for_stream(stream_id)
+    eligible_ids = {c.id for c in clips if c.status in ("approved", "published")}
+
+    # Slice O.6 — read per-platform metadata override fields. Form
+    # keys: meta_<clip_id>_<platform>_<field>. Fields we surface in
+    # the publish-page editor: title, description, hashtags. The
+    # worker merges these onto the platform API call (TikTok caption,
+    # IG Reels caption, YT title/description, Twitch clip title, etc).
+    def _gather_meta(clip_id: str, platform: str) -> dict[str, str]:
+        prefix = f"meta_{clip_id}_{platform}_"
+        bundle: dict[str, str] = {}
+        for fld in ("title", "description", "hashtags"):
+            raw = form.get(prefix + fld)
+            if isinstance(raw, str) and raw.strip():
+                bundle[fld] = raw.strip()
+        return bundle
+
+    created = 0
+    for key, value in form.items():
+        if value != "1" or not key.startswith("clip_"):
+            continue
+        # key shape: clip_<clip_id>_<platform>
+        parts = key[len("clip_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        clip_id, platform = parts
+        if clip_id not in eligible_ids:
+            continue
+        account_id = active_by_platform.get(platform.lower())
+        if account_id is None:
+            continue
+        # Lead variant per clip — same fallback as the GET view.
+        variants = await VariantsRepo(db).list_for_clip(clip_id)
+        if not variants:
+            continue
+        meta = _gather_meta(clip_id, platform.lower())
+        try:
+            await pj_repo.enqueue(
+                clip_id=clip_id,
+                variant_id=variants[0].id,
+                account_id=account_id,
+                platform=platform.lower(),
+                platform_metadata=meta or None,
+            )
+            created += 1
+        except Exception:  # noqa: BLE001 — best-effort; one failure
+            # shouldn't abort the whole batch
+            continue
+
+    await EventsRepo(db).emit(
+        type="publish.batch_enqueued",
+        payload={
+            "stream_id": stream_id,
+            "job_count": created,
+        },
+    )
+    return RedirectResponse(
+        url=f"/dashboard/streams/{stream_id}/publish?queued={created}",
+        status_code=303,
+    )
+
+
 @router.post(
     "/streams/{stream_id}/rerun",
-    dependencies=[Depends(require_full_scope)],
+    dependencies=[Depends(require_full_scope), Depends(require_active_tenant)],
 )
 async def streams_rerun(
     request: Request,
@@ -524,6 +1026,7 @@ async def clip_detail(
     from nexoclip.branding import (
         caption_style_or_default,
         platform_choices,
+        platform_target_choices,
         preset_choices,
         style_choices,
         zones_for_platform,
@@ -593,6 +1096,20 @@ async def clip_detail(
     # the live preview against the right defaults when overlay_config
     # is empty (or partially populated).
     speaker_label: str | None = None
+    # Slice K.7 — surface trigger-phrase detection on the verdict card.
+    # The operator's #1 confusion was "did the AI actually detect the
+    # phrase I said?". Pull the matched phrase / snippet / kind out of
+    # the candidate evidence so the template can render a "Detected
+    # trigger: 'clip it'" line.
+    candidate_trigger: dict[str, object] | None = None
+    # Slice L.4b — face-aware hook positioning. Derive a coarse
+    # "face_zone" hint from the G.3 framing verdict's safe_crop_box so
+    # the editor's main hook + captions can dodge the face instead of
+    # statically anchoring at 18% (and sometimes covering it). Only
+    # three coarse zones — the precision isn't there to justify five —
+    # plus None when framing wasn't run on this clip (degrades to the
+    # L.4 static defaults).
+    face_zone: str | None = None
     if clip.candidate_id:
         for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
             if cand.id == clip.candidate_id:
@@ -600,12 +1117,87 @@ async def clip_detail(
                 lbl = ev.get("speaker_label")
                 if isinstance(lbl, str):
                     speaker_label = lbl
+                if isinstance(ev, dict):
+                    phrase = ev.get("phrase")
+                    snippet = ev.get("transcript_snippet")
+                    kind = ev.get("trigger_kind")
+                    if isinstance(phrase, str) and phrase:
+                        candidate_trigger = {
+                            "phrase": phrase,
+                            "snippet": snippet if isinstance(snippet, str) else "",
+                            "kind": kind if isinstance(kind, str) else "forward",
+                            "language": (
+                                ev.get("language")
+                                if isinstance(ev.get("language"), str)
+                                else None
+                            ),
+                            "confidence": (
+                                float(ev.get("confidence"))
+                                if isinstance(ev.get("confidence"), int | float)
+                                else None
+                            ),
+                        }
+                    # Slice L.4b — extract face_zone from framing.
+                    # The framing evidence persists `safe_crop_box`
+                    # (the chosen 9:16 crop region within the source).
+                    # `crop_box.y` near 0 means the crop is anchored at
+                    # the TOP of the source = face appears HIGH in the
+                    # 9:16 output. Map to three zones:
+                    #   top    → face in upper third → hook conflicts
+                    #   mid    → face mid-frame → L.4 default is fine
+                    #   lower  → face near bottom → hook is fully clear
+                    framing = ev.get("framing")
+                    if isinstance(framing, dict):
+                        crop = framing.get("safe_crop_box")
+                        if isinstance(crop, dict):
+                            cy = crop.get("y")
+                            if isinstance(cy, int | float):
+                                cy_f = float(cy)
+                                if cy_f < 0.10:
+                                    face_zone = "top"
+                                elif cy_f < 0.35:
+                                    face_zone = "mid"
+                                else:
+                                    face_zone = "lower"
                 break
     brand_kit = await resolve_brand_kit_for_candidate(
         db, stream_id=clip.stream_id, speaker_label=speaker_label
     )
     caption_style = caption_style_or_default(
         brand_kit.caption_style if brand_kit is not None else None
+    )
+
+    # Slice L.6 — viral-intelligence decision engine. Pure function
+    # over the breakdown + framing + platform inputs we already have.
+    # Outputs:
+    #   - intel_lines: ✨ phrases for the verdict card
+    #   - caption_position: cascades into the "Auto Viral" picker
+    #   - needs_hook / needs_subtitles / secondary_hook_recommended:
+    #     drive editor visibility hints
+    # The decision runs every request — it's a pure function with no
+    # I/O so per-request cost is negligible (microseconds).
+    from nexoclip.clip.ai_decisions import decide as _ai_decide
+
+    # Resolve operator's target platform (per-clip override wins over
+    # brand-kit default).
+    _ai_target_platform: str | None = None
+    if isinstance(clip.overlay_config, dict):
+        _tp = clip.overlay_config.get("target_platform")
+        if isinstance(_tp, str) and _tp:
+            _ai_target_platform = _tp
+    if not _ai_target_platform and brand_kit is not None:
+        _bk_tp = getattr(brand_kit, "target_platform", None)
+        if isinstance(_bk_tp, str) and _bk_tp:
+            _ai_target_platform = _bk_tp
+
+    ai_decisions = _ai_decide(
+        face_presence=breakdown.face_presence,
+        speaking_intensity=breakdown.speaking_intensity,
+        reaction_confidence=breakdown.reaction_confidence,
+        heuristic_reason=breakdown.heuristic_reason,
+        duration_s=clip.duration_s,
+        face_zone=face_zone,
+        target_platform=_ai_target_platform,
     )
 
     # Slice F.7-G — branding stickiness across clips.
@@ -663,6 +1255,21 @@ async def clip_detail(
             # Slice I.3 — Publishability verdict + AI Director narrative.
             "publishability": publishability,
             "director_lines": director,
+            # Slice K.7 — surface the voice-trigger match that fired
+            # this candidate. None when the clip wasn't voice-triggered
+            # (e.g. chat-heat-only candidates).
+            "candidate_trigger": candidate_trigger,
+            # Slice L.4b — coarse "where is the face" hint derived from
+            # G.3 framing. Template wires it onto the preview as
+            # data-face-zone="top|mid|lower" so the hook + captions
+            # avoid the face. None when framing wasn't run.
+            "face_zone": face_zone,
+            # Slice L.6 — AI auto-decisions (hook needed / subtitles
+            # needed / caption position / face vs gameplay priority /
+            # reaction-wins-over-captions). Drives the ✨ intel lines
+            # on the verdict card AND the "Auto Viral" cascade in the
+            # editor JS.
+            "ai_decisions": ai_decisions,
             "outcomes": outcomes,
             "brand_kit": brand_kit,
             "caption_style": caption_style,
@@ -670,6 +1277,10 @@ async def clip_detail(
             # Slice I.1 — Clip Style preset cards (Repost Page Viral /
             # Clean Creator / Gaming Chaos / Documentary / Minimal Native).
             "clip_style_choices": style_choices(),
+            # Slice K.5 — Target-platform chip row (TikTok / Reels /
+            # Shorts / Kick / All). Picking one auto-applies every
+            # downstream editor setting via PLATFORM_PRESETS.
+            "platform_target_choices": platform_target_choices(),
             # Slice I.2 — platform overlay simulation + safe zones.
             # `platform_choices` populates the simulation dropdown;
             # `platform_zone_specs` is the full zone catalog, indexed
@@ -732,6 +1343,13 @@ def _parse_overlay_form(
     platform_overlay_preview: str = "",
     safe_zone_platform: str = "",
     preview_mode: str = "",
+    # Slice K.5 — target-platform auto-config. ONE chip at the top of
+    # the editor (tiktok / reels / shorts / kick / all) that the JS
+    # uses to fan-out every other field (safe_zone, captions,
+    # banner_variant, clip_style…). We just need to remember *which*
+    # platform the operator picked so the next clip opens to the
+    # same chip.
+    target_platform: str = "",
 ) -> dict[str, object]:
     """Coerce the editor form's flat key/value submission into the
     nested overlay_config shape the renderer reads.
@@ -778,6 +1396,10 @@ def _parse_overlay_form(
             (platform_overlay_preview or "").strip().lower() or None,
         "safe_zone_platform": (safe_zone_platform or "").strip().lower() or None,
         "preview_mode": (preview_mode or "").strip().lower() or None,
+        # Slice K.5 — picked target platform (tiktok/reels/shorts/kick/all).
+        # JS uses this to fan-out the rest of the editor; we persist it so
+        # the next clip remembers the operator's last pick.
+        "target_platform": (target_platform or "").strip().lower() or None,
         "captions": {
             "enabled": _bool(captions_enabled),
             "preset": captions_preset.strip() or None,
@@ -865,6 +1487,15 @@ async def _persist_branding_to_brand_kit(
     clip_style_raw = cfg.get("clip_style")
     clip_style = (
         str(clip_style_raw).strip().lower() if isinstance(clip_style_raw, str) else ""
+    )
+    # Slice K.5 — target platform (tiktok/reels/shorts/kick/all). One
+    # chip drives the whole editor; remembered as the operator's
+    # default so the next clip auto-applies the same preset bundle.
+    target_platform_raw = cfg.get("target_platform")
+    target_platform_val = (
+        str(target_platform_raw).strip().lower()
+        if isinstance(target_platform_raw, str)
+        else ""
     )
     banner_variant_raw = banner.get("variant")
     banner_variant = (
@@ -972,6 +1603,7 @@ async def _persist_branding_to_brand_kit(
             banner_show_context_val, banner_show_safezones_val,
             clip_style or None, banner_variant or None,
             banner_live_badge_val, top_hook_enabled_val, top_hook_style or None,
+            target_platform_val or None,
         ]):
             try:
                 await repo.update(
@@ -986,6 +1618,8 @@ async def _persist_branding_to_brand_kit(
                     banner_live_badge_default=banner_live_badge_val,
                     top_hook_enabled_default=top_hook_enabled_val,
                     top_hook_style_default=top_hook_style or None,
+                    # Slice K.5.
+                    target_platform=target_platform_val or None,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -1004,6 +1638,7 @@ async def _persist_branding_to_brand_kit(
         banner_live_badge_val is not None,
         top_hook_enabled_val is not None,
         top_hook_style,
+        target_platform_val,
     ])
     if not has_change:
         return
@@ -1026,6 +1661,8 @@ async def _persist_branding_to_brand_kit(
             banner_live_badge_default=banner_live_badge_val,
             top_hook_enabled_default=top_hook_enabled_val,
             top_hook_style_default=top_hook_style or None,
+            # Slice K.5.
+            target_platform=target_platform_val or None,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -1041,17 +1678,24 @@ async def clip_apply_ai_fixes(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Slice I.3 — apply non-destructive AI-recommended fixes to a clip.
+    """Slice I.3 + N.1 — apply non-destructive AI-recommended fixes.
 
-    Re-runs `apply_ai_fixes` against the clip's current overlay_config
-    and writes the updated dict back. Returns the list of changes so
-    the dashboard can flash "AI fixed N issues" and the operator sees
-    exactly what got touched. Never modifies the clip's media — only
-    the overlay layer, which is what the burn step consumes.
+    Re-runs `apply_ai_fixes` against the clip's current overlay_config,
+    writes the updated dict back, and (N.1) recomputes publishability
+    before + after so the dashboard can animate the retention score
+    moving up. Also auto-promotes a clip from `cut` to
+    `ready_for_review` when the post-fix score crosses the
+    publish-ready threshold (75) — operator's "Auto fix & optimize"
+    button should produce a tangible status change, not just a
+    silent toast.
     """
     import json as _json
 
-    from nexoclip.clip import apply_ai_fixes
+    from nexoclip.clip import (
+        apply_ai_fixes,
+        clip_breakdown,
+        compute_publishability,
+    )
 
     repo = ClipsRepo(db)
     clip = await repo.get(clip_id)
@@ -1064,12 +1708,52 @@ async def clip_apply_ai_fixes(
         if isinstance(szp, str) and szp:
             safe_zone_target = szp
 
-    result = apply_ai_fixes(
-        overlay_config=(
-            clip.overlay_config if isinstance(clip.overlay_config, dict) else {}
-        ),
+    # --- Snapshot the BEFORE state for the response delta -----
+    before_overlay = (
+        clip.overlay_config if isinstance(clip.overlay_config, dict) else {}
+    )
+    breakdown = await clip_breakdown(db, clip_id)
+    before_verdict = compute_publishability(
+        breakdown=breakdown,
+        overlay_config=before_overlay,
         safe_zone_platform=safe_zone_target,
     )
+
+    # --- Apply fixes ------------------------------------------
+    # N.1 — pull the operator's saved brand-kit URL/handle so the
+    # auto-fixer can fill an empty banner.url. Avoids the "no banner
+    # because no URL was typed" trap that kept clips below the
+    # publish-ready threshold.
+    bk_url: str | None = None
+    try:
+        from nexoclip.branding import resolve_brand_kit_for_candidate
+        _bk = await resolve_brand_kit_for_candidate(
+            db, stream_id=clip.stream_id, speaker_label=None
+        )
+        if _bk is not None:
+            for attr in ("handle_kick", "handle_tiktok", "handle_youtube",
+                         "handle_instagram"):
+                v = getattr(_bk, attr, None)
+                if isinstance(v, str) and v.strip():
+                    bk_url = v.strip()
+                    break
+    except Exception:  # noqa: BLE001 — best-effort
+        bk_url = None
+
+    result = apply_ai_fixes(
+        overlay_config=before_overlay,
+        safe_zone_platform=safe_zone_target,
+        brand_kit_url=bk_url,
+    )
+
+    # --- Compute the AFTER state ------------------------------
+    after_verdict = compute_publishability(
+        breakdown=breakdown,
+        overlay_config=result.new_overlay_config,
+        safe_zone_platform=safe_zone_target,
+    )
+
+    auto_promoted = False
     if result.fixes:
         await repo.set_overlay_config(clip_id, overlay_config=result.new_overlay_config)
         await EventsRepo(db).emit(
@@ -1078,8 +1762,34 @@ async def clip_apply_ai_fixes(
                 "clip_id": clip_id,
                 "fix_count": len(result.fixes),
                 "fields": [f.field for f in result.fixes],
+                "score_before": before_verdict.score,
+                "score_after": after_verdict.score,
             },
         )
+
+        # Auto-promote `cut` → `ready_for_review` when the AI's fix
+        # lands us in publish_ready territory. The operator's clip
+        # status moves from "draft" to "ready" without a manual click
+        # — Auto Fix becomes a real one-click ship lane.
+        allowed = _VALID_STATUS_TRANSITIONS.get(clip.status, set())
+        if (
+            after_verdict.status == "publish_ready"
+            and clip.status == "cut"
+            and "ready_for_review" in allowed
+        ):
+            await repo.update_status(clip_id, status="ready_for_review")
+            auto_promoted = True
+            await EventsRepo(db).emit(
+                type="clip.auto_promoted",
+                payload={
+                    "clip_id": clip_id,
+                    "from_status": "cut",
+                    "to_status": "ready_for_review",
+                    "score": after_verdict.score,
+                    "trigger": "ai_fixes",
+                },
+            )
+
     return Response(
         content=_json.dumps(
             {
@@ -1094,6 +1804,14 @@ async def clip_apply_ai_fixes(
                     }
                     for f in result.fixes
                 ],
+                # N.1 — score delta + status info for the editor JS
+                # to animate. Both scores are 0-100 ints.
+                "score_before": before_verdict.score,
+                "score_after": after_verdict.score,
+                "status_before": before_verdict.status,
+                "status_after": after_verdict.status,
+                "auto_promoted": auto_promoted,
+                "auto_promoted_to": "ready_for_review" if auto_promoted else None,
             }
         ),
         media_type="application/json",
@@ -1197,8 +1915,14 @@ async def me_brand_kit_prefs(
     # and don't belong in the user's branding record. They still ride
     # the Save Draft path into clips.overlay_config_json so a per-clip
     # override is honored when set, but day-to-day persistence is JS.
+    # Slice K.5 — `target_platform` is also brand-kit-bound: it's the
+    # operator's "where I post" sticky default, so the next clip opens
+    # to the same chip pre-selected and every downstream field
+    # auto-applies from PLATFORM_PRESETS.
     if field == "clip_style":
         cfg["clip_style"] = _coerce(value, str)
+    elif field == "target_platform":
+        cfg["target_platform"] = _coerce(value, str)
     elif field in _BANNER_FIELDS:
         key, kind = _BANNER_FIELDS[field]
         banner_block[key] = _coerce(value, kind)
@@ -1273,6 +1997,8 @@ async def clip_overlay_save(
     platform_overlay_preview: str = Form(""),
     safe_zone_platform: str = Form(""),
     preview_mode: str = Form(""),
+    # Slice K.5 — target-platform auto-config (one chip → all settings).
+    target_platform: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1306,13 +2032,37 @@ async def clip_overlay_save(
         platform_overlay_preview=platform_overlay_preview,
         safe_zone_platform=safe_zone_platform,
         preview_mode=preview_mode,
+        target_platform=target_platform,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
-    await ClipsRepo(db).set_overlay_config(clip_id, overlay_config=cfg)
+    repo = ClipsRepo(db)
+    clip_before = await repo.get(clip_id)
+    await repo.set_overlay_config(clip_id, overlay_config=cfg)
     # Slice F.7-G — mirror branding choices to the tenant brand_kit
     # so the operator doesn't re-type URL / color on every clip.
     await _persist_branding_to_brand_kit(db, cfg)
+
+    # Slice O.17 — burn-on-save REMOVED. The previous O.12 behavior
+    # re-encoded clip_final.mp4 on every editor save, which was both
+    # wasteful (operator might save 10× while iterating) and useless
+    # (any subsequent save invalidates the prior burn anyway). The
+    # download / publish path already lazy-regenerates clip_final.mp4
+    # if it's missing — so saves become DB-only writes, and the burn
+    # happens exactly when an MP4 is actually about to leave the
+    # system.
+    #
+    # We MUST nuke any existing clip_final.mp4 here though — otherwise
+    # the download endpoint sees a file on disk + skips the lazy
+    # regen + serves an MP4 burned with the OLD overlay config.
+    # Deleting it forces a fresh burn on next download.
+    if clip_before is not None:
+        try:
+            stale_final = Path(clip_before.path).parent / "clip_final.mp4"
+            if stale_final.exists():
+                stale_final.unlink()
+        except Exception:  # noqa: BLE001 — invalidation is best-effort
+            pass
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
@@ -1348,6 +2098,8 @@ async def clip_overlay_finalize(
     platform_overlay_preview: str = Form(""),
     safe_zone_platform: str = Form(""),
     preview_mode: str = Form(""),
+    # Slice K.5 — target-platform auto-config (one chip → all settings).
+    target_platform: str = Form(""),
     comments_show: str = Form(""),
     comments_fake_likes: int = Form(0),
     tenant_id: str = Depends(tenant_binder),
@@ -1404,6 +2156,7 @@ async def clip_overlay_finalize(
         platform_overlay_preview=platform_overlay_preview,
         safe_zone_platform=safe_zone_platform,
         preview_mode=preview_mode,
+        target_platform=target_platform,
         comments_show=comments_show,
         comments_fake_likes=comments_fake_likes,
     )
@@ -1430,7 +2183,32 @@ async def clip_overlay_finalize(
             "burn_outcome": burn_outcome,
         },
     )
-    return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
+
+    # Slice N.2 — Approve & continue. After finalize, walk to the
+    # NEXT clip on the same stream that's still in the editor queue
+    # (status in `cut` / `ready_for_review`). If none remain, fall
+    # back to the stream detail page so the operator sees they're
+    # done. The "next clip" definition: earliest created_at among
+    # remaining draft clips on this stream, excluding the one we
+    # just approved.
+    siblings = await repo.list_for_stream(clip.stream_id)
+    next_clip = None
+    for c in sorted(siblings, key=lambda x: x.created_at):
+        if c.id == clip_id:
+            continue
+        if c.status in ("cut", "ready_for_review"):
+            next_clip = c
+            break
+
+    if next_clip is not None:
+        return RedirectResponse(
+            url=f"/dashboard/clips/{next_clip.id}?from_approve=1",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/dashboard/streams/{clip.stream_id}?queue_done=1",
+        status_code=303,
+    )
 
 
 @router.post(
@@ -1503,7 +2281,7 @@ async def _burn_overlays_for_clip(
     import structlog
 
     from nexoclip.clip import burn_overlays
-    from nexoclip.db import TranscriptsRepo
+    from nexoclip.db import TenantsRepo, TranscriptsRepo
 
     log = structlog.get_logger("nexoclip.api.dashboard")
 
@@ -1524,6 +2302,23 @@ async def _burn_overlays_for_clip(
         except (TypeError, _json.JSONDecodeError):
             segments = []
 
+    # Slice O.1 — resolve whether to burn the nexoclip.com watermark.
+    # Free tier always; pro+ respects the brand_kit toggle. Best-effort
+    # — we never block a burn on missing tier/kit data.
+    render_wm = True
+    try:
+        tenant = await TenantsRepo(db).get(clip.tenant_id)
+        tier = (tenant.tier if tenant else "free") or "free"
+        if tier != "free":
+            from nexoclip.branding import resolve_brand_kit_for_candidate
+            kit = await resolve_brand_kit_for_candidate(
+                db, stream_id=clip.stream_id, speaker_label=None
+            )
+            if kit is not None and not getattr(kit, "show_nexoclip_credit", True):
+                render_wm = False
+    except Exception:  # noqa: BLE001 — best-effort
+        render_wm = True
+
     try:
         # ffmpeg is sync + CPU-bound; offload to a thread so the
         # event loop isn't blocked while a 30s clip re-encodes.
@@ -1537,6 +2332,7 @@ async def _burn_overlays_for_clip(
             clip_end_s=clip.end_s,
             output_w=clip.width,
             output_h=clip.height,
+            render_watermark=render_wm,
         )
     except Exception as e:  # noqa: BLE001 — we want the catch-all
         log.warning("burn.failed", clip_id=clip_id, error=str(e))
@@ -1700,19 +2496,148 @@ async def clip_generate_hooks(
     )
 
 
+@router.get("/streams/{stream_id}/download-approved")
+async def stream_download_approved(
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.1 — bulk extract: zip every approved/published clip
+    on this stream into a single download. Operator's "Download all"
+    flow at the top of the Clips section.
+
+    Builds the zip in-memory (clips are short, the entire bundle
+    rarely exceeds a few hundred MB). For a stream with hundreds of
+    finalized clips this would warrant streaming-zip-on-disk, but
+    that's a J.2 follow-up — short-form clip pipelines max out
+    around 20-40 clips per stream.
+    """
+    import io
+    import zipfile
+
+    repo = ClipsRepo(db)
+    clips = await repo.list_for_stream(stream_id)
+    if not clips:
+        raise HTTPException(status_code=404, detail="no clips on this stream")
+    # Pick the ones the operator would actually want to ship —
+    # `approved` (ready to publish) + `published` (already shipped
+    # but operator wants a backup copy).
+    ready = [c for c in clips if c.status in ("approved", "published")]
+    if not ready:
+        raise HTTPException(
+            status_code=404,
+            detail="no approved clips yet — approve some first",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+        # Lower compresslevel = MP4s are already compressed; we only
+        # want zip's container behavior, not double-compression CPU.
+        for i, c in enumerate(ready, 1):
+            original = Path(c.path)
+            final = original.parent / "clip_final.mp4"
+            src = final if final.exists() else original
+            if not src.exists():
+                continue
+            # Index-prefixed name so the order in the zip mirrors the
+            # order on the stream page.
+            zf.write(src, arcname=f"{i:02d}_nexoclip_{c.id}.mp4")
+
+    buf.seek(0)
+    body = buf.read()
+    fname = f"nexoclip_stream_{stream_id}.zip"
+    return Response(
+        content=body,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Content-Length": str(len(body)),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/clips/{clip_id}/download")
+async def clip_download(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """Slice O.1 — extract / save the final clip MP4.
+
+    Returns the burned `clip_final.mp4` (the version with overlays +
+    captions + the nexoclip.com watermark when applicable) with
+    `Content-Disposition: attachment` so the browser triggers a save
+    dialog instead of inline playback.
+
+    The watermark itself is baked into `clip_final.mp4` at finalize
+    time per the tenant's tier — this endpoint just hands the file
+    over. If the clip has never been finalized (no clip_final.mp4
+    on disk), fall back to the original `clip.mp4` so the operator
+    still gets SOMETHING to download.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    original = Path(clip.path)
+    final = original.parent / "clip_final.mp4"
+
+    # Slice O.12 — parity fix backstop. If clip_final.mp4 doesn't exist
+    # (clip was approved before this slice landed, or the burn failed
+    # earlier), synthesize one NOW using whatever overlay_config the
+    # operator has saved. Guarantees the download always has the
+    # current preview's overlays + watermark, not a raw cut.
+    #
+    # We run the burn synchronously here even though it can take a few
+    # seconds — the user already clicked Download and is waiting on the
+    # response anyway. Better a 4-second pause with a correct file than
+    # an instant download of the wrong one.
+    if not final.exists() and original.exists():
+        try:
+            cfg = clip.overlay_config or {}
+            await _burn_overlays_for_clip(
+                db=db, clip_id=clip_id, overlay_config=cfg
+            )
+        except Exception:  # noqa: BLE001 — non-fatal, we fall back below
+            pass
+
+    clip_path = final if final.exists() else original
+    if not clip_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"clip file missing from disk: {clip_path}",
+        )
+    # Pretty filename for the download — operators want
+    # "stream-name__clip-001.mp4" not "clip_final.mp4".
+    pretty = f"nexoclip_{clip_id}.mp4"
+    return FileResponse(
+        path=clip_path,
+        media_type="video/mp4",
+        filename=pretty,
+        headers={"Content-Disposition": f'attachment; filename="{pretty}"'},
+    )
+
+
 @router.get("/clips/{clip_id}/media")
 async def clip_media(
     clip_id: str,
+    source: str = "original",
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> FileResponse:
     """Stream the cut MP4 for inline <video> playback on the clip detail page.
 
-    Prefers `clip_final.mp4` when present — that's the burned-in
-    version from the overlay finalize endpoint (slice F.7-E). The
-    editor's preview surface immediately reflects what publishers
-    will upload after the operator clicks Ship to platforms. Falls
-    back to the original `clip.mp4` when no burn has run yet.
+    Slice M.6 — defaults to the ORIGINAL `clip.mp4` (no burns).
+    Operator-reported bug: the editor was serving `clip_final.mp4`
+    (which has captions BAKED INTO PIXELS) while the live preview
+    ALSO renders styled overlay captions on top — operators saw
+    every caption line twice: the burned plain-white one underneath
+    + the karaoke-styled overlay on top.
+
+    The editor's job is to compose; the burn is what we SHIP. To see
+    the burned-final pixels, pass `?source=final` (used only by the
+    "Final" preview-mode tab, if/when wired). Everywhere else gets
+    the source so the styled overlays don't conflict with anything.
 
     Returns 404 if the clip row is missing or the on-disk file disappeared
     (e.g., out/ was nuked between runs). Tenant-bound so one tenant can't
@@ -1723,7 +2648,27 @@ async def clip_media(
         raise HTTPException(status_code=404, detail="clip not found")
     original = Path(clip.path)
     final = original.parent / "clip_final.mp4"
-    clip_path = final if final.exists() else original
+
+    # Slice O.13 — when the editor's "Final" tab requests the burned
+    # version and it's missing on disk, regenerate on the fly using
+    # the saved overlay_config. Guarantees the Final tab is never a
+    # broken video element. Same auto-burn pattern as the download
+    # endpoint (slice O.12).
+    if source == "final" and not final.exists() and original.exists():
+        try:
+            cfg = clip.overlay_config or {}
+            await _burn_overlays_for_clip(
+                db=db, clip_id=clip_id, overlay_config=cfg
+            )
+        except Exception:  # noqa: BLE001 — non-fatal, fall back below
+            pass
+
+    if source == "final" and final.exists():
+        clip_path = final
+    else:
+        # Default: ORIGINAL (no captions burned in pixels). Fall back
+        # to final only if the original is missing for some reason.
+        clip_path = original if original.exists() else final
     if not clip_path.exists():
         raise HTTPException(
             status_code=404,
@@ -1789,18 +2734,65 @@ async def clip_intelligence(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     markers = await compute_intelligence(db, clip_id=clip_id)
+
+    # Slice M.1 — surface the voice-trigger phrase that fired this
+    # clip as a first-class timeline marker. Operator reported the
+    # missing signal: "en el video dije clipea esto y no lo marco
+    # abajo como que escucho al usuario y como genero el clip basado
+    # en eso". The candidate's evidence carries the phrase + the
+    # timestamp; the timeline now shows it as a green dot labeled
+    # 🎯 with the matched phrase so the operator FEELS the AI's
+    # detection.
+    #
+    # Slice M.3 — `compute_intelligence` now ALSO scans the clip's
+    # transcript for trigger phrases (independent of how the candidate
+    # was generated). When that scan already found the phrase, this
+    # candidate-evidence path is a duplicate — skip it.
+    transcript_already_found_trigger = any(
+        m.kind == "voice_trigger" for m in markers
+    )
+    trigger_marker: dict[str, object] | None = None
+    if clip.candidate_id and not transcript_already_found_trigger:
+        for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
+            if cand.id == clip.candidate_id:
+                ev = cand.evidence or {}
+                if isinstance(ev, dict):
+                    phrase = ev.get("phrase")
+                    if isinstance(phrase, str) and phrase:
+                        # Convert absolute stream timestamp to clip-
+                        # relative. cand.timestamp is the phrase START
+                        # in the stream; the clip starts at clip.start_s.
+                        clip_rel = max(0.0, float(cand.timestamp) - clip.start_s)
+                        kind_label = (
+                            "Voice trigger fired"
+                            if ev.get("trigger_kind") != "retroactive"
+                            else "Retroactive trigger fired"
+                        )
+                        trigger_marker = {
+                            "kind": "voice_trigger",
+                            "ts": clip_rel,
+                            "score": float(ev.get("confidence") or 0.9),
+                            "label": f"🎯 {kind_label}: \"{phrase}\"",
+                        }
+                break
+
+    out_markers: list[dict[str, object]] = [
+        {
+            "kind": m.kind,
+            "ts": m.ts,
+            "score": m.score,
+            "label": m.label,
+        }
+        for m in markers
+    ]
+    # Sort by ts and put the trigger first so it leads the legend.
+    if trigger_marker is not None:
+        out_markers.insert(0, trigger_marker)
+
     return Response(
         content=_json.dumps(
             {
-                "markers": [
-                    {
-                        "kind": m.kind,
-                        "ts": m.ts,
-                        "score": m.score,
-                        "label": m.label,
-                    }
-                    for m in markers
-                ],
+                "markers": out_markers,
                 "duration_s": clip.duration_s,
             }
         ),
@@ -1903,6 +2895,14 @@ async def clip_captions(
             clip_end_s=clip.end_s,
         )
         # Classify the failure mode for the empty-state hint.
+        # Slice N.2 — "window_outside_transcript" was a catch-all
+        # that incorrectly fired even when the clip window WAS inside
+        # the transcript span but just happened to have no spoken
+        # words (silence between sentences, music-only stretches,
+        # crossfade gaps). Now we actually CHECK the span boundaries
+        # before claiming the window is outside; otherwise the
+        # diagnostic is simply "silent stretch" — the clip's audio
+        # band had no transcribable speech.
         if lines:
             diag["reason"] = "ok"
         elif diag["transcript_segment_count"] == 0:
@@ -1910,7 +2910,18 @@ async def clip_captions(
         elif diag["transcript_word_count"] == 0:
             diag["reason"] = "no_word_timestamps"
         else:
-            diag["reason"] = "window_outside_transcript"
+            span = diag.get("transcript_span_s")
+            if (
+                isinstance(span, list)
+                and len(span) == 2
+                and (clip.end_s < span[0] or clip.start_s > span[1])
+            ):
+                diag["reason"] = "window_outside_transcript"
+            else:
+                # Clip window IS inside the transcript span but no
+                # words fall in it — the audio band itself is silent /
+                # non-verbal across this stretch.
+                diag["reason"] = "silent_stretch"
         body = {
             "lines": lines_to_json(lines),
             "duration_s": clip.duration_s,
@@ -1982,6 +2993,77 @@ async def stream_source(
         media_type="video/mp4",
         filename=src.name,
     )
+
+
+@router.post(
+    "/streams/{stream_id}/delete",
+    dependencies=[Depends(require_full_scope)],
+)
+async def stream_delete(
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.11 — hard-delete a stream + cascade everything beneath it.
+
+    Two-phase: DB cascade first (FKs handle clips/candidates/variants/
+    publish_jobs/etc), then best-effort filesystem cleanup of the
+    per-stream output directory derived from `source_video_path`.
+
+    Blocks deletion while the pipeline is running so we don't kneecap
+    a worker mid-flight (the cascade would yank rows it's still
+    writing to). Ingested / done / failed streams are fair game.
+    """
+    repo = StreamsRepo(db)
+    stream = await repo.get(stream_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    if stream.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="stream is currently running — wait for it to finish or fail before deleting",
+        )
+
+    # Resolve the on-disk stream directory BEFORE the DB row goes
+    # away. The convention is `<output_dir>/<stream_id>/source.<ext>`,
+    # so the parent of source_video_path IS the per-stream dir. Using
+    # the row's own path is safer than reconstructing — it survives
+    # output_dir config drift between ingest time and delete time.
+    stream_dir: Path | None = None
+    try:
+        src = Path(stream.source_video_path).resolve()
+        parent = src.parent
+        # Guard: only nuke the directory if its name is the stream id.
+        # Belt-and-suspenders against a misconfigured stream pointing
+        # at, say, `/Users/picasso/Movies/source.mp4` whose parent is
+        # NOT a disposable stream dir.
+        if parent.name == stream_id:
+            stream_dir = parent
+    except Exception:  # noqa: BLE001 — path parsing failures are non-fatal
+        stream_dir = None
+
+    deleted = await repo.delete(stream_id)
+    if not deleted:
+        # Shouldn't happen — we just fetched the row — but if a parallel
+        # delete beat us, treat it as a no-op success.
+        return RedirectResponse(url="/dashboard/streams", status_code=303)
+
+    # Best-effort filesystem cleanup. Failures here don't fail the
+    # delete — the DB row is already gone, the operator's goal is
+    # met. Worst case there's a stale folder of mp4s the operator
+    # can rm by hand.
+    if stream_dir and stream_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(stream_dir, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    await EventsRepo(db).emit(
+        type="stream.deleted",
+        payload={"stream_id": stream_id, "fs_dir": str(stream_dir) if stream_dir else None},
+    )
+    return RedirectResponse(url="/dashboard/streams?deleted=1", status_code=303)
 
 
 @router.get("/calibration", response_class=HTMLResponse)
@@ -2295,16 +3377,133 @@ async def accounts_create(
     external_id: str = Form(...),
     display_name: str = Form(""),
     access_token: str = Form(...),
+    redirect_to: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    """Slice O.3 — accept a `redirect_to` form field so the inline
+    "Connect TikTok" modal on the stream publish page can drop the
+    operator right back on the matrix view after they finish the
+    connection (instead of bouncing them to the standalone
+    /connected-accounts page). Defaults to the legacy redirect for
+    requests that don't pass it."""
     await ConnectedAccountsRepo(db).create(
         platform=platform,
         external_id=external_id,
         display_name=display_name or None,
         oauth_blob={"access_token": access_token},
     )
-    return RedirectResponse(url="/dashboard/connected-accounts", status_code=303)
+    # Only honor same-origin paths so nobody can use this as an open
+    # redirect. Whitelisted prefixes match real dashboard routes.
+    safe_redirect = "/dashboard/connected-accounts"
+    if redirect_to.startswith("/dashboard/"):
+        safe_redirect = redirect_to
+    return RedirectResponse(url=safe_redirect, status_code=303)
+
+
+@router.post(
+    "/connected-accounts/{account_id}/update",
+    dependencies=[Depends(require_full_scope)],
+)
+async def accounts_update(
+    account_id: str,
+    external_id: str = Form(""),
+    display_name: str = Form(""),
+    access_token: str = Form(""),
+    redirect_to: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.7 — edit an existing connected account.
+
+    Called from the "Edit connection" modal on the publish page when
+    the operator clicks an already-connected platform chip. Partial
+    update: blank `access_token` keeps the existing one (so the
+    operator can rename without re-pasting a long-lived secret).
+    """
+    repo = ConnectedAccountsRepo(db)
+    existing = await repo.get(account_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+
+    await repo.update_meta(
+        account_id,
+        display_name=display_name if display_name else None,
+        external_id=external_id if external_id else None,
+    )
+    # Replace the access token only if the operator typed something.
+    # Empty string is the deliberate "leave it alone" signal — that's
+    # what the modal placeholder explains to the user.
+    if access_token.strip():
+        await repo.update_oauth(
+            account_id,
+            oauth_blob={"access_token": access_token.strip()},
+        )
+    # If the account had failed auth previously, a token replacement
+    # should flip it back to active. We do this unconditionally on
+    # update since the operator just confirmed the connection.
+    if existing.status != "active":
+        await repo.mark_status(account_id, "active")
+
+    safe_redirect = "/dashboard/connected-accounts"
+    if redirect_to.startswith("/dashboard/"):
+        safe_redirect = redirect_to
+    return RedirectResponse(url=safe_redirect, status_code=303)
+
+
+@router.post(
+    "/connected-accounts/{account_id}/disconnect",
+    dependencies=[Depends(require_full_scope)],
+)
+async def accounts_disconnect(
+    account_id: str,
+    redirect_to: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.7 — mark a connection as `disabled`.
+
+    We don't hard-delete because there may be publish_jobs that point
+    at it; the schema declares ON DELETE RESTRICT for that exact reason.
+    Disabling hides it from the publish UI without orphaning anything.
+    """
+    repo = ConnectedAccountsRepo(db)
+    existing = await repo.get(account_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+    await repo.mark_status(account_id, "disabled")
+    safe_redirect = "/dashboard/connected-accounts"
+    if redirect_to.startswith("/dashboard/"):
+        safe_redirect = redirect_to
+    return RedirectResponse(url=safe_redirect, status_code=303)
+
+
+@router.post(
+    "/publish-jobs/{job_id}/retry",
+    dependencies=[Depends(require_full_scope)],
+)
+async def publish_job_retry(
+    job_id: str,
+    redirect_to: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice O.7 — flip a failed job back to `pending`.
+
+    Surfaced from the publish-page failures panel ("Retry" button next
+    to each error). Doesn't reset the attempts counter — we want the
+    history visible so chronic failures are spottable.
+    """
+    flipped = await PublishJobsRepo(db).retry(job_id)
+    if not flipped:
+        # Job either doesn't exist or wasn't in `failed` state. Return
+        # 404 so the JS poller can surface the issue if it ever calls
+        # this directly.
+        raise HTTPException(status_code=404, detail="job not retryable")
+    safe_redirect = "/dashboard/connected-accounts"
+    if redirect_to.startswith("/dashboard/"):
+        safe_redirect = redirect_to
+    return RedirectResponse(url=safe_redirect, status_code=303)
 
 
 # ---------- LLM ----------

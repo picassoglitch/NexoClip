@@ -101,11 +101,83 @@ class TenantsRepo:
         cur = await conn.execute(
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
             "daily_publish_limit, rescore_concurrency_cap, "
-            "retention_vod_days, retention_clip_days, retention_transcript_days "
+            "retention_vod_days, retention_clip_days, retention_transcript_days, "
+            "tier, status, "
+            "cached_balance_remaining, cached_balance_unlimited, "
+            "cached_balance_monthly_used, cached_balance_at "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
         return _model(Tenant, await cur.fetchone())
+
+    async def find_by_external_user_id(self, external_user_id: str) -> Tenant | None:
+        """Look up a tenant by its Nexo AI cross-system user id.
+
+        Returns None if no tenant has claimed that external id yet. Used by
+        the /api/admin/tenants endpoint to make provisioning idempotent:
+        re-calls from Nexo AI (retries, admin re-grants) find the existing
+        tenant instead of creating a duplicate.
+        """
+        if not external_user_id:
+            return None
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
+            "daily_publish_limit, rescore_concurrency_cap, "
+            "retention_vod_days, retention_clip_days, retention_transcript_days, "
+            "tier, status, "
+            "cached_balance_remaining, cached_balance_unlimited, "
+            "cached_balance_monthly_used, cached_balance_at "
+            "FROM tenants WHERE external_user_id = ?",
+            (external_user_id,),
+        )
+        return _model(Tenant, await cur.fetchone())
+
+    async def set_status(self, tenant_id: str, status: str) -> None:
+        """Flip tenant status. Used by /api/admin/tenants/{id}/status which
+        Nexo AI calls when a PRO subscriber swaps their live engine — the
+        previously-active engine (this one) is paused so they can't cross-
+        use multiple engines on a single-slot plan. Valid values are bound
+        by the CHECK constraint in migration 015."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET status = ? WHERE id = ?",
+            (status, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_balance_cache(
+        self,
+        tenant_id: str,
+        *,
+        remaining: int,
+        unlimited: bool,
+        monthly_used: int,
+        at_iso: str,
+    ) -> None:
+        """Stash the latest Nexo AI balance numbers on this tenant row so
+        templates can render the chip without a network call. Called by the
+        outbound usage reporter after each successful POST to Nexo AI."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET "
+            "cached_balance_remaining = ?, "
+            "cached_balance_unlimited = ?, "
+            "cached_balance_monthly_used = ?, "
+            "cached_balance_at = ? "
+            "WHERE id = ?",
+            (remaining, 1 if unlimited else 0, monthly_used, at_iso, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_external_user_id(self, tenant_id: str, external_user_id: str) -> None:
+        """Bind an existing tenant to a Nexo AI user. One-shot."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET external_user_id = ? WHERE id = ?",
+            (external_user_id, tenant_id),
+        )
+        await conn.commit()
 
     async def get_or_raise(self, tenant_id: str) -> Tenant:
         t = await self.get(tenant_id)
@@ -118,7 +190,10 @@ class TenantsRepo:
         cur = await conn.execute(
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
             "daily_publish_limit, rescore_concurrency_cap, "
-            "retention_vod_days, retention_clip_days, retention_transcript_days "
+            "retention_vod_days, retention_clip_days, retention_transcript_days, "
+            "tier, status, "
+            "cached_balance_remaining, cached_balance_unlimited, "
+            "cached_balance_monthly_used, cached_balance_at "
             "FROM tenants ORDER BY created_at"
         )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]
@@ -455,6 +530,29 @@ class StreamsRepo:
         )
         return [StreamRow.model_validate(dict(r)) for r in await cur.fetchall()]
 
+    async def delete(self, stream_id: str) -> bool:
+        """Slice O.11 — hard-delete a stream + everything that hangs off it.
+
+        Returns True iff a row was deleted (the stream existed AND was
+        owned by the current tenant). Foreign-keys ON DELETE CASCADE
+        handle the rest: transcripts, candidates, clips (and through
+        clips → variants, publish_jobs, publish_metrics, events) all
+        get reaped automatically.
+
+        Filesystem cleanup is the caller's responsibility — this method
+        only touches the DB. The publish-jobs cascade means in-flight
+        jobs lose their row too, so block deletion of a `running` stream
+        at the route layer.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "DELETE FROM streams WHERE id = ? AND tenant_id = ?",
+            (stream_id, tenant_id),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
+
 
 class LLMCallsRepo:
     """Append-only log of every LLM call for billing + audit."""
@@ -783,6 +881,29 @@ class ClipsRepo:
         )
         return [_clip_from_row(r) for r in await cur.fetchall()]
 
+    async def list_for_tenant_with_status(
+        self, statuses: list[str], *, limit: int = 500
+    ) -> list[ClipRow]:
+        """Slice O.8 — every clip across every stream with one of the
+        given statuses. Powers the global Publish page which aggregates
+        approved + published clips across the whole tenant.
+
+        Newest-first because the operator usually wants their latest
+        approvals at the top of the list.
+        """
+        if not statuses:
+            return []
+        tenant_id = current_tenant_id()
+        placeholders = ",".join("?" for _ in statuses)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT * FROM clips WHERE tenant_id = ? "
+            f"AND status IN ({placeholders}) "
+            f"ORDER BY created_at DESC LIMIT ?",
+            (tenant_id, *statuses, limit),
+        )
+        return [_clip_from_row(r) for r in await cur.fetchall()]
+
     async def set_overlay_config(
         self, clip_id: str, *, overlay_config: dict[str, object] | None
     ) -> ClipRow:
@@ -1061,6 +1182,47 @@ class ConnectedAccountsRepo:
             raise NexoClipError(f"connected_account not found: {account_id}")
         return existing
 
+    async def update_meta(
+        self,
+        account_id: str,
+        *,
+        display_name: str | None = None,
+        external_id: str | None = None,
+    ) -> ConnectedAccount:
+        """Slice O.7 — patch the operator-editable fields on a connection.
+
+        Display-name + external-id are the two things an operator might
+        want to tweak from the UI without doing a full re-OAuth (e.g. they
+        renamed their account, or they originally typed a typo in the
+        IG-Business ID). Pass None to leave the column alone.
+        """
+        tenant_id = current_tenant_id()
+        sets: list[str] = []
+        values: list[object] = []
+        if display_name is not None:
+            sets.append("display_name = ?")
+            values.append(display_name or None)
+        if external_id is not None:
+            sets.append("external_id = ?")
+            values.append(external_id)
+        if not sets:
+            existing = await self.get(account_id)
+            if existing is None:
+                raise NexoClipError(f"connected_account not found: {account_id}")
+            return existing
+        values.extend([account_id, tenant_id])
+        conn = await self._db.connect()
+        await conn.execute(
+            f"UPDATE connected_accounts SET {', '.join(sets)} "
+            "WHERE id = ? AND tenant_id = ?",
+            tuple(values),
+        )
+        await conn.commit()
+        existing = await self.get(account_id)
+        if existing is None:
+            raise NexoClipError(f"connected_account not found: {account_id}")
+        return existing
+
 
 def _connected_account_from_row(row: aiosqlite.Row) -> ConnectedAccount:
     d = dict(row)
@@ -1094,16 +1256,24 @@ class PublishJobsRepo:
         account_id: str,
         platform: str,
         scheduled_for: str | None = None,
+        platform_metadata: dict | None = None,
     ) -> PublishJob:
+        # Slice O.6 — operator-supplied per-platform metadata
+        # (title, description, hashtags, platform-specific knobs like
+        # YT category or IG-Reels cover-frame). The worker reads this
+        # blob and merges it onto the platform API call.
+        import json as _json
+
         tenant_id = current_tenant_id()
         job_id = new_id("pjb")
+        meta_json = _json.dumps(platform_metadata) if platform_metadata else None
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO publish_jobs "
             "(id, tenant_id, clip_id, variant_id, account_id, platform, "
             "status, attempts, last_error, scheduled_for, external_id, "
             "external_url, platform_metadata_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, NULL, NULL, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, NULL, NULL, ?, ?)",
             (
                 job_id,
                 tenant_id,
@@ -1112,6 +1282,7 @@ class PublishJobsRepo:
                 account_id,
                 platform,
                 scheduled_for,
+                meta_json,
                 _now(),
             ),
         )
@@ -1178,6 +1349,25 @@ class PublishJobsRepo:
         cur = await conn.execute(
             "UPDATE publish_jobs SET status = 'canceled', last_error = NULL "
             "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+            (job_id, tenant_id),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
+
+    async def retry(self, job_id: str) -> bool:
+        """Slice O.7 — flip a failed job back to `pending` so the worker
+        picks it up on the next pass.
+
+        Returns True iff the job was failed AND owned by the current
+        tenant. Doesn't reset the `attempts` counter — that's intentional
+        so we can see how many times a job has been retried in the
+        history.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "UPDATE publish_jobs SET status = 'pending', last_error = NULL "
+            "WHERE id = ? AND tenant_id = ? AND status = 'failed'",
             (job_id, tenant_id),
         )
         await conn.commit()
@@ -1911,6 +2101,10 @@ _BRAND_KIT_COLS = (
     # (migration 011).
     "clip_style, bottom_banner_style, banner_live_badge_default, "
     "top_hook_enabled_default, top_hook_style_default, "
+    # Slice K.5 — operator's default target platform (migration 012).
+    "target_platform, "
+    # Slice O.1 — pro-tier "show nexoclip credit" toggle (migration 013).
+    "show_nexoclip_credit, "
     "created_at, updated_at"
 )
 
@@ -1927,6 +2121,8 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     # Slice I.1 — new boolean cols from migration 011.
     d["banner_live_badge_default"] = bool(d.get("banner_live_badge_default", 0))
     d["top_hook_enabled_default"] = bool(d.get("top_hook_enabled_default", 0))
+    # Slice O.1 — pro-tier credit toggle (migration 013).
+    d["show_nexoclip_credit"] = bool(d.get("show_nexoclip_credit", 1))
 
     raw_caption = d.pop("caption_style_json", None)
     d["caption_style"] = json.loads(raw_caption) if raw_caption else None
@@ -1998,7 +2194,7 @@ class BrandKitsRepo:
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -2029,6 +2225,11 @@ class BrandKitsRepo:
                 0,       # banner_live_badge_default
                 0,       # top_hook_enabled_default
                 None,    # top_hook_style_default
+                # Slice K.5 — target platform default. NULL → editor
+                # falls back to PLATFORM_PRESETS["all"].
+                None,    # target_platform
+                # Slice O.1 — show_nexoclip_credit defaults ON.
+                1,
                 now, now,
             ),
         )
@@ -2127,6 +2328,8 @@ class BrandKitsRepo:
         banner_live_badge_default: bool | None = None,
         top_hook_enabled_default: bool | None = None,
         top_hook_style_default: str | None = None,
+        # Slice K.5 — operator's default target platform.
+        target_platform: str | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -2220,6 +2423,10 @@ class BrandKitsRepo:
         if top_hook_style_default is not None:
             sets.append("top_hook_style_default = ?")
             values.append(top_hook_style_default if top_hook_style_default else None)
+        # Slice K.5 — operator's default target platform.
+        if target_platform is not None:
+            sets.append("target_platform = ?")
+            values.append(target_platform if target_platform else None)
         if not sets:
             return existing
         sets.append("updated_at = ?")

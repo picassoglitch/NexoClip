@@ -78,6 +78,12 @@ MarkerKind = Literal[
     "reaction",
     "chat_heat",
     "face_emotion",
+    # Slice M.3 — voice-trigger phrase detected inside the clip's
+    # transcript window (e.g. streamer says "clipea esto" on-screen).
+    # Surfaces regardless of whether the original candidate fired
+    # from voice / motion / chat — the operator sees the phrase the
+    # AI heard at the exact moment it was spoken.
+    "voice_trigger",
 ]
 
 
@@ -126,6 +132,26 @@ async def compute_intelligence(
             )
             markers.extend(audio)
             markers.extend(laughter)
+
+            # Slice M.3 — scan the clip's transcript for configured
+            # voice trigger phrases ("clipea esto", "clip this", …)
+            # and emit a marker for every hit inside the clip window.
+            #
+            # This fires INDEPENDENTLY of how the clip was generated.
+            # Even when the original candidate came from a motion-peak
+            # or chat-heat signal, if the streamer ALSO said "clipea
+            # esto" during the clip, the operator sees it marked here.
+            # Fixes the operator-reported gap: "dije clipea esto y no
+            # lo marco abajo como que escucho al usuario".
+            try:
+                trig_markers = _voice_triggers_from_segments(
+                    segments,
+                    clip_start=clip.start_s,
+                    clip_end=clip.end_s,
+                )
+                markers.extend(trig_markers)
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
 
     # ---- scene cuts + motion peaks + face-emotion changes — visual_signals.
     vs_rows = await VisualSignalsRepo(db).list_for_stream(clip.stream_id)
@@ -251,6 +277,195 @@ def _reactions_from_segments(
             )
         )
     return out[:_MAX_MARKERS_PER_KIND]
+
+
+# ---- voice-trigger phrase scan (slice M.3) ------------------------
+
+
+def _voice_triggers_from_segments(
+    segments: list[object],
+    *,
+    clip_start: float,
+    clip_end: float,
+) -> list[Marker]:
+    """Scan transcript segments overlapping the clip window for any
+    configured voice-trigger phrase ("clipea esto", "clip this", …)
+    and emit a marker per hit.
+
+    Why this exists separate from `detect.service.detect_voice_triggers`:
+    the detector runs once at pipeline time on the FULL stream and
+    fires CANDIDATES (which then become clips). This scan runs at
+    DISPLAY time over the clip's own transcript window and is purely
+    for surfacing — it answers the operator's question "did the AI
+    hear me say the trigger phrase IN THIS CLIP". A clip that was
+    generated via motion-peak / chat-heat / manual cut can still get
+    a voice_trigger marker here if the streamer also said the phrase
+    inside the cut window.
+
+    Pulls phrases from settings.voice (the same YAML the detector
+    reads), so the configured trigger list is the single source of
+    truth. Fuzzy distance follows the detector's setting.
+
+    Conservative behavior: returns [] on any config / parse failure
+    so a misconfigured tenant never breaks the intelligence timeline.
+    """
+    try:
+        from nexoclip.config import get_config
+    except ImportError:
+        return []
+    try:
+        cfg = get_config()
+    except Exception:  # noqa: BLE001
+        return []
+
+    voice_cfg = getattr(getattr(cfg, "detection", None), "voice", None)
+    if voice_cfg is None or not getattr(voice_cfg, "enabled", True):
+        return []
+
+    forward = _flatten_phrases(getattr(voice_cfg, "phrases", {}) or {})
+    retroactive = _flatten_phrases(
+        getattr(voice_cfg, "retroactive_phrases", {}) or {}
+    )
+    if not forward and not retroactive:
+        return []
+    fuzzy_distance = int(getattr(voice_cfg, "fuzzy_distance", 2))
+
+    # Flatten transcript words inside the clip window with their
+    # timestamps. Whisper segments carry either `words: [{...}]` for
+    # word-level transcripts (faster-whisper word_timestamps=True) or
+    # just `text` for segment-level. We support both — for segment-
+    # level we approximate the phrase timestamp as the segment midpoint.
+    timed_tokens: list[tuple[str, float]] = []
+    for s in segments:
+        if not isinstance(s, dict):
+            continue
+        s_start = float(s.get("start") or 0)
+        s_end = float(s.get("end") or s_start)
+        if s_end < clip_start or s_start > clip_end:
+            continue
+        words = s.get("words")
+        if isinstance(words, list) and words:
+            for w in words:
+                if not isinstance(w, dict):
+                    continue
+                wt = (w.get("word") or w.get("text") or "").strip()
+                w_ts = float(w.get("start") or s_start)
+                if not wt or not (clip_start <= w_ts <= clip_end):
+                    continue
+                timed_tokens.append((_normalize_token(wt), w_ts))
+        else:
+            text = (s.get("text") or "").strip()
+            if not text:
+                continue
+            # Distribute words across the segment span (linear).
+            split = text.split()
+            n = len(split) or 1
+            span = max(0.05, s_end - s_start)
+            for i, w in enumerate(split):
+                w_ts = s_start + span * (i + 0.5) / n
+                if not (clip_start <= w_ts <= clip_end):
+                    continue
+                timed_tokens.append((_normalize_token(w), w_ts))
+
+    if not timed_tokens:
+        return []
+
+    out: list[Marker] = []
+    seen_keys: set[tuple[str, int]] = set()
+
+    def _scan(phrases: Iterable[str], kind_label: str) -> None:
+        for phrase in phrases:
+            phrase_words = phrase.split()
+            wlen = len(phrase_words)
+            if wlen == 0:
+                continue
+            phrase_norm = " ".join(_normalize_token(w) for w in phrase_words)
+            for i in range(0, len(timed_tokens) - wlen + 1):
+                window_tokens = timed_tokens[i : i + wlen]
+                joined = " ".join(w for w, _ in window_tokens)
+                dist = _levenshtein(phrase_norm, joined, max_dist=fuzzy_distance)
+                if dist > fuzzy_distance:
+                    continue
+                ts_abs = window_tokens[0][1]
+                ts_rel = max(0.0, ts_abs - clip_start)
+                # Dedup: same phrase within 1.5s = treat as same hit.
+                bucket = (phrase, int(ts_rel * 2))
+                if bucket in seen_keys:
+                    continue
+                seen_keys.add(bucket)
+                label = (
+                    f"🎯 {kind_label}: \"{phrase}\""
+                )
+                out.append(
+                    Marker(
+                        kind="voice_trigger",
+                        ts=ts_rel,
+                        score=max(0.5, 1.0 - dist / max(1, fuzzy_distance + 1)),
+                        label=label,
+                    )
+                )
+
+    _scan(forward, "Trigger phrase heard")
+    _scan(retroactive, "Retroactive trigger heard")
+
+    return out[:_MAX_MARKERS_PER_KIND]
+
+
+def _flatten_phrases(by_lang: dict[str, list[str]]) -> list[str]:
+    """Flatten {'es': ['clipea esto', ...], 'en': [...]} → flat list."""
+    out: list[str] = []
+    for lang, lst in by_lang.items():
+        if isinstance(lst, list):
+            for p in lst:
+                if isinstance(p, str) and p.strip():
+                    out.append(p.strip().lower())
+    return out
+
+
+def _normalize_token(s: str) -> str:
+    """Lowercase + strip punctuation for fuzzy matching. Mirrors what
+    the pipeline-time detector does (see `detect.service._normalize`)."""
+    if not s:
+        return ""
+    out = []
+    for ch in s.lower():
+        if ch.isalnum() or ch.isspace():
+            out.append(ch)
+    return "".join(out).strip()
+
+
+def _levenshtein(a: str, b: str, *, max_dist: int) -> int:
+    """Capped Levenshtein — returns max_dist + 1 once the rolling
+    minimum exceeds max_dist (early exit). Same shape as the
+    detector's helper; reimplemented here so this module doesn't
+    pull in nexoclip.detect at import time (creates a back-edge)."""
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return max_dist + 1
+    if la == 0:
+        return lb
+    if lb == 0:
+        return la
+    prev = list(range(lb + 1))
+    cur = [0] * (lb + 1)
+    for i in range(1, la + 1):
+        cur[0] = i
+        row_min = cur[0]
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(
+                prev[j] + 1,
+                cur[j - 1] + 1,
+                prev[j - 1] + cost,
+            )
+            if cur[j] < row_min:
+                row_min = cur[j]
+        if row_min > max_dist:
+            return max_dist + 1
+        prev, cur = cur, prev
+    return prev[lb]
 
 
 # ---- visual_signals-derived signals -------------------------------

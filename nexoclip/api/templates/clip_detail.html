@@ -43,6 +43,13 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    /* Slice K.7 — when smart_crop drops a 16:9 source into a 9:16
+       hole, the default centered crop chops the subject in half at
+       eye level. Faces almost always sit in the upper third of a
+       streamer frame; biasing the crop UP keeps the head + shoulders
+       in shot instead of just an eye. Future: feed the SubjectBox
+       from framing.py here so the crop is per-clip. */
+    object-position: 50% 28%;
     z-index: 1;
   }
 
@@ -64,26 +71,53 @@
   }
   .nc-preview[data-fit-mode="blurred_bg"] video {
     object-fit: contain;
+    /* When the source is letterboxed inside the 9:16 frame, anchor
+       it slightly toward the upper third so the subject sits where
+       creators actually frame their face on the published clip. */
+    object-position: 50% 38%;
   }
-  /* Blurred-bg uses the video as a stretched, blurred background
-     layer. Achieved via a duplicated <video> in the markup? Cheap
-     CSS-only approximation: a backdrop pseudo-element that hosts
-     the same media at cover + heavy blur. */
+  /* Slice K.7 — instead of trying to paint a blurred copy of the
+     <video> (CSS can't render a moving frame), `blurred_bg` matches
+     the Clavicular-style Reels framing: a deep-space starfield
+     gradient with twinkling dot field. Subject sits centered in
+     the 9:16 frame with this glittery backdrop filling top + bottom.
+     Direct visual match to the user's reference screenshot. */
+  .nc-preview[data-fit-mode="blurred_bg"] {
+    isolation: isolate;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(83, 132, 252, 0.18) 0%, transparent 45%),
+      radial-gradient(circle at 80% 70%, rgba(140, 90, 220, 0.16) 0%, transparent 45%),
+      radial-gradient(ellipse at center, #0a1428 0%, #03060e 75%);
+  }
   .nc-preview[data-fit-mode="blurred_bg"]::before {
     content: "";
     position: absolute;
-    inset: -30px;
-    background: inherit;
-    filter: blur(28px) brightness(0.6);
+    inset: 0;
+    background-image:
+      radial-gradient(circle, rgba(255, 255, 255, 0.85) 0.5px, transparent 1.5px),
+      radial-gradient(circle, rgba(180, 210, 255, 0.7) 0.4px, transparent 1.2px),
+      radial-gradient(circle, rgba(255, 255, 255, 0.5) 0.3px, transparent 1px);
+    background-size: 90px 130px, 140px 190px, 60px 80px;
+    background-position: 0 0, 30px 40px, 70px 90px;
+    opacity: 0.9;
     z-index: 0;
+    pointer-events: none;
   }
+  /* Slice K.7 — Ken Burns animation now pauses when the user pauses
+     the video (was rolling on regardless, leaving the frame stuck at
+     a zoomed-in scale). We also reset the transform-origin so a
+     paused frame never sits at the +12% extreme.
+     `[data-paused]` attribute is flipped by the play/pause JS. */
   .nc-preview[data-fit-mode="dynamic_zoom"] video {
     animation: nc-kenburns 12s ease-in-out infinite alternate;
-    transform-origin: center 40%;
+    transform-origin: center 35%;
+  }
+  .nc-preview[data-fit-mode="dynamic_zoom"][data-paused="true"] video {
+    animation-play-state: paused;
   }
   @keyframes nc-kenburns {
     from { transform: scale(1.00) translate(0,    0); }
-    to   { transform: scale(1.12) translate(-2%, -2%); }
+    to   { transform: scale(1.06) translate(-1%, -1%); }
   }
 
   /* Fit-mode pill switcher — lives at the bottom of the preview
@@ -125,78 +159,179 @@
     pointer-events: none;
   }
 
-  /* Top title (the "Adin Ross asked Clav for RETA..." style header) */
+  /* ============================================================
+     Slice L.4 — MAIN VIRAL HOOK.
+     ============================================================
+     Was: a thin 14px bar pinned to the very top of the frame
+     (`top: 14px`), full width minus 14px padding. Operators saw
+     it competing with the platform status bar + IG/TikTok header
+     (the L.3 red zone occupies 0–12%).
+
+     Now: positioned at 18% from top — below the L.3 top-unsafe
+     band, with width clamped to 80% so it doesn't crowd the right
+     rail. Heavy black shadow + bigger type so it reads on a phone.
+     Max 2 lines via line-clamp; longer hooks ellipsize cleanly.
+     Matches the Clavicular-style "Adin Ross asked Clav for RETA"
+     reference the operator pinned in slice L.
+     ============================================================ */
   .nc-pv-title {
     position: absolute;
-    top: 14px;
-    left: 14px;
-    right: 14px;
-    background: rgba(255, 255, 255, 0.95);
+    top: 18%;
+    /* 80% wide → ~10% margin each side. Matches the 75-85% spec. */
+    left: 10%;
+    right: 10%;
+    background: rgba(255, 255, 255, 0.96);
     color: #000;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-weight: 700;
-    font-size: 14px;
-    line-height: 1.25;
-    padding: 8px 12px;
-    border-radius: 6px;
+    font-weight: 800;
+    font-size: 17px;
+    line-height: 1.22;
+    padding: 10px 14px;
+    border-radius: 12px;
     text-align: center;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    /* Heavy shadow for the "repost page" feel the spec asks for. */
+    box-shadow:
+      0 3px 10px rgba(0, 0, 0, 0.55),
+      0 1px 0 rgba(0, 0, 0, 0.18) inset;
+    /* Max 2 lines — anything longer ellipsizes. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* Layer above the L.3 zones so the hook reads on the red wash
+       even when it lands ON the top-unsafe band. */
+    z-index: 3;
+    pointer-events: none;
   }
   .nc-pv-title.is-empty { display: none; }
+  /* On Kick-target clips the bottom red zone is smaller, so the
+     hook can sit a little higher (Kick has no IG-style header). */
+  .nc-preview[data-zone-profile="kick"] .nc-pv-title { top: 14%; }
 
-  /* Active-word caption — animated lower-third by default. */
+  /* ============================================================
+     Slice L.4b — Face-aware hook positioning.
+     ============================================================
+     The L.4 static default (top: 18%) works for clips where the
+     face lands mid-frame (the common case after blurred_bg fit).
+     But on Kick streamers who hug the top of their webcam frame,
+     the face often appears at 22-30% of the 9:16 output — right
+     where the main hook used to sit. The hook overlapped the
+     eyes/forehead and looked amateur.
+
+     The G.3 framing pipeline persists a `safe_crop_box.y` on
+     every candidate's evidence. The dashboard router maps that
+     to a coarse face_zone:
+       y < 0.10  → "top"    face is HIGH in the output
+       y < 0.35  → "mid"    face is mid-frame (the L.4 default)
+       y >= 0.35 → "lower"  face is low
+
+     CSS rules below shift the hook + captions accordingly so they
+     never paint over the face. When face_zone is absent (framing
+     didn't run for this clip), we fall through to the L.4 static
+     defaults — the data attribute simply isn't set and these
+     [data-face-zone=...] selectors don't match.
+     ============================================================ */
+  /* Face high — drop the hook below the face zone to ~46%, just
+     above the L.4 default caption position (lower_third at 68%).
+     Still well clear of the L.3 bottom-unsafe band. */
+  .nc-preview[data-face-zone="top"] .nc-pv-title {
+    top: 46%;
+  }
+  /* Face low — main hook can stay at 18% (clear above), but the
+     captions should rise from lower_third (68%) up to ~52% so they
+     don't crowd the face that's living down there. We add a class
+     on the caption element via JS; this CSS rule is the destination. */
+  .nc-preview[data-face-zone="lower"] .nc-pv-caption--lower_third {
+    top: 52%;
+  }
+  /* Subtle "AI moved this" highlight: when face_zone is non-default,
+     give the hook a quick lime glow once on render so the operator
+     sees the AI made a choice. Animation runs once on page load. */
+  .nc-preview[data-face-zone="top"] .nc-pv-title,
+  .nc-preview[data-face-zone="lower"] .nc-pv-caption {
+    animation: nc-face-aware-flash 1.4s ease-out 1;
+  }
+  @keyframes nc-face-aware-flash {
+    0%   { box-shadow: 0 0 0 2px rgba(200, 255, 92, 0.85), 0 3px 10px rgba(0,0,0,0.55); }
+    100% { box-shadow: 0 3px 10px rgba(0,0,0,0.55); }
+  }
+
+  /* ============================================================
+     Slice L.4 — CAPTIONS (active-word karaoke).
+     ============================================================
+     Spec calls for: large bold UPPERCASE, active-word pop, strong
+     shadow + stroke, "confident, modern, aggressive" — minus the
+     rotated/glowing-reaction clutter we had before.
+
+     Position default moved from 62% → 68% (within the spec's
+     65–72% lower-middle zone). Old "bottom" preset bumped UP to
+     78% so it still clears the L.3 bottom-unsafe band.
+     ============================================================ */
   .nc-pv-caption {
     position: absolute;
-    left: 14px;
-    right: 14px;
+    left: 8%;
+    right: 8%;
     text-align: center;
     font-family: "Inter", -apple-system, sans-serif;
     font-weight: 900;
+    /* L.4 — Adin Ross / Kick-clip caption style is all-caps. */
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
     color: #fff;
-    -webkit-text-stroke: 2px #000;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
-    font-size: 22px;
-    line-height: 1.1;
+    -webkit-text-stroke: 2.5px #000;
+    paint-order: stroke fill;
+    text-shadow:
+      0 3px 8px rgba(0, 0, 0, 0.85),
+      0 1px 0 rgba(0, 0, 0, 0.6);
+    font-size: 26px;
+    line-height: 1.05;
     pointer-events: none;
+    z-index: 3;
   }
-  .nc-pv-caption--upper_third  { top: 33%; transform: translateY(-50%); }
+  /* L.4 — new vertical positions. The "Streamer Standard" default
+     sits at 68% (lower middle, clear of face + safe-zone bottom). */
+  .nc-pv-caption--upper_third  { top: 24%; transform: translateY(0); }
   .nc-pv-caption--centered     { top: 50%; transform: translateY(-50%); }
-  /* Default caption position moved up so it lands ABOVE the TikTok/
-     Reels/Shorts bottom UI band (caption row + audio chip + CTA).
-     The platform-eats-your-subtitle anti-pattern is the #1 reason
-     clips look amateur. */
-  .nc-pv-caption--lower_third  { top: 62%; transform: translateY(-50%); }
-  .nc-pv-caption--bottom       { bottom: 110px; }
+  .nc-pv-caption--lower_third  { top: 68%; transform: translateY(-50%); }
+  /* Was "bottom: 110px" — too close to the L.3 unsafe band. Now
+     78% from top (= ~22% from bottom) so it sits just above the
+     bottom red zone. */
+  .nc-pv-caption--bottom       { top: 78%; transform: translateY(-50%); }
   .nc-pv-caption__word {
     display: inline-block;
-    margin: 0 0.15em;
+    margin: 0 0.12em;
     color: #fff;
-    transition: color 100ms linear, transform 100ms linear, font-size 80ms linear;
+    transition: color 90ms linear, transform 90ms linear;
     opacity: 0.55;
   }
-  /* Active word — base emphasis: gold glow + scale */
+  /* Active word — clean pop, no glow loop. The spec called out
+     "excessive glow" and "tiny karaoke effects" as anti-patterns,
+     so the per-word animation is now a single subtle bounce + a
+     color highlight, not an infinite glow loop. */
   .nc-pv-caption__word.is-active {
-    color: var(--pv-highlight, #FFD700);
-    transform: scale(1.15);
+    color: var(--pv-highlight, #ffd84a);
+    transform: scale(1.10);
     opacity: 1;
-    animation: nc-caption-glow 0.9s ease-in-out infinite;
   }
-  /* Per-emphasis variants — strongest signal wins */
+  /* Emphasis variants — no more rotation. The previous "shout +
+     rotate -2deg + glow" combo read as "AI overproduction" to
+     operators. Now: bigger font + brighter color, no twist. */
   .nc-pv-caption__word[data-emphasis="shout"].is-active {
-    font-size: 1.5em;
+    font-size: 1.35em;
     color: #ff3b30;
-    -webkit-text-stroke-width: 3px;
-    transform: scale(1.35);
+    -webkit-text-stroke-width: 3.5px;
+    transform: scale(1.25);
   }
   .nc-pv-caption__word[data-emphasis="reaction"].is-active {
-    font-size: 1.3em;
+    font-size: 1.18em;
     color: #ffd66b;
-    transform: scale(1.25) rotate(-2deg);
+    transform: scale(1.15);
   }
   .nc-pv-caption__word[data-emphasis="emphasis"].is-active {
-    font-size: 1.2em;
-    color: var(--pv-highlight, #FFD700);
-    transform: scale(1.2);
+    font-size: 1.10em;
+    color: var(--pv-highlight, #ffd84a);
+    transform: scale(1.12);
   }
   /* Past words fade slightly so the eye knows what's "now" vs already-said */
   .nc-pv-caption__word.is-past { opacity: 0.40; }
@@ -264,6 +399,9 @@
      to sit at bottom:0 and get covered on every published clip.
      Now it lifts above the safe band via the [data-platform=...]
      selectors below. */
+  /* Base banner — all variants inherit from this. Slice L.1 tightens
+     defaults: smaller text, no drop shadow, monospace-ish letter
+     tracking (looks more "repost page" than "esports overlay"). */
   .nc-pv-banner {
     position: absolute;
     left: 0;
@@ -277,55 +415,206 @@
     justify-content: space-between;
     padding: 0 14px;
     font-family: "Inter", -apple-system, sans-serif;
-    font-weight: 800;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 14px;
-    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+    letter-spacing: 0.02em;
+    font-size: 12px;
+    /* L.1 — dropped the strong drop shadow. Repost-page Kick clips
+       just have a flat black bar; the shadow was adding fake depth. */
+    box-shadow: none;
   }
   .nc-pv-banner.is-hidden { display: none; }
   .nc-pv-banner__platform { color: #000; }
-  .nc-pv-banner__url { font-size: 12px; opacity: 0.85; }
+  .nc-pv-banner__url { font-size: 11px; opacity: 0.85; }
+  /* L.1 — LIVE pill: smaller, less candy-red, less padding. The
+     repost-page LIVE indicator is a flat ~10px pill, not a chunky
+     button. */
   .nc-pv-banner__live-pill {
-    background: #ff3b30;
+    background: #e62b20;
     color: #fff;
-    font-weight: 900;
+    font-weight: 800;
     font-size: 9px;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     padding: 2px 6px;
-    border-radius: 999px;
-    margin-left: 8px;
+    border-radius: 3px;
+    margin-left: 0;
   }
 
-  /* Slice I.1 — Kick banner variants (mirrors the burn). */
+  /* ============================================================
+     Slice M.2 — Reference-exact Kick repost banner.
+     ============================================================
+     Walk back of M.1's "above-chrome" 78%-top + 0.78-alpha treatment.
+     Operator gave a pixel-precise spec sourced from the reelonkick
+     reference image:
+
+       - Positioned at 50% from top (vertical CENTER of the video,
+         OVER the subject). NOT above the chrome — ON the content.
+       - 28px desktop / 24px mobile, full width, no margin
+       - Solid black (#000), no transparency, blur, or gradient
+       - KICK wordmark: 30px, weight 900, lime green w/ black stroke,
+         absolutely-anchored LEFT (so URL stays dead-center)
+       - URL: 10px desktop / 9px mobile, condensed-bold white,
+         0.2px tracking, 0/1/1/rgba(0,0,0,.9) shadow, true center
+       - NO LIVE pill, NO right-side icons, NO extras
+
+     KICK is `position: absolute` so the URL can use the parent's
+     flex centering without being pushed by the wordmark — matches
+     "dead-center URL" requirement. The renderer-side
+     _banner_repost_page burns these same proportions.
+     ============================================================ */
+  /* ============================================================
+     Slice M.8 — 8-bit Kick wordmark + bar drops to red-zone edge.
+     ============================================================
+     Operator gave a reference image of the actual Kick logo in
+     pixel-art / arcade style + asked: "bring the line down to the
+     red-zone limit, right above my id".
+
+     Two fixes here:
+
+     1. POSITION — moved from top:70% to top:82%. The bar's center
+        now sits at 82% from top, putting the bar's BOTTOM at ≈86%
+        — right at the boundary of the L.3 bottom-unsafe zone, just
+        above the @handle/follow card (which lives at bottom:12%).
+
+     2. KICK WORDMARK — replaced the inline SVG paths with a real
+        static asset at /static/kick-logo.svg. Hand-drawn 8-bit
+        pixel-art letters with stepped diagonals, shape-rendering:
+        crispEdges so the pixel feel survives at every preview
+        size. Changing the wordmark = swap one SVG file.
+
+     Black bar + KICK.COM/<id> URL stay where they were (operator's
+     "only good thing is the black line and the URL").
+     ============================================================ */
   .nc-pv-banner--kick_repost_page {
+    /* Slice M.10 — bar's BOTTOM edge sits exactly at the top of the
+       L.3 bottom-unsafe red zone (y=82% = bottom:18%). The bar lives
+       entirely in the bottom-caution buffer band (78-82%), with the
+       @handle/follow card below it in the unsafe zone where it
+       belongs. No more overlap.
+       Anchoring via `bottom` (not `top`) drops the `translateY(-50%)`
+       trick — the bar's bottom edge is locked, height grows upward. */
+    top: auto;
+    bottom: 18%;
+    transform: none;
+    left: 0;
+    right: 0;
     background: #000;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     color: #fff;
-    padding: 8px 14px;
-    font-size: 14px;
-    font-weight: 900;
-    letter-spacing: 0.04em;
-    height: 32px;
+    padding: 0;
+    height: 36px;
+    min-height: 36px;
+    max-height: 36px;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    overflow: visible;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: none;
+    z-index: 4;
   }
+  /* Slice M.15 — KICK wordmark lifted + black outlined.
+     Operator feedback: letters should sit slightly above the bar's
+     bottom edge AND poke out the top edge, with a black outline
+     around the green.
+
+     Position: shifted UP via translateY(-62%) (was -50%) so the
+     wordmark's bottom sits ~4px above the bar's bottom, and its
+     top extends ~10px above the bar's top.
+
+     Outline: 4-direction drop-shadow stack synthesizes a solid 2px
+     black ring around the green letters (each drop-shadow is a
+     hard-edged 0-blur black silhouette offset by 2px on one axis;
+     the four offsets cover ±x and ±y, joining into a continuous
+     outline). Cheap, GPU-friendly, no SVG filter required. */
   .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
-    color: var(--pv-banner-color, #53FC18);
-    font-size: 18px;
-    font-weight: 900;
-    margin-right: 12px;
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    /* Lifted ~7px upward from dead-center within the bar. */
+    transform: translateY(-62%);
+    width: 140px;
+    height: 44px;
+    color: transparent;
+    font-size: 0;
+    line-height: 0;
+    overflow: visible;
+    flex: none;
+    padding: 0;
+    background-image: url("/static/kick-logo.svg");
+    background-repeat: no-repeat;
+    background-position: left center;
+    background-size: contain;
+    image-rendering: auto;
+    /* Black 2px outline via 4 directional drop-shadows + 1 soft
+       atmospheric shadow underneath so the wordmark also reads
+       on the video pixels showing above the bar. */
+    filter:
+      drop-shadow(2px 0 0 #000)
+      drop-shadow(-2px 0 0 #000)
+      drop-shadow(0 2px 0 #000)
+      drop-shadow(0 -2px 0 #000)
+      drop-shadow(0 3px 4px rgba(0, 0, 0, 0.55));
   }
   .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
+    position: relative;
     color: #fff;
+    font-family:
+      "Arial Narrow",
+      "Roboto Condensed",
+      "Inter Tight",
+      "Inter",
+      -apple-system, sans-serif;
     font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.2px;
+    line-height: 1;
+    text-transform: uppercase;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+    flex: none;
+    overflow: visible;
+    white-space: nowrap;
+    padding: 0;
     opacity: 1;
-    flex: 1;
     text-align: center;
   }
+  .nc-pv-banner--kick_repost_page .nc-pv-banner__live-pill {
+    display: none !important;
+  }
+
+  /* Mobile preview breakpoint — bar + wordmark shrink. */
+  @media (max-width: 768px) {
+    .nc-pv-banner--kick_repost_page {
+      height: 30px;
+      min-height: 30px;
+      max-height: 30px;
+    }
+    .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
+      width: 112px;
+      height: 36px;
+      left: 6px;
+    }
+    .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
+      font-size: 10px;
+    }
+  }
+
+  /* kick_green_block: solid-green KICK badge stuck to the bar's left
+     edge with the URL on a black field next to it. Toned down from
+     K.7's 22px font / 52px height to match the spec's "minimal,
+     clean, compressed" energy. */
   .nc-pv-banner--kick_green_block {
     background: #000;
     color: #fff;
     padding: 0;
-    height: 30px;
+    height: 8%;
+    min-height: 44px;
+    max-height: 68px;
     overflow: hidden;
+    box-shadow: none;
   }
   .nc-pv-banner--kick_green_block .nc-pv-banner__platform {
     background: var(--pv-banner-color, #53FC18);
@@ -335,13 +624,18 @@
     display: inline-flex;
     align-items: center;
     font-weight: 900;
-    font-size: 13px;
+    font-size: 16px;
+    letter-spacing: 0.02em;
   }
   .nc-pv-banner--kick_green_block .nc-pv-banner__url {
     padding: 0 12px;
     color: #fff;
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 700;
     flex: 1;
+    /* L.1 — center the URL on the remaining black field for balance. */
+    text-align: center;
+    letter-spacing: 0.02em;
   }
   .nc-pv-banner--kick_minimal_url {
     background: transparent;
@@ -359,49 +653,75 @@
     border-radius: 4px;
   }
 
-  /* Slice K.4 — banner lifts above the mobile-feed bottom UI band
-     when the operator's safe-zone target is TikTok / Reels / Shorts.
-     The bands take up 5-7% of the vertical frame; the banner sits
-     8% from the bottom so the caption-row + audio-chip + nav UI
-     never paints over the URL. Kick clips have no such band → the
-     banner stays flush at bottom:0 by default. */
-  .nc-preview__layer .nc-pv-safezones[data-platform="tiktok"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url),
-  .nc-preview__layer .nc-pv-safezones[data-platform="reels"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url),
-  .nc-preview__layer .nc-pv-safezones[data-platform="shorts"] ~ .nc-pv-banner:not(.nc-pv-banner--kick_minimal_url) {
-    bottom: 8%;
-  }
+  /* Slice K.4 — banner lift rule REMOVED in M.1.
+     The repost-page banner now positions itself explicitly at
+     top: 78% (above IG description chrome) for the default variant.
+     The old sibling-selector lift (`bottom: 8%` when safezones target
+     was tiktok/reels/shorts) had higher specificity than the variant
+     rules and was fighting M.1's position. Other variants
+     (kick_green_block / kick_black_bar_classic) still rely on the
+     base `bottom: 0` from `.nc-pv-banner`, which sits inside the L.3
+     bottom-unsafe band so the operator visibly sees the collision —
+     consistent with the rest of the L.3 "preview teaches" approach. */
 
-  /* Slice I.1 — top hook white-rounded headline box. */
+  /* ============================================================
+     Slice L.4 — SECONDARY HOOK (context line above the main hook).
+     ============================================================
+     This element is now the OPTIONAL secondary line per the spec
+     ("Most clips do NOT need a second hook"). Operators only turn
+     it on when there's split setup/punchline structure or context-
+     heavy story that needs a one-liner above the main hook.
+
+     Position: 11% from top — tucked under the L.3 top-unsafe band
+     but ABOVE the main viral hook at 18%. Smaller, semi-transparent
+     so it never competes with the main hook visually.
+
+     Max 1 line, ellipsize anything longer. The styles below give
+     three flavors (white_rounded / black_solid / subtle) but every
+     flavor is tuned smaller + lower-contrast than the main hook so
+     the eye still lands on the primary hook first.
+     ============================================================ */
   .nc-pv-top-hook {
     position: absolute;
-    top: 8%;
-    left: 8%;
-    right: 8%;
+    top: 11%;
+    left: 14%;
+    right: 14%;
     text-align: center;
     font-family: var(--nc-font-sans), "Inter", sans-serif;
-    font-weight: 900;
-    font-size: 13px;
-    line-height: 1.2;
-    padding: 6px 10px;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    line-height: 1.15;
+    padding: 4px 10px;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
     pointer-events: none;
-    max-height: 18%;
+    /* Max 1 line — secondary hooks should be a short context tag
+       ("EARLIER ON STREAM…"), not a second paragraph. */
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 3;
   }
+  /* All three flavors are now muted vs the main hook below. */
   .nc-pv-top-hook--white_rounded {
-    background: rgba(255, 255, 255, 0.96);
-    color: #000;
-  }
-  .nc-pv-top-hook--black_solid {
-    background: rgba(0, 0, 0, 0.92);
-    color: #fff;
-  }
-  .nc-pv-top-hook--subtle {
-    background: rgba(255, 255, 255, 0.75);
+    background: rgba(255, 255, 255, 0.72);
     color: #000;
     backdrop-filter: blur(4px);
   }
+  .nc-pv-top-hook--black_solid {
+    background: rgba(0, 0, 0, 0.62);
+    color: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(4px);
+  }
+  .nc-pv-top-hook--subtle {
+    background: rgba(255, 255, 255, 0.55);
+    color: #111;
+    backdrop-filter: blur(6px);
+  }
+  /* Kick zone profile: shorter top unsafe band → secondary hook
+     can sit a little higher. */
+  .nc-preview[data-zone-profile="kick"] .nc-pv-top-hook { top: 8%; }
 
   /* Slice I.1 — Clip Style preset cards grid. */
   .nc-clip-style-grid {
@@ -449,155 +769,563 @@
     -webkit-box-orient: vertical;
   }
 
-  /* Slice I.2 — preview-mode pill switcher above the video. */
+  /* Slice K.5 — Target-platform chip row. The FIRST decision the
+     operator makes in the editor: where am I posting? Picking a chip
+     fans out every downstream setting (safe-zone target, fit_mode,
+     caption position/size/animation/lead_ms, banner variant, top
+     hook, Clip Style) via PLATFORM_PRESETS. "All" picks the safest
+     cross-platform configuration. Lime-glow accent matches the
+     primary CTA so the operator's eye lands here first. */
+  .nc-platform-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+  }
+  .nc-platform-chip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 10px 6px;
+    border: 1px solid var(--nc-border);
+    border-radius: 10px;
+    background: var(--nc-bg-elevated);
+    color: var(--nc-text);
+    cursor: pointer;
+    transition: all 120ms ease;
+    min-height: 62px;
+    text-align: center;
+  }
+  .nc-platform-chip:hover {
+    border-color: var(--nc-lime);
+    transform: translateY(-1px);
+  }
+  .nc-platform-chip__emoji {
+    font-size: 18px;
+    line-height: 1;
+  }
+  .nc-platform-chip__name {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .nc-platform-chip__blurb {
+    display: none;
+  }
+  .nc-platform-chip.is-selected {
+    border-color: var(--nc-lime);
+    background:
+      radial-gradient(circle at top, rgba(200, 255, 92, 0.18), transparent 70%),
+      var(--nc-bg-elevated);
+    box-shadow:
+      0 0 0 1px var(--nc-lime) inset,
+      0 0 16px -3px rgba(200, 255, 92, 0.65);
+    color: var(--nc-lime);
+  }
+  .nc-platform-chip.is-selected .nc-platform-chip__name {
+    color: var(--nc-lime);
+    text-shadow: 0 0 8px rgba(200, 255, 92, 0.55);
+  }
+  /* The auto-apply flash plays when the JS finishes fanning out the
+     preset bundle so the operator sees their click LANDED. */
+  @keyframes nc-platform-flash {
+    0%   { box-shadow: 0 0 0 1px var(--nc-lime) inset, 0 0 0 0 rgba(200, 255, 92, 0.9); }
+    60%  { box-shadow: 0 0 0 1px var(--nc-lime) inset, 0 0 0 12px rgba(200, 255, 92, 0); }
+    100% { box-shadow: 0 0 0 1px var(--nc-lime) inset, 0 0 16px -3px rgba(200, 255, 92, 0.65); }
+  }
+  .nc-platform-chip.is-flashing { animation: nc-platform-flash 700ms ease-out; }
+
+  .nc-platform-row__blurb {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--nc-text-muted);
+    text-align: center;
+    min-height: 14px;
+  }
+  .nc-platform-row__blurb strong { color: var(--nc-lime); }
+
+  @media (max-width: 720px) {
+    .nc-platform-row { grid-template-columns: repeat(5, 1fr); gap: 4px; }
+    .nc-platform-chip { padding: 8px 4px; min-height: 56px; }
+    .nc-platform-chip__name { font-size: 10px; }
+  }
+
+  /* Slice L.5 — preview-mode big segmented pills.
+     Was: tiny 11px / 6px-padding tabs the operator couldn't read on
+     mobile. Now: chunkier 13px / 10px-padding segments with proper
+     touch targets and a lime-glow active state to match the rest
+     of the cyberpunk theme. Horizontal-scroll fallback when the
+     surface is narrow so we never overflow. */
   .nc-preview-modes {
     display: flex;
     gap: 4px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     background: var(--nc-bg-base);
     padding: 4px;
-    border-radius: 8px;
+    border-radius: 12px;
     border: 1px solid var(--nc-border);
+    /* Horizontal scroll on tiny widths. iOS/Android momentum scroll
+       so even 4 segments stay reachable on a 360-wide phone. */
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
+  .nc-preview-modes::-webkit-scrollbar { display: none; }
   .nc-preview-mode {
-    flex: 1;
-    padding: 6px 8px;
+    flex: 1 0 auto;
+    min-width: 64px;
+    padding: 10px 14px;
     border: 0;
     background: transparent;
     color: var(--nc-text-muted);
     cursor: pointer;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     transition: all 120ms ease;
+    /* Larger touch target on phones — 44px tall hits the iOS HIG
+       minimum. */
+    min-height: 40px;
+    line-height: 1;
   }
-  .nc-preview-mode:hover { color: var(--nc-text); }
+  .nc-preview-mode:hover {
+    color: var(--nc-text);
+    background: rgba(255, 255, 255, 0.04);
+  }
   .nc-preview-mode.is-active {
-    background: var(--nc-blue-bright, #4f8bff);
-    color: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    background: var(--nc-lime, #c8ff5c);
+    color: #06080d;
+    box-shadow:
+      0 0 0 1px rgba(200, 255, 92, 0.55) inset,
+      0 1px 8px -2px rgba(200, 255, 92, 0.45);
   }
 
-  /* Slice I.2 — collision warning bar above the preview. */
+  /* Slice L.3 — collision warning bar killed.
+     The red text-warning bar above the preview ("Banner collides with
+     caption_danger…") was operator-reported spam. Replaced by the
+     always-on tri-color zone overlay below: red wash where content
+     gets covered, yellow caution buffer, green implicit-safe middle.
+     The preview teaches; no debug language needed. */
   .nc-pv-collisions {
-    display: none;
-    margin-bottom: 8px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid rgba(255, 180, 0, 0.4);
-  }
-  .nc-pv-collisions.is-active { display: block; }
-  .nc-pv-collisions__row {
-    padding: 6px 10px;
-    font-size: 11px;
-    line-height: 1.4;
-    border-bottom: 1px solid rgba(255, 180, 0, 0.18);
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  .nc-pv-collisions__row:last-child { border-bottom: 0; }
-  .nc-pv-collisions__row--warn {
-    background: rgba(255, 180, 0, 0.10);
-    color: #ffc24a;
-  }
-  .nc-pv-collisions__row--block {
-    background: rgba(255, 60, 60, 0.14);
-    color: #ff8a8a;
-    border-color: rgba(255, 60, 60, 0.4);
-  }
-  .nc-pv-collisions__row::before {
-    content: "▸";
-    font-weight: 900;
-    opacity: 0.6;
+    display: none !important;
   }
 
-  /* Slice I.2 — platform UI simulation layer. */
+  /* ============================================================
+     Slice L.3 — Always-on safe-zone teaching overlay.
+     ============================================================
+     A permanent visual hint at the top + bottom of the preview
+     showing where ANY content WILL get covered by platform UI on
+     publish. Three layers:
+
+       0–12%  TOP UNSAFE (red wash)   — status bar + IG header
+       12–18% TOP CAUTION (yellow)    — algorithmic tab labels
+       18–80% SAFE ACTION ZONE        — implicit (no overlay)
+       80–88% BOTTOM CAUTION (yellow) — caption row edge
+       88–100% BOTTOM UNSAFE (red)    — description + nav dock
+
+     The spec called for 14% top / 22% bottom; we split each into a
+     hard-unsafe inner band + a soft-caution buffer so the operator
+     sees a graduated risk gradient instead of a binary "blocked".
+
+     Sits BELOW the platform chrome (z-index 2) so the chrome reads
+     on top — the operator sees the chrome painting over the same
+     band the red zone is highlighting. Reinforced, not duplicated.
+     ============================================================ */
+  .nc-pv-zones {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .nc-pv-zones__band {
+    position: absolute;
+    left: 0;
+    right: 0;
+  }
+  /* Hard-unsafe top band — solid red wash that fades to transparent at
+     its bottom edge. Operators read this as "anything you put HERE
+     is gone — chrome is painted over it". */
+  .nc-pv-zones__band--top-unsafe {
+    top: 0;
+    height: 12%;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 60, 60, 0.32) 0%,
+      rgba(255, 60, 60, 0.18) 60%,
+      rgba(255, 60, 60, 0.00) 100%
+    );
+    border-bottom: 1px solid rgba(255, 60, 60, 0.40);
+  }
+  /* Soft-caution top buffer — yellow strip between unsafe and safe.
+     "You CAN put a hook here but it's tight". */
+  .nc-pv-zones__band--top-caution {
+    top: 12%;
+    height: 6%;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 200, 0, 0.18) 0%,
+      rgba(255, 200, 0, 0.00) 100%
+    );
+  }
+  /* Hard-unsafe bottom band — bigger than top (description + dock
+     eat ~22% of the frame on every short-form platform). */
+  .nc-pv-zones__band--bottom-unsafe {
+    bottom: 0;
+    height: 18%;
+    background: linear-gradient(
+      0deg,
+      rgba(255, 60, 60, 0.32) 0%,
+      rgba(255, 60, 60, 0.18) 60%,
+      rgba(255, 60, 60, 0.00) 100%
+    );
+    border-top: 1px solid rgba(255, 60, 60, 0.40);
+  }
+  /* Soft-caution bottom buffer — captions can land here at the very
+     top edge but it's getting risky. */
+  .nc-pv-zones__band--bottom-caution {
+    bottom: 18%;
+    height: 4%;
+    background: linear-gradient(
+      0deg,
+      rgba(255, 200, 0, 0.18) 0%,
+      rgba(255, 200, 0, 0.00) 100%
+    );
+  }
+  /* Single-letter labels in the corners — "UNSAFE" / "SAFE" / "OK"
+     so the operator orients without text-spam. Faded; the zones
+     themselves are the message. */
+  .nc-pv-zones__label {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+  }
+  .nc-pv-zones__label--top    { top: 3%; }
+  .nc-pv-zones__label--bottom { bottom: 4%; }
+
+  /* Kick chrome is much lighter — no big rail, smaller bottom dock
+     — so the bottom red zone should shrink. We tighten it to 14%
+     instead of 18% via a data-attr on the parent .nc-preview. */
+  .nc-preview[data-zone-profile="kick"] .nc-pv-zones__band--bottom-unsafe {
+    height: 14%;
+  }
+  .nc-preview[data-zone-profile="kick"] .nc-pv-zones__band--bottom-caution {
+    bottom: 14%;
+  }
+
+  /* In "raw" preview mode (operator just wants to see the source)
+     we hide the zones too — same logic as the burns.
+     Slice O.14: the old "final" mode is gone (removed because the
+     burned-MP4-driven preview kept drifting from the CSS spec). The
+     orphan `data-preview-mode="final"` selector elsewhere in this
+     file is now defensive — defaults map any stale value to
+     "platform" via Jinja + JS. */
+  .nc-preview[data-preview-mode="raw"] .nc-pv-zones {
+    display: none;
+  }
+
+  /* ============================================================
+     Slice L.2 — Real-feeling platform chrome.
+     ============================================================
+     The preview now wears the actual phone UI of whichever platform
+     the operator picked: iPhone status bar at top, platform header,
+     full-size action rail with engagement counts, description block
+     with @handle + Follow + caption, and a bottom navigation dock.
+     Everything is scaled in % of the 9:16 frame so it stays
+     proportionate at every preview size. Goal: the operator should
+     glance and know exactly which of their overlays will get
+     covered by platform chrome on the published clip.
+
+     Layers (bottom → top inside .nc-preview):
+       1. <video>                          (z-index 1)
+       2. .nc-preview__layer burns         (z-index 2)
+       3. .nc-pv-platform-sim chrome       (z-index 4)
+       4. .nc-pv-safezones overlays        (z-index 5, when on)
+       5. .nc-pv-ambient mute+heart        (z-index 6)
+     ============================================================ */
   .nc-pv-platform-sim {
     position: absolute;
     inset: 0;
     pointer-events: none;
     z-index: 4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
-  .nc-pv-platform-sim__profile {
+
+  /* iPhone-style status bar — time / cellular / wifi / battery —
+     pinned to the very top edge. ~3.5% of frame height, matches
+     iOS proportions on a 9:16 portrait. */
+  .nc-pv-platform-sim__status {
     position: absolute;
-    left: 16px;
-    bottom: 16%;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3.5%;
+    min-height: 22px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     color: #fff;
-    font-weight: 700;
     font-size: 11px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
-    display: flex;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  }
+  .nc-pv-platform-sim__status-icons {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-  }
-  .nc-pv-platform-sim__avatar {
-    width: 20px; height: 20px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #ff3b30, #ff9500);
-    border: 1.5px solid #fff;
-  }
-  .nc-pv-platform-sim__caption {
-    position: absolute;
-    left: 16px;
-    right: 24%;
-    bottom: 8%;
-    color: #fff;
+    gap: 4px;
     font-size: 10px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
-    line-height: 1.3;
+    letter-spacing: 0.02em;
   }
-  .nc-pv-platform-sim__rail {
-    position: absolute;
-    right: 6px;
-    bottom: 14%;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+  .nc-pv-platform-sim__status-bars,
+  .nc-pv-platform-sim__status-wifi {
+    display: inline-block;
+    width: 14px;
+    text-align: right;
+  }
+  .nc-pv-platform-sim__status-battery {
+    display: inline-flex;
     align-items: center;
-  }
-  .nc-pv-platform-sim__rail-icon {
-    width: 26px; height: 26px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-size: 13px;
-    box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
-  }
-  .nc-pv-platform-sim__rail-label {
-    color: #fff;
+    gap: 3px;
+    padding: 1px 4px;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: 3px;
     font-size: 8px;
-    font-weight: 700;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-    margin-top: 2px;
+    line-height: 1;
+    position: relative;
   }
+  .nc-pv-platform-sim__status-battery::after {
+    content: "";
+    position: absolute;
+    right: -3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 0 1px 1px 0;
+  }
+
+  /* Platform-specific top header — Reels tabs, TikTok For-You/
+     Following, Shorts header, Kick clip nav. Sits right under the
+     status bar so the burned title overlay can claim the active
+     hook zone underneath. */
   .nc-pv-platform-sim__top {
     position: absolute;
-    top: 6px;
-    left: 12px;
-    right: 12px;
+    top: 3.5%;
+    left: 0;
+    right: 0;
+    height: 6%;
+    min-height: 36px;
+    padding: 0 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     color: #fff;
-    font-size: 9px;
-    font-weight: 600;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-    opacity: 0.85;
+    font-size: 14px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
   }
+  .nc-pv-platform-sim__top-left,
+  .nc-pv-platform-sim__top-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 16px;
+    line-height: 1;
+  }
+  .nc-pv-platform-sim__top-tab {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    opacity: 0.55;
+  }
+  .nc-pv-platform-sim__top-tab.is-active {
+    opacity: 1;
+    text-shadow:
+      0 0 1px rgba(255, 255, 255, 0.4),
+      0 1px 3px rgba(0, 0, 0, 0.55);
+  }
+  .nc-pv-platform-sim__top-tab.is-active::after {
+    content: "";
+    display: block;
+    height: 2px;
+    background: #fff;
+    margin-top: 4px;
+    border-radius: 1px;
+  }
+  .nc-pv-platform-sim__top-icon {
+    font-size: 18px;
+    line-height: 1;
+    opacity: 0.92;
+  }
+
+  /* Big right-edge engagement rail — like / comment / share / save /
+     remix / sound. Each icon ~36px so it reads from across the room.
+     Counts (8, 142) live below the icon, matching real Reels. */
+  .nc-pv-platform-sim__rail {
+    position: absolute;
+    right: 10px;
+    bottom: 24%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+  }
+  .nc-pv-platform-sim__rail-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+  .nc-pv-platform-sim__rail-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.32);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 18px;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  }
+  .nc-pv-platform-sim__rail-icon--avatar {
+    background: linear-gradient(135deg, #ff3b30, #ff9500);
+    border-color: #fff;
+    border-width: 2px;
+    width: 32px; height: 32px;
+    position: relative;
+  }
+  .nc-pv-platform-sim__rail-icon--avatar::after {
+    content: "+";
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #ff3b30;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 14px;
+    border: 1.5px solid var(--nc-bg-base, #06080d);
+  }
+  .nc-pv-platform-sim__rail-label {
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    line-height: 1;
+  }
+
+  /* Description block — bottom-left, the @handle + Follow + caption.
+     This is what eats the lower-left of EVERY published Reel / TikTok
+     so the operator HAS to see it overlapping their burns. */
+  .nc-pv-platform-sim__desc {
+    position: absolute;
+    left: 14px;
+    right: 80px;
+    bottom: 12%;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    pointer-events: none;
+  }
+  .nc-pv-platform-sim__handle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .nc-pv-platform-sim__handle {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+  .nc-pv-platform-sim__follow {
+    display: inline-block;
+    padding: 3px 10px;
+    border: 1.5px solid #fff;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    background: transparent;
+    color: #fff;
+  }
+  .nc-pv-platform-sim__caption {
+    font-size: 12px;
+    line-height: 1.35;
+    max-height: 2.7em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  /* Bottom navigation dock — home / video / send / search / profile.
+     ~7% of frame height with subtle gradient under it so it reads as
+     "below the safe area" instead of floating in space. */
   .nc-pv-platform-sim__bottom-nav {
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    height: 5%;
-    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.55));
+    height: 7%;
+    min-height: 44px;
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(0, 0, 0, 0.45) 60%,
+      rgba(0, 0, 0, 0.78) 100%
+    );
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 8px 6px;
+    color: #fff;
+  }
+  .nc-pv-platform-sim__bottom-nav-icon {
+    font-size: 18px;
+    line-height: 1;
+    opacity: 0.75;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  }
+  .nc-pv-platform-sim__bottom-nav-icon.is-active { opacity: 1; }
+
+  /* Per-platform tinting — Reels gets a hint of magenta on the rail,
+     TikTok stays monochrome, Shorts uses red accents, Kick uses
+     green. Pure decoration, nudges the operator's eye toward
+     platform identity. */
+  .nc-pv-platform-sim[data-platform="tiktok"] .nc-pv-platform-sim__top-tab.is-active::after { background: #fff; }
+  .nc-pv-platform-sim[data-platform="reels"] .nc-pv-platform-sim__rail-item:first-child .nc-pv-platform-sim__rail-icon {
+    color: #ff3aa8;
+  }
+  .nc-pv-platform-sim[data-platform="shorts"] .nc-pv-platform-sim__top-icon { color: #ff3b30; }
+  .nc-pv-platform-sim[data-platform="kick"] .nc-pv-platform-sim__top { color: #53fc18; }
+
+  /* Slice L.2 — when the platform chrome is active (= data-platform is
+     anything other than "clean"), the legacy fake-comments rail
+     (.nc-pv-rail, the 4 small icons added in F.7) collides with the
+     bigger platform-sim rail. Hide it; the platform sim rail is the
+     more authentic one. */
+  .nc-preview__layer:has(.nc-pv-platform-sim:not([data-platform="clean"])) .nc-pv-rail {
+    display: none;
   }
 
   /* Slice I.2 — dynamic safe-zone overlay (rebuilt by JS from server zone catalog). */
@@ -626,11 +1354,18 @@
     color: rgba(255, 220, 140, 0.9);
   }
 
-  /* Slice I.2 — preview-mode display rules.
-     Raw      → hide every overlay
-     Edited   → standard burn-target overlays
-     Platform → Edited + platform sim layer
-     Final    → same as Edited; reserved for export-pipeline parity */
+  /* Slice I.2 + L.2 — preview-mode display rules.
+     Raw      → hide every overlay AND chrome — source crop only
+     Edited   → burn-target overlays + platform chrome (the new
+                default; chrome IS the preview now)
+     Platform → same as Edited; kept for back-compat with
+                bookmarked preview_mode URLs
+     Final    → burns only, no platform chrome (preview of the
+                actual MP4 we ship — what the renderer outputs)
+     Slice L.2 flipped the chrome to default-on so the operator
+     sees "this is what users see" without flipping a toggle. The
+     "Final" mode is for the rare case where they want to see ONLY
+     the pixels they're shipping. */
   .nc-preview[data-preview-mode="raw"] .nc-pv-title,
   .nc-preview[data-preview-mode="raw"] .nc-pv-top-hook,
   .nc-preview[data-preview-mode="raw"] .nc-pv-caption,
@@ -640,10 +1375,43 @@
   .nc-preview[data-preview-mode="raw"] .nc-pv-safezones {
     display: none !important;
   }
-  .nc-preview[data-preview-mode="edited"] .nc-pv-platform-sim,
-  .nc-preview[data-preview-mode="final"] .nc-pv-platform-sim,
+  /* Safezones still need to be opt-in (they're a teaching aid, not
+     a chrome layer). Hidden in every mode unless the operator
+     explicitly toggles "show safezones" on.
+     Slice O.14 — the `data-preview-mode="final"` selectors were
+     removed along with the Final tab; selectors below cover the
+     only three modes that exist today. */
   .nc-preview[data-preview-mode="edited"] .nc-pv-safezones,
-  .nc-preview[data-preview-mode="final"] .nc-pv-safezones {
+  .nc-preview[data-preview-mode="platform"] .nc-pv-safezones {
+    display: none !important;
+  }
+  /* Slice O.12 — preview-only watermark element that mirrors the
+     ffmpeg `_watermark_filter`. Same text, same lime color, same
+     top-right anchor, same opacity. Visible in EVERY mode where the
+     burned MP4 would carry the watermark — Edited / Platform / Final
+     — and absent in Raw. This is the canonical "WYSIWYG" element
+     for the brand stamp the export ships with.
+
+     Sized in % of the preview frame so it stays proportionate at any
+     zoom; the actual fontsize the ffmpeg filter uses scales the same
+     way (3.2% of output_w). */
+  .nc-pv-watermark {
+    position: absolute;
+    top: 2.4%;
+    right: 3.0%;
+    z-index: 5;
+    pointer-events: none;
+    font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 900;
+    font-size: 3.2cqi;  /* container-query-relative so it tracks the preview width */
+    line-height: 1;
+    letter-spacing: 0.04em;
+    color: rgba(200, 255, 92, 0.78);
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+    user-select: none;
+  }
+  .nc-preview[data-preview-mode="raw"] .nc-pv-watermark,
+  .nc-preview[data-watermark="off"] .nc-pv-watermark {
     display: none !important;
   }
 
@@ -1120,6 +1888,32 @@
   .nc-timeline__marker--dead_air      { background: #555; border: 1px dashed rgba(255,255,255,0.3); }
   .nc-timeline__marker--viral_moment  { background: linear-gradient(135deg, #ffc83c, #ff3b8b); box-shadow: 0 0 6px rgba(255,200,60,0.5); }
   .nc-timeline__marker--ai_cut        { background: #00d97a; }
+  /* Slice M.1 — voice-trigger marker: the keystone signal that fired
+     the clip. Lime, slightly larger, with a pulsing glow so the
+     operator sees "this is the moment the AI heard me say the
+     trigger phrase". */
+  .nc-timeline__marker--voice_trigger {
+    background: var(--nc-lime, #c8ff5c);
+    width: 12px;
+    height: 12px;
+    box-shadow:
+      0 0 0 2px rgba(200, 255, 92, 0.30),
+      0 0 12px rgba(200, 255, 92, 0.85);
+    animation: nc-trigger-pulse 1.8s ease-in-out infinite;
+    z-index: 2;
+  }
+  @keyframes nc-trigger-pulse {
+    0%, 100% {
+      box-shadow:
+        0 0 0 2px rgba(200, 255, 92, 0.30),
+        0 0 12px rgba(200, 255, 92, 0.85);
+    }
+    50% {
+      box-shadow:
+        0 0 0 5px rgba(200, 255, 92, 0.18),
+        0 0 18px rgba(200, 255, 92, 1.0);
+    }
+  }
 
   .nc-timeline__marker {
     cursor: pointer;
@@ -1288,6 +2082,94 @@
   .nc-verdict--reject .nc-verdict__retention-pct { color: #ff8a8a; text-shadow: 0 0 18px rgba(255, 90, 90, 0.40); }
   .nc-verdict--needs_edit .nc-verdict__retention-pct { color: #ffb800; text-shadow: 0 0 18px rgba(255, 184, 0, 0.40); }
 
+  /* Slice K.5 — "Optimized for X" badge on the verdict card. Echoes
+     the picked target-platform chip up top so the operator FEELS
+     their pick traveled all the way through the AI scoring. */
+  .nc-verdict__target {
+    position: relative; z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(200, 255, 92, 0.10);
+    border: 1px solid rgba(200, 255, 92, 0.35);
+    color: var(--nc-lime);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-shadow: 0 0 8px rgba(200, 255, 92, 0.35);
+  }
+  .nc-verdict__target-emoji { font-size: 13px; filter: none; }
+
+  /* Slice K.7 — trigger phrase callout on the verdict card. The
+     single most reassuring signal: "the AI literally heard the words
+     you said". Lime accent ties it to the rest of the AI surfaces. */
+  .nc-verdict__trigger {
+    position: relative; z-index: 2;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: linear-gradient(
+      135deg,
+      rgba(200, 255, 92, 0.10),
+      rgba(200, 255, 92, 0.03)
+    );
+    border: 1px solid rgba(200, 255, 92, 0.30);
+    box-shadow: inset 0 0 18px -8px rgba(200, 255, 92, 0.35);
+  }
+  .nc-verdict__trigger-icon {
+    font-size: 18px;
+    line-height: 1;
+    filter: drop-shadow(0 0 8px rgba(200, 255, 92, 0.55));
+  }
+  .nc-verdict__trigger-body { flex: 1; min-width: 0; }
+  .nc-verdict__trigger-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .nc-verdict__trigger-label {
+    color: var(--nc-text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .nc-verdict__trigger-phrase {
+    color: var(--nc-lime);
+    font-weight: 800;
+    font-size: 14px;
+    text-shadow: 0 0 10px rgba(200, 255, 92, 0.40);
+  }
+  .nc-verdict__trigger-kind {
+    font-size: 10px;
+    color: var(--nc-text-muted);
+    font-weight: 700;
+    text-transform: lowercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .nc-verdict__trigger-snippet {
+    margin-top: 4px;
+    color: var(--nc-text-muted);
+    font-size: 11px;
+    font-style: italic;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
   .nc-verdict__intel {
     position: relative; z-index: 2;
     display: flex;
@@ -1304,6 +2186,245 @@
   .nc-verdict__intel-sparkle {
     font-size: 14px;
     filter: drop-shadow(0 0 6px rgba(200, 255, 92, 0.45));
+  }
+
+  /* Slice N.3 — bottom-bar Approve & continue color shifts based on
+     the verdict status so the operator still gets a risk-at-a-glance
+     hint without sacrificing the unified click flow. Lime when
+     publish-ready, amber when needs-edit, red when reject. The
+     CLICK behavior is identical across all three (the modal handles
+     the divergence). */
+  .nc-approve-action {
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .nc-approve-action--publish_ready {
+    background: var(--nc-lime, #c8ff5c);
+    color: #06080d;
+    border: 1px solid var(--nc-lime, #c8ff5c);
+    box-shadow: 0 0 0 1px rgba(200, 255, 92, 0.45) inset;
+  }
+  .nc-approve-action--publish_ready:hover {
+    background: #d8ff7a;
+    border-color: #d8ff7a;
+  }
+  .nc-approve-action--needs_edit {
+    background: rgba(255, 200, 0, 0.10);
+    color: #ffd066;
+    border: 1px solid rgba(255, 200, 0, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 200, 0, 0.25) inset;
+  }
+  .nc-approve-action--needs_edit:hover {
+    background: rgba(255, 200, 0, 0.18);
+    border-color: rgba(255, 200, 0, 0.85);
+  }
+  .nc-approve-action--reject {
+    background: rgba(255, 90, 90, 0.08);
+    color: #ff8a8a;
+    border: 1px solid rgba(255, 90, 90, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 90, 90, 0.20) inset;
+  }
+  .nc-approve-action--reject:hover {
+    background: rgba(255, 90, 90, 0.14);
+    border-color: rgba(255, 90, 90, 0.85);
+  }
+
+  /* Slice N.2 — Approve & continue: issues-before-ship modal.
+     Opens when the operator clicks "Approve & continue" on a clip
+     whose verdict isn't publish_ready. Three escape hatches: keep
+     editing / AI auto-fix / ship anyway. */
+  .nc-approve-modal {
+    position: fixed;
+    inset: 0;
+    /* Slice N.4 — bumped from z-index:1000 → 99999 so the modal
+       sits above the sticky action bar and any other fixed-position
+       chrome the page mounts. */
+    z-index: 99999;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: nc-fade-in 180ms ease-out 1;
+  }
+  .nc-approve-modal[hidden] { display: none; }
+  @keyframes nc-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .nc-approve-modal__panel {
+    background: var(--nc-bg-elevated, #0c1018);
+    border: 1px solid rgba(255, 200, 0, 0.40);
+    border-radius: 14px;
+    padding: 22px 24px;
+    width: 100%;
+    max-width: 520px;
+    box-shadow:
+      0 12px 48px rgba(0, 0, 0, 0.65),
+      inset 0 0 28px -10px rgba(255, 200, 0, 0.18);
+  }
+  .nc-approve-modal__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .nc-approve-modal__icon {
+    font-size: 26px;
+    filter: drop-shadow(0 0 8px rgba(255, 200, 0, 0.55));
+  }
+  .nc-approve-modal__title {
+    color: #ffd066;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    text-shadow: 0 0 12px rgba(255, 184, 0, 0.35);
+  }
+  .nc-approve-modal__body {
+    color: var(--nc-text, #fff);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+  .nc-approve-modal__body p { margin: 0 0 10px; }
+  .nc-approve-modal__body strong { color: var(--nc-lime, #c8ff5c); }
+  .nc-approve-modal__issues {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .nc-approve-modal__issues-row {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 12px;
+    line-height: 1.4;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .nc-approve-modal__issues-row:last-child { border-bottom: 0; }
+  .nc-approve-modal__issues-row--block { color: #ff8a8a; }
+  .nc-approve-modal__issues-row--warn  { color: #ffd066; }
+  .nc-approve-modal__actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .nc-approve-modal__actions .nc-btn {
+    flex: 1 1 auto;
+    min-width: 130px;
+    justify-content: center;
+  }
+  .nc-approve-modal__cancel {
+    background: transparent;
+    border: 1px solid var(--nc-border);
+    color: var(--nc-text);
+  }
+  .nc-approve-modal__autofix {
+    background: rgba(200, 255, 92, 0.08);
+    border: 1px solid rgba(200, 255, 92, 0.40);
+    color: var(--nc-lime, #c8ff5c);
+  }
+  .nc-approve-modal__force {
+    /* Inherits .nc-btn--primary lime fill so it still feels like
+       the primary action — operator's most likely next click. */
+  }
+
+  /* Slice N.1 — Auto-Fix diff card. Renders below the verdict
+     CTA row after the operator clicks "Auto fix & optimize" and
+     lists each ✓ applied fix alongside the before → after score.
+     Stagger-animates in so the operator FEELS the improvement
+     cascading rather than seeing a single static block. */
+  .nc-fix-diff {
+    position: relative; z-index: 2;
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(200, 255, 92, 0.05);
+    border: 1px solid rgba(200, 255, 92, 0.25);
+    box-shadow: inset 0 0 18px -6px rgba(200, 255, 92, 0.20);
+  }
+  .nc-fix-diff__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .nc-fix-diff__title {
+    color: var(--nc-lime, #c8ff5c);
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-shadow: 0 0 8px rgba(200, 255, 92, 0.35);
+  }
+  .nc-fix-diff__delta {
+    font-family: var(--nc-font-mono);
+    font-size: 13px;
+    font-weight: 800;
+  }
+  .nc-fix-diff__delta--up   { color: #d8ff7a; }
+  .nc-fix-diff__delta--down { color: #ff8a8a; }
+  .nc-fix-diff__delta--flat { color: var(--nc-text-muted); }
+  .nc-fix-diff__promote {
+    margin: 6px 0 10px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(200, 255, 92, 0.12);
+    color: var(--nc-lime, #c8ff5c);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .nc-fix-diff__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 0;
+    color: var(--nc-text);
+    font-size: 12px;
+    line-height: 1.4;
+    opacity: 0;
+    animation: nc-fix-row-in 320ms cubic-bezier(.16, 1, .3, 1) both;
+  }
+  .nc-fix-diff__check {
+    color: var(--nc-lime, #c8ff5c);
+    font-weight: 900;
+    flex: 0 0 14px;
+    text-shadow: 0 0 4px rgba(200, 255, 92, 0.45);
+  }
+  .nc-fix-diff__why { flex: 1; }
+  @keyframes nc-fix-row-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Slice L.6 — "AI rationale" inline chip surfaced near controls
+     the AI auto-decides (caption position dropdown today; can be
+     attached to any other field tomorrow). Lime sparkle, lime text,
+     small enough to whisper not shout. Lives inside the existing
+     .nc-label so spacing stays consistent. */
+  .nc-ai-rationale {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(200, 255, 92, 0.07);
+    border: 1px solid rgba(200, 255, 92, 0.22);
+    color: var(--nc-lime, #c8ff5c);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+  }
+  .nc-ai-rationale__spark {
+    font-size: 10px;
+    filter: drop-shadow(0 0 4px rgba(200, 255, 92, 0.5));
   }
 
   .nc-verdict__platforms {
@@ -1631,10 +2752,15 @@
       0 0 20px -8px rgba(0, 217, 255, 0.45);
   }
 
-  /* Slice J.1 — giant inline play/pause overlay on the preview video. */
+  /* Slice J.1 — giant inline play/pause overlay on the preview video.
+     Slice K.6 — bottom inset of 56px so the native browser control bar
+     (play/scrub/volume/fullscreen) stays clickable while paused. */
   .nc-pv-play-overlay {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1901,11 +3027,70 @@
     </div>
   </div>
 
-  {# Slice K.3 — ✨ AI-intelligence sparkle line. Pulled from the
-     existing breakdown so the operator FEELS the AI noticed real
-     stuff in the clip, not just scored boxes. #}
+  {# Slice K.5 — "Optimized for X" badge. Echoes the picked target-
+     platform chip from the editor top so the AI verdict feels
+     situated against the operator's actual destination. Always
+     visible because every clip has a target (defaults to "All"). #}
+  {%- set _vtarget_id = (ov.get('target_platform') if ov.get('target_platform') else (brand_kit.target_platform if brand_kit and brand_kit.target_platform else 'all')) -%}
+  {%- set _vtarget = platform_target_choices | selectattr(0, 'equalto', _vtarget_id) | list -%}
+  {%- if _vtarget -%}
+    {%- set _vt = _vtarget[0] -%}
+    <div class="nc-verdict__target" id="verdict-target-badge"
+         data-platform-id="{{ _vt[0] }}">
+      <span class="nc-verdict__target-emoji" aria-hidden="true">{{ _vt[1] }}</span>
+      <span>Optimized for {{ _vt[2] }}</span>
+    </div>
+  {%- endif -%}
+
+  {# Slice K.7 — surface the EXACT trigger phrase the AI heard. This
+     was the #1 reported confusion: "did the AI actually detect what
+     I said?". When the candidate fired off a voice-trigger we show
+     the phrase + the surrounding snippet so the operator can see the
+     match was real. Voice-trigger candidates only — chat-heat / motion-
+     peak candidates fall through to the regular intel lines below. #}
+  {% if candidate_trigger and candidate_trigger.phrase %}
+  <div class="nc-verdict__trigger" aria-live="polite">
+    <span class="nc-verdict__trigger-icon">🎯</span>
+    <div class="nc-verdict__trigger-body">
+      <div class="nc-verdict__trigger-line">
+        <span class="nc-verdict__trigger-label">AI heard you say</span>
+        <span class="nc-verdict__trigger-phrase">"{{ candidate_trigger.phrase }}"</span>
+        {% if candidate_trigger.kind == 'retroactive' %}
+        <span class="nc-verdict__trigger-kind" title="Phrase fired retroactively — clip extends BACKWARD from the moment you said it">↶ retroactive</span>
+        {% else %}
+        <span class="nc-verdict__trigger-kind" title="Phrase fired forward — clip extends FORWARD from the moment you said it">↷ forward</span>
+        {% endif %}
+      </div>
+      {% if candidate_trigger.snippet %}
+      <div class="nc-verdict__trigger-snippet">
+        …{{ candidate_trigger.snippet }}…
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Slice K.3 + L.4b + L.6 — ✨ AI-intelligence sparkle lines.
+     L.6 is the keystone: the ai_decisions object packages every
+     auto-decision ("Face leads", "Captions tuned down to let the
+     face speak", "Hook recommended · primes the reaction payoff",
+     etc.) into intel_lines. We prepend those, then add the L.4b
+     face-zone hints, then the L.4 detector reason. Deduped and
+     capped at 3 lines to avoid noise.
+     The full ai_decisions panel further down on the card carries
+     the deeper "why" for operators who want to audit. #}
   {% set _ai_evidence_lines = [] %}
-  {% if breakdown.heuristic_reason %}
+  {% if ai_decisions and ai_decisions.intel_lines %}
+    {% for line in ai_decisions.intel_lines %}
+      {% set _ = _ai_evidence_lines.append(line) %}
+    {% endfor %}
+  {% endif %}
+  {% if face_zone == 'top' and (not ai_decisions or 'Face' not in (ai_decisions.intel_lines|join(' '))) %}
+    {% set _ = _ai_evidence_lines.append('Face high in frame — hook pushed below it') %}
+  {% elif face_zone == 'lower' and (not ai_decisions or 'Face' not in (ai_decisions.intel_lines|join(' '))) %}
+    {% set _ = _ai_evidence_lines.append('Face low in frame — captions lifted above it') %}
+  {% endif %}
+  {% if breakdown.heuristic_reason and breakdown.heuristic_reason != 'unknown' %}
     {% set _ = _ai_evidence_lines.append('Detected: ' ~ breakdown.heuristic_reason|replace('_', ' ')) %}
   {% endif %}
   {% if breakdown.reaction_confidence is not none and breakdown.reaction_confidence >= 0.6 %}
@@ -1948,13 +3133,80 @@
       <i class="ti ti-wand" aria-hidden="true"></i>
       <span>Auto fix &amp; optimize</span>
     </button>
-    <button type="submit" form="overlay-form"
-            class="nc-btn nc-btn--primary nc-verdict__cta-secondary">
-      <i class="ti ti-rocket" aria-hidden="true"></i>
-      <span>{% if publishability.status == 'reject' %}Review &amp; publish{% else %}Publish now{% endif %}</span>
+    {# Slice N.2 — CTA renamed from "Review & publish" / "Publish
+       now" to "Approve & continue". The button is no longer a raw
+       form-submit when there are unresolved issues — the JS
+       intercepts the click and opens an issues-banner modal with
+       three escape hatches (ignore / auto-fix / cancel).
+       data-verdict-status drives the modal-trigger logic. #}
+    <button type="button"
+            class="nc-btn nc-btn--primary nc-verdict__cta-secondary"
+            id="approve-continue-btn"
+            data-verdict-status="{{ publishability.status }}"
+            data-form-id="overlay-form">
+      <i class="ti ti-circle-check" aria-hidden="true"></i>
+      <span>Approve &amp; continue</span>
     </button>
   </div>
   <div id="apply-ai-fixes-feedback" class="nc-verdict__feedback"></div>
+
+  {# Slice N.2 — issues-before-ship banner modal. Hidden until the
+     operator clicks Approve & continue on a clip whose publishability
+     status is NOT publish_ready. Three escape hatches:
+       - Ignore & ship anyway  (submit the form as-is)
+       - AI auto-fix all       (run /apply-ai-fixes, then submit)
+       - Cancel & keep editing (close modal, do nothing)
+     The modal is rendered inline so the existing form-submit path
+     stays intact — the modal's "Ship anyway" button submits the
+     same overlay-form the original CTA did. #}
+  <div id="approve-issues-modal" class="nc-approve-modal" hidden>
+    <div class="nc-approve-modal__panel">
+      <div class="nc-approve-modal__head">
+        <span class="nc-approve-modal__icon">⚠</span>
+        <span class="nc-approve-modal__title">
+          This clip isn't quite ready
+        </span>
+      </div>
+      <div class="nc-approve-modal__body">
+        <p>The AI scored this clip
+          <strong id="approve-modal-score">{{ publishability.score }}%</strong> for publish readiness.
+          You can ship it anyway, let the AI auto-fix what it can, or
+          keep editing.</p>
+        <ul id="approve-modal-issues" class="nc-approve-modal__issues">
+          {%- for b in publishability.blocking -%}
+          <li class="nc-approve-modal__issues-row nc-approve-modal__issues-row--block">
+            <span>⛔</span><span>{{ b }}</span>
+          </li>
+          {%- endfor -%}
+          {%- for w in publishability.warnings -%}
+          <li class="nc-approve-modal__issues-row nc-approve-modal__issues-row--warn">
+            <span>⚠</span><span>{{ w }}</span>
+          </li>
+          {%- endfor -%}
+        </ul>
+      </div>
+      <div class="nc-approve-modal__actions">
+        <button type="button"
+                class="nc-btn nc-approve-modal__cancel"
+                id="approve-modal-cancel">
+          <i class="ti ti-arrow-left" aria-hidden="true"></i>
+          <span>Keep editing</span>
+        </button>
+        <button type="button"
+                class="nc-btn nc-approve-modal__autofix"
+                id="approve-modal-autofix">
+          <i class="ti ti-wand" aria-hidden="true"></i>
+          <span>AI auto-fix all</span>
+        </button>
+        <button type="button"
+                class="nc-btn nc-btn--primary nc-approve-modal__force"
+                id="approve-modal-force">
+          <i class="ti ti-rocket" aria-hidden="true"></i>
+          <span>Ship anyway</span>
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 {% endif %}
 
@@ -2185,12 +3437,20 @@
              Platform    = Edited + fake platform UI chrome
              Final       = same as Edited; reserved for export-pipeline parity #}
           <div class="nc-preview-modes" role="tablist">
+            {#- Slice O.14 — "Final" tab removed.
+                It rendered the burned clip_final.mp4 directly which
+                often looked nothing like the CSS preview (stale burn,
+                font drift, etc) and confused operators. The CSS
+                preview IS the spec; the burn's job is to match it.
+                If a Final-mode value persists in localStorage we
+                map it to 'platform' on load (see applyPreviewMode JS).
+            -#}
             {% set _preview_mode = ov.get('preview_mode') or 'edited' %}
+            {% if _preview_mode == 'final' %}{% set _preview_mode = 'platform' %}{% endif %}
             {% for mode_id, mode_label, mode_hint in [
               ('raw',      'Raw',      'Source crop · no overlays'),
               ('edited',   'Edited',   'Title + captions + banner'),
               ('platform', 'Platform', 'Edited + fake platform UI chrome'),
-              ('final',    'Final',    'Exactly what publishers upload'),
             ] %}
             <button type="button"
                     class="nc-preview-mode{% if _preview_mode == mode_id %} is-active{% endif %}"
@@ -2202,21 +3462,54 @@
             {% endfor %}
           </div>
 
-          {# Slice I.2 — collision warning bar. JS fills this from the
-             client-side collision detector whenever a relevant control
-             changes (banner toggle, captions position, platform sim
-             pick). Empty/hidden when no overlays collide. #}
-          <div id="pv-collisions" class="nc-pv-collisions" aria-live="polite"></div>
+          {# Slice L.3 — collision warning bar deleted (was the
+             stacked red "Banner collides with caption_danger" spam
+             operators kept reporting). The always-on tri-color zone
+             overlay inside .nc-preview now teaches visually: red
+             where content gets covered, yellow at the buffer edges,
+             implicit green safe zone in the middle. The element ID
+             stays in the DOM so the JS doesn't NPE when it tries to
+             clear it — but it's permanently `display: none` via CSS. #}
+          <div id="pv-collisions" class="nc-pv-collisions" aria-hidden="true"></div>
 
+          {%- set _zone_profile = (
+              ov.get('target_platform')
+              if ov.get('target_platform')
+              else (brand_kit.target_platform if brand_kit and brand_kit.target_platform else 'all')
+          ) -%}
           <div class="nc-preview"
                id="preview"
                data-preview-mode="{{ _preview_mode }}"
                data-fit-mode="{{ _fit_mode }}"
+               data-zone-profile="{{ _zone_profile }}"
+               {%- if face_zone %} data-face-zone="{{ face_zone }}"{%- endif %}
                style="--pv-highlight: {{ captions.highlight_color or caption_style.highlight_color }};
                       --pv-banner-color: {{ banner.color or platform_colors.get((banner.platform or 'kick'), '#53FC18') }};">
-            <video id="preview-video" preload="metadata" muted playsinline loop>
+            {# Slice K.6 — native browser controls (the bottom bar with
+               play/scrub/volume/fullscreen) so the preview feels like a
+               normal video player. Combined with: our custom big center-
+               play overlay (visible only while paused), the editor
+               waveform/scrubber below, and the floating like + mute
+               chrome up top. The native control bar fades in on hover. #}
+            <video id="preview-video" preload="metadata" muted playsinline loop controls controlslist="nodownload">
               <source src="/dashboard/clips/{{ clip.id }}/media">
             </video>
+
+            {# Slice L.3 — always-on tri-color safe-zone teaching
+               overlay. Permanent visual hint at the top + bottom of
+               the preview showing where content WILL be covered by
+               platform UI on publish. No toggle, no text spam — the
+               red wash IS the warning.
+               Layered BELOW chrome (z-index 2) so the chrome reads
+               on top of the red zone, reinforcing the message. #}
+            <div class="nc-pv-zones" aria-hidden="true">
+              <div class="nc-pv-zones__band nc-pv-zones__band--top-unsafe"></div>
+              <div class="nc-pv-zones__band nc-pv-zones__band--top-caution"></div>
+              <div class="nc-pv-zones__band nc-pv-zones__band--bottom-caution"></div>
+              <div class="nc-pv-zones__band nc-pv-zones__band--bottom-unsafe"></div>
+              <div class="nc-pv-zones__label nc-pv-zones__label--top">UNSAFE · PLATFORM CHROME</div>
+              <div class="nc-pv-zones__label nc-pv-zones__label--bottom">UNSAFE · DESCRIPTION + DOCK</div>
+            </div>
 
             {# Slice K.3 — ambient "this is a real post" affordances.
                A pulsing like-counter pinned top-right + an animated
@@ -2342,8 +3635,33 @@
                 <span class="nc-pv-banner__platform" id="pv-banner-platform">
                   {{ (banner.platform or 'kick')|upper }}
                 </span>
+                {#-
+                  Slice M.9 — URL ALWAYS reads "KICK.COM/<HANDLE>".
+
+                  Normalize whatever the operator typed in the banner URL
+                  field. Inputs we accept and what they render as:
+                    "aldo"                       → KICK.COM/ALDO
+                    "@aldo"                      → KICK.COM/ALDO
+                    "kick.com/aldo"              → KICK.COM/ALDO
+                    "https://kick.com/aldo"      → KICK.COM/ALDO
+                    "https://www.kick.com/aldo"  → KICK.COM/ALDO
+                    ""  (empty)                  → KICK.COM/YOURHANDLE
+
+                  The mirror logic lives in syncBanner() so live-edit
+                  preview matches. Keep both in sync.
+                -#}
+                {%- set _raw = (banner.url or '').strip() -%}
+                {%- if not _raw -%}
+                  {%- set _raw = (_default_handle or 'yourhandle')|replace('@', '') -%}
+                {%- endif -%}
+                {%- set _h = _raw -%}
+                {%- if '://' in _h -%}{%- set _h = _h.split('://', 1)[1] -%}{%- endif -%}
+                {%- if _h.startswith('www.') -%}{%- set _h = _h[4:] -%}{%- endif -%}
+                {%- if '/' in _h -%}{%- set _h = _h.split('/', 1)[1] -%}{%- endif -%}
+                {%- set _h = _h.lstrip('@').strip('/').strip().upper() -%}
+                {%- if not _h -%}{%- set _h = 'YOURHANDLE' -%}{%- endif -%}
                 <span class="nc-pv-banner__url" id="pv-banner-url">
-                  {{ banner.url or ((banner.platform or 'kick') ~ '.com/' ~ (_default_handle|replace('@', '') or 'yourhandle')) }}
+                  KICK.COM/{{ _h }}
                 </span>
                 <span class="nc-pv-banner__live-pill" id="pv-banner-live-pill"
                       {% if not banner.get('live_badge', False) %}style="display:none;"{% endif %}>
@@ -2452,17 +3770,61 @@
        so the primary surface stays low on cognitive load. #}
     <div class="nc-editor-controls">
 
+      {# ---- Slice K.5 — Target platform chip row ----
+         The FIRST decision the operator makes. Picking a chip
+         auto-applies the full PLATFORM_PRESETS bundle (safe-zone
+         target, fit_mode, caption position/size/animation/lead_ms,
+         banner variant, top hook, Clip Style). "All" picks the safest
+         cross-platform configuration. Selection persists via
+         /me/brand-kit-prefs so the next clip auto-opens to the same
+         chip. The JS handler lives further down (search "K.5 target
+         platform"); the markup is intentionally simple — five
+         buttons in a grid. #}
+      <div class="nc-panel">
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">0</span>
+          <span class="nc-panel__title">Where are you posting?</span>
+          <small>— pick one · the rest auto-configures to match what works there</small>
+        </div>
+        <div class="nc-panel__body">
+          {# Hidden field carries the picked target_platform on form
+             submit. The JS keeps it in sync with the active chip. #}
+          {%- set _current_target = (ov.get('target_platform') if ov.get('target_platform') else (brand_kit.target_platform if brand_kit and brand_kit.target_platform else 'all')) -%}
+          <input type="hidden" name="target_platform" id="ctl-target-platform"
+                 value="{{ _current_target }}">
+          <div class="nc-platform-row" role="radiogroup" aria-label="Target platform">
+            {% for tid, emoji, name, blurb in platform_target_choices %}
+            <button type="button"
+                    class="nc-platform-chip{% if _current_target == tid %} is-selected{% endif %}"
+                    data-platform-id="{{ tid }}"
+                    data-platform-blurb="{{ blurb }}"
+                    role="radio"
+                    aria-checked="{{ 'true' if _current_target == tid else 'false' }}"
+                    title="{{ blurb }}">
+              <span class="nc-platform-chip__emoji" aria-hidden="true">{{ emoji }}</span>
+              <span class="nc-platform-chip__name">{{ name }}</span>
+              <span class="nc-platform-chip__blurb">{{ blurb }}</span>
+            </button>
+            {% endfor %}
+          </div>
+          <div class="nc-platform-row__blurb" id="platform-blurb"
+               aria-live="polite"></div>
+        </div>
+      </div>
+
       {# ---- Slice I.1 — Clip Style preset cards ----
          The keystone editor abstraction. Picking a style flips banner
          variant + top hook + caption preset + animation intensity
          in one click. The user shouldn't be configuring 12 dropdowns
          to get a viral-looking clip — they pick "Repost Page Viral"
-         and the system handles the rest. #}
-      <div class="nc-panel">
+         and the system handles the rest.
+         Slice K.5 — picking a target platform above auto-selects the
+         appropriate Clip Style; the operator can still override here. #}
+      <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="clip-style">
         <div class="nc-panel__header nc-panel__header--editor">
-          <span class="nc-panel__step">0</span>
+          <span class="nc-panel__step">·</span>
           <span class="nc-panel__title">Clip style</span>
-          <small>— one click to flip banner / hook / captions to a viral look</small>
+          <small>— fine-tune · banner / hook / captions look</small>
         </div>
         <div class="nc-panel__body">
           <input type="hidden" name="clip_style" id="ctl-clip-style"
@@ -2572,18 +3934,75 @@
              All four flow into both the live preview (CSS classes
              + JS time offset) AND the ASS burn (\fs / \fad / shifted
              \kf), so the operator sees what publishes. #}
-          <label class="nc-label">Position
+          {# Slice L.5 — caption position with creator language.
+             The internal CaptionPosition enum stays the same
+             (upper_third / centered / lower_third / bottom) — only
+             the labels change so non-technical operators understand
+             what they're picking. "Auto Viral" is the empty value
+             which makes the renderer fall through to the platform
+             preset's caption_position (lower_third for short-form,
+             bottom for Kick — set in L.4).
+
+             Map (creator label → internal value):
+               Auto Viral       → "" (use platform-preset default)
+               Streamer Standard → "lower_third" (the new L.4 default)
+               Viral Top        → "upper_third"
+               Face Follow      → "centered"
+               Safe Lower       → "bottom"
+               Gameplay Safe    → "upper_third" (above bottom HUD)
+
+             "Face Follow" + "Gameplay Safe" both map to existing
+             positions today; the labels carry the operator intent
+             so L.4b's face-aware dynamic positioning can read them
+             later without breaking saved clips. #}
+          <label class="nc-label">Caption position
             <select class="nc-select" name="captions_position" id="ctl-captions-position">
               {% set _cur_pos = captions.get('position') or caption_style.position %}
-              {% for opt_id, opt_label in [
-                ('upper_third', 'Upper third — top of subject'),
-                ('centered',    'Centered — middle of frame'),
-                ('lower_third', 'Lower third — under face'),
-                ('bottom',      'Bottom — above platform UI'),
-              ] %}
-              <option value="{{ opt_id }}" {% if _cur_pos == opt_id %}selected{% endif %}>{{ opt_label }}</option>
-              {% endfor %}
+              {# Auto Viral is the special-case "" value — the
+                 server-side resolver falls through to the
+                 platform-preset default. Slice L.6 — when the AI
+                 decision is available, surface what it would pick
+                 so the operator sees the auto-choice inline. #}
+              {%- set _ai_pos_label = {
+                  'upper_third': 'Viral Top',
+                  'centered':    'Face Follow',
+                  'lower_third': 'Streamer Standard',
+                  'bottom':      'Safe Lower',
+              }.get(ai_decisions.caption_position) if ai_decisions else None -%}
+              <option value="" {% if not _cur_pos %}selected{% endif %}>
+                ✨ Auto Viral{% if _ai_pos_label %} · AI picks {{ _ai_pos_label }}{% endif %}
+              </option>
+              <option value="lower_third" {% if _cur_pos == 'lower_third' %}selected{% endif %}>
+                Streamer Standard — under face (recommended)
+              </option>
+              <option value="upper_third" {% if _cur_pos == 'upper_third' %}selected{% endif %}>
+                Viral Top — above face, big-poster feel
+              </option>
+              <option value="centered" {% if _cur_pos == 'centered' %}selected{% endif %}>
+                Face Follow — eye-level over the subject
+              </option>
+              <option value="bottom" {% if _cur_pos == 'bottom' %}selected{% endif %}>
+                Safe Lower — just above platform UI
+              </option>
+              {# Gameplay Safe is a second label that maps to the
+                 same `upper_third` value as Viral Top. We surface
+                 both because creators search for different intents
+                 ("captions don't cover my HUD"); the underlying
+                 position is identical. The select normalizes back
+                 to the canonical option on next page load. #}
             </select>
+            <small style="display:block;margin-top:4px;color:var(--nc-text-muted);">
+              Most creators leave this on Auto Viral. The AI picks per platform.
+            </small>
+            {# Slice L.6 — surface the WHY behind the AI's choice
+               directly under the dropdown. Operator can read it
+               without leaving the captions panel. #}
+            {% if ai_decisions and ai_decisions.caption_position_reason %}
+            <small class="nc-ai-rationale">
+              <span class="nc-ai-rationale__spark">✨</span>
+              <span>{{ ai_decisions.caption_position_reason }}</span>
+            </small>
+            {% endif %}
           </label>
 
           <label class="nc-label">Font size
@@ -2659,7 +4078,13 @@
                    {% if banner.get('show_context', False) %}checked{% endif %}>
             <span>Show platform context (LIVE badge + chat)</span>
           </label>
-          <label class="nc-checkbox">
+          {# Slice L.3 — "Show platform safe zones" toggle hidden.
+             The new always-on tri-color zone overlay (.nc-pv-zones)
+             replaces the dashed per-platform debug zones; operators
+             no longer have to opt-in to see "where my burns get
+             covered". Input stays in the DOM so the form-submit
+             contract doesn't change (server still reads it). #}
+          <label class="nc-checkbox" style="display:none;">
             <input type="checkbox" name="banner_show_safezones" value="1" id="ctl-safezones-on"
                    {% if banner.get('show_safezones', False) %}checked{% endif %}>
             <span>Show platform safe zones (TikTok / Reels UI bands)</span>
@@ -2805,27 +4230,30 @@
            replacing the old AI Director panel) carries the same
            status info in a single emotional line. Power users can
            open "Why AI selected this clip" for the full list. #}
-        {# Slice K.4 — when status='reject', the submit fired the
-           finalize endpoint and got a silent 409 (the lifecycle
-           doesn't allow this transition). Now: type='button' that
-           opens "Why AI selected this clip" + scrolls to it so the
-           operator sees what's actually wrong. Other statuses
-           still submit normally. #}
-        {% if publishability is defined and publishability.status == 'reject' %}
+        {# Slice N.3 — unified Approve & continue button.
+           Was a 3-branch mess (publish_ready → green submit /
+           needs_edit → yellow submit / reject → red "Review issues
+           before shipping" dead-end that just opened the details).
+           Operator: "this button keeps me from moving on" — the
+           reject branch was literally a wall.
+
+           Now: one button, always labeled "Approve & continue",
+           hooked to the SAME modal flow as the verdict-card CTA.
+           Click handler (in JS):
+              publish_ready → submit form, go to next clip
+              else         → open the issues-banner modal with the
+                              three escape hatches (keep editing /
+                              auto-fix all / ship anyway)
+           Button color shifts on `publishability.status` so the
+           operator still sees the risk level at a glance. #}
         <button type="button"
-                id="ship-review-btn"
-                class="nc-btn nc-btn--danger nc-btn--full"
-                onclick="(function(){var d=document.querySelector('.nc-advanced-analysis');if(d){d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'});}var v=document.querySelector('.nc-verdict');if(v){v.classList.add('nc-verdict--flash');setTimeout(function(){v.classList.remove('nc-verdict--flash');},900);}})();">
-          <i class="ti ti-alert-triangle" aria-hidden="true"></i>
-          <span>Review issues before shipping</span>
+                class="nc-btn nc-btn--full nc-approve-action {% if publishability is defined %}nc-approve-action--{{ publishability.status }}{% endif %}"
+                id="approve-continue-btn-2"
+                data-verdict-status="{{ publishability.status if publishability is defined else 'publish_ready' }}"
+                data-form-id="overlay-form">
+          <i class="ti ti-circle-check" aria-hidden="true"></i>
+          <span>Approve &amp; continue</span>
         </button>
-        {% else %}
-        <button type="submit"
-                class="nc-btn {% if publishability is defined and publishability.status == 'needs_edit' %}nc-btn--warn{% else %}nc-btn--primary{% endif %} nc-btn--full">
-          <i class="ti ti-rocket" aria-hidden="true"></i>
-          <span>{% if publishability is defined and publishability.status == 'needs_edit' %}Ship anyway (needs review){% else %}Ship to platforms{% endif %}</span>
-        </button>
-        {% endif %}
         <button type="submit"
                 formaction="/dashboard/clips/{{ clip.id }}/overlay"
                 class="nc-btn nc-btn--full">
@@ -3178,14 +4606,31 @@
     pvTitle.textContent = t;
     pvTitle.classList.toggle("is-empty", !t);
   }
+  // Slice M.9 — normalize whatever the operator types into the URL
+  // field so the banner's white text ALWAYS reads "KICK.COM/<HANDLE>".
+  // Mirrors the Jinja normalization above. Keep both in sync.
+  function _formatKickUrl(raw) {
+    var h = (raw || "").trim();
+    if (!h) return "KICK.COM/YOURHANDLE";
+    // Strip protocol if present.
+    var protoIdx = h.indexOf("://");
+    if (protoIdx >= 0) h = h.slice(protoIdx + 3);
+    // Drop leading "www."
+    if (h.toLowerCase().indexOf("www.") === 0) h = h.slice(4);
+    // If the operator typed "kick.com/aldo" (or any domain/path),
+    // keep only what comes AFTER the first "/" — that's the handle.
+    var slashIdx = h.indexOf("/");
+    if (slashIdx >= 0) h = h.slice(slashIdx + 1);
+    // Strip leading "@", trailing slashes, then upper-case.
+    h = h.replace(/^@+/, "").replace(/\/+$/, "").trim().toUpperCase();
+    if (!h) return "KICK.COM/YOURHANDLE";
+    return "KICK.COM/" + h;
+  }
+
   function syncBanner() {
     pvBanner.classList.toggle("is-hidden", !ctlBannerOn.checked);
     pvBannerPlat.textContent = (ctlBannerPlat.value || "kick").toUpperCase();
-    var url = (ctlBannerUrl.value || "").trim();
-    if (!url) {
-      url = (ctlBannerPlat.value || "kick") + ".com/yourhandle";
-    }
-    pvBannerUrl.textContent = url;
+    pvBannerUrl.textContent = _formatKickUrl(ctlBannerUrl.value);
     preview.style.setProperty("--pv-banner-color", ctlBannerColor.value);
   }
   function syncCaptions() {
@@ -3258,87 +4703,233 @@
     });
   }
 
-  // ---- Slice I.2 — platform UI simulation layer. ----
-  // Paints fake Reels/TikTok/Shorts/Kick chrome over the playback frame
-  // so the operator sees what their published clip looks like INSIDE
-  // the destination platform. Preview-only — never burned.
+  // ---- Slice I.2 + L.2 — platform UI simulation layer. ----
+  // Paints REAL-looking IG/TikTok/Shorts/Kick chrome over the playback
+  // frame so the operator sees what their published clip looks like
+  // INSIDE the destination platform. Preview-only — never burned.
+  //
+  // L.2 — full phone-frame fidelity: iOS status bar at top, platform
+  // header, real-size action rail with engagement counts, description
+  // block (@handle + Follow + caption), bottom nav dock. Proportions
+  // are % of the 9:16 frame so the simulation scales with the preview
+  // surface (and matches real-world spacing on any embed size).
+
+  // Shared status bar — iOS time / cellular / wifi / battery. Lifted
+  // out of every per-platform layout because it's identical across
+  // TikTok, Reels, Shorts. Kick gets its own minimal header.
+  function _statusBar() {
+    return (
+      '<div class="nc-pv-platform-sim__status">' +
+        '<span>10:09</span>' +
+        '<div class="nc-pv-platform-sim__status-icons">' +
+          '<span class="nc-pv-platform-sim__status-bars">●●●○</span>' +
+          '<span class="nc-pv-platform-sim__status-wifi">⌒</span>' +
+          '<span class="nc-pv-platform-sim__status-battery">87</span>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // Shared bottom-dock — five nav icons, the middle one active.
+  function _bottomNav(icons) {
+    var html = '<div class="nc-pv-platform-sim__bottom-nav">';
+    icons.forEach(function (ic, i) {
+      var cls = "nc-pv-platform-sim__bottom-nav-icon" +
+        (i === 1 ? " is-active" : "");
+      html += '<span class="' + cls + '">' + ic + '</span>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  // Engagement rail builder. Each item: { icon, label? }.
+  function _rail(items) {
+    var html = '<div class="nc-pv-platform-sim__rail">';
+    items.forEach(function (it) {
+      html +=
+        '<div class="nc-pv-platform-sim__rail-item">' +
+          '<div class="nc-pv-platform-sim__rail-icon' +
+            (it.cls ? ' ' + it.cls : '') + '">' + (it.icon || '') + '</div>' +
+          (it.label
+            ? '<div class="nc-pv-platform-sim__rail-label">' + it.label + '</div>'
+            : ''
+          ) +
+        '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  // Description block — @handle + Follow + caption preview. Pulls
+  // the operator's brand-kit handle when set so the simulation
+  // reflects THEIR clip, not generic "@username".
+  function _description(handle, caption) {
+    return (
+      '<div class="nc-pv-platform-sim__desc">' +
+        '<div class="nc-pv-platform-sim__handle-row">' +
+          '<span class="nc-pv-platform-sim__handle">' + handle + '</span>' +
+          '<span class="nc-pv-platform-sim__follow">Follow</span>' +
+        '</div>' +
+        '<div class="nc-pv-platform-sim__caption">' + caption + '</div>' +
+      '</div>'
+    );
+  }
+
+  // Pull the operator's display handle (kick.com/aldovillanueva →
+  // @aldovillanueva). Falls back to a placeholder so the chrome
+  // still looks populated on a fresh tenant.
+  function _operatorHandle() {
+    var urlEl = document.getElementById("ctl-banner-url");
+    var raw = urlEl ? urlEl.value.trim() : "";
+    if (!raw) return "@yourhandle";
+    var bits = raw.split("/");
+    var last = bits[bits.length - 1] || raw;
+    last = last.replace(/^@/, "");
+    return "@" + last.toLowerCase();
+  }
+
+  // Likely caption preview — the operator's title or top-hook text,
+  // truncated to a handful of words so the chrome reads like a real
+  // post. Used for every platform.
+  function _captionPreview() {
+    var t = document.getElementById("ctl-title");
+    var h = document.getElementById("ctl-top-hook-text");
+    var src = (t && t.value.trim()) || (h && h.value.trim()) || "";
+    if (!src) return "🔥 unreal moment · live stream highlight #fyp";
+    return src.toLowerCase() + " 🔥";
+  }
+
   var SIM_LAYOUTS = {
     clean: function () { return ""; },
     tiktok: function () {
       return (
+        _statusBar() +
         '<div class="nc-pv-platform-sim__top">' +
-          '<span>For You</span><span>Following</span>' +
+          '<div class="nc-pv-platform-sim__top-left">' +
+            '<span class="nc-pv-platform-sim__top-icon">＋</span>' +
+          '</div>' +
+          '<div class="nc-pv-platform-sim__top-tabs" style="display:inline-flex;gap:18px;">' +
+            '<span class="nc-pv-platform-sim__top-tab">Following</span>' +
+            '<span class="nc-pv-platform-sim__top-tab is-active">For You</span>' +
+          '</div>' +
+          '<div class="nc-pv-platform-sim__top-right">' +
+            '<span class="nc-pv-platform-sim__top-icon">⌕</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="nc-pv-platform-sim__rail">' +
-          '<div class="nc-pv-platform-sim__rail-icon">♡</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">⤴</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">♪</div>' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__profile">' +
-          '<span class="nc-pv-platform-sim__avatar"></span>@username · Follow' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__caption">' +
-          'epic moment 🤯 #fyp #viral #clip' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+        _rail([
+          { icon: '', cls: 'nc-pv-platform-sim__rail-icon--avatar' },
+          { icon: '♥', label: '142.3K' },
+          { icon: '💬', label: '1,284' },
+          { icon: '🔖', label: '3,402' },
+          { icon: '↪', label: 'Share' },
+          { icon: '♪', label: '' },
+        ]) +
+        _description(_operatorHandle(), _captionPreview()) +
+        _bottomNav(['⌂', '▶', '＋', '✉', '◉'])
       );
     },
     reels: function () {
       return (
+        _statusBar() +
         '<div class="nc-pv-platform-sim__top">' +
-          '<span>Reels</span><span>📷</span>' +
+          '<div class="nc-pv-platform-sim__top-left">' +
+            '<span class="nc-pv-platform-sim__top-tab is-active">Reels</span>' +
+            '<span class="nc-pv-platform-sim__top-tab">Friends</span>' +
+          '</div>' +
+          '<div class="nc-pv-platform-sim__top-right">' +
+            '<span class="nc-pv-platform-sim__top-icon">📷</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="nc-pv-platform-sim__rail">' +
-          '<div class="nc-pv-platform-sim__rail-icon">♥</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">↗</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">⋯</div>' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__profile">' +
-          '<span class="nc-pv-platform-sim__avatar"></span>username · Follow' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__caption">' +
-          'reaction clip 🎬 #reels' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+        _rail([
+          { icon: '', cls: 'nc-pv-platform-sim__rail-icon--avatar' },
+          { icon: '♥', label: '8' },
+          { icon: '💬', label: '' },
+          { icon: '↪', label: '' },
+          { icon: '✈', label: '' },
+          { icon: '⋯', label: '' },
+        ]) +
+        _description(_operatorHandle(), _captionPreview()) +
+        _bottomNav(['⌂', '▶', '✈', '⌕', '◉'])
       );
     },
     shorts: function () {
       return (
+        _statusBar() +
         '<div class="nc-pv-platform-sim__top">' +
-          '<span>Shorts</span><span>🔍</span>' +
+          '<div class="nc-pv-platform-sim__top-left">' +
+            '<span class="nc-pv-platform-sim__top-icon">▶</span>' +
+            '<span style="font-size:14px;font-weight:800;">Shorts</span>' +
+          '</div>' +
+          '<div class="nc-pv-platform-sim__top-right">' +
+            '<span class="nc-pv-platform-sim__top-icon">⌕</span>' +
+            '<span class="nc-pv-platform-sim__top-icon">⋯</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="nc-pv-platform-sim__rail">' +
-          '<div class="nc-pv-platform-sim__rail-icon">👍</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">👎</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">💬</div>' +
-          '<div class="nc-pv-platform-sim__rail-icon">↗</div>' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__profile">' +
-          '<span class="nc-pv-platform-sim__avatar"></span>@channel · Subscribe' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__caption">' +
-          'title goes here #shorts' +
-        '</div>' +
-        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+        _rail([
+          { icon: '', cls: 'nc-pv-platform-sim__rail-icon--avatar' },
+          { icon: '👍', label: '24K' },
+          { icon: '👎', label: '' },
+          { icon: '💬', label: '512' },
+          { icon: '↪', label: 'Share' },
+          { icon: '⌘', label: 'Remix' },
+        ]) +
+        _description(_operatorHandle(), _captionPreview()) +
+        _bottomNav(['⌂', '▶', '＋', '◉', '☰'])
       );
     },
     kick: function () {
+      // Kick clip view is much simpler — no algorithmic feed, no
+      // engagement rail, just a back-button and the streamer name.
       return (
+        _statusBar() +
         '<div class="nc-pv-platform-sim__top">' +
-          '<span>← Clip</span><span>Kick</span>' +
+          '<div class="nc-pv-platform-sim__top-left">' +
+            '<span class="nc-pv-platform-sim__top-icon">←</span>' +
+            '<span style="font-size:14px;font-weight:800;">Clip</span>' +
+          '</div>' +
+          '<div class="nc-pv-platform-sim__top-right">' +
+            '<span class="nc-pv-platform-sim__top-icon">⤴</span>' +
+          '</div>' +
         '</div>' +
-        '<div class="nc-pv-platform-sim__bottom-nav"></div>'
+        _description(_operatorHandle(), _captionPreview()) +
+        _bottomNav(['⌂', '▶', '☰', '✉', '◉'])
       );
     },
   };
 
   function syncPlatformSim() {
     var el = document.getElementById("pv-platform-sim");
-    var sel = document.getElementById("ctl-platform-sim");
     if (!el) return;
-    var platform = (sel && sel.value) || "clean";
+
+    // Slice L.2 — chrome resolution priority:
+    //   1. Explicit platform-sim dropdown pick (operator override)
+    //   2. The picked target_platform chip ("all" maps to TikTok
+    //      chrome since that's our strictest safe-zone proxy)
+    //   3. Fallback to clean (no chrome) so legacy clips don't break
+    //
+    // Auto-binding to target_platform is the whole point of L.2: the
+    // operator picks "TikTok" once and the preview INSTANTLY wears
+    // TikTok's UI. Before L.2 they had to pick the platform chip AND
+    // then separately switch the platform-sim dropdown.
+    var sel = document.getElementById("ctl-platform-sim");
+    var explicitPick = sel ? (sel.value || "").trim() : "";
+    var tgtEl = document.getElementById("ctl-target-platform");
+    var tgt = tgtEl ? (tgtEl.value || "").trim().toLowerCase() : "";
+
+    var platform;
+    if (explicitPick && explicitPick !== "" && explicitPick !== "auto") {
+      platform = explicitPick;
+    } else if (tgt === "all") {
+      // "All" → use TikTok chrome since TikTok's chrome is the most
+      // demanding (biggest right rail + heaviest bottom dock), so if
+      // the burns clear here they clear on Reels + Shorts too.
+      platform = "tiktok";
+    } else if (tgt && SIM_LAYOUTS[tgt]) {
+      platform = tgt;
+    } else {
+      platform = "clean";
+    }
+
     var render = SIM_LAYOUTS[platform] || SIM_LAYOUTS.clean;
     el.setAttribute("data-platform", platform);
     el.innerHTML = render();
@@ -3394,55 +4985,38 @@
     return true;
   }
 
+  // Slice L.3 — runCollisionCheck() is now a no-op shell.
+  //
+  // The function used to populate a stacked red warning bar above
+  // the preview ("Banner collides with caption_danger…"). Operators
+  // hated it: technical language, visual noise, redundant with the
+  // verdict card. L.3 deletes that surface — the new always-on
+  // tri-color zone overlay (.nc-pv-zones) inside the preview now
+  // teaches the same thing visually.
+  //
+  // The function stays as a stub because dozens of editor handlers
+  // call it on every input change (it was the cheap "did anything
+  // collide?" probe). Removing all those call sites would balloon
+  // this slice. Instead it returns silently — collision data is
+  // already baked into the server-side PublishabilityVerdict that
+  // drives the AI Verdict Card.
   function runCollisionCheck() {
-    var bar = document.getElementById("pv-collisions");
-    var targetSel = document.getElementById("ctl-safezone-target");
-    if (!bar) return;
-    var platform = (targetSel && targetSel.value) || "tiktok";
-    var zones = PLATFORM_ZONE_SPECS[platform] || [];
-    var overlays = _overlayRects();
-    var warnings = [];
-    overlays.forEach(function (o) {
-      zones.forEach(function (z) {
-        if (_rectsOverlap(o, z)) {
-          var severity = (z.kind === "top_unsafe" || z.kind === "bottom_unsafe")
-                          ? "block" : "warn";
-          warnings.push({
-            overlay: o.name, kind: z.kind, severity: severity,
-            message: o.name.replace("_", " ") + ": " + z.reason,
-          });
-        }
-      });
-    });
-    bar.innerHTML = "";
-    // Slice K.4 — only show the technical collision strings when the
-    // operator has explicitly turned ON "Show platform safe zones".
-    // For normal users the verdict card carries the same info in
-    // friendly emoji form; the raw "TikTok caption + hashtags overlay
-    // covers this band" sentence felt like a developer console error.
-    var safezonesOn = ctlSafezonesOn && ctlSafezonesOn.checked;
-    if (!warnings.length || !safezonesOn) {
-      bar.classList.remove("is-active");
-      return;
-    }
-    warnings.forEach(function (w) {
-      var row = document.createElement("div");
-      row.className = "nc-pv-collisions__row nc-pv-collisions__row--" + w.severity;
-      // Shorten to a chip-style line; full message lives on title=.
-      var short = (w.severity === "block" ? "⛔ " : "⚠ ") +
-                  w.overlay.charAt(0).toUpperCase() + w.overlay.slice(1) +
-                  " collides with " + w.kind.replace(/_/g, " ");
-      row.textContent = short;
-      row.title = w.message;
-      bar.appendChild(row);
-    });
-    bar.classList.add("is-active");
+    // Intentional no-op. See the L.3 comment block above. Collision
+    // signals still flow server-side via compute_publishability;
+    // this client function only fed a deleted UI element.
   }
 
-  // ---- Slice I.2 — preview mode switcher. ----
-  // Pure CSS-driven visibility (see .nc-preview[data-preview-mode=...]
-  // rules). The JS just toggles the data attribute + persists.
+  // ---- Slice I.2 / O.14 — preview mode switcher. ----
+  // Raw / Edited / Platform modes are all CSS-driven on top of the
+  // SAME source clip — no video src swap, no re-encode per change.
+  // The "Final" mode (which used to swap to clip_final.mp4) was
+  // removed in O.14 because that burned file kept drifting from the
+  // CSS preview and confused operators. The CSS preview IS the spec;
+  // the downloaded MP4's job is to match it.
   function applyPreviewMode(mode) {
+    // Defensive: someone with stale localStorage from the O.13 build
+    // might have `final` saved. Coerce to `platform`.
+    if (mode === "final") mode = "platform";
     var preview = document.getElementById("preview");
     if (preview) preview.setAttribute("data-preview-mode", mode);
     document.querySelectorAll(".nc-preview-mode").forEach(function (btn) {
@@ -3584,7 +5158,18 @@
       }
       refresh();
     }
-    btn.addEventListener("click", toggleMute);
+    btn.addEventListener("click", function (e) {
+      // Slice K.6 — explicit guard: clicking the speaker icon must NOT
+      // bubble up to any play/pause click surface. The mute pill sits
+      // INSIDE the preview frame; without this the click would also
+      // toggle playback when the parent registers a click listener.
+      e.stopPropagation();
+      e.preventDefault();
+      toggleMute();
+    });
+    // Keep the floating speaker pill in sync if the user changes
+    // volume / mute from the native controls bar.
+    vid.addEventListener("volumechange", refresh);
     // M-key toggles too, unless the user is typing somewhere.
     document.addEventListener("keydown", function (e) {
       if (e.code !== "KeyM" || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -3599,14 +5184,271 @@
     refresh();
   })();
 
-  // ---- Slice I.3: Apply AI Fixes ----
-  // POSTs to /clips/{id}/apply-ai-fixes which runs the safe non-
-  // destructive fix engine, persists the new overlay_config, and
-  // returns the list of changes. We then reload so the new values
-  // pre-fill every form input (simplest path; the editor's pre-fill
-  // logic already does the right thing from clip.overlay_config).
+  // ---- Slice N.2 + N.3 — Approve & continue + issues modal ----
+  //
+  // Two Approve & continue buttons live on the page:
+  //   - verdict card CTA       (id=approve-continue-btn)
+  //   - bottom editor-actions  (id=approve-continue-btn-2)
+  //
+  // Both share the same flow:
+  //   - publishability.status === "publish_ready" → submit form,
+  //     server-side finalize redirects to next clip in queue.
+  //   - else → open the issues modal with three escape hatches.
+  //
+  // Modal actions:
+  //   - Cancel       → hide, do nothing
+  //   - Auto-fix all → fire /apply-ai-fixes, then auto-submit form
+  //   - Ship anyway  → submit form (server still finalizes)
+  (function () {
+    var approveButtons = [
+      document.getElementById("approve-continue-btn"),
+      document.getElementById("approve-continue-btn-2"),
+    ].filter(Boolean);
+    var modal = document.getElementById("approve-issues-modal");
+    if (approveButtons.length === 0) return;
+
+    // The status + form-id are shared (both buttons render with the
+    // same data-attrs from the template).
+    var primaryBtn = approveButtons[0];
+    var status = primaryBtn.getAttribute("data-verdict-status") || "";
+    var formId = primaryBtn.getAttribute("data-form-id") || "overlay-form";
+    var form = document.getElementById(formId);
+
+    function submitForm() {
+      if (!form) {
+        console.error("[approve] form not found:", formId);
+        return;
+      }
+      // Slice N.8 — robust submit. Three layers of fallback so the
+      // click never silently does nothing:
+      //   1. force the action to /finalize (don't rely on the
+      //      existing action — operator-reported "nothing happens"
+      //      bug was a sign the form was submitting to the wrong
+      //      URL or the submit method was shadowed by a named
+      //      element).
+      //   2. prefer requestSubmit() — modern, fires submit events
+      //      and respects HTML5 validation.
+      //   3. fall back to form.submit() — older browsers; also
+      //      bypasses validation.
+      //   4. last resort: synthesize a click on a hidden submit
+      //      button (works when both submit methods are shadowed).
+      form.action = "/dashboard/clips/{{ clip.id }}/finalize";
+      // Visible feedback so the operator knows the click registered.
+      approveButtons.forEach(function (b) {
+        b.disabled = true;
+        var span = b.querySelector("span");
+        if (span && !b.dataset.origLabel) {
+          b.dataset.origLabel = span.textContent;
+          span.textContent = "Shipping…";
+        }
+      });
+      try {
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+          return;
+        }
+        if (typeof form.submit === "function") {
+          form.submit();
+          return;
+        }
+      } catch (err) {
+        console.error("[approve] submit threw:", err);
+      }
+      // Fallback: inject + click a hidden submit button.
+      var hidden = document.createElement("button");
+      hidden.type = "submit";
+      hidden.style.display = "none";
+      form.appendChild(hidden);
+      hidden.click();
+    }
+    function openModal() {
+      if (modal) modal.hidden = false;
+    }
+    function closeModal() {
+      if (modal) modal.hidden = true;
+    }
+
+    // Slice N.6 — if the publishability verdict has NO warnings and
+    // NO blocking issues to list, there's nothing actionable in the
+    // modal. Skip it entirely and submit. Operator's "Approve &
+    // continue" stays a one-click action when the AI doesn't have
+    // anything specific to flag (low-score clips that just need a
+    // strong hook will fall into this path now that we removed all
+    // the judgey content-level warnings).
+    var modalHasIssues = !!(modal && modal.querySelector(
+      ".nc-approve-modal__issues-row"
+    ));
+
+    approveButtons.forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        // Submit straight when publish-ready OR when there's nothing
+        // actionable to show. Otherwise open the modal so the
+        // operator can decide.
+        if (status === "publish_ready" || !modalHasIssues) {
+          submitForm();
+          return;
+        }
+        e.preventDefault();
+        openModal();
+      });
+    });
+
+    if (modal) {
+      var cancelBtn = document.getElementById("approve-modal-cancel");
+      var autofixBtn = document.getElementById("approve-modal-autofix");
+      var forceBtn = document.getElementById("approve-modal-force");
+
+      if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+      if (forceBtn) forceBtn.addEventListener("click", function () {
+        closeModal();
+        submitForm();
+      });
+      if (autofixBtn) autofixBtn.addEventListener("click", function () {
+        // Reuse the existing Auto Fix flow, then auto-submit on success.
+        var apply = document.getElementById("apply-ai-fixes-btn");
+        if (apply) {
+          // Mark that the next reload should auto-submit the form.
+          try {
+            sessionStorage.setItem(
+              "nc-autofix-then-ship-" + "{{ clip.id }}", "1"
+            );
+          } catch (_) {}
+          apply.click();
+        }
+        closeModal();
+      });
+      // Click-outside-to-close
+      modal.addEventListener("click", function (e) {
+        if (e.target === modal) closeModal();
+      });
+    }
+
+    // If we landed here from a prior "auto-fix then ship" intent,
+    // resume the ship now that fixes have been applied + the page
+    // has reloaded.
+    try {
+      var resume = sessionStorage.getItem("nc-autofix-then-ship-" + "{{ clip.id }}");
+      if (resume === "1") {
+        sessionStorage.removeItem("nc-autofix-then-ship-" + "{{ clip.id }}");
+        // Give the persisted fix-diff a beat to render before we
+        // submit so the operator sees their final state.
+        setTimeout(submitForm, 1200);
+      }
+    } catch (_) {}
+  })();
+
+  // ---- Slice I.3 + N.1 + N.2: Apply AI Fixes ----
+  // POSTs to /clips/{id}/apply-ai-fixes. Backend returns:
+  //   { fix_count, fixes:[{field, before, after, why}, …],
+  //     score_before, score_after, status_before, status_after,
+  //     auto_promoted }
+  //
+  // We now (N.1):
+  //   1. Animate the retention-score counter from before → after
+  //      so the operator SEES the bump (was previously hidden
+  //      behind a page reload).
+  //   2. Render every fix as a ✓-checked line item below the
+  //      verdict card so they can read exactly what changed.
+  //   3. When the post-fix score crosses 75 (publish_ready),
+  //      flash the verdict card lime and update the headline.
+  //   4. Auto-reload AFTER 2.4s so form inputs pick up the new
+  //      overlay_config — but only after the operator has a
+  //      moment to see the diff.
   var applyBtn = document.getElementById("apply-ai-fixes-btn");
   var applyFb  = document.getElementById("apply-ai-fixes-feedback");
+
+  function _animateScore(fromN, toN, durationMs) {
+    var el = document.querySelector(".nc-verdict__retention-pct");
+    if (!el) return;
+    var start = performance.now();
+    function tick(now) {
+      var t = Math.min(1, (now - start) / durationMs);
+      // ease-out cubic
+      var eased = 1 - Math.pow(1 - t, 3);
+      var v = Math.round(fromN + (toN - fromN) * eased);
+      el.textContent = v + "%";
+      if (t < 1) requestAnimationFrame(tick);
+      else el.textContent = toN + "%";
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function _renderFixDiff(fixes, scoreBefore, scoreAfter, autoPromoted) {
+    // Build (or reuse) the fix-diff card under the verdict CTA row.
+    var host = document.getElementById("ai-fix-diff");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "ai-fix-diff";
+      host.className = "nc-fix-diff";
+      var verdict = document.querySelector(".nc-verdict");
+      if (verdict) verdict.appendChild(host);
+    }
+    host.innerHTML = "";
+    // Header line — score delta + auto-promote chip if applicable.
+    var head = document.createElement("div");
+    head.className = "nc-fix-diff__head";
+    var delta = scoreAfter - scoreBefore;
+    var deltaTxt = (delta > 0 ? "+" : "") + delta;
+    head.innerHTML =
+      '<span class="nc-fix-diff__title">✨ AI applied ' + fixes.length +
+        ' fix' + (fixes.length === 1 ? '' : 'es') + '</span>' +
+      '<span class="nc-fix-diff__delta nc-fix-diff__delta--' +
+        (delta > 0 ? 'up' : (delta < 0 ? 'down' : 'flat')) + '">' +
+        scoreBefore + '% → ' + scoreAfter + '%  (' + deltaTxt + ')' +
+      '</span>';
+    host.appendChild(head);
+    if (autoPromoted) {
+      var promo = document.createElement("div");
+      promo.className = "nc-fix-diff__promote";
+      promo.textContent = "✓ Status auto-promoted to Ready for review";
+      host.appendChild(promo);
+    }
+    // Each fix renders as a one-liner with the human "why".
+    fixes.forEach(function (f, i) {
+      var row = document.createElement("div");
+      row.className = "nc-fix-diff__row";
+      // Stagger the fade-in so they cascade visually.
+      row.style.animationDelay = (i * 80) + "ms";
+      row.innerHTML =
+        '<span class="nc-fix-diff__check">✓</span>' +
+        '<span class="nc-fix-diff__why">' + f.why + '</span>';
+      host.appendChild(row);
+    });
+  }
+
+  // Slice N.2 + N.7 — re-render any persisted fix diff for THIS clip.
+  // The cached payload carries a schema version; bump this constant
+  // whenever the fix-engine changes (added/removed fixes, etc.) so
+  // pre-existing sessionStorage entries get auto-invalidated. Without
+  // this, operators see ghost entries like "Set caption lead-time to
+  // recommended 120ms" long after that fix was removed from the engine.
+  var FIX_DIFF_SCHEMA_VERSION = "n7";
+  (function restoreFixDiff() {
+    try {
+      var raw = sessionStorage.getItem("nc-last-fix-diff-" + "{{ clip.id }}");
+      if (!raw) return;
+      var data = JSON.parse(raw);
+      if (!data || !data.fixes || data.fixes.length === 0) return;
+      // Drop if schema version doesn't match — old fix labels would
+      // confuse the operator now that the engine has changed.
+      if (data.schema !== FIX_DIFF_SCHEMA_VERSION) {
+        sessionStorage.removeItem("nc-last-fix-diff-" + "{{ clip.id }}");
+        return;
+      }
+      // Only restore if the diff was generated in the last 30 minutes.
+      if (Date.now() - (data.timestamp || 0) > 30 * 60 * 1000) {
+        sessionStorage.removeItem("nc-last-fix-diff-" + "{{ clip.id }}");
+        return;
+      }
+      _renderFixDiff(
+        data.fixes,
+        data.score_before,
+        data.score_after,
+        !!data.auto_promoted
+      );
+    } catch (_) {}
+  })();
+
   if (applyBtn) {
     applyBtn.addEventListener("click", function () {
       var clipId = applyBtn.getAttribute("data-clip-id");
@@ -3636,12 +5478,54 @@
             applyBtn.disabled = false;
             return;
           }
-          if (applyFb) {
-            applyFb.textContent = "Fixed " + n + " issue" + (n === 1 ? "" : "s") + " — refreshing…";
-            applyFb.className = "nc-verdict__feedback nc-verdict__feedback--ok";
+          if (applyFb) applyFb.textContent = "";
+
+          // 1. Animate the retention-score counter on the verdict card.
+          _animateScore(
+            data.score_before || 0,
+            data.score_after || 0,
+            1100
+          );
+          // 2. Render the fix-diff list.
+          _renderFixDiff(
+            data.fixes || [],
+            data.score_before || 0,
+            data.score_after || 0,
+            !!data.auto_promoted
+          );
+          // 3. Slice N.2 — persist the diff in sessionStorage so it
+          //    survives the reload. Operator's #1 ask: "leave the
+          //    fixes window so the user can go back and know what
+          //    was fixed". We re-render the same card on next mount.
+          try {
+            sessionStorage.setItem(
+              "nc-last-fix-diff-" + "{{ clip.id }}",
+              JSON.stringify({
+                schema: FIX_DIFF_SCHEMA_VERSION,
+                fixes: data.fixes || [],
+                score_before: data.score_before || 0,
+                score_after: data.score_after || 0,
+                auto_promoted: !!data.auto_promoted,
+                status_after: data.status_after,
+                timestamp: Date.now(),
+              })
+            );
+          } catch (_) {}
+          // 4. Pulse the verdict card if status crossed into publish_ready.
+          if (data.status_after === "publish_ready") {
+            var verdict = document.querySelector(".nc-verdict");
+            if (verdict) {
+              verdict.classList.remove("nc-verdict--flash");
+              void verdict.offsetWidth;  // restart animation
+              verdict.classList.add("nc-verdict--flash");
+            }
           }
-          // Reload so the form repopulates from the new overlay_config.
-          setTimeout(function () { window.location.reload(); }, 600);
+          // 5. Reload after the operator has had a moment to read the
+          // diff — form inputs need to pick up the new overlay_config.
+          // The diff itself is persisted (step 3) so it re-renders
+          // on the next page load. Reload delay 2.8s gives them time
+          // to skim the green check list before refresh.
+          setTimeout(function () { window.location.reload(); }, 2800);
         })
         .catch(function (err) {
           if (applyFb) {
@@ -3661,13 +5545,31 @@
   }
 
   // Wire up.
-  ctlTitle.addEventListener("input", syncTitle);
+  // Slice L.2 — debounced platform-sim refresh. The chrome's
+  // @handle + caption read from these inputs, so when the operator
+  // types we want the chrome to reflect their text — but not on
+  // every keystroke (innerHTML rebuild = expensive).
+  var _simRefreshTimer = null;
+  function refreshChrome() {
+    if (_simRefreshTimer) clearTimeout(_simRefreshTimer);
+    _simRefreshTimer = setTimeout(function () {
+      if (typeof syncPlatformSim === "function") syncPlatformSim();
+    }, 200);
+  }
+
+  ctlTitle.addEventListener("input", function () {
+    syncTitle();
+    refreshChrome();
+  });
   ctlBannerOn.addEventListener("change", syncBanner);
   ctlBannerPlat.addEventListener("change", function () {
     applyDefaultBannerColor();
     syncBanner();
   });
-  ctlBannerUrl.addEventListener("input", syncBanner);
+  ctlBannerUrl.addEventListener("input", function () {
+    syncBanner();
+    refreshChrome();
+  });
   ctlBannerColor.addEventListener("input", function () {
     bannerColorTouched = true;
     syncBanner();
@@ -3747,6 +5649,11 @@
                        function (el) { return el.value; },                "top_hook_style"],
     [document.getElementById("ctl-clip-style"),
                        function (el) { return el.value; },                "clip_style"],
+    // Slice K.5 — target-platform chip selection. The hidden input is
+    // written by the chip-row handler; this entry just keeps the
+    // auto-save row table complete so audits / refactors don't miss it.
+    [document.getElementById("ctl-target-platform"),
+                       function (el) { return el.value; },                "target_platform"],
   ];
   _autoSavePrefs.forEach(function (row) {
     var el = row[0];
@@ -3854,6 +5761,217 @@
       if (id) applyClipStylePreset(id);
     });
   });
+
+  // ---- Slice K.5: Target-platform chip row ----
+  //
+  // ONE click → every downstream editor setting auto-flips to match
+  // what creators on that platform already do. Mirrors PLATFORM_PRESETS
+  // from nexoclip/branding/platform_presets.py (keep in sync — server
+  // and client read the same names).
+  //
+  // The flow:
+  //   1. Operator clicks chip (e.g. "TikTok").
+  //   2. Hidden ctl-target-platform input updates + persists via
+  //      /me/brand-kit-prefs (so next clip opens to the same chip).
+  //   3. The bundle's clip_style flows into applyClipStylePreset() so
+  //      the existing Clip Style cascade does most of the work.
+  //   4. Any platform-specific overrides (fit_mode, safe_zone target,
+  //      caption position/size/animation/lead_ms, banner variant, top
+  //      hook toggles) are applied on top of the clip-style cascade.
+  //   5. Selection chip flashes lime so the operator FEELS the change.
+  //
+  // The blurb under the row updates to whatever the picked chip
+  // promises ("Captions up top · minimal banner · strictest safe
+  // zones") so the operator gets one-line feedback on the trade-off.
+  // Slice K.7 + L.4 — keep in sync with nexoclip/branding/platform_presets.py.
+  // L.4 — captions_position flipped from upper_third/centered → lower_third
+  // for tiktok/reels/shorts/all (the spec's 65-72% sweet spot). The main
+  // viral hook lives at 18% from top now; captions at 68% give the face
+  // its own breathing room above + clear the bottom unsafe band below.
+  var PLATFORM_PRESETS_JS = {
+    tiktok: {
+      safe_zone_platform: "tiktok", fit_mode: "blurred_bg",
+      captions_position: "lower_third", captions_font_size: "large",
+      captions_animation: "pop", captions_lead_ms: 120,
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      banner_live_badge: false, top_hook_enabled: true,
+      top_hook_style: "white_rounded", clip_style: "repost_page_viral",
+    },
+    reels: {
+      safe_zone_platform: "reels", fit_mode: "blurred_bg",
+      captions_position: "lower_third", captions_font_size: "large",
+      captions_animation: "pop", captions_lead_ms: 100,
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      banner_live_badge: false, top_hook_enabled: true,
+      top_hook_style: "white_rounded", clip_style: "repost_page_viral",
+    },
+    shorts: {
+      safe_zone_platform: "shorts", fit_mode: "blurred_bg",
+      captions_position: "lower_third", captions_font_size: "medium",
+      captions_animation: "slide", captions_lead_ms: 80,
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      banner_live_badge: false, top_hook_enabled: true,
+      top_hook_style: "white_rounded", clip_style: "repost_page_viral",
+    },
+    kick: {
+      safe_zone_platform: "kick", fit_mode: "letterbox",
+      captions_position: "bottom", captions_font_size: "medium",
+      captions_animation: "pop", captions_lead_ms: 120,
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      banner_live_badge: true, top_hook_enabled: false,
+      top_hook_style: "white_rounded", clip_style: "repost_page_viral",
+    },
+    all: {
+      safe_zone_platform: "tiktok", fit_mode: "blurred_bg",
+      captions_position: "lower_third", captions_font_size: "medium",
+      captions_animation: "pop", captions_lead_ms: 120,
+      banner_variant: "kick_repost_page", banner_enabled: true,
+      banner_live_badge: false, top_hook_enabled: true,
+      top_hook_style: "white_rounded", clip_style: "repost_page_viral",
+    },
+  };
+
+  function applyPlatformPreset(targetId) {
+    var preset = PLATFORM_PRESETS_JS[targetId];
+    if (!preset) return;
+
+    // 1. Hidden input + persist the picked target so the next clip
+    //    opens to the same chip.
+    var hidden = document.getElementById("ctl-target-platform");
+    if (hidden) hidden.value = targetId;
+    autoSavePref("target_platform", targetId);
+
+    // 2. The Clip Style cascade does most of the work — pick the
+    //    bundled clip_style first so all of its fields land, then
+    //    overwrite the platform-specific overrides below.
+    if (typeof applyClipStylePreset === "function") {
+      applyClipStylePreset(preset.clip_style);
+    }
+
+    // Helper: set the control + fire its sync event + auto-save.
+    function setVal(id, value, field) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === "checkbox") {
+        if (el.checked !== !!value) {
+          el.checked = !!value;
+          el.dispatchEvent(new Event("change"));
+        }
+      } else {
+        if (el.value !== String(value)) {
+          el.value = String(value);
+          var ev = (el.tagName === "SELECT") ? "change" : "input";
+          el.dispatchEvent(new Event(ev));
+        }
+      }
+      if (field) autoSavePref(field, value);
+    }
+
+    // 3. Platform-specific overrides on top of the clip-style cascade.
+    setVal("ctl-captions-position",  preset.captions_position,  "captions_position");
+    setVal("ctl-captions-font-size", preset.captions_font_size, "captions_font_size");
+    setVal("ctl-captions-animation", preset.captions_animation, "captions_animation");
+    setVal("ctl-captions-lead-ms",   preset.captions_lead_ms,   "captions_lead_ms");
+    setVal("ctl-banner-variant",     preset.banner_variant,     "banner_variant");
+    setVal("ctl-banner-on",          preset.banner_enabled,     "banner_enabled");
+    setVal("ctl-live-badge",         preset.banner_live_badge,  "banner_live_badge");
+    setVal("ctl-top-hook-on",        preset.top_hook_enabled,   "top_hook_enabled");
+    setVal("ctl-top-hook-style",     preset.top_hook_style,     "top_hook_style");
+    // I.2 editor-only fields — safe_zone_platform + fit_mode live in
+    // the preview chrome, not the brand_kit. We still update the
+    // dropdown / pill so the safe-zone guides + crop mode swap live.
+    // The safe-zone <select> already has its own change-handler that
+    // re-renders the dashed zone guides.
+    setVal("ctl-safezone-target", preset.safe_zone_platform);
+    // Fit-mode pills (smart_crop / blurred_bg / letterbox / dynamic_zoom)
+    // own their click handler — find the matching pill and click it so
+    // localStorage + preview data-fit-mode attribute update properly.
+    var fitPills = document.querySelectorAll(".nc-preview-fitmode__btn");
+    fitPills.forEach(function (pill) {
+      if (pill.getAttribute("data-fit-mode") === preset.fit_mode) {
+        pill.click();
+      }
+    });
+
+    // 4. Mark the picked chip selected + flash it.
+    document.querySelectorAll(".nc-platform-chip").forEach(function (c) {
+      var on = c.getAttribute("data-platform-id") === targetId;
+      c.classList.toggle("is-selected", on);
+      c.setAttribute("aria-checked", on ? "true" : "false");
+      if (on) {
+        c.classList.remove("is-flashing");
+        // Force reflow so the animation re-plays on every click.
+        void c.offsetWidth;
+        c.classList.add("is-flashing");
+      }
+    });
+
+    // 5. Update the blurb under the row so the operator sees the
+    //    one-line trade-off ("Captions up top · minimal banner · …").
+    var blurb = document.getElementById("platform-blurb");
+    var pickedChip = document.querySelector(
+      ".nc-platform-chip[data-platform-id='" + targetId + "']"
+    );
+    var nameText = targetId;
+    var emojiText = "";
+    if (pickedChip) {
+      var b = pickedChip.getAttribute("data-platform-blurb") || "";
+      var name = pickedChip.querySelector(".nc-platform-chip__name");
+      var emojiEl = pickedChip.querySelector(".nc-platform-chip__emoji");
+      nameText = name ? name.textContent.trim() : targetId;
+      emojiText = emojiEl ? emojiEl.textContent.trim() : "";
+      if (blurb) {
+        blurb.innerHTML = "Optimized for <strong>" + nameText + "</strong> · " + b;
+      }
+    }
+
+    // 6. Mirror the pick onto the AI Verdict Card badge so the
+    //    "Optimized for X" pill matches the chip the operator picked.
+    var badge = document.getElementById("verdict-target-badge");
+    if (badge) {
+      badge.setAttribute("data-platform-id", targetId);
+      var bEmoji = badge.querySelector(".nc-verdict__target-emoji");
+      var bText  = badge.querySelector("span:last-child");
+      if (bEmoji && emojiText) bEmoji.textContent = emojiText;
+      if (bText) bText.textContent = "Optimized for " + nameText;
+    }
+
+    // 7. Slice L.2 — re-render the platform chrome so the preview
+    //    instantly wears the picked platform's UI (TikTok bar, Reels
+    //    tabs, Shorts header, Kick clip nav). syncPlatformSim reads
+    //    ctl-target-platform via the priority order we set up, so we
+    //    just need to call it here AFTER the hidden input is updated.
+    if (typeof syncPlatformSim === "function") {
+      syncPlatformSim();
+    }
+
+    // 8. Slice L.3 — update the always-on zone overlay's profile so
+    //    Kick (lighter chrome, no description block) gets a smaller
+    //    bottom unsafe band than TikTok / Reels / Shorts. CSS keys
+    //    off [data-zone-profile=...] on the preview container.
+    var pv = document.getElementById("preview");
+    if (pv) pv.setAttribute("data-zone-profile", targetId || "all");
+  }
+
+  document.querySelectorAll(".nc-platform-chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      var id = chip.getAttribute("data-platform-id");
+      if (id) applyPlatformPreset(id);
+    });
+  });
+
+  // Initial blurb render — show the trade-off for the currently
+  // selected chip on page load so the operator sees it immediately.
+  (function () {
+    var sel = document.querySelector(".nc-platform-chip.is-selected");
+    var blurb = document.getElementById("platform-blurb");
+    if (sel && blurb) {
+      var b = sel.getAttribute("data-platform-blurb") || "";
+      var name = sel.querySelector(".nc-platform-chip__name");
+      var nameText = name ? name.textContent.trim() : "";
+      blurb.innerHTML = "Optimized for <strong>" + nameText + "</strong> · " + b;
+    }
+  })();
 
   // ---- Top hook live preview ----
   var ctlTopHookOn   = document.getElementById("ctl-top-hook-on");
@@ -4016,9 +6134,10 @@
 
   if (playOverlay) playOverlay.addEventListener("click", togglePlayback);
   if (playBtn) playBtn.addEventListener("click", togglePlayback);
-  // Click anywhere on the video surface ALSO toggles (HTML5 video doesn't
-  // do this natively when there are no controls).
-  video.addEventListener("click", togglePlayback);
+  // Slice K.6 — the native <video controls> bar now handles play/pause
+  // / scrub / volume / fullscreen directly. We deliberately removed the
+  // "click anywhere on the video toggles playback" handler because it
+  // collided with the floating mute pill and the control-bar surface.
   // Keyboard space-bar — but only when the user isn't typing in an input.
   document.addEventListener("keydown", function (e) {
     if (e.code !== "Space") return;
@@ -4033,10 +6152,23 @@
     togglePlayback();
   });
   // Reflect state on every play/pause/end so the icon stays accurate.
-  video.addEventListener("play", reflectPlaybackState);
-  video.addEventListener("pause", reflectPlaybackState);
-  video.addEventListener("ended", reflectPlaybackState);
+  // Slice K.7 — also flips a data-paused attribute on the preview so
+  // the dynamic_zoom Ken-Burns animation pauses with the video (was
+  // freezing on the +12% zoomed frame and looking like a bug).
+  function reflectPaused() {
+    var preview = document.getElementById("preview");
+    if (preview) preview.setAttribute("data-paused", video.paused ? "true" : "false");
+  }
+  video.addEventListener("play",  function () { reflectPlaybackState(); reflectPaused(); });
+  video.addEventListener("pause", function () { reflectPlaybackState(); reflectPaused(); });
+  video.addEventListener("ended", function () { reflectPlaybackState(); reflectPaused(); });
   reflectPlaybackState();
+  reflectPaused();
+
+  // Slice K.7 — blurred_bg uses a pure-CSS starfield backdrop
+  // (matches the Instagram-Reels-style framing in the Clavicular
+  // reference). No JS needed; the gradient + dot-field is painted
+  // by .nc-preview[data-fit-mode="blurred_bg"] itself.
 
   document.getElementById("preview-restart").addEventListener("click", function () {
     video.currentTime = 0;
@@ -4207,12 +6339,14 @@
 
   function emptyStateMessage(diag) {
     // Map the captions.json diagnostic to a one-line operator hint.
-    // The user's complaint that triggered this:
-    //   "i keep getting this error even though im talking in spanish"
-    // -> we now distinguish "no transcript at all" from "transcript
-    //    in wrong language" from "this clip is outside the transcribed
-    //    span" so the operator knows what to do next.
-    if (!diag) return "loading captions…";
+    // Slice O.9 — silent_stretch (and the fallback "no captions in
+    // window") now return null instead of a message. The creator
+    // already knows there's no speech — they can hear (or not hear)
+    // their own clip. Burning a giant "NO SPEECH DETECTED" banner
+    // across the preview is noise, not signal. Diagnostics that
+    // genuinely require operator action (no transcript, transcript
+    // empty, etc) still surface.
+    if (!diag) return null;  // pre-load: keep the area blank
     var reason = diag.reason || "";
     var lang = diag.language || "?";
     var win = diag.clip_window_s || [];
@@ -4228,11 +6362,20 @@
       var winLabel  = win.length === 2 ? (win[0].toFixed(1) + "s – " + win[1].toFixed(1) + "s") : "?";
       return "clip window " + winLabel + " is outside the transcribed span (" + spanLabel + ", lang=" + lang + ")";
     }
-    return "no captions in this window";
+    // silent_stretch + the default "no captions in window" deliberately
+    // return null — see comment above. Operator doesn't need a banner
+    // telling them their own clip is silent.
+    return null;
   }
 
   function renderCaptionsEmptyState() {
     var msg = emptyStateMessage(captionDiagnostics);
+    // Slice O.9 — null/empty message → leave the caption area blank.
+    // No giant "CLIP IS SILENT" banner clobbering the preview frame.
+    if (!msg) {
+      pvCaptionEl.innerHTML = "";
+      return;
+    }
     pvCaptionEl.innerHTML =
       '<span class="nc-pv-caption__empty" '
       + 'style="opacity: 0.55; font-size: 0.48em; font-weight: 500; '
@@ -4255,8 +6398,15 @@
       // Only paint the empty-state once we know the fetch resolved;
       // before that, leave the box blank so we don't flash a misleading
       // "no transcript" hint while the data is still loading.
+      // Slice O.9 — when emptyStateMessage returns null (silent clip or
+      // "no captions in this window"), renderCaptionsEmptyState clears
+      // innerHTML — but then the guard below would keep calling it
+      // every frame. Short-circuit: if there's no message to show AND
+      // the caption box is already empty, do nothing.
       if (captionsLoaded && !pvCaptionEl.querySelector(".nc-pv-caption__empty")) {
-        renderCaptionsEmptyState();
+        if (emptyStateMessage(captionDiagnostics) || pvCaptionEl.innerHTML !== "") {
+          renderCaptionsEmptyState();
+        }
       }
       return;
     }

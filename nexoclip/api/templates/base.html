@@ -29,6 +29,12 @@
      so crawlers don't waste budget on auth-walled content. The public
      landing at / is the discoverable surface (see /llms.txt, /robots.txt). #}
   <meta name="robots" content="noindex, nofollow">
+  {#- Slice O.10 — favicon. SVG is the modern primary; the .ico
+      fallback line is omitted because every browser we target since
+      2020 supports SVG favicons. Apple-touch-icon is the same file so
+      iOS home-screen pinning gets the brand mark. -#}
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/nexoclip-theme.css">
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
@@ -42,15 +48,79 @@
         <span class="nc-nav__logo-prefix">NEXO</span><span class="nc-nav__logo-accent">CLIP</span>
       </a>
       <ul class="nc-nav__links">
-        {{ nav_link("/dashboard/streams", "Streams") }}
+        {#- Slice O.9 — "Streams" relabeled to "Clips" so the surface
+            language matches what creators actually think they're
+            managing: clips, not raw streams. The underlying route
+            still lives at /dashboard/streams (a rename of the route
+            would break bookmarks + every internal link). -#}
+        {{ nav_link("/dashboard/streams", "Clips") }}
         {{ nav_link("/dashboard/inbox", "Inbox") }}
         {{ nav_link("/dashboard/personas", "Personas") }}
         {{ nav_link("/dashboard/brand-kits", "Brand kits") }}
-        {{ nav_link("/dashboard/connected-accounts", "Accounts") }}
+        {{ nav_link("/dashboard/publish", "Publish") }}
+        {#- Slice O.9 — LLM spend + LLM settings are operator-only.
+            Driven by NEXOCLIP_ADMIN_TENANT_IDS env var (see auth
+            middleware). Regular creators never see them. -#}
+        {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
+        {% if _is_admin %}
         {{ nav_link("/dashboard/llm-calls", "LLM spend") }}
         {{ nav_link("/dashboard/settings/llm", "LLM settings", prefix="/dashboard/settings/llm") }}
+        {% endif %}
       </ul>
       <div class="nc-nav__right">
+        {# Slice NX.4 — token balance chip. Reads from
+           `request.state.token_balance` which the auth middleware populates
+           from the cached values on the tenant row. The cache is updated by
+           the outbound usage reporter after each LLM call, so this chip
+           reflects the cross-engine Nexo AI balance without any per-render
+           network call. `unlimited` = admins, render as ∞. NULL = no LLM
+           calls yet, render a faded "—" placeholder. #}
+        {%- set _bal = (request.state.token_balance if request and request.state else None) -%}
+        {% if _bal is none %}
+        {# Empty cache. Click triggers an on-demand fetch from Nexo AI. #}
+        <a href="/dashboard/_balance/refresh"
+           class="nc-chip nc-chip--muted"
+           title="Sin uso registrado en el cache local. Haz click para consultar el balance actual en Nexo AI."
+           style="text-decoration: none;">
+          <i class="ti ti-coin" aria-hidden="true"></i>
+          <span>— tokens · refresh</span>
+        </a>
+        {% elif _bal.unlimited %}
+        <a href="/dashboard/_balance/refresh"
+           class="nc-chip nc-chip--success"
+           title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}. Click para refrescar."
+           style="text-decoration: none;">
+          <i class="ti ti-infinity" aria-hidden="true"></i>
+          <span>∞ tokens</span>
+        </a>
+        {% else %}
+          {%- set _remaining = _bal.remaining or 0 -%}
+          {%- set _low = _remaining < 50000 -%}
+          {%- set _short = _remaining // 1000 -%}
+        <a href="/dashboard/_balance/refresh"
+           class="nc-chip nc-chip--{% if _low %}warn{% else %}muted{% endif %}"
+           title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}. Click para refrescar desde Nexo AI."
+           style="text-decoration: none;">
+          <i class="ti ti-coin" aria-hidden="true"></i>
+          <span>{{ _short }}k tokens</span>
+        </a>
+        {% endif %}
+
+        {# Slice O.1 — tier chip. Reads from `request.state.tenant_tier`
+           injected by BearerAuthMiddleware so the chip renders on EVERY
+           authenticated dashboard page without each handler having to
+           pass the value explicitly. Free tier renders amber with the
+           "watermark on" tooltip; pro+ tiers render lime with "clean
+           export". Future J.2 will turn this into a link to the
+           billing page. #}
+        {%- set _tier = (request.state.tenant_tier if request and request.state else None) -%}
+        {% if _tier %}
+        <span class="nc-chip nc-chip--{% if _tier == 'free' %}warn{% else %}success{% endif %}"
+              title="{% if _tier == 'free' %}Free plan · nexoclip.com watermark burned on exports. Upgrade for clean exports.{% else %}{{ _tier|capitalize }} plan · clean exports{% endif %}">
+          <i class="ti ti-{% if _tier == 'free' %}flame{% else %}crown{% endif %}" aria-hidden="true"></i>
+          <span>{{ _tier|capitalize }}</span>
+        </span>
+        {% endif %}
         {% if tenant_id %}
         <span class="nc-chip nc-chip--muted" title="Current tenant">
           <i class="ti ti-user" aria-hidden="true"></i>

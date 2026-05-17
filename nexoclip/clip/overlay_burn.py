@@ -59,9 +59,17 @@ PLATFORM_COLORS: dict[str, str] = {
 # Title overlay sizing (relative to output width, computed in
 # build_filter_graph). Tuned to feel right at 1080x1920 — the values
 # scale linearly when the output is smaller / larger.
-_TITLE_FONTSIZE_FRAC = 0.038
-_TITLE_BOX_PADDING = 14
-_TITLE_TOP_MARGIN = 28
+#
+# Slice L.4 — bumped title font + padding to match the new CSS
+# preview ("Adin Ross asked Clav for RETA" Clavicular-style hook).
+# Title is now positioned at 18% from top (was fixed 28px) so it
+# clears the L.3 top-unsafe band on the published clip; encoded as
+# a FRACTION because _title_filter only knows output_w. The
+# _title_filter signature was extended to also accept output_h so
+# the % position works.
+_TITLE_FONTSIZE_FRAC = 0.044
+_TITLE_BOX_PADDING = 22
+_TITLE_TOP_FRAC = 0.18
 
 # Banner sizing — height as a fraction of total output height.
 _BANNER_HEIGHT_FRAC = 0.05
@@ -324,6 +332,26 @@ _ASS_MARGIN_V_BY_POSITION: dict[str, int] = {
 }
 
 
+def _hex_to_ass_color(hex_color: str | None) -> str | None:
+    """Slice O.16 — convert a `#RRGGBB` web color to ASS's `&H00BBGGRR`
+    (alpha-first, BGR-ordered hex). Returns None when the input is
+    None/empty/malformed so callers can fall back to a default.
+
+    Examples:
+      `#FFD700` → `&H0000D7FF`  (gold)
+      `#C8FF5C` → `&H005CFFC8`  (NexoClip lime)
+    """
+    if not hex_color:
+        return None
+    h = hex_color.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
+        return None
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H00{b}{g}{r}".upper().replace("&H00", "&H00")  # keep alpha 00
+
+
 def build_ass(
     lines: Iterable[CaptionLine],
     *,
@@ -333,6 +361,8 @@ def build_ass(
     position: str = "bottom",
     font_size: str = "medium",
     animation: str = "pop",
+    highlight_color: str | None = None,
+    font_family: str | None = None,
 ) -> str:
     """Generate an ASS subtitle file with per-word karaoke + emphasis.
 
@@ -372,6 +402,20 @@ def build_ass(
     # the burned MP4 keeps the karaoke fill as a sensible fallback).
     line_fad = "{\\fad(180,0)}" if animation == "fade" else ""
 
+    # Slice O.16 — operator-controlled highlight color + font family.
+    # The CSS preview uses `var(--pv-highlight)` for active/emphasis
+    # words; the burn needs the same color or operators get a parity
+    # mismatch every time they pick a custom color in the editor.
+    # `_emphasis_fill_map` shadow-copies the module-level default so
+    # we can swap the "emphasis" slot without mutating shared state.
+    ass_highlight = _hex_to_ass_color(highlight_color)
+    emphasis_fill_map = dict(_ASS_EMPHASIS_FILL)
+    if ass_highlight is not None:
+        emphasis_fill_map["emphasis"] = ass_highlight
+    # Font: caller-supplied name (default Inter); the slice O.15 default
+    # chunky-sans look is preserved when no override is given.
+    font_name = (font_family or "Inter").strip() or "Inter"
+
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -385,10 +429,23 @@ def build_ass(
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
         "MarginL, MarginR, MarginV, Encoding",
-        # Base style: white-fill, black-outline, alignment from above,
-        # MarginV from above.
-        f"Style: Default,Arial,{base_fontsize},&H00FFFFFF,"
-        f"&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,{alignment},"
+        # Slice O.15 — align the burn caption style with the CSS preview:
+        #   font   "Inter" (weight 900). libass walks the system font
+        #          registry; Inter ships with Windows 11 and macOS 13+
+        #          out of the box. On hosts without Inter, libass falls
+        #          back to its built-in DejaVu Sans, which is still
+        #          chunkier than the old Arial default.
+        #   bold   already on (=1) — kept for the weight-900 look.
+        #   outline 3 (was 5). CSS uses 2.5px stroke at ~26px font; an
+        #          ASS Outline of 3 at the larger render resolution
+        #          maps to roughly the same visible thickness.
+        #   shadow 1 (was 0) — adds the soft drop-shadow the CSS uses
+        #          (text-shadow: 0 3px 8px rgba(0,0,0,0.85)).
+        # Spacing 2 mirrors the CSS letter-spacing: 0.02em.
+        # Slice O.16 — font name flows from the `font_family` param so
+        # the operator's chosen font (or a preset) propagates here.
+        f"Style: Default,{font_name},{base_fontsize},&H00FFFFFF,"
+        f"&H00000000,&H80000000,1,0,0,0,100,100,2,0,1,3,1,{alignment},"
         f"40,40,{margin_v},1",
         "",
         "[Events]",
@@ -404,7 +461,12 @@ def build_ass(
         # produce negative ASS timestamps.
         ts = max(0.0, line.ts - lead_s)
         end_ts = max(ts + 0.05, line.end_ts - lead_s)
-        text = _ass_line_text(line, base_fontsize=base_fontsize, lead_s=lead_s)
+        text = _ass_line_text(
+            line,
+            base_fontsize=base_fontsize,
+            lead_s=lead_s,
+            emphasis_fill_map=emphasis_fill_map,
+        )
         events.append(
             f"Dialogue: 0,{_ass_ts(ts)},{_ass_ts(end_ts)},"
             f"Default,,0,0,0,,{line_fad}{text}"
@@ -418,6 +480,7 @@ def _ass_line_text(
     *,
     base_fontsize: int = _ASS_BASE_FONTSIZE,
     lead_s: float = 0.0,
+    emphasis_fill_map: dict[str, str] | None = None,
 ) -> str:
     """Compose the ASS dialogue text for one line — per-word
     karaoke timings + emphasis-driven overrides.
@@ -425,8 +488,11 @@ def _ass_line_text(
     `base_fontsize` is the after-scale base (font_size knob has
     already been applied at the caller). `lead_s` matches the
     Dialogue-level shift so the per-word \\kf values stay in
-    sync with the shifted line start.
+    sync with the shifted line start. `emphasis_fill_map` (slice
+    O.16) lets the caller swap in a per-call color palette so the
+    operator's `captions_highlight_color` override propagates here.
     """
+    fill_map = emphasis_fill_map or _ASS_EMPHASIS_FILL
     pieces: list[str] = []
     line_start = max(0.0, line.ts - lead_s)
     for i, w in enumerate(line.words):
@@ -434,8 +500,13 @@ def _ass_line_text(
         cs = max(1, round((w.end_ts - w.ts) * 100))
         scale = _ASS_EMPHASIS_SCALE.get(w.emphasis, 1.0)
         fontsize = round(base_fontsize * scale)
-        color = _ASS_EMPHASIS_FILL.get(w.emphasis, "&H00FFFFFF")
-        text = _ass_escape(w.text)
+        color = fill_map.get(w.emphasis, "&H00FFFFFF")
+        # Slice O.15 — uppercase to match the CSS preview's
+        # `text-transform: uppercase`. Python upper() handles unicode
+        # (Spanish ñ → Ñ, accented vowels keep their accents on
+        # locale-aware Windows). Done BEFORE _ass_escape so the
+        # escape pass still sees the right chars.
+        text = _ass_escape(w.text.upper())
         # \kf needs to advance through the entire dialogue's duration.
         # Insert a leading silent-skip if there's a gap between the
         # line start and the word start (rare but happens).
@@ -457,6 +528,8 @@ def captions_artifact_for_clip(
     position: str = "bottom",
     font_size: str = "medium",
     animation: str = "pop",
+    highlight_color: str | None = None,
+    font_family: str | None = None,
 ) -> tuple[str, str]:
     """Return `(ass_or_srt_body, extension)` for the captions file
     the burn-in should write.
@@ -491,6 +564,8 @@ def captions_artifact_for_clip(
             position=position,
             font_size=font_size,
             animation=animation,
+            highlight_color=highlight_color,
+            font_family=font_family,
         ), "ass"
 
     # Fall back to SRT (legacy segment-level) by going through the
@@ -549,10 +624,18 @@ def build_filter_graph(
     """
     chunks: list[str] = []
 
-    # 1. Title overlay (legacy "title_text" — kept for backward compat).
-    #    Slice I.1's `top_hook` is its own renderer below.
+    # 1. Title overlay (the MAIN viral hook — operator's "Hook title"
+    #    field). Slice L.4 repositioned it from `top: 28px` (covered by
+    #    IG/TikTok header) to 18% from top.
     if spec.title_text and fontfile is not None:
-        chunks.append(_title_filter(spec.title_text, output_w=output_w, fontfile=fontfile))
+        chunks.append(
+            _title_filter(
+                spec.title_text,
+                output_w=output_w,
+                output_h=output_h,
+                fontfile=fontfile,
+            )
+        )
 
     # 1b. Top hook box — Slice I.1 white-rounded headline overlay.
     #     Lives ABOVE the subject's face, below the platform top safe zone.
@@ -602,19 +685,26 @@ def build_filter_graph(
 
 
 def _title_filter(
-    text: str, *, output_w: int, fontfile: Path
+    text: str, *, output_w: int, output_h: int, fontfile: Path
 ) -> str:
-    """White-card title at the top — bold dark text, padded white box,
-    soft drop shadow (achieved via box opacity + border)."""
-    fontsize = max(20, int(output_w * _TITLE_FONTSIZE_FRAC))
+    """White-card MAIN viral hook — bold dark text, fat white pad box.
+    Slice L.4 — positioned at 18% from top to clear the L.3 top-unsafe
+    band on every short-form platform. Was a fixed 28px top margin,
+    which on a 1920-tall output sits in the IG/TikTok header zone
+    (and got covered on every publish). Renders 1:1 with the CSS
+    preview's `.nc-pv-title`."""
+    fontsize = max(22, int(output_w * _TITLE_FONTSIZE_FRAC))
+    # 18% of frame height, but never closer than 60px from the top
+    # (handles unusually short embed renders).
+    top_y = max(60, int(output_h * _TITLE_TOP_FRAC))
     return (
         f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
         f":text='{_ff_escape_text(text)}'"
         f":fontcolor=black"
         f":fontsize={fontsize}"
         f":x=(w-text_w)/2"
-        f":y={_TITLE_TOP_MARGIN}"
-        f":box=1:boxcolor=white@0.95:boxborderw={_TITLE_BOX_PADDING}"
+        f":y={top_y}"
+        f":box=1:boxcolor=white@0.96:boxborderw={_TITLE_BOX_PADDING}"
     )
 
 
@@ -735,6 +825,37 @@ def _banner_filters_by_variant(
     )
 
 
+def _format_kick_url(raw: str) -> str:
+    """Slice M.9 — normalize any operator URL input into the
+    canonical "KICK.COM/<HANDLE>" form. Mirrors the same logic in
+    the Jinja template + editor JS so the LIVE preview, the
+    persisted form value, and the burned MP4 all show the same text.
+
+    Examples (input → output):
+      "aldo"                        → "KICK.COM/ALDO"
+      "@aldo"                       → "KICK.COM/ALDO"
+      "kick.com/aldo"               → "KICK.COM/ALDO"
+      "https://kick.com/aldo"       → "KICK.COM/ALDO"
+      "https://www.kick.com/aldo/"  → "KICK.COM/ALDO"
+      ""                            → "KICK.COM/YOURHANDLE"
+    """
+    h = (raw or "").strip()
+    if not h:
+        return "KICK.COM/YOURHANDLE"
+    # Strip protocol.
+    if "://" in h:
+        h = h.split("://", 1)[1]
+    # Drop leading "www."
+    if h.lower().startswith("www."):
+        h = h[4:]
+    # Keep only the path part after the first "/".
+    if "/" in h:
+        h = h.split("/", 1)[1]
+    # Strip leading "@", trailing slashes, then upper-case.
+    h = h.lstrip("@").strip("/").strip().upper()
+    return f"KICK.COM/{h}" if h else "KICK.COM/YOURHANDLE"
+
+
 def _banner_repost_page(
     *,
     url: str,
@@ -744,40 +865,80 @@ def _banner_repost_page(
     output_h: int,
     fontfile: Path,
 ) -> list[str]:
-    """Repost-page Kick banner — short BLACK bottom bar with a huge
-    accent-color "KICK" wordmark on the left, blocky URL center, and
-    an optional LIVE NOW pill on the right. Matches the look operators
-    actually see when their clip ricochets through repost pages.
-    """
-    band_h = max(56, int(output_h * 0.07))
-    band_y = output_h - band_h
-    accent = _hex_to_ff_color(color_hex, fallback="0x53FC18")
+    """Repost-page Kick banner.
 
-    # The black bottom bar itself.
+    Slice O.13 — preview/export parity. Replaced the old multi-pass
+    `drawtext` approximation of the KICK wordmark (which used the host
+    system's Arial-or-equivalent font and looked nothing like the real
+    chunky-pixel Kick logo) with the actual rasterized SVG composited
+    via ffmpeg `overlay=`. The PNG comes from
+    `kick_logo_png.kick_logo_png_path()`, which renders the same path
+    data as `/static/kick-logo.svg` once per process and caches the
+    result on disk. CSS preview and ffmpeg burn now read from
+    identical source geometry.
+
+    Layout matches the CSS preview at `.nc-pv-banner--kick_repost_page`:
+      - black bar across the full width
+      - bar's bottom edge sits at 82% of frame height (touching the
+        bottom-unsafe red zone in the preview)
+      - bar height ~3% of frame height (40px floor for tiny outputs)
+      - KICK wordmark height = 1.35× band_h, lifted ~15% so the tops
+        poke ABOVE the bar (matches preview's translateY(-62%))
+      - URL centered horizontally inside the bar
+
+    `live_badge` accepted but NOT rendered — no extras inside the bar.
+    `color_hex` is currently unused; the SVG ships with the Kick lime
+    baked in. Future variants that need recolor can swap PNGs.
+    """
+    band_h = max(40, int(output_h * 0.030))
+    # Bar's BOTTOM edge sits exactly at the top of the bottom-unsafe
+    # red zone (y=82%) — mirrors CSS `.nc-pv-banner--kick_repost_page`
+    # at `bottom: 18%`.
+    band_y = int(output_h * 0.82) - band_h
+    _ = color_hex  # accepted for API parity with sibling banner variants
+    _ = live_badge
+
     chunks: list[str] = [
         f"drawbox=x=0:y={band_y}"
         f":w={output_w}:h={band_h}"
-        f":color=black@0.98:t=fill"
+        f":color=black@1.0:t=fill"
     ]
 
-    # Huge accent-colored "KICK" wordmark on the left.
-    logo_size = max(28, int(output_w * 0.058))
+    # ---- KICK wordmark ----
+    # Slice O.13 — the actual SVG wordmark is composited via a second
+    # ffmpeg input + `-filter_complex` overlay at the burn_overlays
+    # layer (the filter graph here is comma-joined and can't introduce
+    # new sources). We leave a SENTINEL line in the chunk list so
+    # burn_overlays can detect this variant and plan the overlay.
+    # The sentinel encodes the wordmark's pixel size + position so the
+    # outer compositor can build the right `[1:v]scale=...overlay=X:Y`
+    # graph fragment without re-deriving the geometry.
+    logo_h = max(32, int(band_h * 1.35))
+    logo_w = int(round(logo_h * (933.333 / 300.0)))
+    logo_x = 14
+    kick_lift = int(band_h * 0.15)
+    logo_y = band_y + (band_h - logo_h) // 2 - kick_lift
+    # The leading `__KICK_OVERLAY__` is a marker filter signature that
+    # `burn_overlays` strips out + replaces with the proper input +
+    # `-filter_complex` graph. It is NOT a real ffmpeg filter.
+    chunks.append(
+        f"__KICK_OVERLAY__:w={logo_w}:h={logo_h}:x={logo_x}:y={logo_y}"
+    )
+    # `fontfile` is still unused for this variant — keep the param so
+    # the sibling variants below match its API.
+    _ = fontfile
+
+    # URL dead-centered across the full bar — uppercased, normalized.
+    url_text = _format_kick_url(url)
+    url_size = max(16, int(output_h * 0.012))
     chunks.append(
         f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
-        f":text='KICK'"
-        f":fontcolor={accent}"
-        f":fontsize={logo_size}"
-        f":x=24"
-        f":y={band_y}+({band_h}-text_h)/2"
+        f":text='{_ff_escape_text(url_text)}'"
+        f":fontcolor=black@0.9"
+        f":fontsize={url_size}"
+        f":x=(w-text_w)/2"
+        f":y={band_y}+({band_h}-text_h)/2+1"
     )
-
-    # Centered URL — defaults to "KICK.COM/USERNAME" when blank.
-    if url:
-        display_url = url if "." in url else f"kick.com/{url}".upper()
-        url_text = display_url.upper()
-    else:
-        url_text = "KICK.COM/YOURHANDLE"
-    url_size = max(20, int(output_w * 0.034))
     chunks.append(
         f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
         f":text='{_ff_escape_text(url_text)}'"
@@ -786,27 +947,6 @@ def _banner_repost_page(
         f":x=(w-text_w)/2"
         f":y={band_y}+({band_h}-text_h)/2"
     )
-
-    # Optional LIVE NOW pill on the right.
-    if live_badge:
-        pill_h = max(22, int(band_h * 0.55))
-        pill_w = max(120, int(output_w * 0.13))
-        pill_y = band_y + (band_h - pill_h) // 2
-        pill_x = output_w - pill_w - 24
-        chunks.append(
-            f"drawbox=x={pill_x}:y={pill_y}"
-            f":w={pill_w}:h={pill_h}"
-            f":color=red@0.95:t=fill"
-        )
-        live_size = max(14, int(output_w * 0.022))
-        chunks.append(
-            f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
-            f":text='LIVE NOW'"
-            f":fontcolor=white"
-            f":fontsize={live_size}"
-            f":x={pill_x}+({pill_w}-text_w)/2"
-            f":y={pill_y}+({pill_h}-text_h)/2"
-        )
 
     return chunks
 
@@ -899,26 +1039,32 @@ def _top_hook_filter(
     output_h: int,
     fontfile: Path,
 ) -> str:
-    """White-rounded headline box above the subject's face.
+    """SECONDARY hook — short context line above the MAIN viral hook.
 
-    Sits below the platform top safe zone (~8% from top) so TikTok /
-    Reels chrome doesn't cover it. The "rounded corners" are emulated
-    via a chunky `boxborderw` — ffmpeg drawtext doesn't natively render
-    rounded box corners, but a fat padded box reads as a chip badge.
+    Slice L.4 — repositioned + slimmed down per the operator spec:
+    "Most clips do NOT need a second hook. If enabled: place at 10–12%
+    from top, smaller than main hook, max 1 short line, semi-
+    transparent background, subtle styling. Do NOT compete visually
+    with main hook." This used to be a primary headline box at ~8%;
+    it's now the SECONDARY context line and the MAIN hook is the
+    `_title_filter` further up (at 18%).
 
-    `style` toggles fill / text color combos. White-rounded is the
-    viral repost-page default.
+    `style` toggles fill / text color combos. All three are now
+    tuned with reduced opacity / smaller padding so the eye lands on
+    the main hook below it, not on the secondary.
     """
     if style == "black_solid":
-        fill, fg = "black@0.92", "white"
+        fill, fg = "black@0.62", "white"
     elif style == "subtle":
-        fill, fg = "white@0.75", "black"
-    else:  # white_rounded
-        fill, fg = "white@0.96", "black"
-    fontsize = max(20, int(output_w * 0.040))
-    padding = max(14, int(output_w * 0.020))
-    # Position: ~8% from top so we clear the platform's status / nav.
-    top_y = max(40, int(output_h * 0.08))
+        fill, fg = "white@0.55", "black"
+    else:  # white_rounded — also muted vs the L.3 baseline
+        fill, fg = "white@0.72", "black"
+    # L.4 — shrunk from 4% → 2.8% of frame width (matches CSS 11px).
+    fontsize = max(14, int(output_w * 0.028))
+    padding = max(10, int(output_w * 0.014))
+    # L.4 — 11% from top (was 8%). Tucks under the L.3 top-unsafe
+    # band but stays clearly ABOVE the main viral hook at 18%.
+    top_y = max(48, int(output_h * 0.11))
     return (
         f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
         f":text='{_ff_escape_text(text)}'"
@@ -933,6 +1079,52 @@ def _top_hook_filter(
 # ---- driver ---------------------------------------------------
 
 
+def _watermark_filter(*, output_w: int, output_h: int, fontfile: Path | None) -> str | None:
+    """Slice O.12 — top-right "NEXOCLIP" brand wordmark watermark.
+
+    Replaces the original slice O.1 bottom-right "nexoclip.com" URL.
+    The URL-style text felt link-ish ("subscribe to my channel" vibe);
+    the wordmark reads as a clean brand stamp instead — same role as
+    the corner brand mark on a TV-news lower-third. Lime fill so it
+    matches the NEXOCLIP wordmark in the dashboard nav.
+
+    Position: top-right (a more visible / TV-broadcast-style spot than
+    bottom-right, where it often collided with platform UI chrome —
+    TikTok's "Follow" CTA, Instagram's bookmark, YouTube's progress
+    bar). Margin auto-scales with frame width so it looks sensible at
+    both 720×1280 (mobile) and 1920×1080 (landscape).
+
+    Burned on every clip when the tenant is on `free` tier OR pro+ tier
+    with `show_nexoclip_credit` on. Caller decides via render_watermark.
+    """
+    if fontfile is None:
+        return None
+    # Bigger than the old 2% — 3.2% reads cleanly without dominating.
+    # Plus a small letter-spacing via ` `-style tricks isn't
+    # available in drawtext; we live with default tracking.
+    fontsize = max(20, int(output_w * 0.032))
+    # Heavier left/right margin (3% of width) so the mark doesn't kiss
+    # the frame edge — gives the brand stamp some breathing room.
+    margin_x = max(16, int(output_w * 0.030))
+    margin_y = max(14, int(output_h * 0.024))
+    # Slight opacity bump (0.78 → more confident than the timid 0.62)
+    # so it reads against bright snow / sky shots without disappearing.
+    return (
+        f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+        f":text='NEXOCLIP'"
+        f":fontcolor=0xC8FF5C@0.78"
+        f":fontsize={fontsize}"
+        # Top-right anchor. x = video_width - text_width - margin_x;
+        # y = margin_y. Stays above platform-bottom UI (TikTok chrome,
+        # YouTube Shorts seekbar).
+        f":x=w-text_w-{margin_x}"
+        f":y={margin_y}"
+        # Drop shadow for legibility on bright backgrounds.
+        f":shadowcolor=black@0.55"
+        f":shadowx=2:shadowy=2"
+    )
+
+
 def burn_overlays(
     *,
     source_path: Path,
@@ -943,10 +1135,16 @@ def burn_overlays(
     clip_end_s: float,
     output_w: int,
     output_h: int,
+    render_watermark: bool = False,
 ) -> bool:
     """Re-render `source_path` with overlays burned in, writing to
     `target_path`. Returns True on success, False when there's
     nothing to burn (no overlays enabled and no captions to render).
+
+    Slice O.1 — `render_watermark=True` appends the "nexoclip.com"
+    bottom-right credit to the filter graph (free tier always; pro+
+    when `brand_kit.show_nexoclip_credit` is on). Caller decides;
+    this layer just renders the bytes.
 
     Raises RuntimeError on ffmpeg failure with the stderr inline so
     the caller can show the operator what went wrong.
@@ -980,6 +1178,26 @@ def burn_overlays(
             position_str = str(captions_cfg.get("position") or "bottom")
             font_size_str = str(captions_cfg.get("font_size") or "medium")
             animation_str = str(captions_cfg.get("animation") or "pop")
+            # Slice O.16 — operator-controlled highlight color +
+            # font family. The CSS preview reads
+            # `captions.highlight_color` into `--pv-highlight`; we
+            # now pass the same value into the burn so the emphasis
+            # word color matches what the operator saw in the editor.
+            # `font_family` is reserved for future per-preset font
+            # picks — for now it's None and build_ass defaults to
+            # Inter (slice O.15).
+            highlight_color_str = captions_cfg.get("highlight_color")
+            highlight_color_val = (
+                str(highlight_color_str)
+                if isinstance(highlight_color_str, str) and highlight_color_str.strip()
+                else None
+            )
+            font_family_str = captions_cfg.get("font_family")
+            font_family_val = (
+                str(font_family_str)
+                if isinstance(font_family_str, str) and font_family_str.strip()
+                else None
+            )
 
             segments_json = _json.dumps(segments_list)
             body, ext = captions_artifact_for_clip(
@@ -990,6 +1208,8 @@ def burn_overlays(
                 position=position_str,
                 font_size=font_size_str,
                 animation=animation_str,
+                highlight_color=highlight_color_val,
+                font_family=font_family_val,
             )
             if body:
                 captions_path = target_path.parent / f".captions.{ext}"
@@ -1004,6 +1224,22 @@ def burn_overlays(
         captions_path=captions_path,
     )
 
+    # Slice O.1 — append the nexoclip.com watermark when the caller
+    # asks. We append even when filter_graph is empty (a pure-source
+    # clip on free tier still gets the credit) — so we synthesize a
+    # passthrough copy filter if there's nothing else, then concat.
+    if render_watermark:
+        wm = _watermark_filter(
+            output_w=output_w, output_h=output_h, fontfile=fontfile
+        )
+        if wm:
+            if filter_graph:
+                filter_graph = f"{filter_graph},{wm}"
+            else:
+                # Nothing else to burn but the watermark still has to
+                # land — caller still gets a valid clip_final.mp4.
+                filter_graph = wm
+
     if not filter_graph:
         # Nothing to burn — caller should fall back to source_path.
         # We still return False so the caller can decide what to do.
@@ -1011,18 +1247,98 @@ def burn_overlays(
             captions_path.unlink(missing_ok=True)
         return False
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel", "error",
-        "-i", str(source_path),
-        "-vf", filter_graph,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "20",
-        "-c:a", "copy",  # no re-encode of audio — saves time
-        str(target_path),
-    ]
+    # Slice O.13 — KICK wordmark composited via PNG overlay (true
+    # pixel parity with the CSS preview which loads the same SVG).
+    # `_banner_repost_page` plants a `__KICK_OVERLAY__:w=...:h=...:x=...:y=...`
+    # sentinel inside the comma-joined chain. We pull it out here,
+    # strip it from the filter chain, then rebuild the ffmpeg
+    # invocation as a `-filter_complex` graph with the Kick PNG as a
+    # second input.
+    import re as _re
+    kick_overlay = None
+    kick_match = _re.search(
+        r"(^|,)__KICK_OVERLAY__:w=(\d+):h=(\d+):x=(-?\d+):y=(-?\d+)(,|$)",
+        filter_graph,
+    )
+    if kick_match:
+        kick_overlay = {
+            "w": int(kick_match.group(2)),
+            "h": int(kick_match.group(3)),
+            "x": int(kick_match.group(4)),
+            "y": int(kick_match.group(5)),
+        }
+        # Strip the marker from the filter graph, collapsing the
+        # neighbouring commas so we don't leave a `,,` artifact.
+        filter_graph = _re.sub(
+            r"(^|,)__KICK_OVERLAY__:w=\d+:h=\d+:x=-?\d+:y=-?\d+(,|$)",
+            lambda m: "," if m.group(1) == "," and m.group(2) == "," else "",
+            filter_graph,
+        ).strip(",")
+
+    if kick_overlay is not None:
+        # Two-input filter_complex: main video runs through the regular
+        # chain, kick PNG gets scaled, then overlaid at the recorded
+        # x/y. Audio passes through untouched via `-map 0:a?`.
+        try:
+            from nexoclip.clip.kick_logo_png import kick_logo_png_path
+            kick_png = kick_logo_png_path()
+        except Exception:  # noqa: BLE001 — fall back to chain-only
+            kick_png = None
+
+        if kick_png is not None and kick_png.exists():
+            # Build the proper graph. If the regular chain is empty
+            # (banner enabled but everything else off) we still need a
+            # passthrough so the [main] label resolves.
+            main_chain = filter_graph if filter_graph else "null"
+            fc_graph = (
+                f"[0:v]{main_chain}[main];"
+                f"[1:v]scale={kick_overlay['w']}:{kick_overlay['h']}[kwm];"
+                f"[main][kwm]overlay={kick_overlay['x']}:{kick_overlay['y']}[outv]"
+            )
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-loglevel", "error",
+                "-i", str(source_path),
+                "-i", str(kick_png),
+                "-filter_complex", fc_graph,
+                "-map", "[outv]",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-c:a", "copy",
+                str(target_path),
+            ]
+        else:
+            # PNG rendering failed — fall back to single-input chain
+            # without the wordmark. The black bar + URL still burn so
+            # the export isn't totally bare.
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-loglevel", "error",
+                "-i", str(source_path),
+                "-vf", filter_graph or "null",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-c:a", "copy",
+                str(target_path),
+            ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel", "error",
+            "-i", str(source_path),
+            "-vf", filter_graph,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+            "-c:a", "copy",  # no re-encode of audio — saves time
+            str(target_path),
+        ]
     proc = subprocess.run(cmd, capture_output=True, check=False)
 
     # Clean up the captions file regardless of outcome — it's a

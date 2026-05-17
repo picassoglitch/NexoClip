@@ -407,8 +407,9 @@ class LLMRouter:
             from nexoclip.ids import new_id
             from nexoclip.tenancy import bound_tenant
 
+            llm_call_id = new_id("llm")
             db_row = LLMCallRow(
-                id=new_id("llm"),
+                id=llm_call_id,
                 tenant_id=tenant_id,
                 purpose=purpose,
                 provider=provider,
@@ -429,6 +430,22 @@ class LLMRouter:
                 # Best-effort — the LLM call already happened and the JSONL
                 # has the row; a DB write failure must not propagate up.
                 pass
+
+            # Slice NX.3 — push usage back to Nexo AI so the user's cross-
+            # engine token balance updates. Fire-and-forget so the LLM hot
+            # path doesn't wait for the outbound HTTP. Only reports SUCCESSFUL
+            # calls (status='ok'); error rows shouldn't count against quota.
+            if status == "ok" and (input_tokens > 0 or output_tokens > 0):
+                from nexoclip.integrations.nexo_ai.reporter import schedule_report
+
+                schedule_report(
+                    self._db,
+                    tenant_id=tenant_id,
+                    llm_call_id=llm_call_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    occurred_at_iso=ts,
+                )
 
     async def _emit_event(
         self,

@@ -1491,11 +1491,15 @@ details.nc-details > article {
 
 /* Bottom-left fake live-chat strip — three faded chat lines that
  * cycle so the preview shows what platform chat overlay looks like.
- * Pure visual; no real chat data wired in. */
+ * Pure visual; no real chat data wired in.
+ * Slice K.7 — lifted from `bottom: 56px` to `bottom: 140px` so the
+ * chat strip stays clear of the bottom KICK banner (which lives at
+ * `bottom: 8%` and can be up to 64px tall on the repost-page variant).
+ * Operator reported the chat block was painting over the URL line. */
 .nc-pv-chat {
     position: absolute;
     left: 14px;
-    bottom: 56px;
+    bottom: 140px;
     width: 60%;
     max-width: 220px;
     display: flex;
@@ -1503,6 +1507,13 @@ details.nc-details > article {
     gap: 4px;
     pointer-events: none;
     z-index: 3;
+}
+/* When the banner is also enabled (the common case) we further hide
+ * the chat strip — both lived in the same bottom band and even with
+ * the lift above they competed visually. Operators get one signal at
+ * a time: chat overlay only fires when there's NO bottom banner. */
+.nc-preview__layer:has(.nc-pv-banner:not(.is-hidden)) .nc-pv-chat {
+    display: none;
 }
 .nc-pv-chat__row {
     display: flex;
@@ -1947,4 +1958,132 @@ details.nc-details > article {
     width: 28px;
     height: 1.5px;
     background: var(--nc-lime);
+}
+
+/* ============================================================
+   Slice O.4 — globalize .nc-approve-modal styles.
+
+   These styles previously lived inside clip_detail.html's inline
+   <style> block (added in N.2 for the verdict-card issues modal).
+   Other pages — stream_publish.html in particular — also need the
+   modal for their guided-connect flows, but they don't include the
+   clip-detail stylesheet. Moving the rules here makes the modal a
+   first-class theme primitive every dashboard page can use.
+
+   Markup contract:
+     <div class="nc-approve-modal" hidden>
+       <div class="nc-approve-modal__panel"> … </div>
+     </div>
+   ============================================================ */
+.nc-approve-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: nc-fade-in 180ms ease-out 1;
+}
+.nc-approve-modal[hidden] { display: none; }
+@keyframes nc-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.nc-approve-modal__panel {
+    background: var(--nc-bg-elevated, #0c1018);
+    border: 1px solid rgba(255, 200, 0, 0.40);
+    border-radius: 14px;
+    padding: 22px 24px;
+    width: 100%;
+    max-width: 520px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    box-shadow:
+        0 12px 48px rgba(0, 0, 0, 0.65),
+        inset 0 0 28px -10px rgba(255, 200, 0, 0.18);
+}
+.nc-approve-modal__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+.nc-approve-modal__icon {
+    font-size: 26px;
+    filter: drop-shadow(0 0 8px rgba(255, 200, 0, 0.55));
+}
+.nc-approve-modal__title {
+    color: #ffd066;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    text-shadow: 0 0 12px rgba(255, 184, 0, 0.35);
+}
+.nc-approve-modal__body {
+    color: var(--nc-text, #fff);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 18px;
+}
+.nc-approve-modal__body p { margin: 0 0 10px; }
+.nc-approve-modal__body strong { color: var(--nc-lime, #c8ff5c); }
+.nc-approve-modal__issues {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.nc-approve-modal__issues-row {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 12px;
+    line-height: 1.4;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.nc-approve-modal__issues-row:last-child { border-bottom: 0; }
+.nc-approve-modal__issues-row--block { color: #ff8a8a; }
+.nc-approve-modal__issues-row--warn  { color: #ffd066; }
+.nc-approve-modal__actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.nc-approve-modal__actions .nc-btn {
+    flex: 1 1 auto;
+    min-width: 130px;
+    justify-content: center;
+}
+.nc-approve-modal__cancel {
+    background: transparent;
+    border: 1px solid var(--nc-border);
+    color: var(--nc-text);
+}
+.nc-approve-modal__autofix {
+    background: rgba(200, 255, 92, 0.08);
+    border: 1px solid rgba(200, 255, 92, 0.40);
+    color: var(--nc-lime, #c8ff5c);
+}
+
+/* Slice O.4 — guided-connect modal variant: the same modal
+   primitive, but with a lime accent instead of amber (lime reads
+   as "ready to connect, low risk" vs amber's "review issues"). */
+.nc-approve-modal--connect .nc-approve-modal__panel {
+    border-color: rgba(200, 255, 92, 0.40);
+    box-shadow:
+        0 12px 48px rgba(0, 0, 0, 0.65),
+        inset 0 0 28px -10px rgba(200, 255, 92, 0.20);
+}
+.nc-approve-modal--connect .nc-approve-modal__icon {
+    filter: drop-shadow(0 0 8px rgba(200, 255, 92, 0.55));
+}
+.nc-approve-modal--connect .nc-approve-modal__title {
+    color: var(--nc-lime, #c8ff5c);
+    text-shadow: 0 0 12px rgba(200, 255, 92, 0.35);
 }

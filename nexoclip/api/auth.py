@@ -51,6 +51,12 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     # overlay routes themselves do NO database writes and only read
     # the parameters they were called with.
     "/overlay/",
+    # Slice NX.1 — Nexo AI integration surfaces. Both carry their own
+    # auth (admin bearer secret and HMAC SSO token respectively); the
+    # handler enforces the right scheme. We exempt them from the
+    # tenant-token middleware here so the handler runs at all.
+    "/api/admin/",
+    "/auth/sso",
 )
 _COOKIE_NAME = "nexoclip_token"
 
@@ -91,6 +97,57 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         request.state.tenant_id = token_row.tenant_id
         request.state.token_scope = token_row.scope
+
+        # Slice O.1 — also resolve the tenant's subscription tier here
+        # so dashboard templates can render the tier chip via
+        # `{{ request.state.tenant_tier }}` without every handler having
+        # to pass it in TemplateResponse context. Best-effort: any
+        # lookup failure falls back to "free" (the default migration
+        # value, also the conservative choice from a watermark-policy
+        # standpoint).
+        #
+        # Slice NX.2 — also stash tenant.status so handlers that DO actual
+        # work (pipeline kickoff, publish enqueue, LLM calls) can gate on
+        # 'active'. Base template reads `request.state.tenant_status` to
+        # render a "paused by Nexo AI" banner.
+        try:
+            from nexoclip.db import TenantsRepo
+            tenant = await TenantsRepo(self._db).get(token_row.tenant_id)
+            request.state.tenant_tier = (tenant.tier if tenant else "free") or "free"
+            request.state.tenant_status = (
+                (tenant.status if tenant else "active") or "active"
+            )
+            # Slice NX.4 — token balance cache. Populated by the usage reporter
+            # after each LLM call. None until the first call lands (the chip
+            # shows a "—" placeholder in that case).
+            if tenant is not None and tenant.cached_balance_at:
+                request.state.token_balance = {
+                    "remaining": tenant.cached_balance_remaining or 0,
+                    "unlimited": bool(tenant.cached_balance_unlimited),
+                    "monthly_used": tenant.cached_balance_monthly_used or 0,
+                    "at": tenant.cached_balance_at,
+                }
+            else:
+                request.state.token_balance = None
+        except Exception:  # noqa: BLE001 — best-effort
+            request.state.tenant_tier = "free"
+            request.state.tenant_status = "active"
+            request.state.token_balance = None
+
+        # Slice O.9 — admin gating. Templates read `request.state.is_admin`
+        # to decide whether to render operator-only nav items (LLM spend,
+        # LLM settings). Driven by the `NEXOCLIP_ADMIN_TENANT_IDS` env
+        # var (comma-separated). Default empty → no admins (creator UX
+        # for everyone, including local dev). Set it to your own tenant
+        # id to flip those nav items back on.
+        try:
+            from nexoclip.settings import get_settings
+            raw = (get_settings().admin_tenant_ids or "").strip()
+            admin_ids = {p.strip() for p in raw.split(",") if p.strip()}
+            request.state.is_admin = token_row.tenant_id in admin_ids
+        except Exception:  # noqa: BLE001 — best-effort
+            request.state.is_admin = False
+
         return await call_next(request)
 
 

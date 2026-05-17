@@ -281,6 +281,15 @@ async def set_tenant_status(
 # function here because this HTML is emitted as a plain string from
 # inside the route handler (not a template render). Instead we inline
 # both en + es and pick at request time via _render_sso_failure().
+#
+# Slice O.25 — show the actual failure reason instead of a generic
+# "session invalid" page. The previous version hid everything behind
+# one opaque message; operators spent half an hour guessing which of
+# (expired token / wrong signature / missing tenant / DB error) was
+# actually the case. We log the full reason server-side AND render an
+# excerpt to the user. Reason text stays short + non-leaky (no tokens,
+# no SQL traces) — the goal is "tell me what went wrong" not "give an
+# attacker a stack trace."
 _SSO_FAILURE_HTML_TEMPLATE = """<!doctype html>
 <html lang="{lang}">
 <head>
@@ -289,24 +298,60 @@ _SSO_FAILURE_HTML_TEMPLATE = """<!doctype html>
   <link rel="stylesheet" href="/static/nexoclip-theme.css">
 </head>
 <body>
-  <main class="nc-page" style="max-width: 520px; margin: 80px auto; text-align: center;">
+  <main class="nc-page" style="max-width: 560px; margin: 80px auto; text-align: center;">
     <h1>{title}</h1>
     <p>{body}</p>
+    {reason_block}
     <a class="nc-btn" href="https://nexo-ai.world/login">{cta}</a>
   </main>
 </body>
 </html>"""
 
 
-def _render_sso_failure(request: Request) -> str:
-    """Render the SSO failure page in the user's detected locale."""
+def _render_sso_failure(request: Request, reason: str | None = None) -> str:
+    """Render the SSO failure page in the user's detected locale.
+
+    `reason` is a short operator-readable string (e.g. "token expired",
+    "signature mismatch", "tenant provisioning failed"). When provided
+    it gets rendered in a dim panel under the main message so the user
+    knows what specifically failed. Server log gets the same string at
+    WARNING level via the caller so support can correlate.
+    """
+    import html as _html
+    import structlog
     from nexoclip.api.i18n import t
+
     locale = getattr(request.state, "locale", "en")
+    # Log every render with the reason — even when reason is None we
+    # want a trail. Truncate to keep log lines bounded.
+    log = structlog.get_logger("nexoclip.api.sso")
+    log.warning(
+        "sso.failure_page_rendered",
+        reason=(reason or "unspecified")[:200],
+        path=str(request.url.path),
+    )
+
+    reason_block = ""
+    if reason:
+        # Truncate to 200 chars + HTML-escape so we never leak a stack
+        # trace or render attacker-controlled markup.
+        safe = _html.escape(reason[:200])
+        reason_block = (
+            f'<div style="margin: 18px auto; padding: 10px 14px; '
+            f'max-width: 420px; border-radius: 8px; '
+            f'background: rgba(255,107,107,0.08); '
+            f'border: 1px solid rgba(255,107,107,0.35); '
+            f'font-family: ui-monospace, SFMono-Regular, monospace; '
+            f'font-size: 12px; color: var(--nc-danger, #ff6b6b); '
+            f'text-align: left;">{safe}</div>'
+        )
+
     return _SSO_FAILURE_HTML_TEMPLATE.format(
         lang=locale,
         title=t("sso.fail.title", locale),
         body=t("sso.fail.body", locale),
         cta=t("sso.fail.cta", locale),
+        reason_block=reason_block,
     )
 
 
@@ -341,21 +386,39 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
     secret = settings.nexo_ai_sso_secret
 
     if not token:
-        return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_400_BAD_REQUEST)
+        return HTMLResponse(
+            _render_sso_failure(request, reason="Missing `token` query parameter"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     if secret:
         # Strict mode: HMAC-verified.
         try:
             payload = verify_sso_token(token, secret=secret)
-        except SsoTokenError:
-            return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_401_UNAUTHORIZED)
+        except SsoTokenError as e:
+            # Slice O.25 — surface the SsoTokenError message verbatim
+            # (it's already operator-readable: "bad signature", "token
+            # expired", "payload missing required fields", etc).
+            return HTMLResponse(
+                _render_sso_failure(
+                    request,
+                    reason=f"Strict SSO verify failed: {e}",
+                ),
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
     else:
         # Lax mode: parse-only. The operator chose not to configure
         # a shared secret; we trust the token as-issued by nexo-ai.
         try:
             payload = _decode_sso_payload_unsigned(token)
-        except SsoTokenError:
-            return HTMLResponse(_render_sso_failure(request), status_code=status.HTTP_401_UNAUTHORIZED)
+        except SsoTokenError as e:
+            return HTMLResponse(
+                _render_sso_failure(
+                    request,
+                    reason=f"Lax SSO decode failed: {e}",
+                ),
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
 
     # Mint a fresh per-session token. We DON'T reuse the api_token we
     # returned at provisioning time — that one is held by Nexo AI as
@@ -372,11 +435,15 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
         session_raw_token = await mint_session_token_for_tenant(
             db, tenant_id=payload.tenant_id
         )
-    except Exception:
+    except Exception as e_mint:  # noqa: BLE001 — best-effort with fallback
         # Tenant doesn't exist. Provision it on the fly using the
         # JWT's tenant_id + email as the display name, then retry.
         # This is the no-walls behavior — if nexo-ai trusts you, we
         # trust you.
+        # Slice O.25 — surface BOTH the original mint failure AND any
+        # provisioning failure. Previously we hid both; operator had
+        # no way to tell if it was a DB issue, a schema mismatch, or
+        # something else.
         try:
             from nexoclip.db import TenantsRepo
             await TenantsRepo(db).create(
@@ -386,9 +453,16 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
             session_raw_token = await mint_session_token_for_tenant(
                 db, tenant_id=payload.tenant_id
             )
-        except Exception:  # noqa: BLE001 — provisioning itself broke
+        except Exception as e_prov:  # noqa: BLE001 — provisioning itself broke
+            reason = (
+                f"Session mint failed ({type(e_mint).__name__}: {e_mint}) "
+                f"AND tenant auto-provision failed "
+                f"({type(e_prov).__name__}: {e_prov}). "
+                f"Tenant id: {payload.tenant_id}"
+            )
             return HTMLResponse(
-                _render_sso_failure(request), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+                _render_sso_failure(request, reason=reason),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     # Sync tier on every login. Best-effort: if Nexo AI's effective tier

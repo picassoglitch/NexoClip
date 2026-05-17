@@ -31,9 +31,24 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY nexoclip ./nexoclip
 COPY run.py ./run.py
+# Slice O.28 — ship the config/ dir so the LLM router actually finds
+# its routing rules. Without this, load_llm_config() in the running
+# container hits an empty `config/llm.yaml` lookup, returns defaults,
+# and the pipeline crashes at the variants step with
+# `LLMError: unknown routing purpose: variant_generation`.
+COPY config ./config
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
+
+# Slice O.28 — Playwright + Chromium for the preview-recorder (slice
+# O.20). Without these, `/clips/<id>/download` falls back to the
+# ffmpeg burn which renders captions as plain libass without the
+# CSS karaoke pop-color the operator sees in the editor preview.
+# Installing chromium adds ~300 MB to the image but guarantees the
+# downloaded MP4 is pixel-identical to the browser render.
+RUN pip install --no-cache-dir playwright>=1.50 && \
+    playwright install --with-deps chromium
 
 # All persistent state lives on /data:
 #   * SQLite DB
@@ -52,14 +67,21 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Sensible production defaults. Override any via Railway env-var dashboard.
 #   NEXOCLIP_HOST=0.0.0.0       — bind to all interfaces (required in container)
 #   NEXOCLIP_WHISPER_DEVICE=cpu — no GPU on slim image
-#   HF_HOME                     — keep model cache on the persistent volume
+#   NEXOCLIP_WHISPER_MODEL=base — 74 MB. We previously used `small` (244 MB)
+#                                but it leaves no room on Railway's 500 MB free
+#                                tier alongside stream artifacts. `base` is the
+#                                quality floor for production Spanish/English
+#                                streams; bump to `small` / `medium` once the
+#                                volume is on a paid tier (1 GB / 5 GB).
+#   HF_HOME                     — keep model cache on the persistent volume so
+#                                cold-starts don't re-download
 #   PYTHONUNBUFFERED=1          — see logs in real-time (no stdout buffering)
 ENV NEXOCLIP_DB_PATH=/data/nexoclip.db \
     NEXOCLIP_DEFAULT_OUTPUT_DIR=/data/out \
     NEXOCLIP_HOST=0.0.0.0 \
     NEXOCLIP_WHISPER_DEVICE=cpu \
     NEXOCLIP_WHISPER_COMPUTE_TYPE=int8 \
-    NEXOCLIP_WHISPER_MODEL=small \
+    NEXOCLIP_WHISPER_MODEL=base \
     HF_HOME=/data/hf_cache \
     PYTHONUNBUFFERED=1
 

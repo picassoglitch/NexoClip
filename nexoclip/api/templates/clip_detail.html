@@ -328,11 +328,13 @@
     transform: translateY(-1px);
   }
   .nc-clip-style-card.is-selected {
-    border-color: var(--nc-blue-bright, #4f8bff);
-    background: linear-gradient(180deg,
-      rgba(79, 139, 255, 0.12),
-      var(--nc-bg-elevated));
-    box-shadow: 0 0 0 1px var(--nc-blue-bright, #4f8bff) inset;
+    border-color: rgba(0, 217, 255, 0.65);
+    background:
+      radial-gradient(circle at top right, rgba(255, 60, 200, 0.10), transparent 70%),
+      linear-gradient(180deg, rgba(0, 217, 255, 0.12), var(--nc-bg-elevated));
+    box-shadow:
+      0 0 0 1px rgba(0, 217, 255, 0.55) inset,
+      0 0 18px -4px rgba(0, 217, 255, 0.45);
   }
   .nc-clip-style-card__name {
     font-weight: 700;
@@ -546,18 +548,40 @@
     display: none !important;
   }
 
-  /* Slice I.3 — AI Director panel + Publish Confidence ring. */
+  /* Slice I.3 — AI Director panel + Publish Confidence ring.
+     Slice J.1 — cyberpunk accents: cyan→magenta corner glow,
+     subtle scanline overlay, neon edge that pulses on hover. */
   .nc-director {
     display: grid;
     grid-template-columns: 180px 1fr;
     gap: 16px;
-    background: linear-gradient(135deg,
-      rgba(79, 139, 255, 0.08),
-      rgba(155, 79, 255, 0.06));
-    border: 1px solid var(--nc-border);
+    background:
+      radial-gradient(circle at top left, rgba(0, 217, 255, 0.10), transparent 50%),
+      radial-gradient(circle at bottom right, rgba(255, 60, 200, 0.08), transparent 50%),
+      linear-gradient(135deg, rgba(79, 139, 255, 0.06), rgba(155, 79, 255, 0.04));
+    border: 1px solid rgba(0, 217, 255, 0.22);
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(0, 217, 255, 0.10) inset,
+      0 0 28px -8px rgba(0, 217, 255, 0.35),
+      0 4px 24px rgba(0, 0, 0, 0.25);
+  }
+  /* Decorative scanline — barely-there cyberpunk texture */
+  .nc-director::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 2px,
+      rgba(255, 255, 255, 0.012) 2px,
+      rgba(255, 255, 255, 0.012) 3px
+    );
+    pointer-events: none;
   }
   .nc-director__score {
     display: flex;
@@ -968,17 +992,26 @@
   .nc-editor-controls .nc-panel {
     border-radius: 10px;
     border-color: rgba(255, 255, 255, 0.06);
-    transition: border-color 120ms ease;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
   }
   .nc-editor-controls .nc-panel:hover {
     border-color: rgba(255, 255, 255, 0.10);
   }
   .nc-editor-controls .nc-panel__header--editor {
-    padding: 10px 14px;
+    padding: 12px 14px;
     background: linear-gradient(180deg,
       rgba(255, 255, 255, 0.03),
       transparent);
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nc-editor-controls .nc-panel__header--editor:hover {
+    background: linear-gradient(180deg,
+      rgba(79, 139, 255, 0.06),
+      transparent);
   }
   .nc-editor-controls .nc-panel__step {
     font-family: var(--nc-font-mono);
@@ -989,6 +1022,80 @@
     padding: 2px 7px;
     border-radius: 999px;
   }
+
+  /* Slice J.1 — accordion behavior. Panels marked as "accordion" hide
+     their body when .is-collapsed. Clip Style + the always-on panels
+     skip this. The header gets a chevron that rotates on toggle. */
+  .nc-editor-controls .nc-panel--accordion .nc-panel__header--editor::after {
+    content: "";
+    width: 8px; height: 8px;
+    border-right: 2px solid var(--nc-text-muted);
+    border-bottom: 2px solid var(--nc-text-muted);
+    transform: rotate(45deg);
+    margin-left: auto;
+    transition: transform 200ms ease;
+    flex-shrink: 0;
+  }
+  .nc-editor-controls .nc-panel--accordion.is-collapsed .nc-panel__header--editor::after {
+    transform: rotate(-45deg);
+  }
+  .nc-editor-controls .nc-panel--accordion.is-collapsed .nc-panel__body {
+    display: none;
+  }
+  /* Selected panel gets the cyberpunk neon edge — picks up from
+     nexo-ai's visual language (cyan + magenta accent gradient). */
+  .nc-editor-controls .nc-panel--accordion:not(.is-collapsed) {
+    border-color: rgba(0, 217, 255, 0.35);
+    box-shadow:
+      0 0 0 1px rgba(0, 217, 255, 0.20) inset,
+      0 0 20px -8px rgba(0, 217, 255, 0.45);
+  }
+
+  /* Slice J.1 — giant inline play/pause overlay on the preview video. */
+  .nc-pv-play-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 10, 16, 0.40);
+    border: 0;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 64px;
+    z-index: 10;
+    opacity: 1;
+    transition: opacity 200ms ease, background 200ms ease;
+    /* Cyberpunk glow ring around the play icon */
+    text-shadow:
+      0 0 18px rgba(0, 217, 255, 0.65),
+      0 0 36px rgba(255, 60, 200, 0.45);
+  }
+  .nc-pv-play-overlay:hover {
+    background: rgba(8, 10, 16, 0.25);
+    color: #fff;
+  }
+  .nc-pv-play-overlay.is-playing {
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* When hovering the preview while playing, peek the pause icon back. */
+  .nc-preview:hover .nc-pv-play-overlay.is-playing {
+    opacity: 0.6;
+    pointer-events: auto;
+    background: rgba(8, 10, 16, 0.15);
+  }
+
+  /* Slice J.1 — restart button shrinks; play button becomes a TOGGLE
+     that flips its label/icon between Play and Pause based on state. */
+  .nc-preview-controls {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .nc-preview-controls #preview-play .ti { transition: transform 120ms ease; }
+  .nc-preview-controls #preview-play.is-playing .ti { transform: scale(0.95); }
 
   /* Sticky action bar — slice I.5.
      Desktop: sticks inside the right column with a backdrop blur so
@@ -1415,6 +1522,20 @@
               <source src="/dashboard/clips/{{ clip.id }}/media">
             </video>
 
+            {# Slice J.1 — Giant inline play/pause overlay.
+               The bottom "Play preview" / "Pause" buttons used to be the
+               only way to start playback and operators kept losing them.
+               Now: a large centered button sits on top of the video,
+               visible when paused, fades out during playback. Click
+               anywhere on the video surface toggles. Keyboard space-bar
+               works too (wired in JS). #}
+            <button type="button"
+                    id="preview-play-overlay"
+                    class="nc-pv-play-overlay"
+                    aria-label="Play preview">
+              <i class="ti ti-player-play-filled" aria-hidden="true"></i>
+            </button>
+
             <div class="nc-preview__layer"
                  aria-hidden="true"
                  data-clip-style="{{ _current_clip_style }}"
@@ -1575,7 +1696,11 @@
             </div>
           </div>
 
-          <div style="display: flex; gap: 8px; justify-content: center; margin-top: 12px;">
+          {# Slice J.1 — secondary controls. The PRIMARY play/pause is the
+             giant overlay on the video itself. This row is kept for
+             keyboard / discoverability backup and gains a live-flipping
+             label so the operator always knows the toggle action. #}
+          <div class="nc-preview-controls">
             <button type="button" id="preview-play" class="nc-btn nc-btn--sm">
               <i class="ti ti-player-play" aria-hidden="true"></i>
               <span>Play preview</span>
@@ -1638,7 +1763,7 @@
         </div>
       </div>
 
-      <div class="nc-panel">
+      <div class="nc-panel nc-panel--accordion" data-accordion="hook">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">1</span>
           <span class="nc-panel__title">Viral hook</span>
@@ -1689,7 +1814,7 @@
         </div>
       </div>
 
-      <div class="nc-panel">
+      <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="captions">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">2</span>
           <span class="nc-panel__title">Captions</span>
@@ -1777,7 +1902,7 @@
         </div>
       </div>
 
-      <div class="nc-panel">
+      <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="branding">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">3</span>
           <span class="nc-panel__title">Branding</span>
@@ -1870,7 +1995,7 @@
       {# ---- Slice I.1 — Top hook title box ----
          The white rounded headline that sits above the subject's face
          on viral repost-page clips. Two lines max, big bold text. #}
-      <div class="nc-panel">
+      <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="top-hook">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">4</span>
           <span class="nc-panel__title">Top hook box</span>
@@ -3014,17 +3139,92 @@
     idx = (idx + 1) % words.length;
   }, 600);
 
-  // Play / restart controls — small QoL. Keeps the <video> muted so the
-  // browser doesn't gate autoplay. The operator hears nothing here;
-  // audio is just a check on the rendered MP4.
+  // ---- Slice J.1: media controls overhaul ----
+  // Three click surfaces for play/pause, in priority order:
+  //   1. Giant centered overlay button on the video (visible when paused)
+  //   2. The video element itself (click anywhere → toggle)
+  //   3. The small bottom Play/Pause button (label flips based on state)
+  // Plus keyboard space-bar when the editor has focus.
+  //
+  // Browser keeps the <video> muted so autoplay isn't gated; audio is
+  // just a sanity check on the rendered MP4.
   var video = document.getElementById("preview-video");
-  document.getElementById("preview-play").addEventListener("click", function () {
-    if (video.paused) { video.play(); }
-    else { video.pause(); }
+  var playOverlay = document.getElementById("preview-play-overlay");
+  var playBtn = document.getElementById("preview-play");
+  var playBtnIcon = playBtn.querySelector(".ti");
+  var playBtnLabel = playBtn.querySelector("span");
+
+  function togglePlayback() {
+    if (video.paused) video.play();
+    else video.pause();
+  }
+
+  function reflectPlaybackState() {
+    var playing = !video.paused;
+    if (playOverlay) playOverlay.classList.toggle("is-playing", playing);
+    if (playBtn) {
+      playBtn.classList.toggle("is-playing", playing);
+      if (playBtnIcon) {
+        playBtnIcon.classList.toggle("ti-player-play", !playing);
+        playBtnIcon.classList.toggle("ti-player-pause", playing);
+      }
+      if (playBtnLabel) playBtnLabel.textContent = playing ? "Pause" : "Play preview";
+    }
+  }
+
+  if (playOverlay) playOverlay.addEventListener("click", togglePlayback);
+  if (playBtn) playBtn.addEventListener("click", togglePlayback);
+  // Click anywhere on the video surface ALSO toggles (HTML5 video doesn't
+  // do this natively when there are no controls).
+  video.addEventListener("click", togglePlayback);
+  // Keyboard space-bar — but only when the user isn't typing in an input.
+  document.addEventListener("keydown", function (e) {
+    if (e.code !== "Space") return;
+    var t = e.target;
+    if (t instanceof HTMLElement) {
+      var tag = t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) {
+        return;
+      }
+    }
+    e.preventDefault();
+    togglePlayback();
   });
+  // Reflect state on every play/pause/end so the icon stays accurate.
+  video.addEventListener("play", reflectPlaybackState);
+  video.addEventListener("pause", reflectPlaybackState);
+  video.addEventListener("ended", reflectPlaybackState);
+  reflectPlaybackState();
+
   document.getElementById("preview-restart").addEventListener("click", function () {
     video.currentTime = 0;
     video.play();
+  });
+
+  // ---- Slice J.1: accordion behavior for editor panels ----
+  // The Hook / Captions / Branding / Top Hook panels collapse to a
+  // single line by default. Click the header → that panel expands and
+  // every other accordion closes. Clip Style + AI Director stay
+  // always-visible (they're the keystone surfaces). This cuts the
+  // visible field count by ~70% without removing a single feature.
+  var accordionPanels = document.querySelectorAll(".nc-panel--accordion");
+  accordionPanels.forEach(function (panel) {
+    var header = panel.querySelector(".nc-panel__header--editor");
+    if (!header) return;
+    header.addEventListener("click", function (e) {
+      // Don't toggle when the click came from a focusable child
+      // (e.g. someone hits a button inside an expanded header).
+      var target = e.target;
+      if (target instanceof Element && target.closest("button, input, select, textarea, label")) {
+        if (!target.closest(".nc-panel__header--editor") || target.closest("button, input, select, textarea, label") !== header) {
+          return;
+        }
+      }
+      var willOpen = panel.classList.contains("is-collapsed");
+      // Collapse every other accordion — one open at a time.
+      accordionPanels.forEach(function (p) { p.classList.add("is-collapsed"); });
+      if (willOpen) panel.classList.remove("is-collapsed");
+    });
   });
 
   // ---- Waveform + scrubber (slice F.7 follow-up A) ----

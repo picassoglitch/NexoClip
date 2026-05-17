@@ -107,14 +107,14 @@ class VisualConfig(BaseModel):
         description="Which face_emotion values count as 'strong' (worth firing on).",
     )
     timeout_s: float = Field(
-        default=120.0,
+        default=600.0,
         gt=0.0,
         description=(
-            "Hard cap on analyze_video runtime. PySceneDetect on CPU scales "
-            "with video length and can take 10+ minutes on a long VOD — the "
-            "rest of the pipeline shouldn't wait. On timeout the step is "
-            "logged as 'analyze_video.timeout' and the pipeline continues "
-            "without visual signals."
+            "Hard cap on analyze_video runtime in seconds (floor). The pipeline "
+            "actually uses max(timeout_s, duration_s * analyze_video_timeout_multiplier) "
+            "so this is just the minimum even for very short videos. Slice O.27 "
+            "bumped the floor 120 → 600 because PySceneDetect on prod CPU runs "
+            "near 1× realtime and the 120 floor was getting hit on 60-90s clips."
         ),
     )
 
@@ -153,12 +153,16 @@ class ViralConfig(BaseModel):
     identify the 5-15 most clip-worthy moments based on controversy, emotion,
     quotability, and shock value.
 
-    Off by default (it costs an LLM call per stream). Turn on when the
-    voice-trigger-only detector returns nothing useful — the common case
-    when the streamer doesn't actually say 'clip this'.
+    Slice O.27 — enabled by default. The voice-trigger-only detector
+    returns 0 candidates the moment a streamer doesn't yell "clip this"
+    (i.e. essentially every real-world VOD). Without the viral detector
+    on, the pipeline finishes with 0 candidates → 0 clips → the user
+    sees "Pipeline complete" and nothing to do, with no hint why.
+    Costs one LLM call per stream — acceptable for paid-tier users who
+    pay for clips and not for LLM-call budgets.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     weight: float = Field(default=1.0, ge=0.0)
     quality: str = Field(
         default="standard",

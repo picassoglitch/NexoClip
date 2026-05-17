@@ -66,10 +66,14 @@ class Settings(BaseSettings):
     whisper_timeout_multiplier: float = 4.0
 
     # Slice O.12 — analyze_video (PySceneDetect + visual signals)
-    # timeout multiplier. The static config value is the floor; actual
-    # = max(floor, duration_s * multiplier). On a 3-hour stream a
-    # 0.5× cap = 90 min, plenty even on CPU-only hosts.
-    analyze_video_timeout_multiplier: float = 0.5
+    # timeout multiplier. Actual cap = max(floor, duration_s * multiplier).
+    # Slice O.27 — bumped 0.5× → 4× because the 0.5× value assumed GPU
+    # but most prod hosts (Railway, Fly, Render) run on CPU where
+    # PySceneDetect runs at ~1× realtime. A 87-second video hit the
+    # 120-second floor with the old multiplier and skipped the step
+    # entirely; 4× gives PySceneDetect 4 minutes on that video (plenty)
+    # and proportionally more on longer ones.
+    analyze_video_timeout_multiplier: float = 4.0
 
     # Admin tenants (NEXOCLIP_ADMIN_TENANT_IDS) bypass the per-step
     # ceilings entirely. Useful for the operator dogfooding multi-hour

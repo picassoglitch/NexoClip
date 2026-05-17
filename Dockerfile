@@ -35,14 +35,19 @@ COPY run.py ./run.py
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-# All persistent state lives on /data — Railway / Fly volumes mount here.
+# All persistent state lives on /data:
 #   * SQLite DB
 #   * Output clips + frames (ffmpeg writes here)
 #   * Whisper model cache (HuggingFace downloads — ~244MB for `small`)
-# Without the volume, every redeploy loses everything. Volume mount is
-# configured on the platform side; this VOLUME declaration documents the
-# contract.
-VOLUME ["/data"]
+# Without a persistent volume mounted at /data, every redeploy loses
+# everything.
+#
+# Railway-specific note: we DON'T declare `VOLUME ["/data"]` here because
+# Railway rejects anonymous Docker volumes — they have their own volume
+# system that's configured per-service on the dashboard (Settings →
+# Volumes → New Volume → mount path `/data`). Fly.io takes the same
+# approach. If you ever switch to a platform that respects the `VOLUME`
+# declaration (raw Docker, ECS, K8s), add it back.
 
 # Sensible production defaults. Override any via Railway env-var dashboard.
 #   NEXOCLIP_HOST=0.0.0.0       — bind to all interfaces (required in container)

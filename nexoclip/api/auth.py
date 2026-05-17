@@ -41,7 +41,17 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
         "/sitemap.xml",
     }
 )
-_PUBLIC_PREFIXES: tuple[str, ...] = ("/dashboard/login", "/static/")
+_PUBLIC_PREFIXES: tuple[str, ...] = (
+    "/dashboard/login",
+    "/static/",
+    # Slice M.4 — OBS Browser Source overlays. Configuration travels
+    # via the query string (channelId / handle / scale / etc), not
+    # via cookies — OBS can't carry the dashboard's session token,
+    # so requiring auth here would make the feature unusable. The
+    # overlay routes themselves do NO database writes and only read
+    # the parameters they were called with.
+    "/overlay/",
+)
 _COOKIE_NAME = "nexoclip_token"
 
 

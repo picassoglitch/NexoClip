@@ -12,17 +12,33 @@
 /* ---------- 1. Design tokens ---------- */
 
 :root {
-    /* Backgrounds */
-    --nc-bg-base:      #0a0e16;
-    --nc-bg-surface:   #0c1119;
-    --nc-bg-panel:     #0e1420;
-    --nc-bg-raised:    #121a28;
+    /* Slice K.1 — palette realigned with nexo-ai.com.
+     * Deep black backgrounds + electric-lime primary accent +
+     * starfield body. Cyan/magenta cyberpunk tokens from J.1/J.3
+     * stay as-is in the file so any clip-editor-specific CSS that
+     * still references them keeps working; the cross-site default
+     * accent flips to lime here so streams / inbox / personas /
+     * brand-kits / LLM-calls feel like the same product as
+     * nexo-ai.com. */
 
-    /* Blue accent — the NexoClip blue */
-    --nc-blue:         #42a5ff;
-    --nc-blue-bright:  #5fcfff;
-    --nc-blue-dim:     rgba(56, 138, 221, 0.25);
-    --nc-blue-faint:   rgba(56, 138, 221, 0.12);
+    /* Backgrounds — deeper than before to match the landing page */
+    --nc-bg-base:      #06080d;
+    --nc-bg-surface:   #0a0d14;
+    --nc-bg-panel:     #0e131c;
+    --nc-bg-raised:    #141b27;
+
+    /* Primary accent — electric lime ("NEXO AI" CTA color) */
+    --nc-lime:         #c8ff5c;
+    --nc-lime-bright:  #d8ff7a;
+    --nc-lime-dim:     rgba(200, 255, 92, 0.30);
+    --nc-lime-faint:   rgba(200, 255, 92, 0.10);
+    /* Back-compat aliases — every component that referenced the old
+     * `--nc-blue*` tokens now picks up the lime palette automatically.
+     * Pages that explicitly want blue can still set a local override. */
+    --nc-blue:         var(--nc-lime);
+    --nc-blue-bright:  var(--nc-lime-bright);
+    --nc-blue-dim:     var(--nc-lime-dim);
+    --nc-blue-faint:   var(--nc-lime-faint);
 
     /* Text */
     --nc-text:         #e8edf4;
@@ -104,6 +120,32 @@ body {
     padding: 0;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* Slice K.1 — starfield + radial-gradient body backdrop matching
+ * nexo-ai.com. Pure CSS, no images. Layers:
+ *   1. Radial vignette pulling slight lime toward the top
+ *   2. Two layers of pin-prick "stars" via repeating radial-gradients
+ *      at different scales for parallax-ish depth
+ * Fixed attachment so the backdrop stays still while content scrolls. */
+body {
+    background-color: var(--nc-bg-base);
+    background-image:
+      radial-gradient(ellipse at top, rgba(200, 255, 92, 0.04), transparent 60%),
+      radial-gradient(circle at 12% 28%, rgba(255, 255, 255, 0.55) 0.6px, transparent 1.4px),
+      radial-gradient(circle at 68% 14%, rgba(255, 255, 255, 0.40) 0.8px, transparent 1.6px),
+      radial-gradient(circle at 38% 78%, rgba(255, 255, 255, 0.35) 0.6px, transparent 1.4px),
+      radial-gradient(circle at 86% 64%, rgba(255, 255, 255, 0.45) 0.7px, transparent 1.5px),
+      radial-gradient(circle at 22% 88%, rgba(200, 255, 92, 0.30) 0.8px, transparent 1.6px);
+    background-size:
+      100% 100%,
+      120px 110px,
+      180px 200px,
+      240px 180px,
+      160px 220px,
+      300px 260px;
+    background-attachment: fixed;
+    background-repeat: repeat;
 }
 
 /* Dark scrollbars — kills the bright OS scrollbar bleed. */
@@ -196,21 +238,25 @@ hr {
     padding-bottom: 12px;
 }
 .nc-page-header::after {
+    /* Slice K.1 — lime accent under-line replaces J.3's cyan→magenta
+     * gradient. Matches nexo-ai's title-rule treatment. */
     content: "";
     position: absolute;
     left: 0; right: 0; bottom: 0;
     height: 1px;
     background: linear-gradient(90deg,
       transparent 0%,
-      rgba(0, 217, 255, 0.55) 25%,
-      rgba(255, 60, 200, 0.45) 75%,
+      var(--nc-lime-dim) 20%,
+      var(--nc-lime) 50%,
+      var(--nc-lime-dim) 80%,
       transparent 100%);
-    box-shadow: 0 0 8px rgba(0, 217, 255, 0.35);
+    box-shadow: 0 0 6px rgba(200, 255, 92, 0.30);
 }
 .nc-page-header h2 {
     margin: 0;
-    /* Subtle cyan text-shadow for the cyberpunk title glow. */
-    text-shadow: 0 0 12px rgba(0, 217, 255, 0.18);
+    color: #fff;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 .nc-page-header .nc-page-summary {
     color: var(--nc-text-muted);
@@ -244,14 +290,18 @@ hr {
 }
 
 .nc-nav__logo {
-    color: var(--nc-blue);
-    font-weight: 500;
-    font-size: 16px;
-    letter-spacing: 0.02em;
+    /* Slice K.1 — wordmark matches nexo-ai's split "NEXO" white + "AI"
+     * lime treatment. Letter-spaced, lighter weight than I had. */
+    color: #fff;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.06em;
     text-decoration: none;
     flex-shrink: 0;
 }
-.nc-nav__logo:hover { color: var(--nc-blue-bright); text-decoration: none; }
+.nc-nav__logo:hover { text-decoration: none; opacity: 0.92; }
+.nc-nav__logo-prefix { color: #fff; }
+.nc-nav__logo-accent { color: var(--nc-lime); }
 
 .nc-nav__links {
     display: flex;
@@ -280,12 +330,12 @@ hr {
     text-decoration: none;
 }
 .nc-nav__link.is-active {
-    color: var(--nc-cyan);
-    border-bottom-color: var(--nc-cyan);
-    /* Slice J.3 — active nav link gets a soft cyan glow so the
-     * current page is obvious without reading the label. */
-    text-shadow: 0 0 8px rgba(0, 217, 255, 0.45);
-    box-shadow: 0 1px 0 rgba(0, 217, 255, 0.45);
+    color: var(--nc-lime);
+    border-bottom-color: var(--nc-lime);
+    /* Slice K.1 — lime glow on the active nav link (was cyan in J.3).
+     * Matches nexo-ai's accent everywhere. */
+    text-shadow: 0 0 8px rgba(200, 255, 92, 0.40);
+    box-shadow: 0 1px 0 rgba(200, 255, 92, 0.50);
 }
 
 .nc-nav__right {
@@ -394,15 +444,11 @@ hr {
     font-weight: 500;
     font-size: 13px;
     flex-wrap: wrap;
-    /* Slice J.3 — panel headers get a cyan→magenta corner radial
-     * + soft underline glow to match the editor's J.1 treatment.
-     * One CSS change → every page (streams / inbox / personas /
-     * brand kits / LLM-calls) picks it up. */
-    background:
-      radial-gradient(circle at top right, rgba(255, 60, 200, 0.06), transparent 60%),
-      linear-gradient(180deg, rgba(0, 217, 255, 0.05), transparent);
-    border-bottom: 1px solid rgba(0, 217, 255, 0.16);
-    box-shadow: inset 0 -1px 0 rgba(0, 217, 255, 0.10);
+    /* Slice K.1 — softer lime-tinted header. Replaces J.3's
+     * cyan→magenta cyberpunk gradient with the brand's lime accent. */
+    background: linear-gradient(180deg, rgba(200, 255, 92, 0.04), transparent);
+    border-bottom: 1px solid rgba(200, 255, 92, 0.16);
+    box-shadow: inset 0 -1px 0 rgba(200, 255, 92, 0.08);
 }
 .nc-panel__header .nc-panel__title {
     flex: 1;
@@ -495,25 +541,26 @@ hr {
 }
 
 .nc-btn--primary {
-    background: linear-gradient(135deg, #00d9ff 0%, #5fcfff 100%);
-    border-color: rgba(0, 217, 255, 0.55);
-    color: var(--nc-bg-base);
-    /* Slice J.3 — neon cyan glow with subtle magenta inner.
-     * Picked up by every primary CTA across the dashboard. */
-    box-shadow:
-      0 0 18px -4px rgba(0, 217, 255, 0.50),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+    /* Slice K.1 — pill-rounded lime CTA matching nexo-ai.com's
+     * "Iniciar proyecto →" button. Solid lime fill, dark text,
+     * fully rounded corners, subtle glow on hover. Replaces the
+     * J.3 cyan gradient that didn't match the brand. */
+    background: var(--nc-lime);
+    border-color: var(--nc-lime);
+    color: #06080d;
     font-weight: 700;
     letter-spacing: 0.02em;
+    border-radius: 999px;
+    padding: 9px 18px;
+    box-shadow: 0 0 0 1px var(--nc-lime-dim);
 }
 .nc-btn--primary:hover {
-    background: linear-gradient(135deg, #00e9ff 0%, #80e0ff 100%);
-    border-color: rgba(0, 217, 255, 0.80);
-    color: var(--nc-bg-base);
+    background: var(--nc-lime-bright);
+    border-color: var(--nc-lime-bright);
+    color: #06080d;
     box-shadow:
-      0 0 24px -2px rgba(0, 217, 255, 0.70),
-      0 0 32px -8px rgba(255, 60, 200, 0.45),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+      0 0 0 1px var(--nc-lime-bright),
+      0 0 20px -4px rgba(200, 255, 92, 0.55);
     transform: translateY(-1px);
 }
 
@@ -657,20 +704,18 @@ hr {
     font-size: 13px;
 }
 .nc-table thead th {
-    color: var(--nc-cyan);
+    color: var(--nc-lime);
     font-weight: 700;
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.10em;
     text-align: left;
     padding: 10px 12px;
-    /* Slice J.3 — cyan neon underline on the table header row, used
-     * by every dashboard list (streams, inbox, brand kits, LLM calls,
-     * publish outcomes). */
-    border-bottom: 1px solid rgba(0, 217, 255, 0.25);
-    background:
-      linear-gradient(180deg, rgba(0, 217, 255, 0.04), transparent);
-    box-shadow: inset 0 -1px 0 rgba(0, 217, 255, 0.18);
+    /* Slice K.1 — lime accent underline matches nexo-ai's section
+     * dividers. Drops the J.3 cyan that didn't match the brand. */
+    border-bottom: 1px solid rgba(200, 255, 92, 0.22);
+    background: linear-gradient(180deg, rgba(200, 255, 92, 0.04), transparent);
+    box-shadow: inset 0 -1px 0 rgba(200, 255, 92, 0.14);
 }
 .nc-table tbody td {
     padding: 10px 12px;
@@ -859,14 +904,12 @@ hr {
     max-width: 180px;
 }
 .nc-clip-card:hover {
-    /* Slice J.3 — cyan neon edge + soft magenta corner on hover.
-     * Replaces the cold "border-color: blue" lift with the cyberpunk
-     * glow used throughout the editor. */
-    border-color: rgba(0, 217, 255, 0.45);
+    /* Slice K.1 — lime edge + lift on hover. Matches nexo-ai's
+     * landing-page card-hover lift; drops the J.3 cyan/magenta. */
+    border-color: rgba(200, 255, 92, 0.45);
     box-shadow:
-      0 0 0 1px rgba(0, 217, 255, 0.25) inset,
-      0 0 16px -4px rgba(0, 217, 255, 0.40),
-      0 0 24px -10px rgba(255, 60, 200, 0.30);
+      0 0 0 1px rgba(200, 255, 92, 0.25) inset,
+      0 0 18px -6px rgba(200, 255, 92, 0.45);
     transform: translateY(-2px);
 }
 .nc-clip-card__thumb {
@@ -1879,4 +1922,29 @@ details.nc-details > article {
     margin: 0 0 4px 0;
     font-size: 22px;
     letter-spacing: 0.02em;
+}
+
+
+/* ---------- 28. Kicker tag (Slice K.1) ----------
+ * The little uppercase lime label nexo-ai puts above hero titles:
+ *   "— EQUIPO DE TECNOLOGÍA — SEDE EN CIUDAD DE MÉXICO"
+ * Pages can drop <p class="nc-kicker">...</p> above their h2 for the
+ * same treatment.
+ */
+.nc-kicker {
+    color: var(--nc-lime);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin: 0 0 8px 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+.nc-kicker::before {
+    content: "";
+    width: 28px;
+    height: 1.5px;
+    background: var(--nc-lime);
 }

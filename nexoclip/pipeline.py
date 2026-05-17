@@ -260,6 +260,49 @@ class StreamManifest(BaseModel):
     llm_spend: LLMSpend = Field(default_factory=LLMSpend)
 
 
+async def _merge_db_personas(
+    yaml_personas: dict[str, Persona],
+    tenant_id: str,
+    db_path: str,
+) -> dict[str, Persona]:
+    """Slice O.26 — overlay DB personas onto a YAML-loaded map.
+
+    The dashboard's New Persona form writes to the DB (PersonasRepo);
+    the YAML at `config/personas.yaml` is a static baseline that
+    survives DB resets. The pipeline previously only knew about YAML
+    so dashboard-created personas raised `unknown persona; known: (none)`
+    even though the operator saw them in the dropdown.
+
+    Merge rule: YAML first, then DB rows overlay (DB wins on id
+    collision — they reflect operator edits). Tenant-scoped: only
+    rows belonging to `tenant_id`.
+
+    Db read failure is the caller's problem (raises through); pipeline
+    catches it and falls back to YAML-only with a logged warning.
+    """
+    from nexoclip.db import Database, PersonasRepo
+    from nexoclip.tenancy import bound_tenant
+
+    db = Database(db_path)
+    await db.connect()
+    with bound_tenant(tenant_id):
+        db_rows = await PersonasRepo(db).list_for_tenant()
+
+    merged = dict(yaml_personas)
+    for row in db_rows:
+        # PersonaRow has tenant_id + target_languages + created_at on
+        # top of the YAML Persona shape; the variants pipeline only
+        # needs id/name/primary_language/voice_prompt/routing_tags.
+        merged[row.id] = Persona(
+            id=row.id,
+            name=row.name,
+            primary_language=row.primary_language,
+            voice_prompt=row.voice_prompt,
+            routing_tags=list(row.routing_tags or []),
+        )
+    return merged
+
+
 @dataclass
 class PipelineDeps:
     """Injectable dependencies — the CLI uses defaults, tests override."""
@@ -308,7 +351,30 @@ async def process_vod(
     deps = deps or PipelineDeps()
     config = deps.config or load_config()
     llm_config = deps.llm_config or load_llm_config()
-    personas = deps.personas if deps.personas is not None else load_personas()
+    # Slice O.26 — merge DB personas with YAML personas.
+    # Before: pipeline only read config/personas.yaml. The dashboard saved
+    # operator-created personas to the DB; the dropdown showed them
+    # (_merged_personas in dashboard.py) but the pipeline didn't know
+    # about them → "unknown persona 'xxx'; known: (none)" on every
+    # upload after a fresh deploy.
+    # After: YAML first (deterministic baseline), then DB rows overlay
+    # (any operator edits win). Only merges when deps.personas wasn't
+    # explicitly passed — tests can still inject a closed set.
+    if deps.personas is not None:
+        personas = deps.personas
+    else:
+        personas = load_personas()
+        if db_path:
+            try:
+                personas = await _merge_db_personas(personas, tenant_id, db_path)
+            except Exception as merge_err:  # noqa: BLE001 — defensive
+                # DB read failed: log + fall through to YAML-only. That
+                # surfaces a clearer error downstream than masking it.
+                _log.warning(
+                    "personas.db_merge_failed",
+                    error=str(merge_err)[:200],
+                    tenant_id=tenant_id,
+                )
     settings = deps.settings or get_settings()
 
     if persona_id not in personas:

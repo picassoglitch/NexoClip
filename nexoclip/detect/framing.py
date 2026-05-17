@@ -35,9 +35,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from nexoclip.clip.models import SmartCropBox
+if TYPE_CHECKING:
+    # Slice K.3 fix — `nexoclip.clip.models` imports `nexoclip.detect.Candidate`,
+    # and `nexoclip.detect.__init__` re-exports this module. Pulling
+    # SmartCropBox at module top creates a circular import (clip.models
+    # is still loading when framing tries to read it back).
+    # Type-check-only import keeps the annotation working without the cycle.
+    from nexoclip.clip.models import SmartCropBox
 
 # ---- Type aliases ----
 
@@ -442,9 +448,16 @@ def _fallback_verdict(reason: str) -> FramingVerdict:
     )
 
 
-def to_smart_crop_box(box: SubjectBox, *, source_w: int, source_h: int) -> SmartCropBox:
+def to_smart_crop_box(box: SubjectBox, *, source_w: int, source_h: int) -> "SmartCropBox":
     """Convert a fractional SubjectBox into the absolute-pixel
-    `SmartCropBox` the renderer's `crop=` ffmpeg filter consumes."""
+    `SmartCropBox` the renderer's `crop=` ffmpeg filter consumes.
+
+    Lazy-imports SmartCropBox so framing.py stays cycle-free with
+    `nexoclip.clip.models` (which transitively imports this module
+    via `nexoclip.detect.Candidate`).
+    """
+    from nexoclip.clip.models import SmartCropBox
+
     return SmartCropBox(
         x=max(0, round(box.x * source_w)),
         y=max(0, round(box.y * source_h)),

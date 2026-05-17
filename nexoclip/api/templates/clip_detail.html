@@ -2,32 +2,40 @@
 {% block title %}Clip {{ clip.id }} - NexoClip{% endblock %}
 {% block head %}
 <style>
-  /* ---- Clip editor: split-pane live preview ----------------- */
+  /* ---- Clip editor: split-pane live preview -----------------
+     Slice K.2 — the preview is the HERO. Operators decide "would I
+     post this?" from the preview, not from a checklist. Made it
+     ~50% larger and rebalanced the grid so the preview takes the
+     larger column on wide screens. */
 
   .nc-editor {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
+    gap: 20px;
     align-items: start;
   }
-  @media (max-width: 900px) {
-    .nc-editor { grid-template-columns: 1fr; }
+  @media (max-width: 1100px) {
+    .nc-editor { grid-template-columns: minmax(0, 1fr); }
   }
 
   /* The preview surface — a real <video> with absolutely-positioned
      HTML overlay layers on top. The HTML overlays are a faithful
      visual stand-in for what the renderer will burn in when the
-     operator clicks Complete. */
+     operator clicks Complete.
+     Slice K.2 — bumped max-width from 360 to 520, drops the box-y
+     hairline border in favor of a tight contained radius. */
   .nc-preview {
     position: relative;
     aspect-ratio: 9 / 16;
-    max-width: 360px;
+    max-width: 520px;
     margin: 0 auto;
     background: #000;
-    border: var(--nc-hairline);
-    border-radius: var(--nc-radius);
+    border-radius: 14px;
     overflow: hidden;
     contain: layout paint;
+    box-shadow:
+      0 0 0 1px rgba(200, 255, 92, 0.12),
+      0 12px 36px -12px rgba(0, 0, 0, 0.55);
   }
   .nc-preview video {
     position: absolute;
@@ -684,6 +692,23 @@
   .nc-director__line-text { color: var(--nc-text); }
   .nc-director__line--info .nc-director__line-text { color: var(--nc-text-muted); font-style: italic; }
   .nc-director__apply-btn { align-self: flex-start; margin-top: 4px; }
+  /* Slice K.2 — hero treatment for the Apply AI fixes CTA. */
+  .nc-director__apply-btn--hero {
+    width: 100%;
+    align-self: stretch;
+    padding: 12px 18px;
+    font-size: 14px;
+    font-weight: 800;
+    margin-top: 8px;
+    box-shadow:
+      0 0 0 1px var(--nc-lime),
+      0 0 24px -4px rgba(200, 255, 92, 0.55);
+  }
+  .nc-director__apply-btn--hero:hover {
+    box-shadow:
+      0 0 0 1px var(--nc-lime-bright),
+      0 0 32px -2px rgba(200, 255, 92, 0.70);
+  }
   .nc-director__feedback {
     font-size: 11px;
     color: var(--nc-text-muted);
@@ -797,6 +822,27 @@
     color: #fff;
     border-color: var(--nc-blue-bright, #4f8bff);
   }
+  /* Slice K.2 — horizontal swipe rail replaces the vertical grid.
+     Same cards, scroll-snap pinned, scrollbar hidden. Operators skim
+     5-8 cards at a glance instead of doom-scrolling a long list. */
+  .nc-variant-rail {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 4px 14px;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nc-variant-rail::-webkit-scrollbar { display: none; }
+  .nc-variant-rail .nc-variant-card {
+    flex: 0 0 280px;
+    scroll-snap-align: start;
+  }
+  /* Legacy class kept for backward compat if anything still
+     references it elsewhere. */
   .nc-variant-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -833,20 +879,39 @@
     gap: 6px;
     flex-wrap: wrap;
   }
-  .nc-variant-card__tone {
-    font-size: 9px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 3px 8px;
+  /* Slice K.2 — emotional-outcome pill (replaces the editor-tone tag).
+     Bigger emoji, larger pill, name spelled out. Each emotional label
+     gets its own accent so the operator can locate "the viral one"
+     visually without reading. */
+  .nc-variant-card__emo {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
     border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 11px;
+    font-weight: 700;
   }
-  .nc-variant-card__tone--funny         { background: rgba(255, 200, 60, 0.16); color: #ffc83c; }
-  .nc-variant-card__tone--aggressive    { background: rgba(255, 60, 60, 0.16);  color: #ff7a7a; }
-  .nc-variant-card__tone--motivational  { background: rgba(0, 217, 122, 0.16);  color: #00d97a; }
-  .nc-variant-card__tone--controversial { background: rgba(180, 70, 255, 0.16); color: #c78bff; }
-  .nc-variant-card__tone--clean         { background: rgba(120, 200, 255, 0.16); color: #78c8ff; }
-  .nc-variant-card__tone--neutral       { background: rgba(255, 255, 255, 0.06); color: var(--nc-text-muted); }
+  .nc-variant-card__emo-emoji { font-size: 14px; line-height: 1; }
+  .nc-variant-card__emo-text { letter-spacing: 0.02em; }
+  .nc-variant-card--high_viral .nc-variant-card__emo {
+    background: rgba(255, 90, 90, 0.16); color: #ffb3b3;
+  }
+  .nc-variant-card--authority .nc-variant-card__emo {
+    background: rgba(120, 200, 255, 0.16); color: #bfe2ff;
+  }
+  .nc-variant-card--meme .nc-variant-card__emo {
+    background: rgba(255, 200, 60, 0.16); color: #ffe28a;
+  }
+  .nc-variant-card--conversion .nc-variant-card__emo {
+    background: rgba(200, 255, 92, 0.18); color: #e1ff9a;
+  }
+  .nc-variant-card--safe_brand .nc-variant-card__emo {
+    background: rgba(255, 255, 255, 0.06); color: var(--nc-text);
+  }
+  /* Legacy tone-tag class kept harmless for any older saved HTML. */
+  .nc-variant-card__tone { display: none; }
 
   .nc-variant-card__lang {
     font-family: var(--nc-font-mono);
@@ -986,6 +1051,57 @@
   .nc-editor-controls .nc-panel { margin-bottom: 14px; }
   .nc-editor-controls .nc-panel__body { padding: 14px 16px; }
   .nc-editor-controls .nc-label { margin-bottom: 10px; }
+
+  /* Slice K.2 — Advanced analysis accordion. Wraps the diagnostic
+     surfaces (AI insights chips, why-this-clip table, outcomes table,
+     framing details) so the hero verdict isn't competing with
+     developer-tool metrics. Single click to expand for power users. */
+  .nc-advanced-analysis {
+    background: var(--nc-bg-panel);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .nc-advanced-analysis__summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--nc-text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .nc-advanced-analysis__summary::-webkit-details-marker { display: none; }
+  .nc-advanced-analysis__summary::after {
+    content: "";
+    width: 8px; height: 8px;
+    border-right: 2px solid var(--nc-text-muted);
+    border-bottom: 2px solid var(--nc-text-muted);
+    transform: rotate(45deg);
+    margin-left: auto;
+    transition: transform 200ms ease;
+  }
+  .nc-advanced-analysis[open] .nc-advanced-analysis__summary::after {
+    transform: rotate(-135deg);
+  }
+  .nc-advanced-analysis__summary small {
+    font-size: 10px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+    color: var(--nc-text-muted);
+    opacity: 0.7;
+  }
+  .nc-advanced-analysis__summary:hover { color: var(--nc-text); }
+  .nc-advanced-analysis[open] .nc-advanced-analysis__summary { color: var(--nc-text); }
+  .nc-advanced-analysis > *:not(summary) {
+    margin: 0 16px 16px 16px;
+  }
 
   /* Slice G.3 — framing intelligence label panel. Mirrors the AI
      Director cyberpunk look so the operator reads it as part of the
@@ -1394,12 +1510,16 @@
       </li>
       {% endfor %}
     </ul>
+    {# Slice K.2 — Apply AI fixes is the HERO CTA on the verdict card.
+       Bigger, brighter, lime-fill primary. Operators feel "make this
+       viral automatically" rather than hunting for a small wand
+       button. #}
     <button type="button"
-            class="nc-btn nc-btn--ai nc-director__apply-btn"
+            class="nc-btn nc-btn--primary nc-director__apply-btn nc-director__apply-btn--hero"
             id="apply-ai-fixes-btn"
             data-clip-id="{{ clip.id }}">
       <i class="ti ti-wand" aria-hidden="true"></i>
-      <span>Apply AI fixes</span>
+      <span>Make this viral automatically</span>
     </button>
     <div id="apply-ai-fixes-feedback" class="nc-director__feedback"></div>
   </div>
@@ -1450,15 +1570,22 @@
 </div>
 {% endif %}
 
-{# ---- AI insights strip (slice F.7-F upgrade — kept as evidence drill-down) ----
-   Each score is a click-to-expand card showing the EVIDENCE that
-   drove the number: heuristic that fired, rescore, motion, face
-   presence, speaking pace, candidate reason. Below the Director
-   panel because the operator reads Director first, then drills
-   into specific evidence chips when they want detail. #}
+{# ---- Slice K.2 — diagnostics collapsed by default ----
+   The technical AI-insight chips (heuristic that fired / motion score
+   / face presence / speaking pace / rescore) used to render inline
+   under the Director panel. Operators reading the editor for the
+   first time saw "magical AI" and "developer scoring console" side by
+   side and felt overwhelmed. Now hidden behind a single expandable
+   so curious power users still get the evidence one click away. #}
 {% if ai_scores is defined %}
+<details class="nc-advanced-analysis">
+  <summary class="nc-advanced-analysis__summary">
+    <i class="ti ti-chart-line" aria-hidden="true"></i>
+    <span>Why AI selected this clip</span>
+    <small>· technical evidence behind the score</small>
+  </summary>
 <div class="nc-ai-strip">
-  <div class="nc-ai-strip__header">
+  <div class="nc-ai-strip__header" style="display:none;">
     <i class="ti ti-sparkles" aria-hidden="true"></i>
     <span>AI insights</span>
     <small>· click any score to see the evidence</small>
@@ -1575,6 +1702,7 @@
     </div>
   </details>
 </div>
+</details>
 {% endif %}
 
 <form id="overlay-form"
@@ -2273,17 +2401,19 @@
       <input type="hidden" name="variant_id" id="variants-selected-id"
              value="{{ variants[0].id if variants else '' }}">
 
-      {# Filter tabs — all / safe / aggressive / funny / clean / spanish / english #}
+      {# Slice K.2 — emotional-outcome filter chips replace
+         editor-terminology tabs. Operators pick by what they want
+         the clip to DO, not by tone classification. #}
       <div class="nc-variant-filters" role="tablist">
         {% for filter_id, filter_label in [
-          ('all',          'All'),
-          ('safe',         'Safe'),
-          ('aggressive',   'Aggressive'),
-          ('funny',        'Funny'),
-          ('clean',        'Clean'),
-          ('controversial','Controversial'),
-          ('es',           'Spanish'),
-          ('en',           'English'),
+          ('all',         'All'),
+          ('high_viral',  '🔥 Viral'),
+          ('authority',   '🧠 Authority'),
+          ('meme',        '😂 Meme'),
+          ('conversion',  '💰 Conversion'),
+          ('safe_brand',  '🎯 Safe brand'),
+          ('es',          'Spanish'),
+          ('en',          'English'),
         ] %}
         <button type="button"
                 class="nc-variant-filter{% if filter_id == 'all' %} is-active{% endif %}"
@@ -2293,16 +2423,37 @@
         {% endfor %}
       </div>
 
-      <div class="nc-variant-grid" id="variants-grid">
+      {# Slice K.2 — variants are now a horizontal swipe rail.
+         Vertical grid created visual exhaustion; horizontal lets the
+         operator skim 5-8 emotional-label cards at a glance, then
+         scroll for more. Emotional labels (🔥/🧠/😂/💰/🎯) replace
+         the editor-terminology tone tags ("aggressive"/"funny"/etc).
+         Outcomes matter more than tools to creators. #}
+      <div class="nc-variant-rail" id="variants-grid">
         {% for ev in enriched_variants %}
         {% set v = ev.variant %}
-        <article class="nc-variant-card{% if loop.first %} is-selected{% endif %}"
+        {% set _emo_emoji = (
+          '🔥' if ev.emotional_label == 'high_viral'
+          else '🧠' if ev.emotional_label == 'authority'
+          else '😂' if ev.emotional_label == 'meme'
+          else '💰' if ev.emotional_label == 'conversion'
+          else '🎯'
+        ) %}
+        {% set _emo_text = (
+          'High Viral Potential' if ev.emotional_label == 'high_viral'
+          else 'Authority Builder' if ev.emotional_label == 'authority'
+          else 'Meme Format' if ev.emotional_label == 'meme'
+          else 'Conversion Style' if ev.emotional_label == 'conversion'
+          else 'Safe Brand Format'
+        ) %}
+        <article class="nc-variant-card nc-variant-card--{{ ev.emotional_label }}{% if loop.first %} is-selected{% endif %}"
                  data-variant-id="{{ v.id }}"
                  data-facets="{{ ev.facets|join(' ') }}"
                  data-title-card="{{ v.title_card_text or '' }}">
           <header class="nc-variant-card__head">
-            <span class="nc-variant-card__tone nc-variant-card__tone--{{ ev.tone }}">
-              {{ ev.tone }}
+            <span class="nc-variant-card__emo" title="{{ _emo_text }}">
+              <span class="nc-variant-card__emo-emoji">{{ _emo_emoji }}</span>
+              <span class="nc-variant-card__emo-text">{{ _emo_text }}</span>
             </span>
             <span class="nc-variant-card__lang">{{ v.language|upper }}</span>
             {% if ev.risk != 'safe' %}
@@ -2365,13 +2516,15 @@
   </div>
 </div>
 
-{# ---- Why this clip + outcomes ------------------------------ #}
-<div class="nc-panel">
-  <div class="nc-panel__header">
-    <i class="ti ti-zoom-question" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Why this clip?</span>
-  </div>
-  <div class="nc-panel__body" style="padding: 0;">
+{# Slice K.2 — "Why this clip?" rendered as an Advanced Analysis
+   accordion. Operators rarely need this; power users one click away. #}
+<details class="nc-advanced-analysis">
+  <summary class="nc-advanced-analysis__summary">
+    <i class="ti ti-zoom-question" aria-hidden="true"></i>
+    <span>Why this clip?</span>
+    <small>· detection breakdown</small>
+  </summary>
+  <div style="padding: 0;">
     <table class="nc-table">
       <tbody>
         <tr>
@@ -2444,9 +2597,16 @@
       </tbody>
     </table>
   </div>
-</div>
+</details>
 
 {% if outcomes %}
+{# Slice K.2 — outcomes table behind an Advanced Analysis accordion. #}
+<details class="nc-advanced-analysis">
+  <summary class="nc-advanced-analysis__summary">
+    <i class="ti ti-rocket" aria-hidden="true"></i>
+    <span>Publishing outcomes</span>
+    <small>· per-platform metrics</small>
+  </summary>
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-chart-bar" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
@@ -2493,6 +2653,7 @@
     </table>
   </div>
 </div>
+</details>
 {% endif %}
 
 {# ---- Live overlay binding -------------------------------------- #}

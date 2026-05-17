@@ -205,14 +205,36 @@ def compute_publishability(
         captions_enabled=captions_enabled,
     )
 
+    # Slice K.2 — cap the lists shown by default. The full set still
+    # lands in the Advanced Analysis accordion the dashboard renders
+    # below; the hero verdict card only shows the top 3 positives +
+    # top 2 fixes. Long lists drown the emotional decision moment.
+    reasons_short = [_shorten(r) for r in reasons[:3]]
+    warnings_short = [_shorten(w) for w in warnings[:2]]
+    blocking_short = [_shorten(b) for b in blocking[:1]]
+
     return PublishabilityVerdict(
         score=score,
         status=status,
-        reasons=reasons,
-        warnings=warnings,
+        reasons=reasons_short,
+        warnings=warnings_short,
         recommended_action=recommended_action,
-        blocking=blocking,
+        blocking=blocking_short,
     )
+
+
+def _shorten(msg: str, *, max_chars: int = 60) -> str:
+    """Trim a verdict bullet to chip-length for the hero card. Full
+    text remains available via the bullet's title= attribute (the
+    dashboard renders the long form as a hover tooltip)."""
+    msg = msg.strip()
+    if len(msg) <= max_chars:
+        return msg
+    # Cut on a word boundary inside max_chars when possible.
+    cut = msg.rfind(" ", 0, max_chars - 1)
+    if cut < max_chars // 2:
+        cut = max_chars - 1
+    return msg[:cut].rstrip(",.;:") + "…"
 
 
 def _overlay_rects_from_config(overlay: dict[str, object]) -> list[OverlayRect]:

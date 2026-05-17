@@ -1,6 +1,8 @@
 """Variant generator — LLM-driven caption variants per (clip, persona)."""
 
 from .enrichment import (
+    EMOTIONAL_LABELS,
+    EmotionalLabel,
     EnrichedVariant,
     PlatformFit,
     RiskLabel,
@@ -20,6 +22,8 @@ from .personas import Persona, get_persona, load_personas
 from .service import find_clip, generate_variants, load_variants
 
 __all__ = [
+    "EMOTIONAL_LABELS",
+    "EmotionalLabel",
     "EnrichedVariant",
     "Hook",
     "HookBatch",

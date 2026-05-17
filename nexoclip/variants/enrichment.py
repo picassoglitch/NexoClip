@@ -31,6 +31,17 @@ Tone = Literal["aggressive", "funny", "clean", "motivational", "controversial", 
 RiskLabel = Literal["safe", "spicy", "generic"]
 PlatformFit = Literal["tiktok", "reels", "shorts", "kick"]
 
+# Slice K.2 — emotional variant labels. Operators don't think in
+# "aggressive vs funny vs clean" — those are editor terms. Map each
+# detected tone to an outcome the creator emotionally understands.
+EmotionalLabel = Literal[
+    "high_viral",       # 🔥 High Viral Potential
+    "authority",        # 🧠 Authority Builder
+    "meme",             # 😂 Meme Format
+    "conversion",       # 💰 Conversion Style
+    "safe_brand",       # 🎯 Safe Brand Format
+]
+
 
 @dataclass(frozen=True)
 class EnrichedVariant:
@@ -42,6 +53,8 @@ class EnrichedVariant:
     retention_confidence: int  # 0-100
     risk: RiskLabel
     risk_reason: str
+    # Slice K.2 — emotional outcome label (replaces tone in the UI).
+    emotional_label: EmotionalLabel
     # Filter facets the card-grid filter tabs read.
     facets: list[str]
 
@@ -98,6 +111,55 @@ _SPICY_TOKENS = frozenset({
     "mierda", "puta", "joder", "cojones",
 })
 
+# Slice K.2 — conversion-CTA detection. Variants that ask viewers to
+# DO something (visit / follow / link in bio / swipe up / etc) get
+# the 💰 Conversion Style emotional label.
+_CTA_PATTERNS = (
+    re.compile(r"link\s+in\s+bio", re.IGNORECASE),
+    re.compile(r"swipe\s+up", re.IGNORECASE),
+    re.compile(r"\bvisit\b", re.IGNORECASE),
+    re.compile(r"\bfollow\b", re.IGNORECASE),
+    re.compile(r"\bjoin\s+(my|the|us)", re.IGNORECASE),
+    re.compile(r"\bsubscribe\b", re.IGNORECASE),
+    re.compile(r"\bcheck\s+out\b", re.IGNORECASE),
+    re.compile(r"sign\s+up", re.IGNORECASE),
+    re.compile(r"comprar|compra|comprá", re.IGNORECASE),  # ES: buy
+    re.compile(r"síguenos|síguete|sígueme", re.IGNORECASE),
+)
+
+
+# Emotional-label display metadata. Order matters: the renderer
+# picks the FIRST matching label from a small ranking heuristic.
+EMOTIONAL_LABELS: dict[EmotionalLabel, tuple[str, str]] = {
+    "high_viral":  ("🔥", "High Viral Potential"),
+    "authority":   ("🧠", "Authority Builder"),
+    "meme":        ("😂", "Meme Format"),
+    "conversion":  ("💰", "Conversion Style"),
+    "safe_brand":  ("🎯", "Safe Brand Format"),
+}
+
+
+def _emotional_label(text: str, tone: Tone) -> EmotionalLabel:
+    """Map (caption text, detected tone) → outcome-first label the
+    creator can decide from at a glance.
+
+    Priority:
+      1. CTA keywords win — conversion is the most actionable label
+      2. Aggressive / controversial → high_viral (high-energy, polarizing)
+      3. Motivational → authority
+      4. Funny → meme
+      5. Clean / neutral → safe_brand
+    """
+    if any(p.search(text) for p in _CTA_PATTERNS):
+        return "conversion"
+    if tone in ("aggressive", "controversial"):
+        return "high_viral"
+    if tone == "motivational":
+        return "authority"
+    if tone == "funny":
+        return "meme"
+    return "safe_brand"
+
 
 # ---- enrichment ----------------------------------------------
 
@@ -129,9 +191,12 @@ def enrich_variant(variant: Variant) -> EnrichedVariant:
     )
     risk, risk_reason = _classify_risk(text, blob, tone)
 
+    emotional_label = _emotional_label(text, tone)
+
     facets: list[str] = []
     facets.append(variant.language.lower())  # 'es' / 'en' / 'pt' / …
     facets.append(tone)
+    facets.append(emotional_label)  # Slice K.2 — facet for filter chips
     if risk == "safe":
         facets.append("safe")
     if risk == "spicy":
@@ -146,6 +211,7 @@ def enrich_variant(variant: Variant) -> EnrichedVariant:
         retention_confidence=retention,
         risk=risk,
         risk_reason=risk_reason,
+        emotional_label=emotional_label,
         facets=facets,
     )
 
@@ -292,6 +358,8 @@ def _classify_risk(text: str, blob: str, tone: Tone) -> tuple[RiskLabel, str]:
 
 
 __all__ = [
+    "EMOTIONAL_LABELS",
+    "EmotionalLabel",
     "EnrichedVariant",
     "PlatformFit",
     "RiskLabel",

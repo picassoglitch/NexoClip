@@ -83,8 +83,35 @@
                    "0.0s" doesn't make the user think nothing happened.
                  - everything else → seconds / minutes as before. #}
             {% if s.skipped %}
-              <span class="nc-steps__time" title="{{ s.note }}">
-                (skipped{% if s.note %} — {{ s.note }}{% endif %})
+              {#- Slice O.34 — map technical skip_reason strings to a
+                  short, friendly note for the user. The raw technical
+                  reason still goes in the tooltip (title=) for support.
+                  Mapping covers the cases we've actually seen in
+                  prod; anything else falls through to the raw text
+                  truncated. -#}
+              {%- set _raw = (s.note or "") -%}
+              {%- set _raw_low = _raw.lower() -%}
+              {%- if "torchaudio" in _raw_low or "audiometadata" in _raw_low or "worker exited" in _raw_low -%}
+                {%- set _friendly = "speaker labels off — pyannote not available on this server" -%}
+              {%- elif "disabled in config" in _raw_low -%}
+                {%- set _friendly = "speaker labels off — feature disabled" -%}
+              {%- elif "hf_token" in _raw_low -%}
+                {%- set _friendly = "speaker labels off — HF_TOKEN not configured" -%}
+              {%- elif "audio file missing" in _raw_low -%}
+                {%- set _friendly = "speaker labels off — audio extract missing" -%}
+              {%- elif "model access" in _raw_low or "gated" in _raw_low -%}
+                {%- set _friendly = "speaker labels off — pyannote license not accepted" -%}
+              {%- elif "timeout" in _raw_low or "exceeded" in _raw_low -%}
+                {%- set _friendly = "step took too long, moved on" -%}
+              {%- elif "visual detector disabled" in _raw_low -%}
+                {%- set _friendly = "visual signals off — feature disabled" -%}
+              {%- elif "not decodable" in _raw_low -%}
+                {%- set _friendly = "video could not be decoded by the visual detector" -%}
+              {%- else -%}
+                {%- set _friendly = _raw[:80] -%}
+              {%- endif -%}
+              <span class="nc-steps__time" title="{{ _raw }}">
+                (skipped{% if _friendly %} — {{ _friendly }}{% endif %})
               </span>
             {% elif s.duration_s is not none %}
               <span class="nc-steps__time">

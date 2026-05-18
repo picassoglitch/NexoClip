@@ -160,34 +160,49 @@ async def record_clip_to_mp4(
                 )
                 await page.goto(record_url, wait_until="domcontentloaded")
 
-                # Wait for the `playing` flag the render page exposes
-                # on window.__nexoclipRender. We poll because Playwright
-                # doesn't have a built-in "wait for media event" API.
-                # Auto-play kicks off because the <video> is muted +
-                # the autoplay-policy flag we set above.
+                # Slice O.34 — wait for `allReady` (video.playing AND
+                # captions fetched + animator running), not just
+                # `playing`. Previously we started the recording
+                # timer the moment the video began playing, but the
+                # async caption fetch + animator setup could still be
+                # pending — so the first ~300 ms of recording captured
+                # an empty caption row. User-visible symptom: download
+                # had hook + banner but no captions at all.
                 try:
                     await page.wait_for_function(
-                        "window.__nexoclipRender && window.__nexoclipRender.playing === true",
+                        "window.__nexoclipRender && window.__nexoclipRender.allReady === true",
                         timeout=READY_TIMEOUT_S * 1000,
                     )
                 except Exception as e:  # noqa: BLE001
-                    # Some browsers won't fire 'playing' until play() is
-                    # explicitly called. Try once, then re-wait.
+                    # Belt-and-braces: kick playback explicitly, then
+                    # re-wait. Some Chromium headless builds need the
+                    # explicit play() even with autoplay attr + policy
+                    # flag set.
                     try:
                         await page.evaluate(
                             "() => { const v = document.getElementById('preview-video');"
                             " if (v) { v.muted = true; return v.play(); } }"
                         )
                         await page.wait_for_function(
-                            "window.__nexoclipRender && window.__nexoclipRender.playing === true",
+                            "window.__nexoclipRender && window.__nexoclipRender.allReady === true",
                             timeout=READY_TIMEOUT_S * 1000,
                         )
                     except Exception as inner:  # noqa: BLE001
-                        raise PreviewRecordingError(
-                            f"<video> never fired 'playing' within "
-                            f"{READY_TIMEOUT_S:.1f}s. "
-                            f"Last error: {inner}"
-                        ) from e
+                        # Final fallback: at least make sure the video
+                        # is playing even if captions never resolved.
+                        # Better an export with no captions than a
+                        # frozen export with nothing at all.
+                        try:
+                            await page.wait_for_function(
+                                "window.__nexoclipRender && window.__nexoclipRender.playing === true",
+                                timeout=2000,
+                            )
+                        except Exception:
+                            raise PreviewRecordingError(
+                                f"<video> never reached `allReady` within "
+                                f"{READY_TIMEOUT_S:.1f}s. "
+                                f"Last error: {inner}"
+                            ) from e
 
                 # Cronómetro starts NOW — first frame is on screen.
                 _log.info(

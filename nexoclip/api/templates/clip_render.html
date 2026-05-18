@@ -395,31 +395,101 @@
     // Slice O.19 — minimal client wiring for the render route.
     // The recorder (slice O.20) reads window.__nexoclipRender state
     // to coordinate playback timing with frame capture.
+    //
+    // Slice O.34 — added an `allReady` gate. The recorder now waits
+    // for video.playing AND captions to be loaded + animator started.
+    // Previously the recorder only waited for `playing` and started
+    // timing immediately; captions fetched async after that → the
+    // first few hundred ms of recording captured an empty caption
+    // row → user saw "captions never appear in download".
     window.__nexoclipRender = {
       ready: false,            // metadata loaded
       playing: false,          // 'playing' event fired
+      captionsReady: false,    // captions fetched + word spans built
+      allReady: false,         // playing && captionsReady
       duration_s: {{ clip.duration_s | float }},
       clip_id: "{{ clip.id }}",
     };
+
+    function _checkAllReady() {
+      if (window.__nexoclipRender.playing && window.__nexoclipRender.captionsReady) {
+        window.__nexoclipRender.allReady = true;
+      }
+    }
 
     {% if _captions.get('enabled', True) %}
     // Caption lines are fetched from /dashboard/clips/<id>/captions.json
     // (same endpoint the editor uses) so the karaoke render is
     // byte-identical between editor preview and headless render.
+    //
+    // Slice O.34 — actually render the captions. Previous version of
+    // this template fetched the JSON but never built the word spans;
+    // captions were forever invisible in the headless recording. We
+    // now port a minimal version of clip_detail.html's syncCaptionFrame
+    // logic — same data shape, same active/past/upcoming classes —
+    // so the karaoke pop-color animation actually paints onto frames.
+    var _captionLines = null;
+    var _captionEl = document.getElementById("pv-caption");
     fetch("/dashboard/clips/{{ clip.id }}/captions.json",
           { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
+        if (data && Array.isArray(data.lines)) {
+          _captionLines = data.lines;
+        }
         window.__nexoclipRender.captions = data;
-        // The editor's caption animator runs off requestAnimationFrame.
-        // We replicate the minimal version here: build word spans once,
-        // then per-tick mark active/past/upcoming based on video.currentTime.
-        var captionEl = document.getElementById("pv-caption");
-        if (!captionEl || !data || !data.lines) return;
-        // Hidden initially — JS toggles visibility based on time.
-        captionEl.style.visibility = "hidden";
+        // Whether or not lines exist, mark captions "ready" so the
+        // recorder isn't blocked forever on a clip with no transcript.
+        window.__nexoclipRender.captionsReady = true;
+        _checkAllReady();
       })
-      .catch(function () {});
+      .catch(function () {
+        // Fetch failed (404, network) — still let the recorder proceed.
+        // Better an export with no captions than a frozen headless tab.
+        window.__nexoclipRender.captionsReady = true;
+        _checkAllReady();
+      });
+
+    // Per-frame caption animator. Runs in rAF; finds the active line
+    // by clip-relative time, builds word spans with active/past/
+    // upcoming classes. ~10 lines and identical to the editor's
+    // minimal path so headless render matches the editor 1:1.
+    function _renderCaptions() {
+      var v = document.getElementById("preview-video");
+      if (v && _captionLines && _captionEl) {
+        var t = v.currentTime;
+        var activeLine = null;
+        for (var i = 0; i < _captionLines.length; i++) {
+          var ln = _captionLines[i];
+          if (t >= ln.ts && t < ln.end_ts) { activeLine = ln; break; }
+        }
+        if (activeLine && Array.isArray(activeLine.words)) {
+          var html = "";
+          for (var j = 0; j < activeLine.words.length; j++) {
+            var w = activeLine.words[j];
+            var cls = "nc-pv-caption__word";
+            if (t >= w.ts && t < w.end_ts) cls += " is-active";
+            else if (t >= w.end_ts) cls += " is-past";
+            else cls += " is-upcoming";
+            html += '<span class="' + cls + '"'
+                  + (w.emphasis ? ' data-emphasis="' + w.emphasis + '"' : "")
+                  + '>' + (w.text || "") + '</span>';
+          }
+          _captionEl.innerHTML = html;
+          _captionEl.style.visibility = "visible";
+        } else {
+          _captionEl.innerHTML = "";
+          _captionEl.style.visibility = "hidden";
+        }
+      }
+      requestAnimationFrame(_renderCaptions);
+    }
+    requestAnimationFrame(_renderCaptions);
+    {% else %}
+    // No captions enabled on this clip — mark the gate true so the
+    // recorder doesn't wait for nothing.
+    window.__nexoclipRender.captionsReady = true;
+    _checkAllReady();
     {% endif %}
 
     var video = document.getElementById("preview-video");
@@ -431,7 +501,10 @@
       // recorder's wait_for_function flips quickly. 'playing' is the
       // canonical one but some Chromium headless builds fire 'play'
       // and 'timeupdate' before 'playing'; any of them is sufficient.
-      function _markPlaying() { window.__nexoclipRender.playing = true; }
+      function _markPlaying() {
+        window.__nexoclipRender.playing = true;
+        _checkAllReady();
+      }
       video.addEventListener("playing", _markPlaying);
       video.addEventListener("play", _markPlaying);
       video.addEventListener("timeupdate", function () {

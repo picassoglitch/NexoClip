@@ -2186,20 +2186,25 @@ async def clip_overlay_finalize(
     if target != clip.status:
         await repo.update_status(clip_id, status=target)
 
-    # ---- Renderer-side overlay burn-in (slice F.7-E) ----
-    # Re-render the clip with title / banner / captions burned into
-    # the pixels. Output goes to `<clip_dir>/clip_final.mp4` next to
-    # the original. Publishers prefer the final when present and
-    # fall back to the original on burn failure.
-    burn_outcome = await _burn_overlays_for_clip(
-        db=db, clip_id=clip_id, overlay_config=cfg
-    )
+    # Slice O.37 — Approve no longer blocks on ffmpeg burn. O.17 took
+    # the burn out of the save path; finalize was still doing a
+    # synchronous re-encode, which is what made "Continue & close"
+    # spin for 30-90s. The download path lazy-regenerates a fresh
+    # MP4 (Playwright recorder, fallback ffmpeg burn) from the saved
+    # overlay config, so we just nuke any stale cache and bounce.
+    try:
+        clip_dir = Path(clip.path).parent
+        for stale in (clip_dir / "clip_render.mp4", clip_dir / "clip_final.mp4"):
+            if stale.exists():
+                stale.unlink()
+    except Exception:  # noqa: BLE001 — invalidation is best-effort
+        pass
     await EventsRepo(db).emit(
         type="clip.finalized",
         payload={
             "clip_id": clip_id,
             "to_status": target,
-            "burn_outcome": burn_outcome,
+            "burn_outcome": "deferred_to_download",
         },
     )
 

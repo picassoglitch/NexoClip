@@ -187,20 +187,25 @@
              been finalized yet so there's no clip_final.mp4 with the
              burned overlays). #}
           {% if c.status in ('approved', 'published') %}
-          {#- Slice O.35 — visual feedback while the server renders the
-              MP4. The Playwright recorder takes ~clip_duration seconds
-              in real time; without UX feedback the operator hammered
-              the button thinking it was frozen. The `js-download-btn`
-              class hooks into the handler at the bottom of the page
-              which swaps label → "Preparing…", spins the icon, and
-              disables pointer-events until the browser actually starts
-              the download (or 90s auto-restore as a safety net). -#}
+          {#- Slice O.35 → O.40 — determinate progress bar while the
+              server renders the MP4. The Playwright recorder takes
+              ~clip_duration seconds in real time; without UX feedback
+              the operator hammered the button thinking it was frozen.
+
+              O.40 upgrade: the spinner becomes an actual time-based
+              progress bar that fills over (clip_duration_s + 5s). The
+              server doesn't stream progress, so this is a CSS-only
+              estimate — close enough that the operator sees movement.
+              `data-duration-s` lets the handler size each clip's bar
+              independently. -#}
           <a href="/dashboard/clips/{{ c.id }}/download"
              class="nc-btn js-download-btn"
              download
              title="Save the final MP4 to your machine"
              data-label-busy="Preparing…"
-             style="margin-top: 6px;">
+             data-duration-s="{{ '%.1f'|format(c.duration_s) }}"
+             style="margin-top: 6px; position: relative; overflow: hidden;">
+            <span class="js-download-progress" aria-hidden="true"></span>
             <i class="ti ti-download js-download-icon" aria-hidden="true"></i>
             <span class="js-download-label">Download</span>
           </a>
@@ -281,56 +286,96 @@
 </div>
 {% endif %}
 
-{#- Slice O.35 — Download button busy-state. -#}
+{#- Slice O.40 — Download button progress bar (replaces O.35 spinner).
+    The server can't stream progress mid-render, so this is a CSS-only
+    time-based estimate: the fill animates from 0% → 95% over
+    (clip_duration_s + 5s), then parks at 95% until the browser actually
+    triggers the file dialog or the 90s safety net fires. We never go
+    to 100% on the estimate alone — the operator sees the bar pause and
+    knows the server is "almost there" without us lying about success. -#}
 <style>
-  /* Subtle spin on the download icon while the server renders the MP4.
-     Same cadence as the platform-status pulse so it feels native. */
-  @keyframes nc-dl-spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
+  .js-download-btn {
+    /* The progress fill is positioned absolutely; the button needs to
+       be a positioning context AND clip the overflow. The inline style
+       on each anchor sets position:relative + overflow:hidden — kept
+       there so this CSS block can stay scoped to behavior only. */
+  }
+  .js-download-progress {
+    position: absolute;
+    inset: 0 auto 0 0;          /* top right(auto) bottom left(0) */
+    width: 0%;
+    background: linear-gradient(
+      90deg,
+      rgba(200, 255, 92, 0.22) 0%,
+      rgba(200, 255, 92, 0.40) 100%
+    );
+    transition: width linear;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .js-download-icon,
+  .js-download-label {
+    position: relative;
+    z-index: 1;                  /* sit on top of the fill */
   }
   .js-download-btn.is-preparing {
-    opacity: 0.7;
     pointer-events: none;
     cursor: progress;
-  }
-  .js-download-btn.is-preparing .js-download-icon {
-    animation: nc-dl-spin 1.2s linear infinite;
-    display: inline-block;
+    /* Don't dim the whole button — the fill itself signals state. */
   }
 </style>
 <script>
-  // Slice O.35 — give the user feedback while the server is rendering.
-  // The Playwright recorder takes clip_duration_s real-time to record
-  // + ~2s ffmpeg mux. Without UI feedback operators spam-clicked the
-  // Download button thinking it was frozen.
+  // Slice O.40 — determinate progress bar. We don't get real progress
+  // events from the server, so the bar runs on a clip-duration-based
+  // estimate (clip_duration_s + 5s mux overhead). The bar caps at 95%
+  // until either the browser actually starts the download (in which
+  // case we leave it parked — the operator is gone) or the 90s safety
+  // net fires (browser is presumably broken; restore the button).
   //
-  // Pattern:
-  //   1. On click, swap label to "Preparing…", spin the icon, and
-  //      disable pointer-events so the button can't be re-clicked.
-  //   2. The browser still navigates the <a download> normally — the
-  //      file dialog appears once the server responds.
-  //   3. After 90s the button auto-restores. By then either the file
-  //      arrived (success — operator stopped looking at the button)
-  //      or the server failed (operator can retry).
+  // Why determinate and not a spinner: the operator complained the
+  // spinner gave no sense of "how much longer", which made the page
+  // feel hung. A bar that visibly moves over ~clip_duration seconds
+  // matches the actual wait time and feels honest.
   (function () {
     document.querySelectorAll(".js-download-btn").forEach(function (btn) {
       var label = btn.querySelector(".js-download-label");
+      var fill = btn.querySelector(".js-download-progress");
       var origText = label ? label.textContent : null;
       var busyText = btn.getAttribute("data-label-busy") || "Preparing…";
+      var dur = parseFloat(btn.getAttribute("data-duration-s") || "0");
+      if (!isFinite(dur) || dur <= 0) dur = 20;  // sane fallback
+      // +5s covers Playwright launch + ffmpeg mux on a warm box. The
+      // estimate is generous on purpose — operator would rather see
+      // the bar fill slightly slower than have it sit at 95% for
+      // half the wait.
+      var totalMs = (dur + 5) * 1000;
       btn.addEventListener("click", function () {
-        // Defer one tick so the click navigates first; mutating the
-        // anchor before the browser handles the click can race.
+        if (btn.classList.contains("is-preparing")) return;
         setTimeout(function () {
           btn.classList.add("is-preparing");
           if (label) label.textContent = busyText;
+          if (fill) {
+            // Snap to 0% first, force a layout flush, then start the
+            // transition to 95%. Without the flush the browser
+            // collapses both writes into one and the bar jumps.
+            fill.style.transition = "none";
+            fill.style.width = "0%";
+            // eslint-disable-next-line no-unused-expressions
+            fill.offsetWidth;
+            fill.style.transition = "width " + totalMs + "ms linear";
+            fill.style.width = "95%";
+          }
         }, 0);
-        // Safety auto-restore. If the user is still on the page after
-        // 90s and the download never arrived, give the button back so
-        // they can retry instead of being permanently stuck.
+        // Safety auto-restore at 90s. Either the file already arrived
+        // (operator stopped looking — harmless) or the server failed
+        // (operator can retry).
         setTimeout(function () {
           btn.classList.remove("is-preparing");
           if (label && origText !== null) label.textContent = origText;
+          if (fill) {
+            fill.style.transition = "none";
+            fill.style.width = "0%";
+          }
         }, 90000);
       });
     });

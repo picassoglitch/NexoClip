@@ -2620,23 +2620,50 @@ async def clip_download(
         )
         settings = get_settings()
         cookie_val = request.cookies.get("nexoclip_token", "")
+
+        # Slice O.31 — derive the recorder's base URL from the inbound
+        # request's Host header by default. The previous version relied
+        # on `settings.public_url` which defaults to `http://localhost:8000`
+        # and breaks the moment we deploy anywhere; on Railway it caused
+        # Playwright to dial localhost (nothing listening) → timeout →
+        # PreviewRecordingError → fallback to legacy ffmpeg burn (the
+        # plain-captions output the operator complained about).
+        # Using the request's own host is correct by construction — the
+        # browser already routed to this server, so it can route to
+        # itself with the same URL. `NEXOCLIP_PUBLIC_URL` still wins
+        # when explicitly set so reverse-proxy setups can pin it.
+        explicit_base = (settings.public_url or "").strip()
+        if explicit_base and explicit_base != "http://localhost:8000":
+            base_url = explicit_base
+        else:
+            scheme = (
+                request.headers.get("x-forwarded-proto")
+                or request.url.scheme
+                or "https"
+            )
+            host = request.headers.get("host") or request.url.netloc
+            base_url = f"{scheme}://{host}"
+
         try:
             await record_clip_to_mp4(
                 clip_id=clip_id,
                 duration_s=float(clip.duration_s),
                 audio_source_path=original,
                 output_path=rendered,
-                base_url=settings.public_url,
+                base_url=base_url,
                 auth_cookie_value=cookie_val or None,
             )
         except PreviewRecordingError as e:
-            # Surface the recorder's error to the operator but keep
-            # the legacy burn as a graceful fallback so they still get
-            # SOMETHING to download.
+            # Slice O.31 — surface the recorder's error LOUDLY now so we
+            # can finally see why it falls back. Previously this was a
+            # warning log + silent legacy burn; the operator saw the
+            # legacy MP4 + no idea Playwright had failed.
             import structlog
-            structlog.get_logger("nexoclip.api.dashboard").warning(
+            structlog.get_logger("nexoclip.api.dashboard").error(
                 "clip_download.recorder_failed",
-                clip_id=clip_id, error=str(e),
+                clip_id=clip_id,
+                base_url=base_url,
+                error=str(e),
             )
             legacy_final = original.parent / "clip_final.mp4"
             if not legacy_final.exists():

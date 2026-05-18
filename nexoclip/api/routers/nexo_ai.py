@@ -445,11 +445,36 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
         # no way to tell if it was a DB issue, a schema mismatch, or
         # something else.
         try:
-            from nexoclip.db import TenantsRepo
+            from nexoclip.db import PersonasRepo, TenantsRepo
+            from nexoclip.tenancy import bound_tenant
             await TenantsRepo(db).create(
                 tenant_id=payload.tenant_id,
                 name=payload.email or payload.tenant_id,
             )
+            # Slice O.30 — seed `default` persona to mirror the
+            # /api/admin/tenants provisioning path. Without this a
+            # first-time SSO leaves /dashboard/personas empty and the
+            # first upload crashes on `unknown persona 'default'`.
+            # Non-fatal: seed failure doesn't block login.
+            try:
+                with bound_tenant(payload.tenant_id):
+                    await PersonasRepo(db).create(
+                        persona_id="default",
+                        name="Default",
+                        primary_language="en",
+                        target_languages=["en", "es"],
+                        voice_prompt=(
+                            "You are writing short-form social media captions "
+                            "for a content creator. Write tight, punchy captions "
+                            "that earn the swipe. Lead with a hook — no soft "
+                            "openers. Avoid corporate language and emoji "
+                            "stuffing. Match the energy of the source clip. "
+                            "Output the caption and nothing else."
+                        ),
+                        routing_tags=["general"],
+                    )
+            except Exception:  # noqa: BLE001 — non-fatal seed
+                pass
             session_raw_token = await mint_session_token_for_tenant(
                 db, tenant_id=payload.tenant_id
             )

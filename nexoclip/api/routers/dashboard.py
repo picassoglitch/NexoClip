@@ -37,6 +37,7 @@ from nexoclip.db import (
     PersonasRepo,
     PublishJobsRepo,
     StreamsRepo,
+    TenantsRepo,
     VariantsRepo,
 )
 from nexoclip.db.models import ConnectedAccount, CustomTriggerPhrases
@@ -82,20 +83,160 @@ async def refresh_balance(
 
     Triggered by clicking the balance chip in the nav. Useful when:
       - The tenant just signed in and hasn't run any LLM calls yet (cache is
-        empty so the chip shows '— tokens').
+        empty so the chip shows '— tokens'.
       - The operator wants to confirm the cross-engine balance reflects a
         recent top-up purchase that happened on another device.
 
-    Best-effort: any failure leaves the cache as it was. The page that
-    redirects back here either shows the new number or the old placeholder.
+    Behavior:
+      - Success → 303 back to the referer (chip re-renders with fresh data).
+      - Failure (env vars unset, tenant has no external_user_id, network
+        error, etc.) → 303 to /dashboard/_diag/nexo_ai so the user sees
+        exactly what's broken instead of staring at the same '— tokens'
+        chip wondering if the click did anything.
     """
     from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
 
-    await fetch_balance_now(db, tenant_id=tenant_id)
+    ok = await fetch_balance_now(db, tenant_id=tenant_id)
+    if not ok:
+        # Tell the user what's actually wrong instead of silently bouncing.
+        return RedirectResponse(url="/dashboard/_diag/nexo_ai", status_code=303)
     # Bounce back to wherever the user clicked from. Falls back to streams
     # list if no Referer (direct hit, curl, etc).
     referer = request.headers.get("referer") or "/dashboard/streams"
     return RedirectResponse(url=referer, status_code=303)
+
+
+@router.get("/_diag/nexo_ai", response_class=HTMLResponse, include_in_schema=False)
+async def diag_nexo_ai(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Diagnostic page — surfaces every state bit that the balance pipeline
+    depends on, rendered as a readable dashboard panel so we don't need to
+    grep Railway logs to debug a missing token chip.
+
+    The page reports env-var presence (NOT values), tenant.external_user_id
+    presence, the cached balance, and the result of a live ping to Nexo AI.
+    The 'interpret' line says in plain language which step is broken + what
+    to do about it.
+
+    Was JSON before — moved to HTML so the operator can browse to the URL
+    directly and read the answer instead of saving response.json."""
+    from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    tenant_before = await TenantsRepo(db).get(tenant_id)
+
+    # Live ping uses the same code path as the click-to-refresh button.
+    # Logs include the rejection reason on Railway; we don't show it here
+    # because it can contain secrets (the Bearer header for example).
+    live_ok = await fetch_balance_now(db, tenant_id=tenant_id)
+    tenant_after = await TenantsRepo(db).get(tenant_id)
+
+    base_url = settings.nexo_ai_base_url or None
+    has_admin_token = bool(settings.nexo_ai_admin_token)
+    has_sso_secret = bool(settings.nexo_ai_sso_secret)
+    external_user_id = tenant_after.external_user_id if tenant_after else None
+    cached_at = tenant_after.cached_balance_at if tenant_after else None
+    cached_remaining = (
+        tenant_after.cached_balance_remaining if tenant_after else None
+    )
+    cached_unlimited = (
+        tenant_after.cached_balance_unlimited if tenant_after else None
+    )
+
+    interpret = _interpret_diag(
+        base_url=base_url,
+        has_admin_token=has_admin_token,
+        external_user_id=external_user_id,
+        live_ok=live_ok,
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "_diag_nexo_ai.html",
+        {
+            "tenant_id": tenant_id,
+            "base_url": base_url,
+            "has_admin_token": has_admin_token,
+            "has_sso_secret": has_sso_secret,
+            "external_user_id": external_user_id,
+            "tenant_tier": tenant_after.tier if tenant_after else None,
+            "tenant_status": tenant_after.status if tenant_after else None,
+            "cached_remaining": cached_remaining,
+            "cached_unlimited": cached_unlimited,
+            "cached_at": cached_at,
+            "live_ok": live_ok,
+            "interpret": interpret,
+        },
+    )
+
+
+def _interpret_diag(
+    *,
+    base_url: str | None,
+    has_admin_token: bool,
+    external_user_id: str | None,
+    live_ok: bool,
+) -> dict[str, str]:
+    """Translate the raw diag bits into one human-readable status + next step.
+    Returns a {severity, headline, action} dict so the template can color the
+    panel appropriately."""
+    if not base_url:
+        return {
+            "severity": "danger",
+            "headline": "NEXO_AI_BASE_URL no está configurada en Railway",
+            "action": (
+                "Abre el dashboard de Railway → este servicio → Variables, "
+                "agrega NEXO_AI_BASE_URL=https://nexo-ai.world, y redeploya. "
+                "Sin esto NexoClip no sabe a dónde reportar usage."
+            ),
+        }
+    if not has_admin_token:
+        return {
+            "severity": "danger",
+            "headline": "NEXO_AI_ADMIN_TOKEN no está configurada en Railway",
+            "action": (
+                "Debe coincidir EXACTAMENTE con NEXOCLIP_ADMIN_TOKEN del lado "
+                "Nexo AI (Vercel env vars). Si no son iguales, Nexo AI "
+                "responde 401 a cada reporte de usage."
+            ),
+        }
+    if not external_user_id:
+        return {
+            "severity": "warn",
+            "headline": "Este tenant no está vinculado a un usuario de Nexo AI",
+            "action": (
+                "external_user_id está vacío. Probablemente el tenant se creó "
+                "via CLI antes de la integración. Re-provisiona desde Nexo AI "
+                "(POST /api/admin/tenants) o actualiza la columna en SQLite "
+                "manualmente para apuntarlo al user_id del usuario en Supabase."
+            ),
+        }
+    if not live_ok:
+        return {
+            "severity": "warn",
+            "headline": "Las env vars están bien pero el ping a Nexo AI falló",
+            "action": (
+                "Revisa los logs de Railway buscando "
+                "'nexoclip.nexo_ai.balance' — ahí está la razón exacta "
+                "(timeout, 403, 404 user_id desconocido, etc.). "
+                "Causas comunes: tokens no coinciden entre ambos sides, "
+                "external_user_id no existe en la tabla profiles de Supabase, "
+                "o nexo-ai.world está caído."
+            ),
+        }
+    return {
+        "severity": "ok",
+        "headline": "Todo en verde — el chip debería estar reportando balance",
+        "action": (
+            "Si el chip aún muestra '— tokens', haz click una vez más para "
+            "forzar el refresh manual. Si vuelve aquí, hay un edge case que "
+            "no estoy detectando — revisa Railway logs."
+        ),
+    }
 
 
 def _split_csv(value: str) -> list[str]:

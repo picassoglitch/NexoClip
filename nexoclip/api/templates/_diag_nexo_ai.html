@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Diag · Nexo AI · NexoClip{% endblock %}
+{% block content %}
+
+{# Diagnostic page for the Nexo AI integration. Rendered when the user clicks
+   the empty balance chip and the live ping fails, OR when they hit
+   /dashboard/_diag/nexo_ai directly. Every state bit that the balance
+   pipeline depends on shows here so we can self-diagnose without
+   grepping Railway logs. #}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Diagnóstico · integración Nexo AI</h2>
+    <small>Cada eslabón de la cadena de reporting de tokens, en orden. El primero en rojo es el que hay que arreglar.</small>
+  </div>
+</div>
+
+{# ── Verdict panel: the one-line diagnosis + recommended action ──────── #}
+{% set _color_var = 'var(--nc-success)' if interpret.severity == 'ok' else ('var(--nc-warn)' if interpret.severity == 'warn' else 'var(--nc-danger)') %}
+{% set _bg_rgba = 'rgba(46,204,113,0.06)' if interpret.severity == 'ok' else ('rgba(245,177,61,0.06)' if interpret.severity == 'warn' else 'rgba(229,72,77,0.06)') %}
+<div class="nc-panel" style="border-color: {{ _color_var }}; background: {{ _bg_rgba }}; margin-bottom: 18px;">
+  <div class="nc-panel__header" style="border-color: {{ _color_var }};">
+    {% if interpret.severity == 'ok' %}
+      <i class="ti ti-circle-check" aria-hidden="true" style="color: {{ _color_var }};"></i>
+    {% elif interpret.severity == 'warn' %}
+      <i class="ti ti-alert-triangle" aria-hidden="true" style="color: {{ _color_var }};"></i>
+    {% else %}
+      <i class="ti ti-alert-octagon" aria-hidden="true" style="color: {{ _color_var }};"></i>
+    {% endif %}
+    <span class="nc-panel__title" style="color: {{ _color_var }};">{{ interpret.headline }}</span>
+  </div>
+  <div class="nc-panel__body">
+    <p style="font-size: 13.5px; color: var(--nc-text); line-height: 1.55; margin: 0;">
+      {{ interpret.action }}
+    </p>
+  </div>
+</div>
+
+{# ── Configuration row: env vars on this Railway service ────────────── #}
+<div class="nc-panel" style="margin-bottom: 14px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-key" aria-hidden="true"></i>
+    <span class="nc-panel__title">Env vars en Railway</span>
+  </div>
+  <div class="nc-panel__body">
+    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+      <tbody>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted); font-family: var(--nc-mono), monospace;">NEXO_AI_BASE_URL</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if base_url %}
+              <code style="color: var(--nc-success);">{{ base_url }}</code>
+            {% else %}
+              <span style="color: var(--nc-danger);">✗ no configurada</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted); font-family: var(--nc-mono), monospace;">NEXO_AI_ADMIN_TOKEN</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if has_admin_token %}
+              <span style="color: var(--nc-success);">✓ presente</span>
+            {% else %}
+              <span style="color: var(--nc-danger);">✗ no configurada</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: var(--nc-text-muted); font-family: var(--nc-mono), monospace;">NEXO_AI_SSO_SECRET</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if has_sso_secret %}
+              <span style="color: var(--nc-success);">✓ presente</span>
+            {% else %}
+              <span style="color: var(--nc-warn);">⚠ no configurada (solo SSO falla)</span>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Tenant row: this is YOUR tenant in NexoClip ─────────────────────── #}
+<div class="nc-panel" style="margin-bottom: 14px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-user" aria-hidden="true"></i>
+    <span class="nc-panel__title">Tu tenant en NexoClip</span>
+  </div>
+  <div class="nc-panel__body">
+    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+      <tbody>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Tenant ID (NexoClip)</td>
+          <td style="padding: 8px 0; text-align: right;"><code style="font-size: 11.5px;">{{ tenant_id }}</code></td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">external_user_id (Nexo AI)</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if external_user_id %}
+              <code style="font-size: 11.5px; color: var(--nc-success);">{{ external_user_id }}</code>
+            {% else %}
+              <span style="color: var(--nc-danger);">✗ NULL · no está vinculado</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Tier</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code>{{ tenant_tier or '—' }}</code>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Status</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code>{{ tenant_status or '—' }}</code>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Live ping result ────────────────────────────────────────────────── #}
+<div class="nc-panel" style="margin-bottom: 14px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-wave-sine" aria-hidden="true"></i>
+    <span class="nc-panel__title">Ping en vivo a Nexo AI</span>
+  </div>
+  <div class="nc-panel__body">
+    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+      <tbody>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Resultado del ping (este request)</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if live_ok %}
+              <span style="color: var(--nc-success);">✓ balance actualizado</span>
+            {% else %}
+              <span style="color: var(--nc-danger);">✗ falló — ver logs de Railway</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">remaining (cache local)</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if cached_remaining is not none %}
+              <code>{{ '{:,}'.format(cached_remaining) }} tokens</code>
+            {% else %}
+              <span style="color: var(--nc-text-muted);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">unlimited (admin)</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if cached_unlimited %}
+              <span style="color: var(--nc-success);">true (∞)</span>
+            {% elif cached_unlimited is not none %}
+              <span>false</span>
+            {% else %}
+              <span style="color: var(--nc-text-muted);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Última actualización</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if cached_at %}
+              <code style="font-size: 11.5px;">{{ cached_at }}</code>
+            {% else %}
+              <span style="color: var(--nc-text-muted);">nunca</span>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap;">
+      <a href="/dashboard/_balance/refresh" class="nc-btn nc-btn--sm">
+        <i class="ti ti-refresh" aria-hidden="true"></i>
+        <span>Refrescar balance otra vez</span>
+      </a>
+      <a href="/dashboard/streams" class="nc-btn nc-btn--sm nc-btn--ghost">
+        <i class="ti ti-arrow-left" aria-hidden="true"></i>
+        <span>Volver al dashboard</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+{# ── How the chain works (reference for whoever lands here) ──────────── #}
+<details class="nc-details" style="margin-top: 22px;">
+  <summary>Cómo funciona la cadena (referencia)</summary>
+  <ol style="line-height: 1.7; font-size: 13px; color: var(--nc-text-muted); margin-top: 12px; padding-left: 22px;">
+    <li>NexoClip hace una llamada LLM (variants, hooks, etc.).</li>
+    <li><code>nexoclip/llm/router.py</code> termina la llamada y dispara <code>schedule_report()</code> fire-and-forget.</li>
+    <li>El reporter en <code>nexoclip/integrations/nexo_ai/reporter.py</code> hace
+        <code>POST {NEXO_AI_BASE_URL}/api/engines/nexoclip/usage</code> con bearer auth.</li>
+    <li>Nexo AI inserta en <code>usage_events</code> de Supabase y devuelve el balance actualizado.</li>
+    <li>NexoClip persiste ese balance en <code>tenants.cached_balance_*</code>.</li>
+    <li>El middleware <code>BearerAuthMiddleware</code> lee la cache en cada request y la pone en <code>request.state.token_balance</code>.</li>
+    <li><code>base.html</code> renderiza el chip arriba a la derecha.</li>
+  </ol>
+  <p style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; margin-top: 10px;">
+    Si la cadena se rompe en cualquier paso, el chip queda en "— tokens · refresh"
+    y un click te trae aquí.
+  </p>
+</details>
+
+{% endblock %}

@@ -79,10 +79,12 @@
            calls yet, render a faded "—" placeholder. #}
         {%- set _bal = (request.state.token_balance if request and request.state else None) -%}
         {% if _bal is none %}
-        {# Empty cache. Click triggers an on-demand fetch from Nexo AI. #}
+        {# Empty cache. Click triggers an on-demand fetch — and on failure
+           the refresh handler 303s straight to /dashboard/_diag/nexo_ai so
+           the user sees what's broken instead of a silent reload. #}
         <a href="/dashboard/_balance/refresh"
            class="nc-chip nc-chip--muted"
-           title="Sin uso registrado en el cache local. Haz click para consultar el balance actual en Nexo AI."
+           title="Sin balance en cache. Click para refrescar desde Nexo AI — si falla, te llevará a la página de diagnóstico."
            style="text-decoration: none;">
           <i class="ti ti-coin" aria-hidden="true"></i>
           <span>— tokens · refresh</span>

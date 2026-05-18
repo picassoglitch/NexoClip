@@ -187,13 +187,22 @@
              been finalized yet so there's no clip_final.mp4 with the
              burned overlays). #}
           {% if c.status in ('approved', 'published') %}
+          {#- Slice O.35 — visual feedback while the server renders the
+              MP4. The Playwright recorder takes ~clip_duration seconds
+              in real time; without UX feedback the operator hammered
+              the button thinking it was frozen. The `js-download-btn`
+              class hooks into the handler at the bottom of the page
+              which swaps label → "Preparing…", spins the icon, and
+              disables pointer-events until the browser actually starts
+              the download (or 90s auto-restore as a safety net). -#}
           <a href="/dashboard/clips/{{ c.id }}/download"
-             class="nc-btn"
+             class="nc-btn js-download-btn"
              download
              title="Save the final MP4 to your machine"
+             data-label-busy="Preparing…"
              style="margin-top: 6px;">
-            <i class="ti ti-download" aria-hidden="true"></i>
-            <span>Download</span>
+            <i class="ti ti-download js-download-icon" aria-hidden="true"></i>
+            <span class="js-download-label">Download</span>
           </a>
           {% endif %}
         </div>
@@ -271,4 +280,60 @@
   </div>
 </div>
 {% endif %}
+
+{#- Slice O.35 — Download button busy-state. -#}
+<style>
+  /* Subtle spin on the download icon while the server renders the MP4.
+     Same cadence as the platform-status pulse so it feels native. */
+  @keyframes nc-dl-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .js-download-btn.is-preparing {
+    opacity: 0.7;
+    pointer-events: none;
+    cursor: progress;
+  }
+  .js-download-btn.is-preparing .js-download-icon {
+    animation: nc-dl-spin 1.2s linear infinite;
+    display: inline-block;
+  }
+</style>
+<script>
+  // Slice O.35 — give the user feedback while the server is rendering.
+  // The Playwright recorder takes clip_duration_s real-time to record
+  // + ~2s ffmpeg mux. Without UI feedback operators spam-clicked the
+  // Download button thinking it was frozen.
+  //
+  // Pattern:
+  //   1. On click, swap label to "Preparing…", spin the icon, and
+  //      disable pointer-events so the button can't be re-clicked.
+  //   2. The browser still navigates the <a download> normally — the
+  //      file dialog appears once the server responds.
+  //   3. After 90s the button auto-restores. By then either the file
+  //      arrived (success — operator stopped looking at the button)
+  //      or the server failed (operator can retry).
+  (function () {
+    document.querySelectorAll(".js-download-btn").forEach(function (btn) {
+      var label = btn.querySelector(".js-download-label");
+      var origText = label ? label.textContent : null;
+      var busyText = btn.getAttribute("data-label-busy") || "Preparing…";
+      btn.addEventListener("click", function () {
+        // Defer one tick so the click navigates first; mutating the
+        // anchor before the browser handles the click can race.
+        setTimeout(function () {
+          btn.classList.add("is-preparing");
+          if (label) label.textContent = busyText;
+        }, 0);
+        // Safety auto-restore. If the user is still on the page after
+        // 90s and the download never arrived, give the button back so
+        // they can retry instead of being permanently stuck.
+        setTimeout(function () {
+          btn.classList.remove("is-preparing");
+          if (label && origText !== null) label.textContent = origText;
+        }, 90000);
+      });
+    });
+  })();
+</script>
 {% endblock %}

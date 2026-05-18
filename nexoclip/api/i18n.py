@@ -155,8 +155,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "exactly once."
         ),
         # ---- Nav (base.html dashboard chrome) ---------------------------
-        "nav.clips": "Clips",
-        "nav.inbox": "Inbox",
+        # Slice O.36 — operator-requested label swap:
+        #   /dashboard/streams → labeled "Streams" (where uploads live)
+        #   /dashboard/inbox   → labeled "Clips"   (where cut clips live)
+        # The translation keys keep their original names so we don't have to
+        # rewire base.html — the key `nav.clips` still maps to the
+        # `/dashboard/streams` link, just with the new "Streams" label.
+        "nav.clips": "Streams",
+        "nav.inbox": "Clips",
         "nav.personas": "Personas",
         "nav.brand_kits": "Brand kits",
         "nav.publish": "Publish",
@@ -245,8 +251,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "resumible — re-corré cualquier stream y los mismos outputs "
             "aterrizan exactamente una vez."
         ),
-        "nav.clips": "Clips",
-        "nav.inbox": "Inbox",
+        "nav.clips": "Streams",
+        "nav.inbox": "Clips",
         "nav.personas": "Personas",
         "nav.brand_kits": "Brand kits",
         "nav.publish": "Publicar",

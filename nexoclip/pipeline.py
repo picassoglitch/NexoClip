@@ -793,18 +793,57 @@ async def _run_pipeline(
         )
 
     with _step("cut", db=db, candidate_count=len(candidates)):
-        clips = await cut_clips(
-            tenant_id=tenant_id,
-            stream=stream,
-            candidates=candidates,
-            output_dir=output_dir,
-            config=config.clip,
-            force=force,
-            brand_kits=candidate_kits,
-            # Slice G.1 — dynamic per-candidate windowing snaps each
-            # clip's start/end to transcript sentence boundaries.
-            transcript=transcript,
+        # Slice O.33 — adaptive hard timeout. cut step previously had
+        # no ceiling; a single hung ffmpeg subprocess (the smart-crop
+        # OpenCV pass occasionally stalls on certain h264 profiles)
+        # would freeze the whole pipeline indefinitely. The user saw
+        # a 87s video stuck at "cut (running...) 22.9m elapsed".
+        # Formula matches whisper/analyze_video: max(static_floor,
+        # duration_s * multiplier). 6x realtime on CPU for ~3-4
+        # concurrent clip cuts at preset=veryfast covers normal load;
+        # the floor protects very short clips.
+        _cut_timeout = (
+            None if _admin_uncapped
+            else max(300.0, stream.duration_s * 6.0)
         )
+        try:
+            if _cut_timeout is None:
+                clips = await cut_clips(
+                    tenant_id=tenant_id,
+                    stream=stream,
+                    candidates=candidates,
+                    output_dir=output_dir,
+                    config=config.clip,
+                    force=force,
+                    brand_kits=candidate_kits,
+                    transcript=transcript,
+                )
+            else:
+                clips = await asyncio.wait_for(
+                    cut_clips(
+                        tenant_id=tenant_id,
+                        stream=stream,
+                        candidates=candidates,
+                        output_dir=output_dir,
+                        config=config.clip,
+                        force=force,
+                        brand_kits=candidate_kits,
+                        # Slice G.1 — dynamic per-candidate windowing snaps each
+                        # clip's start/end to transcript sentence boundaries.
+                        transcript=transcript,
+                    ),
+                    timeout=_cut_timeout,
+                )
+        except asyncio.TimeoutError as e:
+            raise RuntimeError(
+                f"cut step exceeded {_cut_timeout:.0f}s "
+                f"(stream duration {stream.duration_s:.0f}s × 6x multiplier). "
+                f"Common causes on CPU: a single ffmpeg subprocess stalled "
+                f"(SIGTERM didn't propagate), smart_crop OpenCV pass stuck on "
+                f"a broken h264 frame, or disk space pressure. "
+                f"Restart `python run.py` and re-run; if it stalls a second "
+                f"time on the same clip, the source mp4 may be the issue."
+            ) from e
         if db is not None:
             await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])
 

@@ -139,6 +139,44 @@ class TenantsRepo:
         )
         return _model(Tenant, await cur.fetchone())
 
+    async def find_by_user_email(self, email: str) -> Tenant | None:
+        """Look up a tenant by an email registered against ANY of its users.
+
+        Used by the self-healing provision path: when Nexo AI posts a
+        provisioning call for an external_user_id we've never seen, we
+        check whether a CLI-era tenant already exists for that email and
+        claim it (backfilling external_user_id) rather than creating a
+        duplicate tenant for the same human. Email is the only stable
+        cross-system identifier we have for legacy rows.
+
+        Multiple tenants COULD theoretically own the same email (the users
+        table doesn't UNIQUE on it). If that happens we return the OLDEST
+        tenant (lowest created_at) — that's the most likely target since
+        it's the original CLI-created one before any later duplicates.
+        """
+        if not email:
+            return None
+        # Lower-case match — emails are case-insensitive per RFC 5321 §2.4.
+        normalized = email.strip().lower()
+        if not normalized:
+            return None
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT t.id, t.name, t.created_at, t.daily_llm_budget_usd_micros, "
+            "t.daily_publish_limit, t.rescore_concurrency_cap, "
+            "t.retention_vod_days, t.retention_clip_days, t.retention_transcript_days, "
+            "t.tier, t.status, t.external_user_id, "
+            "t.cached_balance_remaining, t.cached_balance_unlimited, "
+            "t.cached_balance_monthly_used, t.cached_balance_at "
+            "FROM tenants t "
+            "INNER JOIN users u ON u.tenant_id = t.id "
+            "WHERE LOWER(u.email) = ? "
+            "ORDER BY t.created_at ASC "
+            "LIMIT 1",
+            (normalized,),
+        )
+        return _model(Tenant, await cur.fetchone())
+
     async def set_status(self, tenant_id: str, status: str) -> None:
         """Flip tenant status. Used by /api/admin/tenants/{id}/status which
         Nexo AI calls when a PRO subscriber swaps their live engine — the

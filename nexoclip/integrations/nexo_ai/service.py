@@ -19,6 +19,7 @@ cookie — see sso_finalize() below.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from nexoclip.db import (
@@ -29,6 +30,8 @@ from nexoclip.db import (
 )
 from nexoclip.errors import NexoClipError
 from nexoclip.tenancy import bound_tenant, mint_token
+
+_log = logging.getLogger("nexoclip.nexo_ai.service")
 
 
 class NexoAiServiceError(NexoClipError):
@@ -85,6 +88,38 @@ async def provision_tenant_for_nexo_ai(
             await _set_tier(db, existing.id, tier)
         return NexoAiProvisionResult(
             tenant_id=existing.id,
+            api_token=raw,
+            duplicate=True,
+        )
+
+    # ── Self-healing email fallback (B2 reconciliation layer) ────────────
+    # No tenant claims this external_user_id, but a CLI-era tenant may
+    # already exist for the same human under a different identity (the
+    # email). Pre-integration tenants ALL look like this — they were
+    # created by `nexoclip tenants add` before Nexo AI sent any
+    # external_user_id at all.
+    #
+    # Claim the orphan tenant, backfill external_user_id, sync tier,
+    # mint a fresh token. The caller (Nexo AI) gets back the SAME
+    # tenant_id it would have created, so the engine_subscriptions row
+    # on the Nexo AI side stays consistent.
+    #
+    # Returning duplicate=True signals "we recognized this already"
+    # which Nexo AI maps to 409 (idempotent success).
+    orphan = await tenants.find_by_user_email(email)
+    if orphan is not None:
+        _log.info(
+            "claiming orphan tenant by email · tenant=%s email=%s external_user_id=%s",
+            orphan.id, email, external_user_id,
+        )
+        await tenants.set_external_user_id(orphan.id, external_user_id)
+        if tier and tier != orphan.tier:
+            await _set_tier(db, orphan.id, tier)
+        raw, hash_ = mint_token()
+        with bound_tenant(orphan.id):
+            await ApiTokensRepo(db).create(hash_=hash_, scope="full")
+        return NexoAiProvisionResult(
+            tenant_id=orphan.id,
             api_token=raw,
             duplicate=True,
         )

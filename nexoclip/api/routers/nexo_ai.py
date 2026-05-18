@@ -500,6 +500,23 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
         except Exception:  # noqa: BLE001 — never break login on a tier sync
             pass
 
+    # Backfill external_user_id on every login (B2 reconciliation layer).
+    # CLI-era tenants land here with external_user_id = NULL, which silently
+    # breaks the usage reporter (it skips tenants without an external id).
+    # The SSO payload always carries it, so the simplest fix is to opportu-
+    # nistically re-link any tenant that's missing the pointer. Idempotent:
+    # if the tenant already has a (possibly different) external_user_id we
+    # leave it alone rather than risk swapping ownership mid-session.
+    try:
+        from nexoclip.db import TenantsRepo
+        _tenant = await TenantsRepo(db).get(payload.tenant_id)
+        if _tenant is not None and not _tenant.external_user_id and payload.user_id:
+            await TenantsRepo(db).set_external_user_id(
+                payload.tenant_id, payload.user_id
+            )
+    except Exception:  # noqa: BLE001 — non-blocking; reporter just stays silent until next login
+        pass
+
     response = RedirectResponse(url="/dashboard/streams", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         key=_COOKIE_NAME,

@@ -153,6 +153,112 @@ async def logout() -> Response:
     return response
 
 
+# ---------- Diarize health (admin) ----------
+#
+# Slice O.38 — operator-facing diagnostic. The pipeline frequently marks
+# diarization as "skipped" with a friendly note ("speaker labels off —
+# pyannote not available on this server"), which is correct UX for an
+# end-user but useless for the admin trying to fix the underlying cause.
+# This route probes every fail-mode in process and reports the raw
+# truth: HF_TOKEN presence, pyannote / torchaudio / speechbrain
+# importability + versions, the DiarizationConfig the pipeline will use,
+# and (when --probe-load=1 is passed) attempts the real pyannote Pipeline
+# load — the same call the worker subprocess runs. Admin-gated.
+
+
+@router.get("/_health/diarize", response_class=HTMLResponse, include_in_schema=False)
+async def diarize_health(
+    request: Request,
+    probe_load: int = 0,
+) -> Response:
+    """Admin-only diarize diagnostic. Surfaces real, untranslated errors."""
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
+    import importlib
+    import os as _os
+
+    from nexoclip.config import load_config as _load_pipeline_config
+
+    def _probe_import(modname: str) -> dict[str, object]:
+        try:
+            mod = importlib.import_module(modname)
+            return {
+                "ok": True,
+                "version": getattr(mod, "__version__", "?"),
+                "path": getattr(mod, "__file__", "?"),
+                "error": None,
+            }
+        except Exception as e:  # noqa: BLE001 — we want every failure
+            return {
+                "ok": False,
+                "version": None,
+                "path": None,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+    pyannote = _probe_import("pyannote.audio")
+    torchaudio = _probe_import("torchaudio")
+    torch = _probe_import("torch")
+    speechbrain = _probe_import("speechbrain")
+
+    # torchaudio.AudioMetaData is the specific attribute pyannote 3.3.x
+    # consults at import time — version skew flips this to False even
+    # when both packages import successfully.
+    torchaudio_audiometadata = False
+    if torchaudio["ok"]:
+        try:
+            import torchaudio as _ta
+            torchaudio_audiometadata = hasattr(_ta, "AudioMetaData")
+        except Exception:  # noqa: BLE001
+            torchaudio_audiometadata = False
+
+    hf_token = _os.environ.get("HF_TOKEN", "").strip()
+    hf_present = bool(hf_token)
+    hf_prefix = hf_token[:6] if hf_token else ""
+
+    cfg = _load_pipeline_config()
+    diarize_cfg = {
+        "enabled": cfg.diarization.enabled,
+        "model": cfg.diarization.model,
+        "device": cfg.diarization.device,
+    }
+
+    pipeline_load: dict[str, object] | None = None
+    if probe_load == 1 and pyannote["ok"] and hf_present:
+        try:
+            from pyannote.audio import Pipeline  # type: ignore[import-not-found]
+            pl = Pipeline.from_pretrained(
+                diarize_cfg["model"], use_auth_token=hf_token
+            )
+            pipeline_load = {
+                "ok": True,
+                "summary": str(type(pl).__name__),
+                "error": None,
+            }
+        except Exception as e:  # noqa: BLE001
+            pipeline_load = {
+                "ok": False,
+                "summary": None,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+    ctx = {
+        "request": request,
+        "pyannote": pyannote,
+        "torchaudio": torchaudio,
+        "torchaudio_audiometadata": torchaudio_audiometadata,
+        "torch": torch,
+        "speechbrain": speechbrain,
+        "hf_present": hf_present,
+        "hf_prefix": hf_prefix,
+        "diarize_cfg": diarize_cfg,
+        "pipeline_load": pipeline_load,
+        "probe_load_requested": bool(probe_load),
+    }
+    return templates.TemplateResponse("diarize_health.html", ctx)
+
+
 # ---------- Streams ----------
 
 

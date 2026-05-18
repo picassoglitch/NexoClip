@@ -66,6 +66,7 @@
         {% if _is_admin %}
         {{ nav_link("/dashboard/llm-calls", t("nav.llm_spend")) }}
         {{ nav_link("/dashboard/settings/llm", t("nav.llm_settings"), prefix="/dashboard/settings/llm") }}
+        {{ nav_link("/dashboard/_health/diarize", "Diarize", prefix="/dashboard/_health/diarize") }}
         {% endif %}
       </ul>
       <div class="nc-nav__right">

@@ -2191,10 +2191,13 @@ class BrandKitsRepo:
                 "WHERE tenant_id = ? AND is_default = 1",
                 (now, tenant_id),
             )
+        # Slice O.41 — INSERT had 38 ? placeholders for 40 columns
+        # (_BRAND_KIT_COLS lists 40), so every brand-kit create raised
+        # "incorrect number of bindings" → 500. Restore parity at 40.
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,

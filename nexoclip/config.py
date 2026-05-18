@@ -38,12 +38,46 @@ class VoiceDetectorConfig(BaseModel):
     enabled: bool = True
     weight: float = Field(default=1.0, ge=0.0)
     fuzzy_distance: int = Field(default=2, ge=0)
+    # Slice O.41 — bake in the spec defaults instead of `{}`. Railway
+    # boots without a nexoclip.yaml file (the YAML is operator-local
+    # config), and the empty default meant the voice detector returned
+    # zero candidates on every Spanish stream until the operator
+    # discovered the YAML knob. Same list as the example YAML so
+    # behavior is identical with-or-without a config file.
     phrases: dict[str, list[str]] = Field(
-        default_factory=dict,
+        default_factory=lambda: {
+            "es": [
+                "clipea esto",
+                "clipéalo",
+                "saca un clip",
+                "guarda esto",
+                "momento clip",
+                "este momento",
+            ],
+            "en": [
+                "clip this",
+                "clip that",
+                "someone clip this",
+                "did you clip that",
+            ],
+        },
         description="ISO 639-1 → list of forward trigger phrases.",
     )
     retroactive_phrases: dict[str, list[str]] = Field(
-        default_factory=dict,
+        default_factory=lambda: {
+            "es": [
+                "clipeaste eso",
+                "clipea eso",
+                "clipearon eso",
+                "eso fue épico",
+            ],
+            "en": [
+                "did you clip that",
+                "clip that",
+                "tell me you clipped that",
+                "please tell me you got that",
+            ],
+        },
         description="ISO 639-1 → list of retroactive trigger phrases.",
     )
     retroactive_lookback_s: float = Field(

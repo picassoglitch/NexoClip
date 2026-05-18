@@ -82,12 +82,18 @@ async def diarize(
         try:
             cached = Diarization.model_validate_json(out_path.read_text("utf-8"))
             # If the previous run was skipped for a transient reason and the
-            # condition has cleared (e.g. user just added HF_TOKEN), force a
-            # fresh attempt. We detect this only on the 'token missing' case
-            # since it's the most common cause of a stale skip.
-            if cached.skipped and (
-                cached.skip_reason or ""
-            ).lower().find("hf_token") >= 0 and os.environ.get("HF_TOKEN"):
+            # condition has cleared, force a fresh attempt. Two transient
+            # cases we detect:
+            #   - "hf_token" missing: user just set HF_TOKEN
+            #   - "disabled in config": config was flipped from
+            #     enabled:false → enabled:true (slice O.29 default flip)
+            # Either way, ignore the stale skip and retry.
+            stale_reason = (cached.skip_reason or "").lower()
+            transient = (
+                ("hf_token" in stale_reason and os.environ.get("HF_TOKEN"))
+                or ("disabled in config" in stale_reason and cfg.enabled)
+            )
+            if cached.skipped and transient:
                 pass  # fall through to re-run
             else:
                 return cached

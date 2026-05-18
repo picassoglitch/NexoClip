@@ -231,7 +231,13 @@ class ClipConfig(BaseModel):
     output_width: int = Field(default=1080, gt=0)
     output_height: int = Field(default=1920, gt=0)
     encoder: str = "libx264"
-    preset: str = "fast"
+    # Slice O.32 — `fast` → `veryfast`. On Railway CPU (no GPU encoder)
+    # the `fast` preset was burning ~30-60s per ~12s clip; for 2 clips
+    # that's nearly 2 minutes just on cut, blocking the pipeline.
+    # `veryfast` is ~2.5× faster at the same CRF 23 quality target;
+    # the visible quality difference on social-video output is
+    # imperceptible (TikTok / Reels re-encode aggressively anyway).
+    preset: str = "veryfast"
     crf: int = Field(default=23, ge=0, le=51)
     burn_captions: bool = False
     # Slice G.1 — dynamic per-candidate clip windowing. When True

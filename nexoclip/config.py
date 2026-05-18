@@ -122,10 +122,13 @@ class VisualConfig(BaseModel):
 class DiarizationConfig(BaseModel):
     """Speaker diarization (pyannote-3.1) settings.
 
-    Disabled by default in the example config so a fresh install boots
-    without HF_TOKEN. Once the operator accepts the pyannote license and
-    sets HF_TOKEN, flip `enabled=true` and the pipeline will start
-    attaching speaker labels to candidates.
+    Slice O.29 — flipped to True by default. The pipeline already
+    short-circuits gracefully when (a) pyannote.audio isn't installed
+    or (b) HF_TOKEN isn't set — the step logs `diarize.skipped` with
+    the reason and downstream code reads `diarization.skipped` to fall
+    back to un-attributed candidates. So flipping the default is safe:
+    setups that DO have pyannote+HF_TOKEN get the feature for free;
+    setups that don't see the same skip-with-reason they saw before.
 
     `match_threshold` is the cosine-sim cutoff for matching a new VOD's
     speaker embedding against the tenant's persistent `speakers` table.
@@ -134,7 +137,7 @@ class DiarizationConfig(BaseModel):
     matches.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     model: str = Field(default="pyannote/speaker-diarization-3.1")
     device: str = Field(default="cuda")
     match_threshold: float = Field(default=0.75, ge=0.0, le=1.0)

@@ -39,7 +39,14 @@ COPY run.py ./run.py
 COPY config ./config
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir '.[diarize]'
+# Slice O.29 — install the `diarize` extra so pyannote-audio +
+# speechbrain ship inside the image. Pulls torch (~2-3 GB image
+# bloat). Without this, the diarize step short-circuits with
+# "diarization disabled" even when DiarizationConfig.enabled is
+# True, because the pyannote import fails. Requires HF_TOKEN env
+# var on the host AND the operator to have accepted the
+# pyannote/speaker-diarization-3.1 license on HuggingFace.
 
 # Slice O.28 — Playwright + Chromium for the preview-recorder (slice
 # O.20). Without these, `/clips/<id>/download` falls back to the

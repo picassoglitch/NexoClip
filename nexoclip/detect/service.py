@@ -83,6 +83,7 @@ def detect_voice_triggers(
     *,
     diarization: object | None = None,
     extra_phrases_by_speaker: dict[str, object] | None = None,
+    extra_phrases_tenant_wide: object | None = None,
 ) -> list[Candidate]:
     """Return merged voice-trigger candidates for `stream`.
 
@@ -106,6 +107,14 @@ def detect_voice_triggers(
     them. Extra-phrase hits are restricted to candidates whose attributed
     speaker matches the map key — a co-host's kit can't accidentally
     create candidates for words the host said.
+
+    `extra_phrases_tenant_wide` (slice O.39) is the solo-streamer
+    counterpart: a single CustomTriggerPhrases (typed as object for the
+    same reason as the map above) applied with NO speaker restriction.
+    The pipeline supplies the tenant default brand kit's phrases here
+    when diarization was skipped — there are no speaker labels to key
+    off, so we just fire the kit on anyone. Quietly ignored when
+    diarization succeeded; per-speaker mapping above handles that case.
     """
     if tenant_id != stream.tenant_id:
         raise DetectionError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -186,6 +195,40 @@ def detect_voice_triggers(
                     diarization=diarization,
                     restrict_to_speaker=speaker_label,
                 )
+
+    # Slice O.39 — tenant-wide kit phrases (solo-streamer path). When
+    # diarization is skipped, the per-speaker map above is empty by
+    # construction (no speaker labels exist). The pipeline supplies the
+    # tenant default brand kit's phrases here so the operator's setup
+    # ("clipea esto" + their own preferred phrases) still fires on every
+    # word in the VOD. No speaker restriction = anyone's words can hit.
+    if extra_phrases_tenant_wide is not None:
+        tw_forward = list(getattr(extra_phrases_tenant_wide, "forward", []) or [])
+        tw_retroactive = list(
+            getattr(extra_phrases_tenant_wide, "retroactive", []) or []
+        )
+        if tw_forward:
+            _scan_phrase_family(
+                flat=flat,
+                phrases_by_lang={"es": tw_forward},
+                fuzzy_distance=voice_cfg.fuzzy_distance,
+                weight=voice_cfg.weight,
+                kind="forward",
+                out=raw,
+                diarization=diarization,
+            )
+        if tw_retroactive:
+            _scan_phrase_family(
+                flat=flat,
+                phrases_by_lang={"es": tw_retroactive},
+                fuzzy_distance=voice_cfg.fuzzy_distance,
+                weight=voice_cfg.weight,
+                kind="retroactive",
+                out=raw,
+                retroactive_lookback_s=voice_cfg.retroactive_lookback_s,
+                diarization=diarization,
+            )
+
     # Per-speaker cooldown — keeps the first trigger of each
     # (speaker, kind) within `cooldown_s`. Falls back to a global
     # cooldown when no diarization was attached.
@@ -354,6 +397,7 @@ def detect_candidates(
     viral_candidates: list[Candidate] | None = None,
     diarization: object | None = None,
     extra_phrases_by_speaker: dict[str, object] | None = None,
+    extra_phrases_tenant_wide: object | None = None,
 ) -> list[Candidate]:
     """Run every available detector and return the fused candidate stream.
 
@@ -380,6 +424,7 @@ def detect_candidates(
         config=config,
         diarization=diarization,
         extra_phrases_by_speaker=extra_phrases_by_speaker,
+        extra_phrases_tenant_wide=extra_phrases_tenant_wide,
     )
     chat: list[Candidate] = []
     if chat_replay is not None:

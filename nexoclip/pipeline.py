@@ -742,6 +742,37 @@ async def _run_pipeline(
                     speakers_with_extras=len(extra_phrases_by_speaker),
                 )
 
+        # Slice O.39 — solo-streamer fallback. When diarization was
+        # skipped (no HF_TOKEN, pyannote not installed, CPU-only host
+        # where it's too slow, etc.), the per-speaker map above is empty
+        # by construction. The tenant default brand kit's custom phrases
+        # would never fire, even though the operator clearly intended
+        # them to. Apply them tenant-wide instead — no speaker label
+        # means no restriction, so they hit anyone's words.
+        extra_phrases_tenant_wide: object | None = None
+        if db is not None and diarization.skipped:
+            try:
+                from nexoclip.db import BrandKitsRepo
+
+                default_kit = await BrandKitsRepo(db).get_default()
+                if default_kit is not None and (
+                    default_kit.custom_trigger_phrases.forward
+                    or default_kit.custom_trigger_phrases.retroactive
+                ):
+                    extra_phrases_tenant_wide = default_kit.custom_trigger_phrases
+                    _log.info(
+                        "detect.tenant_wide_kit_phrases",
+                        stream_id=stream.id,
+                        forward=len(default_kit.custom_trigger_phrases.forward),
+                        retroactive=len(default_kit.custom_trigger_phrases.retroactive),
+                    )
+            except Exception as e:  # noqa: BLE001 — best-effort, never block detect
+                _log.warning(
+                    "detect.tenant_wide_kit_phrases_failed",
+                    stream_id=stream.id,
+                    reason=str(e),
+                )
+
         candidates = detect_candidates(
             tenant_id=tenant_id,
             stream=stream,
@@ -752,6 +783,7 @@ async def _run_pipeline(
             viral_candidates=viral_cands,
             diarization=diarization,
             extra_phrases_by_speaker=extra_phrases_by_speaker or None,
+            extra_phrases_tenant_wide=extra_phrases_tenant_wide,
         )
         save_candidates(
             stream_dir,

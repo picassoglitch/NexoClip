@@ -49,6 +49,16 @@ class Tenant(BaseModel):
     # clear "paused by Nexo AI" message on the dashboard instead of jobs
     # silently failing.
     status: str = "active"
+    # Slice NX.1 — Nexo AI cross-system user id. The Nexo AI platform's
+    # Supabase auth.users.id for the human who owns this tenant. NULL for
+    # CLI-created tenants (the historical case before the integration).
+    # Used by:
+    #   - balance.py / reporter.py:   bound into the outbound usage POST
+    #   - service.py provisioning:    duplicate detection so POST /api/admin/tenants
+    #                                 is idempotent on Nexo AI retries
+    # Without this field on the model + the SELECT below, the reporter
+    # AttributeErrors on every LLM call (and the chip stays "— tokens").
+    external_user_id: str | None = None
     # Slice NX.4 — cached Nexo AI token balance. Updated by the outbound
     # usage reporter after each LLM call. Templates render these directly
     # in the nav chip without making any network call. NULL until the

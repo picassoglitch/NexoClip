@@ -98,11 +98,17 @@ class TenantsRepo:
 
     async def get(self, tenant_id: str) -> Tenant | None:
         conn = await self._db.connect()
+        # NOTE: every SELECT against `tenants` MUST list `external_user_id` —
+        # the Tenant Pydantic model has it as an optional field (NX.1) and
+        # callers (balance.py, reporter.py, service.py) read it directly.
+        # Forgetting it here = silent AttributeError on every LLM call which
+        # is what kept the token chip stuck on "— tokens · refresh" until
+        # this fix landed.
         cur = await conn.execute(
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
             "daily_publish_limit, rescore_concurrency_cap, "
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
-            "tier, status, "
+            "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at "
             "FROM tenants WHERE id = ?",
@@ -125,7 +131,7 @@ class TenantsRepo:
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
             "daily_publish_limit, rescore_concurrency_cap, "
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
-            "tier, status, "
+            "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at "
             "FROM tenants WHERE external_user_id = ?",
@@ -191,7 +197,7 @@ class TenantsRepo:
             "SELECT id, name, created_at, daily_llm_budget_usd_micros, "
             "daily_publish_limit, rescore_concurrency_cap, "
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
-            "tier, status, "
+            "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at "
             "FROM tenants ORDER BY created_at"

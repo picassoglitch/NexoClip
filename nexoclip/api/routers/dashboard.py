@@ -116,36 +116,75 @@ async def diag_nexo_ai(
     depends on, rendered as a readable dashboard panel so we don't need to
     grep Railway logs to debug a missing token chip.
 
-    The page reports env-var presence (NOT values), tenant.external_user_id
-    presence, the cached balance, and the result of a live ping to Nexo AI.
-    The 'interpret' line says in plain language which step is broken + what
-    to do about it.
+    Defensive: each fetch is wrapped in its own try/except so a broken
+    upstream (e.g. NEXO_AI_BASE_URL pointing at a 404) shows up as an
+    inline error on the panel rather than a generic 500. The whole route
+    catches at the outer level too — the response should ALWAYS be HTML
+    even if the integration is in a bad state.
 
-    Was JSON before — moved to HTML so the operator can browse to the URL
-    directly and read the answer instead of saving response.json."""
+    The env-var section shows the LITERAL value of NEXO_AI_BASE_URL (a URL
+    is safe to display) so you can spot typos or whitespace in the Railway
+    env var without copying the deploy logs. Token values stay
+    presence-only (booleans) — never echo a secret back to the browser."""
+    import traceback
     from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
     from nexoclip.settings import get_settings
 
-    settings = get_settings()
-    tenant_before = await TenantsRepo(db).get(tenant_id)
+    # Defaults so we can always render SOMETHING.
+    base_url: str | None = None
+    has_admin_token = False
+    has_sso_secret = False
+    external_user_id: str | None = None
+    tenant_tier: str | None = None
+    tenant_status: str | None = None
+    cached_at: str | None = None
+    cached_remaining: int | None = None
+    cached_unlimited: int | None = None
+    live_ok = False
+    diag_error: str | None = None
 
-    # Live ping uses the same code path as the click-to-refresh button.
-    # Logs include the rejection reason on Railway; we don't show it here
-    # because it can contain secrets (the Bearer header for example).
-    live_ok = await fetch_balance_now(db, tenant_id=tenant_id)
-    tenant_after = await TenantsRepo(db).get(tenant_id)
+    try:
+        settings = get_settings()
+        # Show the URL literal so the user can spot misspellings / trailing
+        # whitespace / wrong port. Pydantic auto-strips outer whitespace,
+        # so what shows up here is what the runtime actually uses.
+        base_url = settings.nexo_ai_base_url or None
+        has_admin_token = bool(settings.nexo_ai_admin_token)
+        has_sso_secret = bool(settings.nexo_ai_sso_secret)
+    except Exception as e:  # noqa: BLE001
+        diag_error = f"settings load failed: {e!r}"
 
-    base_url = settings.nexo_ai_base_url or None
-    has_admin_token = bool(settings.nexo_ai_admin_token)
-    has_sso_secret = bool(settings.nexo_ai_sso_secret)
-    external_user_id = tenant_after.external_user_id if tenant_after else None
-    cached_at = tenant_after.cached_balance_at if tenant_after else None
-    cached_remaining = (
-        tenant_after.cached_balance_remaining if tenant_after else None
-    )
-    cached_unlimited = (
-        tenant_after.cached_balance_unlimited if tenant_after else None
-    )
+    try:
+        tenant = await TenantsRepo(db).get(tenant_id)
+        if tenant is not None:
+            external_user_id = tenant.external_user_id
+            tenant_tier = tenant.tier
+            tenant_status = tenant.status
+            cached_remaining = tenant.cached_balance_remaining
+            cached_unlimited = tenant.cached_balance_unlimited
+            cached_at = tenant.cached_balance_at
+    except Exception as e:  # noqa: BLE001
+        diag_error = (diag_error or "") + f" · tenant lookup failed: {e!r}"
+
+    # Live ping. fetch_balance_now is supposed to swallow all errors, but
+    # we wrap defensively in case a future regression doesn't.
+    try:
+        live_ok = await fetch_balance_now(db, tenant_id=tenant_id)
+    except Exception as e:  # noqa: BLE001
+        live_ok = False
+        diag_error = (diag_error or "") + f" · ping crashed: {e!r}"
+
+    # Re-read tenant after the ping so the rendered cache numbers reflect
+    # any update that ping just produced (if it did).
+    try:
+        tenant_after = await TenantsRepo(db).get(tenant_id)
+        if tenant_after is not None:
+            external_user_id = tenant_after.external_user_id
+            cached_remaining = tenant_after.cached_balance_remaining
+            cached_unlimited = tenant_after.cached_balance_unlimited
+            cached_at = tenant_after.cached_balance_at
+    except Exception as e:  # noqa: BLE001
+        diag_error = (diag_error or "") + f" · post-ping read failed: {e!r}"
 
     interpret = _interpret_diag(
         base_url=base_url,
@@ -154,24 +193,40 @@ async def diag_nexo_ai(
         live_ok=live_ok,
     )
 
-    return templates.TemplateResponse(
-        request,
-        "_diag_nexo_ai.html",
-        {
-            "tenant_id": tenant_id,
-            "base_url": base_url,
-            "has_admin_token": has_admin_token,
-            "has_sso_secret": has_sso_secret,
-            "external_user_id": external_user_id,
-            "tenant_tier": tenant_after.tier if tenant_after else None,
-            "tenant_status": tenant_after.status if tenant_after else None,
-            "cached_remaining": cached_remaining,
-            "cached_unlimited": cached_unlimited,
-            "cached_at": cached_at,
-            "live_ok": live_ok,
-            "interpret": interpret,
-        },
-    )
+    try:
+        return templates.TemplateResponse(
+            request,
+            "_diag_nexo_ai.html",
+            {
+                "tenant_id": tenant_id,
+                "base_url": base_url,
+                "has_admin_token": has_admin_token,
+                "has_sso_secret": has_sso_secret,
+                "external_user_id": external_user_id,
+                "tenant_tier": tenant_tier,
+                "tenant_status": tenant_status,
+                "cached_remaining": cached_remaining,
+                "cached_unlimited": cached_unlimited,
+                "cached_at": cached_at,
+                "live_ok": live_ok,
+                "interpret": interpret,
+                "diag_error": diag_error,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        # Absolute last-resort: if the template itself crashes, emit a
+        # plain-text response with the traceback so the operator still
+        # sees SOMETHING useful instead of FastAPI's 500 page.
+        tb = traceback.format_exc()
+        return HTMLResponse(
+            content=(
+                "<pre style='padding:24px;font-family:monospace;color:#e54;'>"
+                "diag template crashed:\n\n"
+                f"{tb}\n\n"
+                f"diag_error: {diag_error}</pre>"
+            ),
+            status_code=500,
+        )
 
 
 def _interpret_diag(

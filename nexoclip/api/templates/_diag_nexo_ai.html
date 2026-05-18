@@ -15,6 +15,20 @@
   </div>
 </div>
 
+{# If any internal step raised, surface the raw error so we don't hide
+   bugs behind a green panel. Should be empty in healthy production. #}
+{% if diag_error %}
+<div class="nc-panel" style="border-color: var(--nc-danger); background: rgba(229,72,77,0.06); margin-bottom: 14px;">
+  <div class="nc-panel__header" style="border-color: rgba(229,72,77,0.25);">
+    <i class="ti ti-bug" aria-hidden="true" style="color: var(--nc-danger);"></i>
+    <span class="nc-panel__title" style="color: var(--nc-danger);">Excepción interna durante el diagnóstico</span>
+  </div>
+  <div class="nc-panel__body">
+    <pre style="font-size: 11px; color: var(--nc-text); white-space: pre-wrap; margin: 0;">{{ diag_error }}</pre>
+  </div>
+</div>
+{% endif %}
+
 {# ── Verdict panel: the one-line diagnosis + recommended action ──────── #}
 {% set _color_var = 'var(--nc-success)' if interpret.severity == 'ok' else ('var(--nc-warn)' if interpret.severity == 'warn' else 'var(--nc-danger)') %}
 {% set _bg_rgba = 'rgba(46,204,113,0.06)' if interpret.severity == 'ok' else ('rgba(245,177,61,0.06)' if interpret.severity == 'warn' else 'rgba(229,72,77,0.06)') %}

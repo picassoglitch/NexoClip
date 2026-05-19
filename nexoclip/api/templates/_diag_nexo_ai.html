@@ -47,6 +47,17 @@
     <p style="font-size: 13.5px; color: var(--nc-text); line-height: 1.55; margin: 0;">
       {{ interpret.action }}
     </p>
+    {# Deep-link to the rich HTTP panel for the live_ok=False case.
+       Anchor target lives further down the page (#ping-detail). Only show
+       the jump-link when there's actually a ping outcome to inspect. #}
+    {% if interpret.severity != 'ok' and ping and ping.outcome != 'ok' %}
+    <p style="margin: 12px 0 0 0;">
+      <a href="#ping-detail" class="nc-btn nc-btn--sm" style="text-decoration: none;">
+        <i class="ti ti-arrow-down" aria-hidden="true"></i>
+        <span>Saltar al detalle del ping HTTP</span>
+      </a>
+    </p>
+    {% endif %}
   </div>
 </div>
 
@@ -140,7 +151,7 @@
   {%- set _ok = (_po == 'ok') -%}
   {%- set _skip = (_po.startswith('skip_')) -%}
   {%- set _ping_color = 'var(--nc-success)' if _ok else ('var(--nc-text-muted)' if _skip else 'var(--nc-danger)') -%}
-<div class="nc-panel" style="margin-bottom: 14px; border-color: {{ _ping_color }};">
+<div id="ping-detail" class="nc-panel" style="margin-bottom: 14px; border-color: {{ _ping_color }}; scroll-margin-top: 80px;">
   <div class="nc-panel__header" style="border-color: {{ _ping_color }};">
     <i class="ti ti-{% if _ok %}check{% elif _skip %}forbid{% else %}alert-circle{% endif %}" aria-hidden="true" style="color: {{ _ping_color }};"></i>
     <span class="nc-panel__title" style="color: {{ _ping_color }};">

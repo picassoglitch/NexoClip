@@ -282,12 +282,13 @@ def _interpret_diag(
             "severity": "warn",
             "headline": "Las env vars están bien pero el ping a Nexo AI falló",
             "action": (
-                "Revisa los logs de Railway buscando "
-                "'nexoclip.nexo_ai.balance' — ahí está la razón exacta "
-                "(timeout, 403, 404 user_id desconocido, etc.). "
-                "Causas comunes: tokens no coinciden entre ambos sides, "
+                "▼ Scroll abajo a la sección 'Ping en vivo a Nexo AI' — "
+                "verás el HTTP status code exacto + el body de respuesta + "
+                "una pista específica según el código. Es la primera cosa "
+                "que tienes que mirar en esta página. (Causas más comunes: "
+                "tokens no coinciden byte-por-byte entre ambos sides, "
                 "external_user_id no existe en la tabla profiles de Supabase, "
-                "o nexo-ai.world está caído."
+                "o nexo-ai.world está caído.)"
             ),
         }
     return {

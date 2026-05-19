@@ -3008,6 +3008,24 @@ async def clip_download(
                 base_url=base_url,
                 error=str(e),
             )
+            # Slice O.21 — emit an event so the operator's monitoring
+            # surface (and any future dashboard widget) can see when
+            # we degraded to the legacy burn. overlay_burn.py is kept
+            # as the safety net until Playwright is proven stable in
+            # prod; retirement criterion is "zero recorder_failed
+            # events for 30 consecutive days at the current load".
+            try:
+                await EventsRepo(db).emit(
+                    type="clip.download.recorder_failed",
+                    payload={
+                        "clip_id": clip_id,
+                        "base_url": base_url,
+                        "error": str(e)[:500],
+                        "fallback": "legacy_ffmpeg_burn",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — never block the download
+                pass
             legacy_final = original.parent / "clip_final.mp4"
             if not legacy_final.exists():
                 try:

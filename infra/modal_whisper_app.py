@@ -60,10 +60,11 @@ app = modal.App("nexoclip-whisper")
     image=_IMAGE,
     gpu="T4",  # cheapest GPU that runs `small` at >10x realtime
     timeout=3600,  # 1h cap — multi-hour VODs need it
-    container_idle_timeout=300,  # keep warm for 5 min for burst uploads
+    scaledown_window=300,  # keep warm for 5 min for burst uploads
+                            # (renamed from container_idle_timeout in Modal 1.x)
     secrets=[modal.Secret.from_name("nexoclip-modal-token")],
 )
-@modal.web_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST")
 def transcribe(payload: dict) -> dict:
     """Transcribe the audio at `payload["audio_url"]`.
 

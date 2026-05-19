@@ -8,6 +8,7 @@ in addition to the `Authorization` header. The bearer middleware in
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -461,6 +462,115 @@ async def diarize_health(
         "probe_load_requested": bool(probe_load),
     }
     return templates.TemplateResponse("diarize_health.html", ctx)
+
+
+# ---------- Pipeline queue (admin) ----------
+#
+# Slice O.43 — operator visibility into "how saturated is the box?".
+# Walks the events log across all tenants, pairs step.started with the
+# corresponding step.completed by stream_id + step name, and surfaces
+# the orphans as "currently running steps". Long-running outliers (a
+# step open for > 30 min) flag separately so the operator sees if the
+# CPU Whisper is choking.
+#
+# Why this is the right signal: streams don't have an explicit
+# "queued" state today — uploads kick off pipelines in FastAPI's
+# BackgroundTasks, which run as fast as the box can serve them. The
+# event log is the only place that tells us "step X started at T,
+# never reported done". With 10 users and long VODs we'll see the
+# transcribe step pile up — that's the trigger for the Modal move.
+
+
+@router.get("/_health/queue", response_class=HTMLResponse, include_in_schema=False)
+async def queue_health(
+    request: Request,
+    db: Database = Depends(get_db),
+) -> Response:
+    """Admin pipeline-queue diagnostic. Surfaces all currently-running
+    steps across every tenant + the longest waiters."""
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
+    import datetime as _dt
+
+    # Pull the last 7 days of step events from the events log (no
+    # tenant filter — admin view). 7d window is generous: anything
+    # older than that is almost certainly a crashed pipeline whose
+    # next manual re-run will refresh the events.
+    conn = await db.connect()
+    cur = await conn.execute(
+        "SELECT tenant_id, type, payload_json, ts FROM events "
+        "WHERE type IN ('pipeline.step.started', 'pipeline.step.completed', "
+        "'pipeline.step.failed') "
+        "AND ts >= datetime('now', '-7 days') "
+        "ORDER BY ts ASC"
+    )
+    rows = await cur.fetchall()
+
+    # Build (stream_id, step) → list of (event_type, ts) so we can
+    # pair started with completed/failed. Whichever wins last sets the
+    # final state. If only a started is seen, the step is open.
+    open_steps: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        d = dict(row)
+        try:
+            payload = json.loads(d.get("payload_json") or "{}")
+        except Exception:  # noqa: BLE001
+            payload = {}
+        stream_id = payload.get("stream_id")
+        step = payload.get("step")
+        if not stream_id or not step:
+            continue
+        key = (str(stream_id), str(step))
+        if d["type"] == "pipeline.step.started":
+            open_steps[key] = {
+                "tenant_id": d["tenant_id"],
+                "stream_id": stream_id,
+                "step": step,
+                "started_at": d["ts"],
+            }
+        else:
+            # completed or failed — close the open step.
+            open_steps.pop(key, None)
+
+    # Sort longest-running first.
+    now = _dt.datetime.now(_dt.UTC)
+    running: list[dict[str, object]] = []
+    for info in open_steps.values():
+        try:
+            started = _dt.datetime.fromisoformat(str(info["started_at"]))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=_dt.UTC)
+            elapsed_s = (now - started).total_seconds()
+        except Exception:  # noqa: BLE001
+            elapsed_s = 0.0
+        running.append({**info, "elapsed_s": elapsed_s})
+    running.sort(key=lambda r: r["elapsed_s"], reverse=True)
+
+    # Per-step counts.
+    step_counts: dict[str, int] = {}
+    for r in running:
+        s = str(r["step"])
+        step_counts[s] = step_counts.get(s, 0) + 1
+
+    # Health bucket
+    bucket = "ok"
+    if len(running) >= 5 or any(r["elapsed_s"] > 1800 for r in running):
+        bucket = "warn"
+    if len(running) >= 10 or any(r["elapsed_s"] > 3600 for r in running):
+        bucket = "danger"
+
+    return templates.TemplateResponse(
+        "queue_health.html",
+        {
+            "request": request,
+            "running": running,
+            "step_counts": step_counts,
+            "total_running": len(running),
+            "longest_running_s": running[0]["elapsed_s"] if running else 0,
+            "bucket": bucket,
+        },
+    )
 
 
 # ---------- Streams ----------

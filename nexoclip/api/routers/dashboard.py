@@ -2518,6 +2518,34 @@ async def clip_overlay_finalize(
         },
     )
 
+    # Slice G.5 — fire the per-clip auto-publish trigger as soon as the
+    # operator approves. The periodic sweep ALSO runs, but waiting up
+    # to publish_interval_s (default 60s) for the undo countdown to
+    # appear made the UX feel broken — the operator clicks Complete
+    # and the inbox's "fires in" chip should populate immediately.
+    # Skip rules + idempotence are shared with the sweep so the two
+    # paths can coexist without duplicating jobs.
+    try:
+        from nexoclip.publish.auto import dispatch_for_clip
+        report = await dispatch_for_clip(db, clip_id=clip_id)
+        if report.jobs_enqueued:
+            await EventsRepo(db).emit(
+                type="clip.auto_publish_enqueued",
+                payload={
+                    "clip_id": clip_id,
+                    "jobs": report.jobs_enqueued,
+                    "skipped_no_account": report.clips_skipped_no_account,
+                    "skipped_already_queued": report.clips_skipped_already_queued,
+                },
+            )
+    except Exception as e:  # noqa: BLE001 — auto-publish must never block approval
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "clip.finalize.auto_publish_failed",
+            clip_id=clip_id,
+            reason=str(e),
+        )
+
     # Slice N.2 — Approve & continue. After finalize, walk to the
     # NEXT clip on the same stream that's still in the editor queue
     # (status in `cut` / `ready_for_review`). If none remain, fall

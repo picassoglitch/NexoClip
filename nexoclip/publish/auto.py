@@ -267,3 +267,117 @@ def _undo_window_iso(*, clip_created_at: str, delay_min: int) -> str:
 def auto_publish_enabled_kits(kits: list[BrandKitRow]) -> list[BrandKitRow]:
     """Filter helper for the dashboard's settings page."""
     return [k for k in kits if k.auto_publish_enabled]
+
+
+# ---- per-clip trigger (slice G.5) ----
+#
+# `dispatch_auto_publish` is the periodic sweep. G.5 is the
+# operator-driven counterpart: the moment the operator clicks
+# "Complete / Approve" we want the publish_job in the queue so the
+# undo timer starts visibly, not silently on the next cron tick.
+#
+# Same idempotence + skip rules as `_dispatch_one_tenant` — calling
+# this from the approve handler AND letting the sweep also run is
+# safe; the sweep just skips a (clip, platform) pair when a job
+# already exists.
+
+
+async def dispatch_for_clip(
+    db: Database,
+    *,
+    clip_id: str,
+    dry_run: bool = False,
+) -> AutoPublishReport:
+    """Enqueue auto-publish jobs for a single approved clip.
+
+    Returns a single-clip report. Caller is responsible for binding the
+    tenant via `bound_tenant` before invoking — same contract as the
+    periodic dispatcher's per-tenant body.
+    """
+    clips_repo = ClipsRepo(db)
+    candidates_repo = CandidatesRepo(db)
+    variants_repo = VariantsRepo(db)
+    accounts_repo = ConnectedAccountsRepo(db)
+    jobs_repo = PublishJobsRepo(db)
+
+    clip = await clips_repo.get(clip_id)
+    if clip is None:
+        return _empty_report(tenant_id="", dry_run=dry_run)
+
+    # Resolve the kit via the same path as the sweep so per-speaker
+    # routing is honored even on the per-clip trigger. CandidatesRepo
+    # only exposes list_for_stream — cheap enough for the per-clip
+    # case (one stream's worth of candidates) so we just filter.
+    candidates_by_id: dict[str, object] = {}
+    if clip.candidate_id:
+        for cand in await candidates_repo.list_for_stream(clip.stream_id):
+            if cand.id == clip.candidate_id:
+                candidates_by_id[cand.id] = cand
+                break
+    speaker_label = _speaker_label_for_clip(clip, candidates_by_id)
+    kit = await resolve_brand_kit_for_candidate(
+        db,
+        stream_id=clip.stream_id,
+        speaker_label=speaker_label,
+    )
+
+    report = _empty_report(tenant_id=clip.tenant_id, dry_run=dry_run)
+    if kit is None or not kit.auto_publish_enabled:
+        return report._replace(clips_considered=1, clips_skipped_no_kit=1)
+
+    clip_variants = await variants_repo.list_for_clip(clip.id)
+    if not clip_variants:
+        return report._replace(clips_considered=1, clips_skipped_no_variant=1)
+    variant = clip_variants[0]
+
+    accounts = await accounts_repo.list_for_tenant()
+    accounts_by_platform: dict[str, ConnectedAccount] = {
+        acc.platform: acc for acc in accounts
+    }
+
+    existing_jobs = await jobs_repo.list_for_clip(clip.id)
+    existing_platforms = {j.platform for j in existing_jobs}
+
+    enqueued = 0
+    skipped_no_account = 0
+    skipped_already_queued = 0
+    for platform in kit.auto_publish_platforms or []:
+        account = accounts_by_platform.get(platform)
+        if account is None:
+            skipped_no_account += 1
+            continue
+        if platform in existing_platforms:
+            skipped_already_queued += 1
+            continue
+        scheduled_for = _undo_window_iso(
+            clip_created_at=clip.created_at,
+            delay_min=kit.auto_publish_delay_min,
+        )
+        if not dry_run:
+            await jobs_repo.enqueue(
+                clip_id=clip.id,
+                variant_id=variant.id,
+                account_id=account.id,
+                platform=platform,
+                scheduled_for=scheduled_for,
+            )
+        enqueued += 1
+
+    _log.info(
+        "auto_publish.dispatched_for_clip",
+        tenant_id=clip.tenant_id,
+        clip_id=clip.id,
+        enqueued=enqueued,
+        skipped_no_account=skipped_no_account,
+        skipped_already_queued=skipped_already_queued,
+    )
+    return AutoPublishReport(
+        tenant_id=clip.tenant_id,
+        jobs_enqueued=enqueued,
+        clips_considered=1,
+        clips_skipped_no_kit=0,
+        clips_skipped_no_variant=0,
+        clips_skipped_already_queued=skipped_already_queued,
+        clips_skipped_no_account=skipped_no_account,
+        dry_run=dry_run,
+    )

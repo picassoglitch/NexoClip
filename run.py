@@ -433,6 +433,48 @@ def _free_stale_port(host: str, port: int) -> None:
     _time.sleep(0.5)
 
 
+def _check_db_persistence(db_path: Path) -> None:
+    """Loud warning when the DB file lives on container-ephemeral storage.
+
+    Slice O.42 — Railway / Fly.io / Heroku container filesystems are wiped
+    on every redeploy. NEXOCLIP_DB_PATH defaults to /data/nexoclip.db in
+    the Dockerfile, which is meaningless unless a persistent Volume is
+    actually mounted at /data on the dashboard side. Operators forget
+    that step and then lose all their tenants on the next deploy.
+
+    Detection: on Linux, a real volume mount has a different st_dev than
+    the root filesystem. Same device = the directory is just part of the
+    container's overlay = ephemeral. We log a loud warning rather than
+    refusing to boot so local dev (where the file lives in CWD) still
+    works without ceremony.
+    """
+    db_dir = db_path.parent.resolve()
+    db_dir.mkdir(parents=True, exist_ok=True)
+    # Only the "/data on container" case is risky; local paths are
+    # expected to be ephemeral relative to the dev's intent.
+    if not str(db_dir).startswith(("/data", "/mnt", "/var/lib")):
+        return
+    try:
+        if os.stat(db_dir).st_dev == os.stat("/").st_dev:
+            banner = (
+                "\n"
+                + "=" * 70
+                + "\n"
+                + "  WARNING: NEXOCLIP_DB_PATH points at " + str(db_path) + "\n"
+                + "  but " + str(db_dir) + " is NOT a persistent mount.\n"
+                + "  \n"
+                + "  Every redeploy will wipe this DB. Attach a persistent\n"
+                + "  Volume on Railway (Settings -> Volumes -> mount /data)\n"
+                + "  before going live, or set NEXOCLIP_DB_PATH to a path\n"
+                + "  on a volume you control.\n"
+                + "=" * 70
+                + "\n"
+            )
+            print(banner, file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001 — never block boot on the check
+        pass
+
+
 async def _boot() -> None:
     _silence_connection_reset(asyncio.get_running_loop())
     db_path = Path(os.environ.get("NEXOCLIP_DB_PATH", "./nexoclip.db"))
@@ -440,6 +482,7 @@ async def _boot() -> None:
     port = int(os.environ.get("NEXOCLIP_PORT", "8000"))
 
     _free_stale_port(host, port)
+    _check_db_persistence(db_path)
 
     db = Database(db_path)
     await apply_migrations(db)

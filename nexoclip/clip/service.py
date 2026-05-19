@@ -469,22 +469,32 @@ def _ffmpeg_reformat_9_16(
     )
 
     if is_horizontal:
-        # Two-stream blurred-letterbox filter.
-        #   bg: scale to fill the 9:16 frame (will overflow horizontally,
-        #       we crop), then heavy box-blur so the bars don't draw the
-        #       eye away from the foreground.
-        #   fg: scale to fit inside the 9:16 frame without distortion.
-        #       force_original_aspect_ratio=decrease makes ffmpeg leave
-        #       horizontal letterbox space.
-        # Overlay fg centered on bg. Output is exactly cfg.output_width x
-        # output_height, no source pixels lost.
+        # Slice G.4c (refined) — black-letterbox with a modest 20% zoom.
+        # Operator feedback after the initial blurred-letterbox ship:
+        # the foreground was too small + the blurred bars drew the eye
+        # away from the actual content. New behavior:
+        #   - scale source 20% larger than "fit inside frame", so it
+        #     fills more of the vertical
+        #   - center-crop horizontally so the result is exactly 1080 wide
+        #     (lose ~10% off each side; the operator chose this trade
+        #     because their content is center-framed)
+        #   - pad the remaining top/bottom with solid black
+        # Single-stream filter — faster than the two-stream blur path.
         w, h = cfg.output_width, cfg.output_height
+        # The 1.2 factor is the "20% zoom" the operator asked for.
+        # `ZOOM=1.2` means foreground occupies 1.2× the fit-into-frame
+        # size; sides spill past `w` and get center-cropped.
+        zoom = 1.2
+        # Compute the target foreground height for an h-tall frame +
+        # zoom. force_original_aspect_ratio=decrease + this scale yields
+        # a 16:9 source landing at (1080*1.2)=1296 wide, 729 tall — 10%
+        # crop each side, ~38% vertical fill.
+        fg_w = int(w * zoom)
+        fg_h = int(h * zoom)
         vf = (
-            f"[0:v]split=2[bg][fg];"
-            f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},boxblur=40:5[blurred];"
-            f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[scaled];"
-            f"[blurred][scaled]overlay=(W-w)/2:(H-h)/2"
+            f"scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease,"
+            f"crop={w}:'min(ih,{h})':(iw-{w})/2:0,"
+            f"pad={w}:{h}:0:({h}-ih)/2:black"
         )
     elif smart_box is not None:
         vf = crop_box_to_ffmpeg_filter(

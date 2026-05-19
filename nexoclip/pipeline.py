@@ -69,6 +69,7 @@ from nexoclip.llm.config import Quality
 from nexoclip.logging import get_logger
 from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
+from nexoclip.llm.schemas import Variant
 from nexoclip.variants import Persona, generate_variants, load_personas
 from nexoclip.vision import analyze_video as _analyze_video
 from nexoclip.vision import load_visual_signals
@@ -891,18 +892,52 @@ async def _run_pipeline(
             routing_tags=persona.routing_tags,
         )
     clip_entries: list[ClipEntry] = []
+    # Slice O.46 — variants generation is off by default (operator
+    # feedback). When disabled, we still create exactly ONE stub
+    # VariantRow per clip so the publish flow (which reads
+    # variant.caption / variant.hashtags) keeps working. The stub
+    # pulls its caption from the clip's overlay_config when set, falls
+    # back to the persona name otherwise. No LLM calls in the
+    # disabled path.
+    variants_enabled = bool(getattr(settings, "variants_enabled", False))
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
-            variants = await generate_variants(
-                tenant_id=tenant_id,
-                clip=clip,
-                persona=persona,
-                router=router,
-                n=n_variants,
-                language=language,
-                quality=quality,
-                force=force,
-            )
+            if variants_enabled:
+                variants = await generate_variants(
+                    tenant_id=tenant_id,
+                    clip=clip,
+                    persona=persona,
+                    router=router,
+                    n=n_variants,
+                    language=language,
+                    quality=quality,
+                    force=force,
+                )
+            else:
+                # Stub path — one row per clip, captioned from overlay
+                # or a sensible fallback. The dashboard editor + the
+                # publish flow both read .caption; the operator can
+                # edit it via the overlay form before shipping.
+                stub_caption = ""
+                overlay = getattr(clip, "overlay_config", None)
+                if isinstance(overlay, dict):
+                    stub_caption = (
+                        overlay.get("title_text")
+                        or overlay.get("top_hook", {}).get("text", "")
+                        if isinstance(overlay.get("top_hook"), dict)
+                        else overlay.get("title_text") or ""
+                    ) or ""
+                if not stub_caption:
+                    stub_caption = persona.name
+                variants = [
+                    Variant(
+                        id="v_stub",
+                        language=language or persona.primary_language or "es",
+                        caption=str(stub_caption)[:240],
+                        title_card_text="",
+                        hashtags=[],
+                    )
+                ]
             clip_entries.append(ClipEntry(clip=clip, persona_id=persona.id, variants=variants))
             if db is not None:
                 variant_rows = [

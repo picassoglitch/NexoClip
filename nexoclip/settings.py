@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # openai) when their providers ship in F.10+. Each cloud option
     # reads its own API key from the matching `<vendor>_api_key`
     # setting below.
+    # Slice O.46 — variants generation is OFF by default. Operator
+    # feedback: "they take a lot and don't do much". The variants step
+    # used to fan out per-persona LLM caption drafts; with the editor's
+    # overlay system + hook generator carrying most of the same value
+    # without an LLM call per persona, the per-clip variant generation
+    # was wasteful. When False, the pipeline still creates a single
+    # stub VariantRow per clip so the publish flow keeps working
+    # (publishers consume variant.caption / variant.hashtags).
+    variants_enabled: bool = False
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None

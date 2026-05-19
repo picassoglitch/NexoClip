@@ -1588,27 +1588,12 @@ async def clip_detail(
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
+    # Slice O.46 — variants picker UI removed. We still read the
+    # stub variant row that the pipeline creates per clip so the
+    # publish flow (which consumes variant.caption) has something to
+    # pass to TikTok / Reels / etc. No more enrichment / emotional
+    # labels / retention bars — that was the panel we deleted.
     variants = await VariantsRepo(db).list_for_clip(clip_id)
-    # Slice I.4 — enrich each variant with tone / fit / retention /
-    # risk metadata for the new card-grid layout.
-    enriched_variants: list[object] = []
-    try:
-        from nexoclip.llm import Variant as _LLMVariant
-        from nexoclip.variants import enrich_variants as _enrich
-
-        variant_rows = [
-            _LLMVariant(
-                id=v.id,
-                language=getattr(v, "language", "en"),
-                caption=getattr(v, "caption", ""),
-                title_card_text=getattr(v, "title_card_text", "") or "",
-                hashtags=list(getattr(v, "hashtags", None) or []),
-            )
-            for v in variants
-        ]
-        enriched_variants = list(_enrich(variant_rows))
-    except Exception:  # noqa: BLE001 — best-effort enrichment
-        enriched_variants = []
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     valid_transitions = sorted(_VALID_STATUS_TRANSITIONS.get(clip.status, set()))
     breakdown = await clip_breakdown(db, clip_id)
@@ -1802,9 +1787,6 @@ async def clip_detail(
         {
             "clip": clip,
             "variants": variants,
-            # Slice I.4 — per-variant tone / fit / retention / risk for the
-            # card-grid template. Parallel array; same index as `variants`.
-            "enriched_variants": enriched_variants,
             "accounts": accounts,
             "valid_transitions": valid_transitions,
             "breakdown": breakdown,

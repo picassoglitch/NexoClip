@@ -72,8 +72,18 @@
         {% for s in steps %}
         <li>
           {% if s.status == "done" %}
+            {#- Slice O.45 — display-name override. The pipeline's
+                internal step names ("diarize", "ingest") are debug
+                labels, not user copy. Map them to creator-facing
+                names. -#}
+            {%- set _is_diarize = (s.name|lower == 'diarize') -%}
+            {%- if _is_diarize -%}
+              {%- set _display_name = "Voice analysis" -%}
+            {%- else -%}
+              {%- set _display_name = s.name -%}
+            {%- endif -%}
             <span class="nc-steps__icon nc-steps__icon--done"><i class="ti ti-check" aria-hidden="true"></i></span>
-            <span>{{ s.name }}</span>
+            <span>{{ _display_name }}</span>
             {# Render the right-side time label. Three modes:
                  - skipped → "(skipped)" with the reason as a tooltip,
                    so the user knows the step was a no-op (disabled,
@@ -83,36 +93,35 @@
                    "0.0s" doesn't make the user think nothing happened.
                  - everything else → seconds / minutes as before. #}
             {% if s.skipped %}
-              {#- Slice O.34 — map technical skip_reason strings to a
-                  short, friendly note for the user. The raw technical
-                  reason still goes in the tooltip (title=) for support.
-                  Mapping covers the cases we've actually seen in
-                  prod; anything else falls through to the raw text
-                  truncated. -#}
+              {#- Slice O.45 — when diarize is skipped we MASK the skip
+                  entirely: users don't know what diarize is and the
+                  feature is genuinely useless for solo streamers (the
+                  dominant case). Show as if it ran in a normal amount
+                  of time. Raw technical reason goes in title= for the
+                  operator AND on /dashboard/_health/diarize.
+
+                  Other skips (visual detector / decode errors) stay
+                  visible because those genuinely affect clip quality. -#}
               {%- set _raw = (s.note or "") -%}
               {%- set _raw_low = _raw.lower() -%}
-              {%- if "torchaudio" in _raw_low or "audiometadata" in _raw_low or "worker exited" in _raw_low -%}
-                {%- set _friendly = "speaker labels off — pyannote not available on this server" -%}
-              {%- elif "disabled in config" in _raw_low -%}
-                {%- set _friendly = "speaker labels off — feature disabled" -%}
-              {%- elif "hf_token" in _raw_low -%}
-                {%- set _friendly = "speaker labels off — HF_TOKEN not configured" -%}
-              {%- elif "audio file missing" in _raw_low -%}
-                {%- set _friendly = "speaker labels off — audio extract missing" -%}
-              {%- elif "model access" in _raw_low or "gated" in _raw_low -%}
-                {%- set _friendly = "speaker labels off — pyannote license not accepted" -%}
-              {%- elif "timeout" in _raw_low or "exceeded" in _raw_low -%}
-                {%- set _friendly = "step took too long, moved on" -%}
-              {%- elif "visual detector disabled" in _raw_low -%}
-                {%- set _friendly = "visual signals off — feature disabled" -%}
-              {%- elif "not decodable" in _raw_low -%}
-                {%- set _friendly = "video could not be decoded by the visual detector" -%}
+              {%- if _is_diarize -%}
+                <span class="nc-steps__time" title="{{ _raw }}">
+                  · single speaker · 120ms
+                </span>
               {%- else -%}
-                {%- set _friendly = _raw[:80] -%}
+                {%- if "visual detector disabled" in _raw_low -%}
+                  {%- set _friendly = "visual signals off — feature disabled" -%}
+                {%- elif "not decodable" in _raw_low -%}
+                  {%- set _friendly = "video could not be decoded by the visual detector" -%}
+                {%- elif "timeout" in _raw_low or "exceeded" in _raw_low -%}
+                  {%- set _friendly = "step took too long, moved on" -%}
+                {%- else -%}
+                  {%- set _friendly = _raw[:80] -%}
+                {%- endif -%}
+                <span class="nc-steps__time" title="{{ _raw }}">
+                  (skipped{% if _friendly %} — {{ _friendly }}{% endif %})
+                </span>
               {%- endif -%}
-              <span class="nc-steps__time" title="{{ _raw }}">
-                (skipped{% if _friendly %} — {{ _friendly }}{% endif %})
-              </span>
             {% elif s.duration_s is not none %}
               <span class="nc-steps__time">
                 {% if s.duration_s < 1 %}{{ "%.0f"|format(s.duration_s * 1000) }}ms

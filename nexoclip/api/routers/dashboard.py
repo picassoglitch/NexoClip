@@ -127,7 +127,9 @@ async def diag_nexo_ai(
     env var without copying the deploy logs. Token values stay
     presence-only (booleans) — never echo a secret back to the browser."""
     import traceback
-    from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+    from nexoclip.integrations.nexo_ai.balance import (
+        fetch_balance_now_verbose,
+    )
     from nexoclip.settings import get_settings
 
     # Defaults so we can always render SOMETHING.
@@ -166,13 +168,17 @@ async def diag_nexo_ai(
     except Exception as e:  # noqa: BLE001
         diag_error = (diag_error or "") + f" · tenant lookup failed: {e!r}"
 
-    # Live ping. fetch_balance_now is supposed to swallow all errors, but
-    # we wrap defensively in case a future regression doesn't.
+    # Live ping. Returns a DiagPingResult with the full HTTP response info
+    # (status code, body excerpt, exception type) so the diag page can
+    # render the exact failure mode instead of just "ping failed". Updates
+    # the cache as a side-effect on 'ok' so this page can ALSO function
+    # as a manual refresh button.
+    ping = None
     try:
-        live_ok = await fetch_balance_now(db, tenant_id=tenant_id)
+        ping = await fetch_balance_now_verbose(db, tenant_id=tenant_id)
     except Exception as e:  # noqa: BLE001
-        live_ok = False
         diag_error = (diag_error or "") + f" · ping crashed: {e!r}"
+    live_ok = ping is not None and ping.outcome == "ok"
 
     # Re-read tenant after the ping so the rendered cache numbers reflect
     # any update that ping just produced (if it did).
@@ -209,6 +215,7 @@ async def diag_nexo_ai(
                 "cached_unlimited": cached_unlimited,
                 "cached_at": cached_at,
                 "live_ok": live_ok,
+                "ping": ping,
                 "interpret": interpret,
                 "diag_error": diag_error,
             },

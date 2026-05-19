@@ -134,22 +134,121 @@
   </div>
 </div>
 
-{# ── Live ping result ────────────────────────────────────────────────── #}
+{# ── Live ping result — rich HTTP outcome ───────────────────────────── #}
+{% if ping %}
+  {%- set _po = ping.outcome -%}
+  {%- set _ok = (_po == 'ok') -%}
+  {%- set _skip = (_po.startswith('skip_')) -%}
+  {%- set _ping_color = 'var(--nc-success)' if _ok else ('var(--nc-text-muted)' if _skip else 'var(--nc-danger)') -%}
+<div class="nc-panel" style="margin-bottom: 14px; border-color: {{ _ping_color }};">
+  <div class="nc-panel__header" style="border-color: {{ _ping_color }};">
+    <i class="ti ti-{% if _ok %}check{% elif _skip %}forbid{% else %}alert-circle{% endif %}" aria-hidden="true" style="color: {{ _ping_color }};"></i>
+    <span class="nc-panel__title" style="color: {{ _ping_color }};">
+      Ping en vivo a Nexo AI ·
+      {%- if _ok %} OK
+      {%- elif _po == 'http_error' %} HTTP {{ ping.status_code }}
+      {%- elif _po == 'timeout' %} TIMEOUT
+      {%- elif _po == 'network' %} NETWORK ERROR
+      {%- elif _po == 'parse_error' %} PARSE ERROR
+      {%- elif _po == 'skip_no_url' %} skipped (sin BASE_URL)
+      {%- elif _po == 'skip_no_token' %} skipped (sin ADMIN_TOKEN)
+      {%- elif _po == 'skip_no_external_id' %} skipped (sin external_user_id)
+      {%- else %} {{ _po }}
+      {%- endif %}
+    </span>
+  </div>
+  <div class="nc-panel__body">
+    {% if ping.url %}
+    <div style="font-family: var(--nc-mono), monospace; font-size: 11px; color: var(--nc-text-muted); margin-bottom: 10px; word-break: break-all;">
+      GET {{ ping.url }}
+    </div>
+    {% endif %}
+    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+      <tbody>
+        {% if ping.status_code is not none %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">HTTP status</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code style="color: {{ _ping_color }};">{{ ping.status_code }}</code>
+          </td>
+        </tr>
+        {% endif %}
+        {% if ping.elapsed_ms is not none %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Latencia</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code>{{ ping.elapsed_ms }} ms</code>
+          </td>
+        </tr>
+        {% endif %}
+        {% if ping.exception_type %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Excepción</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code style="color: var(--nc-danger);">{{ ping.exception_type }}</code>
+          </td>
+        </tr>
+        {% endif %}
+        {% if ping.exception_message %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted); vertical-align: top;">Mensaje</td>
+          <td style="padding: 8px 0; text-align: right; max-width: 60ch;">
+            <code style="font-size: 11px; color: var(--nc-danger); white-space: pre-wrap; word-break: break-word;">{{ ping.exception_message }}</code>
+          </td>
+        </tr>
+        {% endif %}
+        {% if ping.balance_remaining is not none %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Balance reportado por Nexo AI</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code>{{ '{:,}'.format(ping.balance_remaining) }} tokens</code>
+            {% if ping.balance_unlimited %}<span style="color: var(--nc-success); margin-left: 8px;">unlimited</span>{% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    {# Body excerpt — when Nexo AI returns 4xx/5xx the response usually
+       carries a JSON error or HTML error page. Render it so the operator
+       can see exactly what the server said. Capped at 500 chars upstream. #}
+    {% if ping.body_excerpt %}
+    <div style="margin-top: 14px;">
+      <div style="font-family: var(--nc-mono), monospace; font-size: 10px; letterspacing: 0.1em; text-transform: uppercase; color: var(--nc-text-muted); margin-bottom: 4px;">
+        Body de respuesta (primeros 500 chars)
+      </div>
+      <pre style="margin: 0; padding: 10px 12px; background: var(--nc-bg-1); border: 1px solid var(--nc-line); border-radius: 6px; font-size: 11px; color: var(--nc-text); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">{{ ping.body_excerpt }}</pre>
+    </div>
+    {% endif %}
+
+    {# Hint notes — pre-computed in Python for each HTTP status code. #}
+    {% if ping.notes %}
+    <div style="margin-top: 14px; padding: 10px 12px; background: rgba(245,177,61,0.06); border: 1px solid rgba(245,177,61,0.25); border-radius: 6px; font-size: 12.5px; line-height: 1.5; color: var(--nc-text);">
+      {% for note in ping.notes %}
+        <div{% if not loop.first %} style="margin-top: 6px;"{% endif %}>▸ {{ note }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Cache state ────────────────────────────────────────────────────── #}
 <div class="nc-panel" style="margin-bottom: 14px;">
   <div class="nc-panel__header">
-    <i class="ti ti-wave-sine" aria-hidden="true"></i>
-    <span class="nc-panel__title">Ping en vivo a Nexo AI</span>
+    <i class="ti ti-database" aria-hidden="true"></i>
+    <span class="nc-panel__title">Cache local del balance</span>
   </div>
   <div class="nc-panel__body">
     <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
       <tbody>
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Resultado del ping (este request)</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Estado del ping anterior (legacy)</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if live_ok %}
               <span style="color: var(--nc-success);">✓ balance actualizado</span>
             {% else %}
-              <span style="color: var(--nc-danger);">✗ falló — ver logs de Railway</span>
+              <span style="color: var(--nc-danger);">✗ falló — ver detalle arriba</span>
             {% endif %}
           </td>
         </tr>

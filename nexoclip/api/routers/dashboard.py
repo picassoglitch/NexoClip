@@ -1419,6 +1419,22 @@ async def clip_detail(
     )
     director = director_lines(breakdown=breakdown, verdict=publishability)
 
+    # Slice G.2 — cache the verdict on the clip row so the inbox + streams
+    # grid can render a status chip without recomputing. Best-effort:
+    # a write failure here must not block the editor render.
+    if (
+        clip.publishability_score != int(publishability.score)
+        or clip.publishability_status != publishability.status
+    ):
+        try:
+            await ClipsRepo(db).set_publishability(
+                clip_id,
+                score=int(publishability.score),
+                status=publishability.status,
+            )
+        except Exception:  # noqa: BLE001 — never block render on cache write
+            pass
+
     # Resolve the brand kit + caption style so the editor can render
     # the live preview against the right defaults when overlay_config
     # is empty (or partially populated).

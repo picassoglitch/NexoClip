@@ -141,12 +141,31 @@
     <div class="nc-inbox-grid">
       {% for clip in group.clips %}
       <div class="nc-clip-card">
-        <div class="nc-clip-card__thumb">
+        <div class="nc-clip-card__thumb" style="position: relative;">
           {% if clip.thumbnail_frame_path %}
           <img src="/dashboard/clips/{{ clip.id }}/thumbnail" alt="thumb">
           {% else %}
           <i class="ti ti-photo-off" aria-hidden="true"></i>
           {% endif %}
+          {# Slice G.2 — publishability chip overlaid on the thumb so the
+             operator scans the inbox and instantly sees which clips are
+             ship-ready, which need a tweak, and which are throwaway.
+             Cache populated on every editor render; legacy rows with
+             NULL stay clean. #}
+          {%- if clip.publishability_status -%}
+            {%- set _ps = clip.publishability_status -%}
+            {%- if _ps == 'publish_ready' -%}{%- set _chip = 'success' -%}{%- set _label = 'Ship ready' -%}{%- set _icon = 'rocket' -%}
+            {%- elif _ps == 'needs_edit' -%}{%- set _chip = 'warn' -%}{%- set _label = 'Needs edit' -%}{%- set _icon = 'edit' -%}
+            {%- else -%}{%- set _chip = 'danger' -%}{%- set _label = 'Reject' -%}{%- set _icon = 'x' -%}
+            {%- endif -%}
+          <span class="nc-chip nc-chip--{{ _chip }}"
+                title="Publishability score: {{ clip.publishability_score }} / 100"
+                style="position: absolute; top: 6px; left: 6px; font-size: 10px; padding: 2px 6px;">
+            <i class="ti ti-{{ _icon }}" aria-hidden="true"></i>
+            <span>{{ _label }}</span>
+            <span class="nc-mono">{{ clip.publishability_score }}</span>
+          </span>
+          {%- endif -%}
         </div>
         <div class="nc-clip-card__time">
           {{ "%d"|format(clip.start_s|int) }}s <span style="color: var(--nc-text-muted);">→</span> {{ "%d"|format(clip.end_s|int) }}s

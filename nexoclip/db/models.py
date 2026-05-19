@@ -188,6 +188,12 @@ class ClipRow(BaseModel):
     # picks the keys it knows; adding a new overlay knob doesn't need a
     # schema migration.
     overlay_config: dict[str, object] | None = None
+    # Slice G.2 — cached publishability verdict. None = never scored.
+    # `compute_publishability` runs in the editor + after save; the
+    # cache lets the inbox + streams grid render a status chip without
+    # recomputing per row.
+    publishability_score: int | None = None
+    publishability_status: str | None = None  # publish_ready | needs_edit | reject
 
 
 class VariantRow(BaseModel):

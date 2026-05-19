@@ -975,6 +975,33 @@ class ClipsRepo:
         assert out is not None
         return out
 
+    async def set_publishability(
+        self,
+        clip_id: str,
+        *,
+        score: int,
+        status: str,
+    ) -> ClipRow:
+        """Slice G.2 — cache the publishability verdict on the clip row.
+
+        Called from the editor render path + every save endpoint so the
+        inbox + streams grid can render a status chip without rerunning
+        the scorer. `status` is one of the PublishStatus literals
+        (publish_ready / needs_edit / reject).
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET publishability_score = ?, "
+            "publishability_status = ? WHERE id = ? AND tenant_id = ?",
+            (int(score), status, clip_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(clip_id)
+        if out is None:
+            raise NexoClipError(f"clip {clip_id!r} not found")
+        return out
+
     async def update_status(self, clip_id: str, *, status: str) -> ClipRow:
         """Direct status write — caller checks the transition graph.
 

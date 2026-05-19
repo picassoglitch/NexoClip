@@ -45,7 +45,15 @@ import modal
 # provider — bumping it on one side and forgetting the other would
 # produce different transcripts between dev + prod.
 _IMAGE = (
-    modal.Image.debian_slim(python_version="3.11")
+    # Slice O.44.4 — debian_slim doesn't ship libcublas / libcudnn, so
+    # ctranslate2 (faster-whisper's runtime) crashes at first inference
+    # with "Library libcublas.so.12 is not found". Use NVIDIA's CUDA
+    # runtime image so the GPU libs are in /usr/local/cuda/lib64 where
+    # ctranslate2 looks. cuDNN 9 + CUDA 12.4 matches ctranslate2 4.x.
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+        add_python="3.11",
+    )
     .apt_install("ffmpeg")
     .pip_install(
         "faster-whisper==1.0.3",

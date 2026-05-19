@@ -50,6 +50,10 @@ _IMAGE = (
     .pip_install(
         "faster-whisper==1.0.3",
         "httpx>=0.27",
+        # Modal 1.x stopped auto-installing FastAPI for fastapi_endpoint
+        # functions — we now have to pin it ourselves. `[standard]`
+        # pulls in the useful middleware extras Modal recommends.
+        "fastapi[standard]>=0.115",
     )
 )
 

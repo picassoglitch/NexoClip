@@ -74,6 +74,26 @@ async def dashboard_root() -> Response:
     return RedirectResponse(url="/dashboard/streams", status_code=303)
 
 
+@router.get("/_balance/chip", response_class=HTMLResponse, include_in_schema=False)
+async def balance_chip(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+) -> Response:
+    """Slice O.47 — HTMX-polled token chip.
+
+    Returns just the chip's HTML fragment so the nav can swap it in place
+    on a poll (every 30s) AND after token-consuming actions (clip
+    finalize, publish, download). No live Nexo AI fetch — reads the
+    cached values populated by the outbound usage reporter after every
+    LLM call. The "refresh" button now sits inside the chip and forces
+    a live fetch only when the user explicitly clicks it.
+    """
+    bal = getattr(request.state, "token_balance", None)
+    return templates.TemplateResponse(
+        "_balance_chip.html", {"request": request, "_bal": bal}
+    )
+
+
 @router.get("/_balance/refresh", include_in_schema=False)
 async def refresh_balance(
     request: Request,
@@ -124,43 +144,65 @@ async def estimate_run_cost(
     data, just empirical multipliers × the duration the client already
     knows. Clamp inputs so a hostile / buggy client can't produce
     absurd numbers."""
-    from nexoclip.llm.estimator import (
-        estimate_pipeline_run,
-        format_tokens,
-    )
+    # Slice O.47 — wrap in try/except so a single-field bug can't 500
+    # the upload page. On any internal error, return a degraded payload
+    # the UI can render as "estimate unavailable" instead of an alarming
+    # red error block.
+    try:
+        from nexoclip.llm.estimator import (
+            estimate_pipeline_run,
+            format_tokens,
+        )
 
-    safe_duration = max(0.0, min(float(duration_seconds or 0), 12 * 3600))
-    safe_personas = max(1, min(int(persona_count), 10))
+        safe_duration = max(0.0, min(float(duration_seconds or 0), 12 * 3600))
+        safe_personas = max(1, min(int(persona_count), 10))
 
-    est = estimate_pipeline_run(
-        duration_seconds=safe_duration if safe_duration > 0 else None,
-        persona_count=safe_personas,
-    )
-    # The persona-multiplied phase ("Variantes") is the only one whose
-    # tokens scale with persona_count. Expose its per-persona slice so
-    # the UI can render "+Y tokens per extra persona" without recomputing.
-    variant_tokens_total = next(
-        (line.tokens for line in est.lines if line.phase == "Variantes"),
-        0,
-    )
-    per_persona_variant = (
-        variant_tokens_total // safe_personas if safe_personas > 0 else 0
-    )
+        est = estimate_pipeline_run(
+            duration_seconds=safe_duration if safe_duration > 0 else None,
+            persona_count=safe_personas,
+        )
+        # The persona-multiplied phase ("Variantes") is suppressed when
+        # variants are disabled; per_persona_variant is 0 in that case.
+        variant_tokens_total = next(
+            (line.tokens for line in est.lines if line.phase == "Variantes"),
+            0,
+        )
+        per_persona_variant = (
+            variant_tokens_total // safe_personas if safe_personas > 0 else 0
+        )
 
-    return JSONResponse(
-        {
-            "duration_seconds": safe_duration,
-            "persona_count": safe_personas,
-            "total_tokens": est.total_tokens,
-            "total_fmt": format_tokens(est.total_tokens),
-            "per_persona_variant_tokens": per_persona_variant,
-            "per_persona_variant_fmt": format_tokens(per_persona_variant),
-            "lines": [
-                {"phase": ln.phase, "tokens": ln.tokens, "note": ln.note}
-                for ln in est.lines
-            ],
-        }
-    )
+        return JSONResponse(
+            {
+                "duration_seconds": safe_duration,
+                "persona_count": safe_personas,
+                "total_tokens": est.total_tokens,
+                "total_fmt": format_tokens(est.total_tokens),
+                "per_persona_variant_tokens": per_persona_variant,
+                "per_persona_variant_fmt": format_tokens(per_persona_variant),
+                "lines": [
+                    {"phase": ln.phase, "tokens": ln.tokens, "note": ln.note}
+                    for ln in est.lines
+                ],
+            }
+        )
+    except Exception as e:  # noqa: BLE001 — never 500 the upload page
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "estimate_pipeline_run.failed", reason=str(e)
+        )
+        return JSONResponse(
+            {
+                "duration_seconds": 0.0,
+                "persona_count": 1,
+                "total_tokens": 0,
+                "total_fmt": "—",
+                "per_persona_variant_tokens": 0,
+                "per_persona_variant_fmt": "—",
+                "lines": [],
+                "error": "estimate unavailable",
+            },
+            status_code=200,
+        )
 
 
 @router.get("/_diag/nexo_ai", response_class=HTMLResponse, include_in_schema=False)
@@ -793,6 +835,9 @@ async def stream_progress(
     ]
 
     # Roll up by step name -> latest known status. Step order is fixed.
+    # Slice O.47 — `variants` removed from the user-visible list. The
+    # step still runs in the pipeline (creates one stub row per clip so
+    # publish works) but it's not a creator-facing concept anymore.
     step_order = [
         "ingest",
         "analyze_video",
@@ -800,7 +845,6 @@ async def stream_progress(
         "transcribe",
         "detect",
         "cut",
-        "variants",
     ]
     step_state: dict[str, dict[str, object]] = {
         name: {

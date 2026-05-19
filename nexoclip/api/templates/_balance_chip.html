@@ -1,0 +1,56 @@
+{# Slice O.47 — token-balance chip fragment.
+
+   Standalone <a> fragment so the nav can swap it via HTMX every 30s
+   AND after token-consuming actions (clip finalize, publish, download)
+   without re-rendering the whole nav.
+
+   Three states match the original chip:
+     - cache empty  → muted "— tokens · refresh" (click forces a fetch)
+     - unlimited    → success "∞ tokens"
+     - normal       → warn if <50k, muted otherwise; "Xk tokens"
+
+   Click target is always /_balance/refresh — that does the live Nexo
+   AI fetch + bounces back. Polling just keeps the cached number
+   fresh as the outbound usage reporter writes new values to the DB
+   after each LLM call. #}
+
+{%- if _bal is none -%}
+<a href="/dashboard/_balance/refresh"
+   id="nc-balance-chip"
+   class="nc-chip nc-chip--muted"
+   title="Sin balance en cache. Click para refrescar desde Nexo AI."
+   hx-get="/dashboard/_balance/chip"
+   hx-trigger="every 30s, balance-poll from:body"
+   hx-swap="outerHTML"
+   style="text-decoration: none;">
+  <i class="ti ti-coin" aria-hidden="true"></i>
+  <span>— tokens · refresh</span>
+</a>
+{%- elif _bal.unlimited -%}
+<a href="/dashboard/_balance/refresh"
+   id="nc-balance-chip"
+   class="nc-chip nc-chip--success"
+   title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}."
+   hx-get="/dashboard/_balance/chip"
+   hx-trigger="every 30s, balance-poll from:body"
+   hx-swap="outerHTML"
+   style="text-decoration: none;">
+  <i class="ti ti-infinity" aria-hidden="true"></i>
+  <span>∞ tokens</span>
+</a>
+{%- else -%}
+  {%- set _remaining = _bal.remaining or 0 -%}
+  {%- set _low = _remaining < 50000 -%}
+  {%- set _short = _remaining // 1000 -%}
+<a href="/dashboard/_balance/refresh"
+   id="nc-balance-chip"
+   class="nc-chip nc-chip--{% if _low %}warn{% else %}muted{% endif %}"
+   title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}."
+   hx-get="/dashboard/_balance/chip"
+   hx-trigger="every 30s, balance-poll from:body"
+   hx-swap="outerHTML"
+   style="text-decoration: none;">
+  <i class="ti ti-coin" aria-hidden="true"></i>
+  <span>{{ _short }}k tokens</span>
+</a>
+{%- endif -%}

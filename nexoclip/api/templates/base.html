@@ -78,38 +78,13 @@
            reflects the cross-engine Nexo AI balance without any per-render
            network call. `unlimited` = admins, render as ∞. NULL = no LLM
            calls yet, render a faded "—" placeholder. #}
+        {# Slice O.47 — chip is now an HTMX-polled fragment. Re-fetches
+           every 30s automatically AND on the `balance-poll` custom
+           event we dispatch after token-spending actions. The chip
+           markup lives in _balance_chip.html so both this server-side
+           include AND the HTMX swap target see identical HTML. #}
         {%- set _bal = (request.state.token_balance if request and request.state else None) -%}
-        {% if _bal is none %}
-        {# Empty cache. Click triggers an on-demand fetch — and on failure
-           the refresh handler 303s straight to /dashboard/_diag/nexo_ai so
-           the user sees what's broken instead of a silent reload. #}
-        <a href="/dashboard/_balance/refresh"
-           class="nc-chip nc-chip--muted"
-           title="Sin balance en cache. Click para refrescar desde Nexo AI — si falla, te llevará a la página de diagnóstico."
-           style="text-decoration: none;">
-          <i class="ti ti-coin" aria-hidden="true"></i>
-          <span>— tokens · refresh</span>
-        </a>
-        {% elif _bal.unlimited %}
-        <a href="/dashboard/_balance/refresh"
-           class="nc-chip nc-chip--success"
-           title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}. Click para refrescar."
-           style="text-decoration: none;">
-          <i class="ti ti-infinity" aria-hidden="true"></i>
-          <span>∞ tokens</span>
-        </a>
-        {% else %}
-          {%- set _remaining = _bal.remaining or 0 -%}
-          {%- set _low = _remaining < 50000 -%}
-          {%- set _short = _remaining // 1000 -%}
-        <a href="/dashboard/_balance/refresh"
-           class="nc-chip nc-chip--{% if _low %}warn{% else %}muted{% endif %}"
-           title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}. Click para refrescar desde Nexo AI."
-           style="text-decoration: none;">
-          <i class="ti ti-coin" aria-hidden="true"></i>
-          <span>{{ _short }}k tokens</span>
-        </a>
-        {% endif %}
+        {% include "_balance_chip.html" %}
 
         {# Slice O.1 — tier chip. Reads from `request.state.tenant_tier`
            injected by BearerAuthMiddleware so the chip renders on EVERY

@@ -103,7 +103,7 @@
               Costo estimado de este run · <span style="color: {{ _est_color }};">~{{ estimate_total_fmt }} tokens</span>
             </div>
             <div style="font-size: 11.5px; color: var(--nc-text-muted); margin-top: 2px;">
-              Por persona extra: +{{ estimate_per_extra_persona_fmt }} tokens (la variante es el paso que más gasta)
+              Detección, cortes y hooks. Una pasada por video.
             </div>
           </div>
         </div>
@@ -141,9 +141,8 @@
           </tbody>
         </table>
         <small style="display: block; margin-top: 8px; color: var(--nc-text-muted); line-height: 1.5;">
-          ▸ Es un estimado upper-bound basado en histórico de runs (P80). Lo real
-          suele venir 15-30% más bajo. El cálculo asume 1 persona; cada persona
-          extra multiplica la fase de variantes.
+          ▸ Estimado upper-bound basado en histórico de runs (P80). Lo real
+          suele venir 15-30% más bajo.
         </small>
       </details>
     </div>

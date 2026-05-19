@@ -98,6 +98,17 @@ def estimate_pipeline_run(
     Returns:
       PipelineEstimate with a flat total + a breakdown the UI can render.
     """
+    # Slice O.47 — variants phase suppressed when variants_enabled is
+    # False (the new default). Pipeline still creates one stub variant
+    # row per clip but it's a 0-token operation. We omit the line
+    # entirely so the UI breakdown doesn't show a phantom "Variantes"
+    # row at 0 tokens.
+    try:
+        from nexoclip.settings import get_settings
+        _variants_enabled = bool(get_settings().variants_enabled)
+    except Exception:  # noqa: BLE001 — defensive; estimator must never 500
+        _variants_enabled = False
+
     duration_min = (duration_seconds or 3600) / 60.0
     duration_hr = duration_min / 60.0
 
@@ -108,10 +119,14 @@ def estimate_pipeline_run(
 
     detect_tokens = candidates * TOKENS_PER_CANDIDATE_DETECT
     cut_tokens = clips * TOKENS_PER_CLIP_CUT
-    variant_tokens = clips * persona_count * variants_per_clip * TOKENS_PER_VARIANT
+    variant_tokens = (
+        clips * persona_count * variants_per_clip * TOKENS_PER_VARIANT
+        if _variants_enabled
+        else 0
+    )
     hook_tokens = clips * hooks_per_clip * TOKENS_PER_HOOK_PER_CLIP
 
-    lines: tuple[EstimateLine, ...] = (
+    lines_list: list[EstimateLine] = [
         EstimateLine(
             phase="Detección",
             tokens=detect_tokens,
@@ -122,25 +137,33 @@ def estimate_pipeline_run(
             tokens=cut_tokens,
             note=f"~{clips} clips × {TOKENS_PER_CLIP_CUT} tokens",
         ),
-        EstimateLine(
-            phase="Variantes",
-            tokens=variant_tokens,
-            note=(
-                f"{clips} × {persona_count} persona{'s' if persona_count != 1 else ''} × "
-                f"{variants_per_clip} variantes × {TOKENS_PER_VARIANT} tokens"
-            ),
-        ),
+    ]
+    if _variants_enabled:
+        lines_list.append(
+            EstimateLine(
+                phase="Variantes",
+                tokens=variant_tokens,
+                note=(
+                    f"{clips} × {persona_count} persona{'s' if persona_count != 1 else ''} × "
+                    f"{variants_per_clip} variantes × {TOKENS_PER_VARIANT} tokens"
+                ),
+            )
+        )
+    lines_list.append(
         EstimateLine(
             phase="Hooks",
             tokens=hook_tokens,
             note=f"{clips} × {hooks_per_clip} hooks × {TOKENS_PER_HOOK_PER_CLIP} tokens",
-        ),
+        )
+    )
+    lines_list.append(
         EstimateLine(
             phase="Overhead",
             tokens=TOKENS_FIXED_OVERHEAD,
             note="init + validación + misc",
-        ),
+        )
     )
+    lines = tuple(lines_list)
 
     total = sum(line.tokens for line in lines)
     return PipelineEstimate(total_tokens=total, lines=lines)

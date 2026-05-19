@@ -6058,6 +6058,13 @@
 
   // Initial blurb render — show the trade-off for the currently
   // selected chip on page load so the operator sees it immediately.
+  // Slice K.5 close-out: on a FRESH clip (no overlay_config saved yet,
+  // _has_clip_overlay = false), cascade the brand-kit's target_platform
+  // through applyPlatformPreset so the controls actually match the
+  // pre-selected chip. Without this, the chip rendered "TikTok"
+  // selected but captions stayed at the brand-kit default position,
+  // confusing operators who picked a platform on the brand kit and
+  // expected every new clip to open with that platform's settings.
   (function () {
     var sel = document.querySelector(".nc-platform-chip.is-selected");
     var blurb = document.getElementById("platform-blurb");
@@ -6066,6 +6073,16 @@
       var name = sel.querySelector(".nc-platform-chip__name");
       var nameText = name ? name.textContent.trim() : "";
       blurb.innerHTML = "Optimized for <strong>" + nameText + "</strong> · " + b;
+    }
+    // First-open auto-apply. _has_clip_overlay is the template flag
+    // set to true iff the clip already has an overlay_config in the
+    // DB. False = brand-new clip, no operator edits yet, so applying
+    // the chip's preset is non-destructive. True = operator has
+    // already touched settings, leave them alone.
+    var hasOverlay = {{ 'true' if clip.overlay_config else 'false' }};
+    if (!hasOverlay && sel && typeof applyPlatformPreset === "function") {
+      var id = sel.getAttribute("data-platform-id");
+      if (id) applyPlatformPreset(id);
     }
   })();
 

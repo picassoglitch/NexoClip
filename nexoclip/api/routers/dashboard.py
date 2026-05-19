@@ -107,6 +107,62 @@ async def refresh_balance(
     return RedirectResponse(url=referer, status_code=303)
 
 
+@router.get("/_estimate", include_in_schema=False)
+async def estimate_run_cost(
+    duration_seconds: float | None = None,
+    persona_count: int = 1,
+    tenant_id: str = Depends(tenant_binder),
+) -> JSONResponse:
+    """JSON endpoint hit by the upload page JS once the user picks a video.
+
+    Returns the same shape the stream_detail page renders server-side, so
+    the upload-time preview and the post-upload re-run preview look
+    identical. Duration is browser-read (HTMLMediaElement.duration); no
+    file content moves through this endpoint.
+
+    Safe to call as a regular tenant — the response carries no other-user
+    data, just empirical multipliers × the duration the client already
+    knows. Clamp inputs so a hostile / buggy client can't produce
+    absurd numbers."""
+    from nexoclip.llm.estimator import (
+        estimate_pipeline_run,
+        format_tokens,
+    )
+
+    safe_duration = max(0.0, min(float(duration_seconds or 0), 12 * 3600))
+    safe_personas = max(1, min(int(persona_count), 10))
+
+    est = estimate_pipeline_run(
+        duration_seconds=safe_duration if safe_duration > 0 else None,
+        persona_count=safe_personas,
+    )
+    # The persona-multiplied phase ("Variantes") is the only one whose
+    # tokens scale with persona_count. Expose its per-persona slice so
+    # the UI can render "+Y tokens per extra persona" without recomputing.
+    variant_tokens_total = next(
+        (line.tokens for line in est.lines if line.phase == "Variantes"),
+        0,
+    )
+    per_persona_variant = (
+        variant_tokens_total // safe_personas if safe_personas > 0 else 0
+    )
+
+    return JSONResponse(
+        {
+            "duration_seconds": safe_duration,
+            "persona_count": safe_personas,
+            "total_tokens": est.total_tokens,
+            "total_fmt": format_tokens(est.total_tokens),
+            "per_persona_variant_tokens": per_persona_variant,
+            "per_persona_variant_fmt": format_tokens(per_persona_variant),
+            "lines": [
+                {"phase": ln.phase, "tokens": ln.tokens, "note": ln.note}
+                for ln in est.lines
+            ],
+        }
+    )
+
+
 @router.get("/_diag/nexo_ai", response_class=HTMLResponse, include_in_schema=False)
 async def diag_nexo_ai(
     request: Request,

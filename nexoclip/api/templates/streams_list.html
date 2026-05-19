@@ -66,6 +66,41 @@
             </select>
           </label>
         </div>
+        {# Pre-upload cost estimate. Hidden until the user picks a video
+           file; once picked, JS reads HTMLMediaElement.duration locally
+           (no upload yet) + GETs /dashboard/_estimate to render the
+           token cost preview. Same look as the post-upload estimate on
+           stream_detail.html so the experience is continuous. #}
+        <div id="upload-estimate" style="display: none; margin: 12px 0 10px 0;
+             border: 1px solid var(--nc-line-soft); border-radius: 8px;
+             padding: 12px 14px; background: rgba(120, 197, 255, 0.04);">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <i class="ti ti-calculator" aria-hidden="true" style="color: var(--nc-blue-bright); font-size: 16px;"></i>
+            <div style="flex: 1;">
+              <div id="ue-headline" style="font-size: 13px; color: var(--nc-text); font-weight: 600;">
+                Calculando estimado…
+              </div>
+              <div id="ue-sub" style="font-size: 11.5px; color: var(--nc-text-muted); margin-top: 2px;"></div>
+            </div>
+            <button type="button" id="ue-details-toggle"
+                    style="background: transparent; border: 1px solid var(--nc-line-soft);
+                           border-radius: 6px; padding: 4px 9px; font-size: 11px;
+                           color: var(--nc-text-muted); cursor: pointer;">
+              Detalle ▾
+            </button>
+          </div>
+          <div id="ue-details" style="display: none; margin-top: 10px;">
+            <table style="width: 100%; font-size: 11.5px; border-collapse: collapse;">
+              <tbody id="ue-lines"></tbody>
+            </table>
+            <small style="display: block; margin-top: 8px; color: var(--nc-text-muted); line-height: 1.5;">
+              ▸ Upper-bound (P80). Lo real suele venir 15-30% más bajo. Calculado
+              con la duración del archivo leída en tu navegador (no se sube nada
+              todavía).
+            </small>
+          </div>
+        </div>
+
         <button id="upload-submit"
                 class="nc-btn nc-btn--primary nc-btn--full"
                 type="submit"
@@ -136,6 +171,123 @@
     hint.style.display = "";
     showIdle();
   });
+
+  // ── Pre-upload cost estimate ───────────────────────────────────────
+  // When the user picks a video, read its duration in the browser via a
+  // throwaway <video> element (no upload yet — same File the form will
+  // submit later). Then GET /dashboard/_estimate?duration_seconds=X and
+  // render the panel. The form's enctype is multipart and the file lives
+  // in the <input>, so this is read-only on the local file — instant.
+  const estPanel = document.getElementById("upload-estimate");
+  const estHeadline = document.getElementById("ue-headline");
+  const estSub = document.getElementById("ue-sub");
+  const estLinesTbody = document.getElementById("ue-lines");
+  const estDetails = document.getElementById("ue-details");
+  const estToggle = document.getElementById("ue-details-toggle");
+  const fileInput = form.querySelector('input[type="file"]');
+
+  estToggle?.addEventListener("click", function () {
+    const open = estDetails.style.display !== "none";
+    estDetails.style.display = open ? "none" : "block";
+    estToggle.textContent = open ? "Detalle ▾" : "Detalle ▴";
+  });
+
+  function fmtTokens(n) {
+    if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + "B";
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+    return String(n);
+  }
+
+  function readDurationSeconds(file) {
+    return new Promise(function (resolve) {
+      const url = URL.createObjectURL(file);
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      // Cleanup either way — the object URL holds memory until revoked
+      // and the <video> stays in memory until the GC sees it gone.
+      const done = function (val) {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+        resolve(val);
+      };
+      v.addEventListener("loadedmetadata", function () {
+        const d = isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+        done(d);
+      }, { once: true });
+      v.addEventListener("error", function () { done(null); }, { once: true });
+      v.src = url;
+    });
+  }
+
+  function renderEstimate(data) {
+    estPanel.style.display = "";
+    estHeadline.innerHTML =
+      'Costo estimado de este run · <span style="color: var(--nc-blue-bright);">~' +
+      data.total_fmt + ' tokens</span>';
+    estSub.textContent =
+      'Por persona extra: +' + data.per_persona_variant_fmt +
+      ' tokens · duración leída del archivo';
+    // Build the breakdown table on demand. Reuses Jinja-style markup
+    // shape from the post-upload panel.
+    estLinesTbody.innerHTML = "";
+    for (const line of data.lines || []) {
+      const tr = document.createElement("tr");
+      tr.style.borderBottom = "1px solid var(--nc-line-soft)";
+      const tdPhase = document.createElement("td");
+      tdPhase.style.padding = "5px 0";
+      tdPhase.style.color = "var(--nc-text)";
+      tdPhase.style.fontWeight = "500";
+      tdPhase.textContent = line.phase;
+      const tdNote = document.createElement("td");
+      tdNote.style.padding = "5px 8px";
+      tdNote.style.color = "var(--nc-text-muted)";
+      tdNote.style.fontSize = "11px";
+      tdNote.textContent = line.note;
+      const tdTokens = document.createElement("td");
+      tdTokens.style.padding = "5px 0";
+      tdTokens.style.textAlign = "right";
+      tdTokens.style.fontFamily = "var(--nc-mono), monospace";
+      tdTokens.style.color = "var(--nc-text)";
+      tdTokens.textContent = (line.tokens || 0).toLocaleString("es-MX");
+      tr.appendChild(tdPhase);
+      tr.appendChild(tdNote);
+      tr.appendChild(tdTokens);
+      estLinesTbody.appendChild(tr);
+    }
+  }
+
+  async function refreshEstimate() {
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+      estPanel.style.display = "none";
+      return;
+    }
+    const file = fileInput.files[0];
+    estPanel.style.display = "";
+    estHeadline.textContent = "Calculando estimado…";
+    estSub.textContent = "Leyendo metadata del archivo localmente";
+    let dur = await readDurationSeconds(file);
+    // Fallback: when the browser can't parse duration (rare codec quirk),
+    // assume a 1-hour stream so the estimate is still informative.
+    if (!dur || dur <= 0) dur = 3600;
+    try {
+      const res = await fetch(
+        "/dashboard/_estimate?duration_seconds=" + Math.round(dur) +
+        "&persona_count=1",
+        { credentials: "same-origin" }
+      );
+      if (!res.ok) throw new Error("estimate fetch failed: " + res.status);
+      const data = await res.json();
+      renderEstimate(data);
+    } catch (err) {
+      estHeadline.textContent = "No se pudo calcular el estimado";
+      estSub.textContent = String(err);
+    }
+  }
+
+  fileInput?.addEventListener("change", function () {
+    refreshEstimate();
+  });
+
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();

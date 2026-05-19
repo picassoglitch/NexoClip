@@ -54,6 +54,10 @@ _IMAGE = (
         # functions — we now have to pin it ourselves. `[standard]`
         # pulls in the useful middleware extras Modal recommends.
         "fastapi[standard]>=0.115",
+        # faster-whisper 1.0.3's utils.py imports `requests` at the top
+        # of the file but doesn't declare it as a dependency. Pin it
+        # explicitly so the image build doesn't skip it.
+        "requests>=2.32",
     )
 )
 

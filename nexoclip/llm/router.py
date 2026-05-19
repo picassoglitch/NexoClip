@@ -435,6 +435,11 @@ class LLMRouter:
             # engine token balance updates. Fire-and-forget so the LLM hot
             # path doesn't wait for the outbound HTTP. Only reports SUCCESSFUL
             # calls (status='ok'); error rows shouldn't count against quota.
+            #
+            # Operation tag: pass the LLM purpose (variant_generation, hooks,
+            # etc.) so /app/usage on the Nexo AI side can collapse all the
+            # calls inside one pipeline run into a single user-visible row
+            # ("Variantes para stream X · 5.2k tokens · 8 llamadas").
             if status == "ok" and (input_tokens > 0 or output_tokens > 0):
                 from nexoclip.integrations.nexo_ai.reporter import schedule_report
 
@@ -445,6 +450,7 @@ class LLMRouter:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     occurred_at_iso=ts,
+                    operation=purpose,
                 )
 
     async def _emit_event(

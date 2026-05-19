@@ -52,6 +52,7 @@ async def report_llm_usage(
     input_tokens: int,
     output_tokens: int,
     occurred_at_iso: str,
+    operation: str | None = None,
 ) -> None:
     """Push one LLM call's token consumption to Nexo AI + persist the
     returned balance on the tenant row. Never raises — all errors are
@@ -94,16 +95,22 @@ async def report_llm_usage(
         return
 
     url = f"{base.rstrip('/')}/api/engines/nexoclip/usage"
+    # Build a single-event POST. `operation` is forwarded so Nexo AI's
+    # /app/usage page can collapse a multi-call pipeline run into one
+    # row (it groups events by user+engine+operation+date). Optional —
+    # omitted when the caller didn't pass a purpose, in which case
+    # Nexo AI renders each event individually as before.
+    event: dict[str, Any] = {
+        "kind": "llm.tokens",
+        "amount": amount,
+        "source_id": llm_call_id,
+        "occurred_at": occurred_at_iso,
+    }
+    if operation:
+        event["operation"] = operation
     body: dict[str, Any] = {
         "external_user_id": tenant.external_user_id,
-        "events": [
-            {
-                "kind": "llm.tokens",
-                "amount": amount,
-                "source_id": llm_call_id,
-                "occurred_at": occurred_at_iso,
-            }
-        ],
+        "events": [event],
     }
     headers = {
         "Authorization": f"Bearer {token}",
@@ -173,6 +180,7 @@ def schedule_report(
     input_tokens: int,
     output_tokens: int,
     occurred_at_iso: str,
+    operation: str | None = None,
 ) -> None:
     """Fire-and-forget wrapper. Spawns a task so the caller (LLMRouter._log)
     doesn't pay the network round-trip on the hot path. The task runs to
@@ -198,6 +206,7 @@ def schedule_report(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             occurred_at_iso=occurred_at_iso,
+            operation=operation,
         )
     )
     _BACKGROUND_TASKS.add(task)

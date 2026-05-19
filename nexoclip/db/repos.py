@@ -1002,6 +1002,64 @@ class ClipsRepo:
             raise NexoClipError(f"clip {clip_id!r} not found")
         return out
 
+    async def set_trim_bounds(
+        self,
+        clip_id: str,
+        *,
+        start_s: float,
+        end_s: float,
+        duration_s: float,
+        new_path: str,
+        original_start_s: float | None,
+        original_end_s: float | None,
+    ) -> ClipRow:
+        """Slice G.4b — replace the clip's bounds + path after auto-trim.
+
+        Stores the originals on the FIRST trim so revert is one query.
+        Caller is responsible for not overwriting them on a second
+        auto-trim (re-pass `existing.original_start_s` if already set).
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET start_s = ?, end_s = ?, duration_s = ?, "
+            "path = ?, original_start_s = ?, original_end_s = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                float(start_s),
+                float(end_s),
+                float(duration_s),
+                new_path,
+                original_start_s,
+                original_end_s,
+                clip_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(clip_id)
+        if out is None:
+            raise NexoClipError(f"clip {clip_id!r} not found")
+        return out
+
+    async def clear_trim_bounds(self, clip_id: str) -> ClipRow:
+        """Slice G.4b — wipe original_start_s / original_end_s after a
+        successful revert. Caller is responsible for restoring
+        start_s/end_s/duration_s + path back to the original via
+        set_trim_bounds (with originals=None) BEFORE calling this."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET original_start_s = NULL, "
+            "original_end_s = NULL WHERE id = ? AND tenant_id = ?",
+            (clip_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(clip_id)
+        if out is None:
+            raise NexoClipError(f"clip {clip_id!r} not found")
+        return out
+
     async def update_status(self, clip_id: str, *, status: str) -> ClipRow:
         """Direct status write — caller checks the transition graph.
 

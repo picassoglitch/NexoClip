@@ -3221,6 +3221,70 @@
     {% endfor %}
   </div>
 
+  {# Slice G.4b — integrity trim CTA. Renders only when the breakdown
+     has integrity issues OR the clip has been trimmed (so the Revert
+     button is available). Auto-trim shrinks the clip to its longest
+     clean window; Revert restores the original bounds. Both round-trip
+     through ffmpeg so the MP4 is regenerated; clip_render.mp4 +
+     clip_final.mp4 caches get invalidated. #}
+  {%- set _issues = (breakdown.integrity_issues if breakdown and breakdown.integrity_issues else []) -%}
+  {%- set _trimmed = (clip.original_start_s is not none) -%}
+  {%- if _issues or _trimmed -%}
+  <div class="nc-verdict__trim-row" style="margin-top: 12px; padding: 10px 12px; background: rgba(255, 184, 0, 0.06); border: 1px solid rgba(255, 184, 0, 0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+    <i class="ti ti-scissors" aria-hidden="true" style="color: var(--nc-warn); flex-shrink: 0;"></i>
+    <div style="flex: 1; min-width: 180px;">
+      <div style="font-size: 13px; font-weight: 600; color: var(--nc-text);">
+        {%- if _trimmed -%}
+          Clip was trimmed
+        {%- else -%}
+          Integrity issue{{ "s" if _issues|length != 1 else "" }} detected
+        {%- endif -%}
+      </div>
+      <div style="font-size: 11px; color: var(--nc-text-muted); margin-top: 2px;">
+        {%- if _trimmed -%}
+          Original bounds: {{ "%.1f"|format(clip.original_start_s) }}s &rarr; {{ "%.1f"|format(clip.original_end_s) }}s.
+          Revert to restore.
+        {%- else -%}
+          Auto-trim shrinks the clip to its longest clean window. Revert is one click.
+        {%- endif -%}
+      </div>
+    </div>
+    {%- if _issues -%}
+    <form action="/dashboard/clips/{{ clip.id }}/auto-trim" method="post" style="margin: 0;">
+      <button type="submit" class="nc-btn nc-btn--sm">
+        <i class="ti ti-cut" aria-hidden="true"></i>
+        <span>Auto-trim</span>
+      </button>
+    </form>
+    {%- endif -%}
+    {%- if _trimmed -%}
+    <form action="/dashboard/clips/{{ clip.id }}/revert-trim" method="post" style="margin: 0;">
+      <button type="submit" class="nc-btn nc-btn--sm">
+        <i class="ti ti-arrow-back-up" aria-hidden="true"></i>
+        <span>Revert</span>
+      </button>
+    </form>
+    {%- endif -%}
+  </div>
+
+  {# One-shot flash notice driven by ?trim=... query param. #}
+  {%- set _trim_flash = request.query_params.get('trim') if request and request.query_params else None -%}
+  {%- if _trim_flash -%}
+  <div style="margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 12px;
+              {% if _trim_flash == 'trimmed' or _trim_flash == 'reverted' %}background: rgba(0,217,122,0.08); color: var(--nc-success); border: 1px solid rgba(0,217,122,0.3);
+              {% elif _trim_flash == 'no_issues' or _trim_flash == 'noop' %}background: rgba(120,140,180,0.08); color: var(--nc-text-muted); border: 1px solid rgba(120,140,180,0.25);
+              {% elif _trim_flash == 'no_clean_window' %}background: rgba(255,184,0,0.08); color: var(--nc-warn); border: 1px solid rgba(255,184,0,0.3);
+              {% else %}background: rgba(229,72,77,0.08); color: var(--nc-danger); border: 1px solid rgba(229,72,77,0.3);{% endif %}">
+    {% if _trim_flash == 'trimmed' %}Trimmed around integrity issues.
+    {% elif _trim_flash == 'reverted' %}Restored original bounds.
+    {% elif _trim_flash == 'no_issues' %}No integrity issues to trim.
+    {% elif _trim_flash == 'noop' %}Clip was never trimmed — nothing to revert.
+    {% elif _trim_flash == 'no_clean_window' %}Couldn't find a clean window of at least 5s — try editing manually or rejecting the clip.
+    {% else %}Trim failed — check the server logs.{% endif %}
+  </div>
+  {%- endif -%}
+  {%- endif -%}
+
   <div class="nc-verdict__cta-row">
     <button type="button"
             class="nc-btn nc-btn--primary nc-verdict__cta-primary"

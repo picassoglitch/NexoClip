@@ -2590,6 +2590,91 @@ async def clip_overlay_finalize(
 
 
 @router.post(
+    "/clips/{clip_id}/auto-trim",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_auto_trim(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice G.4b — re-cut the clip around its integrity issues.
+
+    Recomputes the breakdown to pick up the latest integrity findings,
+    finds the longest clean window, re-cuts via ffmpeg, persists the
+    new bounds + stashes the originals so /clips/{id}/revert-trim
+    works. Best-effort: any failure surfaces as a redirect-with-error
+    flash, never a 500.
+    """
+    from nexoclip.clip.breakdown import clip_breakdown
+    from nexoclip.clip.trim import auto_trim_around_integrity
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    try:
+        breakdown = await clip_breakdown(db, clip_id)
+        result = await auto_trim_around_integrity(
+            db,
+            clip_id=clip_id,
+            integrity_issues=list(breakdown.integrity_issues),
+        )
+        await EventsRepo(db).emit(
+            type="clip.auto_trimmed",
+            payload={"clip_id": clip_id, **result},
+        )
+        flash = result.get("outcome", "trimmed")
+    except Exception as e:  # noqa: BLE001
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "clip.auto_trim.failed", clip_id=clip_id, reason=str(e)
+        )
+        flash = "error"
+    return RedirectResponse(
+        url=f"/dashboard/clips/{clip_id}?trim={flash}", status_code=303
+    )
+
+
+@router.post(
+    "/clips/{clip_id}/revert-trim",
+    dependencies=[Depends(require_full_scope)],
+)
+async def clip_revert_trim(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Slice G.4b — restore the clip to its original bounds.
+
+    No-op when the clip has never been trimmed. Otherwise re-cuts
+    the source video at the originals.
+    """
+    from nexoclip.clip.trim import revert_trim
+
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    try:
+        result = await revert_trim(db, clip_id=clip_id)
+        await EventsRepo(db).emit(
+            type="clip.trim_reverted",
+            payload={"clip_id": clip_id, **result},
+        )
+        flash = result.get("outcome", "reverted")
+    except Exception as e:  # noqa: BLE001
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "clip.revert_trim.failed", clip_id=clip_id, reason=str(e)
+        )
+        flash = "error"
+    return RedirectResponse(
+        url=f"/dashboard/clips/{clip_id}?trim={flash}", status_code=303
+    )
+
+
+@router.post(
     "/clips/{clip_id}/reject",
     dependencies=[Depends(require_full_scope)],
 )

@@ -199,16 +199,22 @@ def compute_publishability(
 
     # ---- integrity hooks (slice G.4) ---------------------------
     # breakdown.integrity_issues is the freeze/silence detector
-    # output from clip_breakdown(). Penalty per issue is small (-6)
-    # so a single 3-second freeze in the middle of an otherwise-
-    # great clip doesn't tank it to "reject" — but two or three
-    # issues add up and push the verdict down a tier, which is the
-    # right behavior. Each issue also surfaces as a warning so the
-    # operator can decide whether to trim the clip's window.
+    # output from clip_breakdown(). Each is a dict with kind /
+    # start_s / end_s / label. Penalty per issue is small (-6) so
+    # a single 3-second freeze in the middle of an otherwise-great
+    # clip doesn't tank it to "reject" — but two or three issues
+    # add up and push the verdict down a tier. Each issue surfaces
+    # as a warning (using .label) so the operator can decide whether
+    # to trim the clip's window with the G.4b auto-trim button.
     issues = getattr(breakdown, "integrity_issues", None) or ()
     for issue in issues:
         score -= 6
-        warnings.append(issue)
+        if isinstance(issue, dict):
+            label = issue.get("label") or "stream integrity issue"
+            warnings.append(str(label))
+        else:
+            # Legacy str shape — accept it so old callers don't break.
+            warnings.append(str(issue))
     # Three or more integrity issues = the underlying VOD is too
     # broken in this window to safely ship; mark as blocking so
     # the verdict bucket flips to reject even if the score is

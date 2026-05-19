@@ -43,12 +43,14 @@ class ClipBreakdown:
     rescore_reason: str | None
     heuristic_reason: str  # candidates.reason (voice / chat / audio / visual)
     heuristic_score: float
-    # Slice G.4 — stream integrity findings. Each issue is a short
-    # human-readable string ("freeze: 4s zero-motion at 12-16s",
-    # "silence: 6s without speech at 22-28s"). Empty tuple = clip is
-    # clean. The publishability scorer reads this and adds warnings +
-    # score penalties. Detection is per-clip (not per-stream) so a
-    # clean clip from a glitchy VOD still passes.
+    # Slice G.4 — stream integrity findings. Each issue is a structured
+    # dict with timestamps (in source-stream coordinates) so the G.4b
+    # auto-trim service can read them. Empty tuple = clip is clean.
+    # Shape: {"kind": "freeze" | "silence", "start_s": float,
+    #         "end_s": float, "label": str}.
+    # The publishability scorer reads `.label`; the trim service reads
+    # `.start_s` / `.end_s`. Detection is per-clip (not per-stream) so
+    # a clean clip from a glitchy VOD still passes.
     #
     # MVP detects:
     #   - freeze frames  (consecutive seconds with motion_energy ~ 0)
@@ -56,7 +58,7 @@ class ClipBreakdown:
     # Deferred (need extra pipeline passes):
     #   - bitrate drops (ffprobe at ingest)
     #   - PTS skip / desync (ffprobe -show_packets)
-    integrity_issues: tuple[str, ...] = ()
+    integrity_issues: tuple[dict[str, object], ...] = ()
 
 
 async def clip_breakdown(db: Database, clip_id: str) -> ClipBreakdown:
@@ -173,8 +175,9 @@ def _detect_integrity_issues(
     clip_end_s: float,
     visuals: list,  # type: ignore[type-arg]  # aiosqlite.Row is opaque
     transcript: object | None,
-) -> tuple[str, ...]:
-    issues: list[str] = []
+) -> tuple[dict[str, object], ...]:
+    """Return structured issues, source-stream coordinate timestamps."""
+    issues: list[dict[str, object]] = []
     issues.extend(_detect_freeze_frames(visuals=visuals))
     issues.extend(
         _detect_silent_gaps(
@@ -186,7 +189,7 @@ def _detect_integrity_issues(
     return tuple(issues)
 
 
-def _detect_freeze_frames(*, visuals: list) -> list[str]:  # type: ignore[type-arg]
+def _detect_freeze_frames(*, visuals: list) -> list[dict[str, object]]:  # type: ignore[type-arg]
     """Find runs of ≥3 consecutive seconds with motion_energy below 0.05.
 
     visual_signals already runs per-second motion analysis at ingest,
@@ -199,7 +202,7 @@ def _detect_freeze_frames(*, visuals: list) -> list[str]:  # type: ignore[type-a
     if not visuals:
         return []
     rows = sorted(visuals, key=lambda v: float(v["ts_offset_s"]))
-    out: list[str] = []
+    out: list[dict[str, object]] = []
     run_start: float | None = None
     last_ts: float | None = None
     for v in rows:
@@ -212,22 +215,34 @@ def _detect_freeze_frames(*, visuals: list) -> list[str]:  # type: ignore[type-a
             last_ts = ts
         else:
             if run_start is not None and last_ts is not None:
-                length = (last_ts - run_start) + 1
+                end_s = last_ts + 1
+                length = end_s - run_start
                 if length >= MIN_RUN_S:
-                    out.append(
-                        f"freeze: {int(length)}s zero-motion at "
-                        f"{int(run_start)}-{int(last_ts) + 1}s"
-                    )
+                    out.append({
+                        "kind": "freeze",
+                        "start_s": float(run_start),
+                        "end_s": float(end_s),
+                        "label": (
+                            f"freeze: {int(length)}s zero-motion at "
+                            f"{int(run_start)}-{int(end_s)}s"
+                        ),
+                    })
             run_start = None
             last_ts = None
     # Tail run
     if run_start is not None and last_ts is not None:
-        length = (last_ts - run_start) + 1
+        end_s = last_ts + 1
+        length = end_s - run_start
         if length >= MIN_RUN_S:
-            out.append(
-                f"freeze: {int(length)}s zero-motion at "
-                f"{int(run_start)}-{int(last_ts) + 1}s"
-            )
+            out.append({
+                "kind": "freeze",
+                "start_s": float(run_start),
+                "end_s": float(end_s),
+                "label": (
+                    f"freeze: {int(length)}s zero-motion at "
+                    f"{int(run_start)}-{int(end_s)}s"
+                ),
+            })
     return out
 
 
@@ -236,7 +251,7 @@ def _detect_silent_gaps(
     clip_start_s: float,
     clip_end_s: float,
     transcript: object | None,
-) -> list[str]:
+) -> list[dict[str, object]]:
     """Find runs of ≥5 seconds with no spoken words.
 
     Walks the transcript's word-level timestamps. A natural pause
@@ -263,25 +278,40 @@ def _detect_silent_gaps(
         # surfaced by speaking_intensity. Don't double-flag.
         return []
     word_timestamps.sort()
-    out: list[str] = []
+    out: list[dict[str, object]] = []
     # Check leading silence (from clip_start_s to first word).
     if word_timestamps[0] - clip_start_s >= MIN_RUN_S:
-        out.append(
-            f"silence: {int(word_timestamps[0] - clip_start_s)}s without speech "
-            f"at {int(clip_start_s)}-{int(word_timestamps[0])}s"
-        )
+        out.append({
+            "kind": "silence",
+            "start_s": float(clip_start_s),
+            "end_s": float(word_timestamps[0]),
+            "label": (
+                f"silence: {int(word_timestamps[0] - clip_start_s)}s without speech "
+                f"at {int(clip_start_s)}-{int(word_timestamps[0])}s"
+            ),
+        })
     # Gaps between adjacent words.
     for prev, cur in zip(word_timestamps, word_timestamps[1:], strict=False):
         gap = cur - prev
         if gap >= MIN_RUN_S:
-            out.append(
-                f"silence: {int(gap)}s without speech at "
-                f"{int(prev)}-{int(cur)}s"
-            )
+            out.append({
+                "kind": "silence",
+                "start_s": float(prev),
+                "end_s": float(cur),
+                "label": (
+                    f"silence: {int(gap)}s without speech at "
+                    f"{int(prev)}-{int(cur)}s"
+                ),
+            })
     # Trailing silence (last word to clip_end_s).
     if clip_end_s - word_timestamps[-1] >= MIN_RUN_S:
-        out.append(
-            f"silence: {int(clip_end_s - word_timestamps[-1])}s without "
-            f"speech at {int(word_timestamps[-1])}-{int(clip_end_s)}s"
-        )
+        out.append({
+            "kind": "silence",
+            "start_s": float(word_timestamps[-1]),
+            "end_s": float(clip_end_s),
+            "label": (
+                f"silence: {int(clip_end_s - word_timestamps[-1])}s without "
+                f"speech at {int(word_timestamps[-1])}-{int(clip_end_s)}s"
+            ),
+        })
     return out

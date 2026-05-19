@@ -194,6 +194,12 @@ class ClipRow(BaseModel):
     # recomputing per row.
     publishability_score: int | None = None
     publishability_status: str | None = None  # publish_ready | needs_edit | reject
+    # Slice G.4b — when the operator auto-trims around integrity
+    # issues, we shrink start_s/end_s/duration_s to the clean window
+    # but stash the originals here so the "Revert trim" button can
+    # restore them. NULL means the clip has never been trimmed.
+    original_start_s: float | None = None
+    original_end_s: float | None = None
 
 
 class VariantRow(BaseModel):

@@ -31,6 +31,7 @@ from .auth import BearerAuthMiddleware
 from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
+from .routers import internal as internal_router
 from .routers import llm_calls as llm_calls_router
 from .routers import nexo_ai as nexo_ai_router
 from .routers import overlay as overlay_router
@@ -192,5 +193,9 @@ def create_app(
     # (shared admin bearer + HMAC SSO); see routers/nexo_ai.py and
     # docs/nexo_ai_integration.md.
     app.include_router(nexo_ai_router.router)
+    # Slice O.44 — internal Modal-pull endpoint. Auth is per-request
+    # HMAC on a signed URL; the bearer-cookie middleware skips
+    # /api/internal/* (see auth.py allowlist).
+    app.include_router(internal_router.router)
 
     return app

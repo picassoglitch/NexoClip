@@ -57,6 +57,11 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     # tenant-token middleware here so the handler runs at all.
     "/api/admin/",
     "/auth/sso",
+    # Slice O.44 — internal endpoints (e.g. signed-URL audio fetch the
+    # Modal Whisper provider pulls from). Each route in /api/internal/
+    # carries its own HMAC signature check, so the bearer-cookie path
+    # would only get in the way (Modal can't carry our cookie).
+    "/api/internal/",
 )
 _COOKIE_NAME = "nexoclip_token"
 

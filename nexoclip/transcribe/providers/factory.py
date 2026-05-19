@@ -44,6 +44,37 @@ def get_provider() -> TranscribeProvider:
             use_subprocess=use_subprocess,
         )
 
+    if choice == "modal":
+        # Slice O.44 — Modal GPU Whisper. See modal_whisper.py for
+        # the deploy + env-var contract.
+        from .modal_whisper import ModalWhisperProvider
+
+        public_url = (settings.public_url or "").strip()
+        if not settings.modal_endpoint_url or not settings.modal_token:
+            raise NexoClipError(
+                "transcribe_provider='modal' requires NEXOCLIP_MODAL_ENDPOINT_URL "
+                "and NEXOCLIP_MODAL_TOKEN. Run `modal deploy "
+                "infra/modal_whisper_app.py` and paste the printed URL."
+            )
+        if not settings.internal_signing_secret:
+            raise NexoClipError(
+                "transcribe_provider='modal' requires "
+                "NEXOCLIP_INTERNAL_SIGNING_SECRET (random string used to sign "
+                "the audio URL Modal pulls from)."
+            )
+        if not public_url:
+            raise NexoClipError(
+                "transcribe_provider='modal' requires NEXOCLIP_PUBLIC_URL "
+                "(externally-reachable base URL Modal hits)."
+            )
+        return ModalWhisperProvider(
+            endpoint_url=settings.modal_endpoint_url,
+            bearer_token=settings.modal_token,
+            signing_secret=settings.internal_signing_secret,
+            public_base_url=public_url,
+            model=settings.modal_model,
+        )
+
     if choice in {"assemblyai", "deepgram", "openai"}:
         api_key = getattr(settings, f"{choice}_api_key", None)
         if not api_key:
@@ -55,5 +86,5 @@ def get_provider() -> TranscribeProvider:
 
     raise NexoClipError(
         f"unknown transcribe_provider {choice!r}; expected one of "
-        f"local / assemblyai / deepgram / openai"
+        f"local / modal / assemblyai / deepgram / openai"
     )

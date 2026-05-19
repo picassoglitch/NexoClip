@@ -42,6 +42,26 @@ class Settings(BaseSettings):
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None
     openai_api_key: str | None = None
+    # Slice O.44 — Modal Whisper provider. Wired when
+    # `transcribe_provider="modal"`. The endpoint is the URL Modal
+    # exposes for the `transcribe` web function (printed by
+    # `modal deploy infra/modal_whisper_app.py`). The token is a
+    # shared bearer that the Modal app verifies — pick something
+    # long and random.
+    #   - modal_endpoint_url: e.g. https://username--nexoclip-whisper-transcribe.modal.run
+    #   - modal_token: shared secret in the Authorization: Bearer header
+    #   - modal_model: faster-whisper model size; "small" is the sweet
+    #     spot on a T4 GPU (3-5 min per VOD-hour, accurate Spanish).
+    #     "base" is faster but loses on accented speech; "medium" / "large-v3"
+    #     are slower + costlier on Modal.
+    modal_endpoint_url: str | None = None
+    modal_token: str | None = None
+    modal_model: str = "small"
+    # Slice O.44 — HMAC secret for the internal signed-URL audio
+    # fetch endpoint Modal pulls from. Different secret than the
+    # SSO HMAC — this one is purely internal. Pick something random;
+    # the audio URL only stays valid for 30 min so a leak is bounded.
+    internal_signing_secret: str | None = None
 
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline
     # work via FastAPI BackgroundTasks on this host (current behavior).

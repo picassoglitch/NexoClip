@@ -43,6 +43,20 @@ class ClipBreakdown:
     rescore_reason: str | None
     heuristic_reason: str  # candidates.reason (voice / chat / audio / visual)
     heuristic_score: float
+    # Slice G.4 — stream integrity findings. Each issue is a short
+    # human-readable string ("freeze: 4s zero-motion at 12-16s",
+    # "silence: 6s without speech at 22-28s"). Empty tuple = clip is
+    # clean. The publishability scorer reads this and adds warnings +
+    # score penalties. Detection is per-clip (not per-stream) so a
+    # clean clip from a glitchy VOD still passes.
+    #
+    # MVP detects:
+    #   - freeze frames  (consecutive seconds with motion_energy ~ 0)
+    #   - silent gaps    (consecutive seconds with no spoken words)
+    # Deferred (need extra pipeline passes):
+    #   - bitrate drops (ffprobe at ingest)
+    #   - PTS skip / desync (ffprobe -show_packets)
+    integrity_issues: tuple[str, ...] = ()
 
 
 async def clip_breakdown(db: Database, clip_id: str) -> ClipBreakdown:
@@ -119,6 +133,17 @@ async def clip_breakdown(db: Database, clip_id: str) -> ClipBreakdown:
                 rescore_delta = float(match.rescore_score) - float(match.score)
             rescore_reason = match.rescore_reason
 
+    # ---- integrity issues (slice G.4) ----
+    # Per-clip detection: freeze (consecutive seconds with near-zero
+    # motion) + silence (consecutive seconds with no spoken words).
+    # Both run on data we already have on hand; no extra ffmpeg pass.
+    integrity_issues = _detect_integrity_issues(
+        clip_start_s=clip.start_s,
+        clip_end_s=clip.end_s,
+        visuals=in_window,
+        transcript=transcript,
+    )
+
     return ClipBreakdown(
         clip_id=clip_id,
         duration_s=clip.duration_s,
@@ -130,4 +155,133 @@ async def clip_breakdown(db: Database, clip_id: str) -> ClipBreakdown:
         rescore_reason=rescore_reason,
         heuristic_reason=heuristic_reason,
         heuristic_score=heuristic_score,
+        integrity_issues=integrity_issues,
     )
+
+
+# ---- integrity detectors (slice G.4) ----
+#
+# Both detectors look for *runs* of bad seconds rather than single
+# blips — one-second motion dips are noise, but a 3-second freeze
+# is real. Tuning constants are at the top of each function so we
+# can re-tune from prod telemetry without code changes elsewhere.
+
+
+def _detect_integrity_issues(
+    *,
+    clip_start_s: float,
+    clip_end_s: float,
+    visuals: list,  # type: ignore[type-arg]  # aiosqlite.Row is opaque
+    transcript: object | None,
+) -> tuple[str, ...]:
+    issues: list[str] = []
+    issues.extend(_detect_freeze_frames(visuals=visuals))
+    issues.extend(
+        _detect_silent_gaps(
+            clip_start_s=clip_start_s,
+            clip_end_s=clip_end_s,
+            transcript=transcript,
+        )
+    )
+    return tuple(issues)
+
+
+def _detect_freeze_frames(*, visuals: list) -> list[str]:  # type: ignore[type-arg]
+    """Find runs of ≥3 consecutive seconds with motion_energy below 0.05.
+
+    visual_signals already runs per-second motion analysis at ingest,
+    so we just walk the rows in timestamp order. A "frozen" stream
+    rarely has motion_energy of exactly 0 (camera noise, codec
+    artifacts) so we use a small threshold instead of `== 0`.
+    """
+    MIN_RUN_S = 3
+    THRESHOLD = 0.05
+    if not visuals:
+        return []
+    rows = sorted(visuals, key=lambda v: float(v["ts_offset_s"]))
+    out: list[str] = []
+    run_start: float | None = None
+    last_ts: float | None = None
+    for v in rows:
+        ts = float(v["ts_offset_s"])
+        me = v["motion_energy"]
+        is_frozen = me is not None and float(me) < THRESHOLD
+        if is_frozen:
+            if run_start is None:
+                run_start = ts
+            last_ts = ts
+        else:
+            if run_start is not None and last_ts is not None:
+                length = (last_ts - run_start) + 1
+                if length >= MIN_RUN_S:
+                    out.append(
+                        f"freeze: {int(length)}s zero-motion at "
+                        f"{int(run_start)}-{int(last_ts) + 1}s"
+                    )
+            run_start = None
+            last_ts = None
+    # Tail run
+    if run_start is not None and last_ts is not None:
+        length = (last_ts - run_start) + 1
+        if length >= MIN_RUN_S:
+            out.append(
+                f"freeze: {int(length)}s zero-motion at "
+                f"{int(run_start)}-{int(last_ts) + 1}s"
+            )
+    return out
+
+
+def _detect_silent_gaps(
+    *,
+    clip_start_s: float,
+    clip_end_s: float,
+    transcript: object | None,
+) -> list[str]:
+    """Find runs of ≥5 seconds with no spoken words.
+
+    Walks the transcript's word-level timestamps. A natural pause
+    between sentences is shorter than 5s, so 5s+ usually means
+    the audio actually dropped, the streamer muted, or whisper
+    missed a stretch (which is also worth flagging — operator
+    should listen back).
+    """
+    MIN_RUN_S = 5
+    if transcript is None:
+        return []
+    try:
+        segments = json.loads(getattr(transcript, "segments_json", None) or "[]")
+    except json.JSONDecodeError:
+        return []
+    word_timestamps: list[float] = []
+    for seg in segments:
+        for word in seg.get("words") or []:
+            ts = word.get("ts")
+            if isinstance(ts, int | float) and clip_start_s <= float(ts) < clip_end_s:
+                word_timestamps.append(float(ts))
+    if not word_timestamps:
+        # Whole clip silent — that's the dead-air signal already
+        # surfaced by speaking_intensity. Don't double-flag.
+        return []
+    word_timestamps.sort()
+    out: list[str] = []
+    # Check leading silence (from clip_start_s to first word).
+    if word_timestamps[0] - clip_start_s >= MIN_RUN_S:
+        out.append(
+            f"silence: {int(word_timestamps[0] - clip_start_s)}s without speech "
+            f"at {int(clip_start_s)}-{int(word_timestamps[0])}s"
+        )
+    # Gaps between adjacent words.
+    for prev, cur in zip(word_timestamps, word_timestamps[1:], strict=False):
+        gap = cur - prev
+        if gap >= MIN_RUN_S:
+            out.append(
+                f"silence: {int(gap)}s without speech at "
+                f"{int(prev)}-{int(cur)}s"
+            )
+    # Trailing silence (last word to clip_end_s).
+    if clip_end_s - word_timestamps[-1] >= MIN_RUN_S:
+        out.append(
+            f"silence: {int(clip_end_s - word_timestamps[-1])}s without "
+            f"speech at {int(word_timestamps[-1])}-{int(clip_end_s)}s"
+        )
+    return out

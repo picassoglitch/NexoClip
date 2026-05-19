@@ -197,8 +197,26 @@ def compute_publishability(
         if url:
             score += 5
 
-    # ---- integrity hooks (G.4 reserved) ------------------------
-    # Future: read breakdown.integrity_issues — for now, no-op.
+    # ---- integrity hooks (slice G.4) ---------------------------
+    # breakdown.integrity_issues is the freeze/silence detector
+    # output from clip_breakdown(). Penalty per issue is small (-6)
+    # so a single 3-second freeze in the middle of an otherwise-
+    # great clip doesn't tank it to "reject" — but two or three
+    # issues add up and push the verdict down a tier, which is the
+    # right behavior. Each issue also surfaces as a warning so the
+    # operator can decide whether to trim the clip's window.
+    issues = getattr(breakdown, "integrity_issues", None) or ()
+    for issue in issues:
+        score -= 6
+        warnings.append(issue)
+    # Three or more integrity issues = the underlying VOD is too
+    # broken in this window to safely ship; mark as blocking so
+    # the verdict bucket flips to reject even if the score is
+    # somehow still above 30.
+    if len(issues) >= 3:
+        blocking.append(
+            f"stream integrity: {len(issues)} issues detected — re-trim or skip"
+        )
 
     # ---- clamp + bucket + recommend -----------------------------
     # Slice N.7 — thresholds lowered again: publish_ready 60 → 50,

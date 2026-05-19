@@ -874,6 +874,46 @@ async def stream_detail(
     candidates = await CandidatesRepo(db).list_for_stream(stream_id)
     clips = await ClipsRepo(db).list_for_stream(stream_id)
     personas = await _merged_personas(db)
+
+    # Pre-run estimate. Uses stream duration + a heuristic for clip count
+    # to produce an upper-bound token count, then divides by the user's
+    # remaining balance to suggest how many more times they could run.
+    # See nexoclip/llm/estimator.py for the math + the per-phase
+    # multipliers.
+    from nexoclip.llm.estimator import (
+        estimate_pipeline_run,
+        estimate_runs_per_balance,
+        format_tokens,
+    )
+
+    # We don't know how many personas the user will pick at run time, so
+    # estimate for the single-persona case (most common) AND surface what
+    # the multiplier looks like when they pick more — the template renders
+    # both as "1 persona: ~X tokens · cada persona extra: +Y".
+    estimate_single = estimate_pipeline_run(
+        duration_seconds=getattr(stream, "duration_s", None),
+        persona_count=1,
+    )
+    # Variant tokens are the only persona-multiplied phase. Extract just
+    # that line so the UI can compute "+Y per extra persona".
+    variant_tokens_one_persona = next(
+        (line.tokens for line in estimate_single.lines if line.phase == "Variantes"),
+        0,
+    )
+
+    # Balance for the "runs available" hint. The middleware populates
+    # request.state.token_balance already; we read it here for the
+    # template. Admins (unlimited) get None back.
+    token_balance = getattr(request.state, "token_balance", None)
+    remaining = None
+    if token_balance is not None and not getattr(token_balance, "unlimited", False):
+        remaining = getattr(token_balance, "remaining", None)
+    runs_available = estimate_runs_per_balance(
+        remaining_tokens=remaining,
+        duration_seconds=getattr(stream, "duration_s", None),
+        persona_count=1,
+    )
+
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
@@ -882,6 +922,14 @@ async def stream_detail(
             "candidates": candidates,
             "clips": clips,
             "personas": personas,
+            "estimate": estimate_single,
+            "estimate_total_fmt": format_tokens(estimate_single.total_tokens),
+            "estimate_per_extra_persona_fmt": format_tokens(variant_tokens_one_persona),
+            "runs_available": runs_available,
+            "is_unlimited": (
+                token_balance is not None
+                and getattr(token_balance, "unlimited", False)
+            ),
         },
     )
 

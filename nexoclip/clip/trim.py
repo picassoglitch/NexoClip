@@ -262,12 +262,17 @@ def _recut_clip_mp4(
     # Import locally to avoid a service.py → trim.py → service.py cycle
     # at module load time. service.py imports from clip.__init__ which
     # re-exports trim symbols.
-    from .service import _ffmpeg_fast_cut, _ffmpeg_reformat_9_16
+    from .service import _ffmpeg_fast_cut, _ffmpeg_reformat_9_16, _safe_analyze_framing
     from nexoclip.config import ClipConfig
 
     cfg = ClipConfig()
     intermediate = out_path.parent / f"{out_path.stem}.trim.intermediate.mp4"
     tmp_out = out_path.with_suffix(".trim.tmp.mp4")
+    # Slice G.4c — re-run framing detection on the new window so a horizontal
+    # source still gets the blurred-letterbox path on trim/revert.
+    framing_verdict = _safe_analyze_framing(
+        video_path=source_video, start_s=start_s, end_s=start_s + duration_s
+    )
     try:
         _ffmpeg_fast_cut(
             video_path=source_video,
@@ -285,6 +290,7 @@ def _recut_clip_mp4(
             brand_kit=None,  # brand_kit overlay is burned at download
                              # time via the recorder/burn path, not in
                              # the source MP4.
+            framing_verdict=framing_verdict,
         )
         # Replace atomically.
         tmp_out.replace(out_path)

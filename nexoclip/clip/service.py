@@ -245,6 +245,7 @@ def _cut_all(
                 cfg=cfg,
                 smart_box=smart_box,
                 brand_kit=kit,
+                framing_verdict=framing_verdict,
             )
         finally:
             if intermediate.exists():
@@ -438,8 +439,20 @@ def _ffmpeg_reformat_9_16(
     cfg: ClipConfig,
     smart_box: SmartCropBox | None = None,
     brand_kit: object | None = None,
+    framing_verdict: "FramingVerdict | None" = None,
 ) -> None:
-    """Crop to 9:16 (smart-box or center) and scale to the configured resolution.
+    """Reformat the cut window into the export aspect ratio.
+
+    Slice G.4c — branching on source orientation:
+
+      * vertical / square source → 9:16 crop (smart_box if we have a face
+        track, else center crop). This is the existing path.
+      * horizontal source → DON'T crop. Scale to fit width-wise and pad
+        the top/bottom with a heavily-blurred copy of the same frame so
+        the operator gets a familiar "TikTok with blurred letterbox"
+        look + zero content lost off the sides. Previously horizontal
+        sources had 70% of the frame chopped off and the operator had to
+        re-trim everything manually.
 
     When `brand_kit` is provided and the kit carries a primary social handle
     + we can resolve a font on this OS, append a `drawtext` filter that burns
@@ -450,7 +463,30 @@ def _ffmpeg_reformat_9_16(
     Failures to resolve a font or read kit attributes are silent — the
     clip still renders, just without the overlay.
     """
-    if smart_box is not None:
+    is_horizontal = (
+        framing_verdict is not None
+        and getattr(framing_verdict, "source_orientation", None) == "horizontal"
+    )
+
+    if is_horizontal:
+        # Two-stream blurred-letterbox filter.
+        #   bg: scale to fill the 9:16 frame (will overflow horizontally,
+        #       we crop), then heavy box-blur so the bars don't draw the
+        #       eye away from the foreground.
+        #   fg: scale to fit inside the 9:16 frame without distortion.
+        #       force_original_aspect_ratio=decrease makes ffmpeg leave
+        #       horizontal letterbox space.
+        # Overlay fg centered on bg. Output is exactly cfg.output_width x
+        # output_height, no source pixels lost.
+        w, h = cfg.output_width, cfg.output_height
+        vf = (
+            f"[0:v]split=2[bg][fg];"
+            f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},boxblur=40:5[blurred];"
+            f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[scaled];"
+            f"[blurred][scaled]overlay=(W-w)/2:(H-h)/2"
+        )
+    elif smart_box is not None:
         vf = crop_box_to_ffmpeg_filter(
             smart_box, output_w=cfg.output_width, output_h=cfg.output_height
         )
@@ -461,6 +497,11 @@ def _ffmpeg_reformat_9_16(
     if overlay:
         vf = f"{vf},{overlay}"
 
+    # The horizontal-source path uses multi-stream filter syntax
+    # ([bg], [fg], overlay) which needs -filter_complex, not -vf.
+    # Detect via the [ character — every multi-stream filter graph
+    # mentions at least one labeled pad.
+    filter_flag = "-filter_complex" if "[" in vf else "-vf"
     cmd = [
         "ffmpeg",
         "-y",
@@ -468,7 +509,7 @@ def _ffmpeg_reformat_9_16(
         "error",
         "-i",
         str(in_path),
-        "-vf",
+        filter_flag,
         vf,
         "-c:v",
         cfg.encoder,

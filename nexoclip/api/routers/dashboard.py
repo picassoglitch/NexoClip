@@ -2617,9 +2617,21 @@ async def clip_overlay_save(
     if clip_before is not None:
         try:
             clip_dir = Path(clip_before.path).parent
-            for stale in (clip_dir / "clip_render.mp4", clip_dir / "clip_final.mp4"):
-                if stale.exists():
-                    stale.unlink()
+            # Slice J.2a — invalidate ALL resolution caches, not just the
+            # base name. clip_render.mp4 (legacy) + per-resolution variants
+            # all need to go so the next download lazy-regenerates with
+            # the current overlay config.
+            stale_names = [
+                "clip_render.mp4",
+                "clip_render_1080.mp4",
+                "clip_render_2k.mp4",
+                "clip_render_4k.mp4",
+                "clip_final.mp4",
+            ]
+            for name in stale_names:
+                p = clip_dir / name
+                if p.exists():
+                    p.unlink()
         except Exception:  # noqa: BLE001 — invalidation is best-effort
             pass
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
@@ -2734,9 +2746,18 @@ async def clip_overlay_finalize(
     # overlay config, so we just nuke any stale cache and bounce.
     try:
         clip_dir = Path(clip.path).parent
-        for stale in (clip_dir / "clip_render.mp4", clip_dir / "clip_final.mp4"):
-            if stale.exists():
-                stale.unlink()
+        # Slice J.2a — same multi-resolution invalidation as the save path.
+        stale_names = [
+            "clip_render.mp4",
+            "clip_render_1080.mp4",
+            "clip_render_2k.mp4",
+            "clip_render_4k.mp4",
+            "clip_final.mp4",
+        ]
+        for name in stale_names:
+            p = clip_dir / name
+            if p.exists():
+                p.unlink()
     except Exception:  # noqa: BLE001 — invalidation is best-effort
         pass
     await EventsRepo(db).emit(
@@ -3234,36 +3255,82 @@ async def stream_download_approved(
     )
 
 
+# Slice J.2a — resolution tiers. Free + pro are 1080p only; all_access
+# unlocks 2K + 4K with a per-export extra cost reported back to nexo-ai
+# for billing. Keys are URL-safe; values are (w, h, multiplier-on-base-cost).
+# The multiplier is what we add to the LLM-call cost report so the
+# operator's plan absorbs the extra GPU time the larger viewport eats.
+_EXPORT_RESOLUTIONS: dict[str, tuple[int, int, float]] = {
+    "1080": (1080, 1920, 1.0),
+    "2k": (1440, 2560, 1.8),
+    "4k": (2160, 3840, 3.6),
+}
+_TIER_RESOLUTIONS: dict[str, set[str]] = {
+    "free": {"1080"},
+    "pro": {"1080"},
+    "all_access": {"1080", "2k", "4k"},
+}
+
+
+def _resolve_export_resolution(tier: str, choice: str) -> tuple[str, int, int]:
+    """Map (tier, requested) -> (resolved_key, width, height).
+
+    Falls back to 1080 if the tier can't access the requested resolution.
+    Caller is responsible for surfacing that fact to the operator.
+    """
+    requested = (choice or "1080").strip().lower()
+    if requested not in _EXPORT_RESOLUTIONS:
+        requested = "1080"
+    allowed = _TIER_RESOLUTIONS.get(tier or "free", {"1080"})
+    if requested not in allowed:
+        requested = "1080"
+    w, h, _mult = _EXPORT_RESOLUTIONS[requested]
+    return requested, w, h
+
+
 @router.get("/clips/{clip_id}/download")
 async def clip_download(
     request: Request,
     clip_id: str,
+    quality: str = "1080",
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> FileResponse:
     """Slice O.21 — download the clip's headless-Chrome rendered MP4.
+    Slice J.2a — `quality` query param picks the export resolution
+    (1080 / 2k / 4k). Free + pro tiers are capped at 1080; all_access
+    can pick higher and pays the extra GPU time via the outbound
+    usage report.
 
-    Replaces the previous overlay_burn.py pipeline. The exported MP4 is
-    now produced by Playwright recording the `/clips/<id>/render` page
-    at 1080×1920 native, then muxing the source clip's audio track
-    lossless. By construction the output is pixel-identical to the
-    editor preview — same browser engine renders both.
+    The exported MP4 is produced by Playwright recording the
+    `/clips/<id>/render` page at the chosen viewport, then muxing the
+    source clip's audio track lossless. By construction the output is
+    pixel-identical to the editor preview — same browser engine renders
+    both, just sized to the picked resolution.
 
     `overlay_burn.py` is intentionally kept in the repo (slice O.21
     decision) but no longer called from any endpoint. We retain it as
     a fallback option in case Playwright fails at runtime — see the
-    except branch below.
+    except branch below. The fallback always emits 1080×1920 regardless
+    of `quality` since ffmpeg drawtext can't upscale faithfully.
 
-    Cache: the recorder writes `clip_render.mp4` next to the source
-    clip; subsequent downloads serve the cached file unless the
-    operator saved new overlay settings (which deletes the cache via
-    `clip_overlay_save`).
+    Cache key includes the resolution so 1080 and 4K versions of the
+    same clip live as separate files — switching resolutions doesn't
+    invalidate the other's cache.
     """
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     original = Path(clip.path)
-    rendered = original.parent / "clip_render.mp4"
+
+    # Resolve the export resolution against the tenant's tier.
+    tenant_tier = getattr(request.state, "tenant_tier", "free") or "free"
+    resolved_key, target_w, target_h = _resolve_export_resolution(
+        tenant_tier, quality
+    )
+    # Cache file per-resolution so flipping between 1080 / 4K doesn't
+    # require a re-record on every switch.
+    rendered = original.parent / f"clip_render_{resolved_key}.mp4"
 
     # Generate on-demand if we don't have a cache. The cache is
     # invalidated by `clip_overlay_save` (slice O.17), so this regen
@@ -3310,6 +3377,8 @@ async def clip_download(
                 output_path=rendered,
                 base_url=base_url,
                 auth_cookie_value=cookie_val or None,
+                width=target_w,
+                height=target_h,
             )
         except PreviewRecordingError as e:
             # Slice O.31 — surface the recorder's error LOUDLY now so we

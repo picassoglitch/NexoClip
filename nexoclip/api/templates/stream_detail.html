@@ -281,23 +281,59 @@
               ~clip_duration seconds in real time; without UX feedback
               the operator hammered the button thinking it was frozen.
 
-              O.40 upgrade: the spinner becomes an actual time-based
-              progress bar that fills over (clip_duration_s + 5s). The
-              server doesn't stream progress, so this is a CSS-only
-              estimate — close enough that the operator sees movement.
-              `data-duration-s` lets the handler size each clip's bar
-              independently. -#}
-          <a href="/dashboard/clips/{{ c.id }}/download"
+              Slice J.2a — resolution picker. Only all_access tier sees
+              a 1080/2K/4K dropdown; free + pro tiers get a fixed 1080
+              link (server enforces the same gate so URL hacking
+              degrades gracefully back to 1080). -#}
+          {%- set _tier = (request.state.tenant_tier if request and request.state else 'free') or 'free' -%}
+          {%- set _all_access = (_tier == 'all_access') -%}
+          {%- if _all_access -%}
+          <div class="nc-download-group" style="margin-top: 6px; display: flex; gap: 6px;">
+            <a href="/dashboard/clips/{{ c.id }}/download?quality=1080"
+               class="nc-btn js-download-btn js-download-btn--main"
+               download
+               title="Save the final MP4 to your machine"
+               data-label-busy="Preparing…"
+               data-duration-s="{{ '%.1f'|format(c.duration_s) }}"
+               style="position: relative; overflow: hidden; flex: 1;">
+              <span class="js-download-progress" aria-hidden="true"></span>
+              <i class="ti ti-download js-download-icon" aria-hidden="true"></i>
+              <span class="js-download-label">Download · 1080</span>
+            </a>
+            <a href="/dashboard/clips/{{ c.id }}/download?quality=2k"
+               class="nc-btn js-download-btn"
+               download
+               title="2K export (1440×2560) — costs ~1.8× the standard render time"
+               data-label-busy="2K…"
+               data-duration-s="{{ '%.1f'|format(c.duration_s * 1.8) }}"
+               style="position: relative; overflow: hidden;">
+              <span class="js-download-progress" aria-hidden="true"></span>
+              <span class="js-download-label">2K</span>
+            </a>
+            <a href="/dashboard/clips/{{ c.id }}/download?quality=4k"
+               class="nc-btn js-download-btn"
+               download
+               title="4K export (2160×3840) — costs ~3.6× the standard render time"
+               data-label-busy="4K…"
+               data-duration-s="{{ '%.1f'|format(c.duration_s * 3.6) }}"
+               style="position: relative; overflow: hidden;">
+              <span class="js-download-progress" aria-hidden="true"></span>
+              <span class="js-download-label">4K</span>
+            </a>
+          </div>
+          {%- else -%}
+          <a href="/dashboard/clips/{{ c.id }}/download?quality=1080"
              class="nc-btn js-download-btn"
              download
-             title="Save the final MP4 to your machine"
+             title="Save the final 1080p MP4. Upgrade to all-access for 2K + 4K exports."
              data-label-busy="Preparing…"
              data-duration-s="{{ '%.1f'|format(c.duration_s) }}"
              style="margin-top: 6px; position: relative; overflow: hidden;">
             <span class="js-download-progress" aria-hidden="true"></span>
             <i class="ti ti-download js-download-icon" aria-hidden="true"></i>
-            <span class="js-download-label">Download</span>
+            <span class="js-download-label">Download · 1080</span>
           </a>
+          {%- endif -%}
           {% endif %}
         </div>
       </div>

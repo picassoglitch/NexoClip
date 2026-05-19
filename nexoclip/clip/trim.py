@@ -303,10 +303,18 @@ def _recut_clip_mp4(
 
 
 def _invalidate_export_cache(clip_dir: Path) -> None:
-    """Nuke clip_render.mp4 + clip_final.mp4 so the next download
-    lazy-regenerates with the new bounds. Same pattern as
-    clip_overlay_save's O.17 invalidation."""
-    for name in ("clip_render.mp4", "clip_final.mp4"):
+    """Nuke every cached export so the next download lazy-regenerates
+    with the new bounds. Slice J.2a added per-resolution variants; we
+    invalidate them all here because the source MP4 changed and any
+    pre-existing 4K cache is stale too."""
+    names = (
+        "clip_render.mp4",
+        "clip_render_1080.mp4",
+        "clip_render_2k.mp4",
+        "clip_render_4k.mp4",
+        "clip_final.mp4",
+    )
+    for name in names:
         path = clip_dir / name
         try:
             if path.exists():

@@ -280,6 +280,16 @@ def _mux_video_and_audio(
 
     Raises `PreviewRecordingError` on non-zero ffmpeg exit.
     """
+    # Slice O.49 — preset "veryfast" -> "medium", CRF 20 -> 17.
+    # Operator: downloaded clips look low quality. This is the LAST of
+    # three lossy passes in the export chain (cut -> WebM record -> mux);
+    # at CRF 20 / veryfast the H.264 output couldn't recover any detail
+    # already lost to the WebM intermediate. medium + CRF 17 is closer
+    # to "visually lossless" relative to the WebM input — ~2× slower at
+    # the same resolution but worth it once because the result is cached
+    # at clip_render_<quality>.mp4 and reused on every subsequent
+    # download. (Also bumped to "slow" via maxrate target for the 2K +
+    # 4K paths via the bitrate ladder.)
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     cmd = [
         ffmpeg,
@@ -290,8 +300,8 @@ def _mux_video_and_audio(
         "-map", "0:v:0",
         "-map", "1:a:0?",
         "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "20",
+        "-preset", "medium",
+        "-crf", "17",
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
         "-c:a", "copy",

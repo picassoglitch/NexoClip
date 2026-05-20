@@ -268,14 +268,19 @@ class ClipConfig(BaseModel):
     output_width: int = Field(default=1080, gt=0)
     output_height: int = Field(default=1920, gt=0)
     encoder: str = "libx264"
-    # Slice O.32 — `fast` → `veryfast`. On Railway CPU (no GPU encoder)
-    # the `fast` preset was burning ~30-60s per ~12s clip; for 2 clips
-    # that's nearly 2 minutes just on cut, blocking the pipeline.
-    # `veryfast` is ~2.5× faster at the same CRF 23 quality target;
-    # the visible quality difference on social-video output is
-    # imperceptible (TikTok / Reels re-encode aggressively anyway).
-    preset: str = "veryfast"
-    crf: int = Field(default=23, ge=0, le=51)
+    # Slice O.49 — preset "veryfast" -> "fast", CRF 23 -> 19. Operator
+    # report: downloaded clips look low quality. The reason: the cut
+    # step is the FIRST of three lossy passes in the export chain
+    # (cut -> Playwright WebM recording -> ffmpeg H.264 mux). At
+    # veryfast / CRF 23 the cut alone produces visible blocking on
+    # text + faces; "fast" + CRF 19 gives mathematically higher
+    # quality at roughly the same wall time on Railway CPU
+    # (~+15-20% encode time, ~+30% bitrate). The mux pass also got
+    # CRF 17 + "medium" so the final MP4 doesn't double-lose
+    # detail. See preview_recorder.py:_mux_video_and_audio for the
+    # corresponding mux-side change.
+    preset: str = "fast"
+    crf: int = Field(default=19, ge=0, le=51)
     burn_captions: bool = False
     # Slice G.1 — dynamic per-candidate clip windowing. When True
     # (the default) and a transcript is available, each clip's

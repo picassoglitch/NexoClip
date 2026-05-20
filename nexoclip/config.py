@@ -87,10 +87,13 @@ class VoiceDetectorConfig(BaseModel):
         "many seconds BEFORE the timestamp.",
     )
     cooldown_s: float = Field(
-        default=10.0,
+        default=2.5,
         ge=0.0,
-        description="Minimum gap between two triggers of the same kind to "
-        "prevent dupes from rapid speech.",
+        description="Minimum gap between two triggers of the same kind. "
+        "Only there to drop stutter-dupes inside a single utterance "
+        "('clip— clipea esto'). Operator-flagged the old 10s default: "
+        "if they say the phrase three times in two minutes they want "
+        "three clips, not one.",
     )
 
 

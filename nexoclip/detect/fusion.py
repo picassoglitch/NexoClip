@@ -127,11 +127,29 @@ def fuse_candidates(
         return sorted(items, key=lambda c: c.timestamp)
 
     # ---- 1. Cluster by timestamp ----
+    # Slice O.48 — voice triggers don't merge with other voice
+    # triggers. Operator request: "for all the times the user says
+    # the keyword to clip regardless of how many times he says it"
+    # — every "clipea esto" should produce its own clip, not get
+    # collapsed into the previous one because they happened within
+    # cluster_window_s of each other.
+    # Cross-signal clustering still applies (a voice trigger + a
+    # visual spike + an audio peak within 30s = one richer clip with
+    # all three as evidence), only voice-to-voice is blocked.
     sorted_items = sorted(items, key=lambda c: c.timestamp)
     clusters: list[list[Candidate]] = [[sorted_items[0]]]
     for c in sorted_items[1:]:
-        if c.timestamp - clusters[-1][-1].timestamp <= cfg.cluster_window_s:
-            clusters[-1].append(c)
+        prev_cluster = clusters[-1]
+        within_window = (
+            c.timestamp - prev_cluster[-1].timestamp <= cfg.cluster_window_s
+        )
+        # Block voice + voice in the same cluster.
+        voice_voice_collision = (
+            c.reason == "voice"
+            and any(member.reason == "voice" for member in prev_cluster)
+        )
+        if within_window and not voice_voice_collision:
+            prev_cluster.append(c)
         else:
             clusters.append([c])
 

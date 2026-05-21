@@ -182,12 +182,21 @@
       backdrop-filter: blur(1.154cqw);
     }
 
-    /* Banner (Kick repost variant) */
+    /* Banner — base. Slice O.55 — sits above the social-platform
+       safe area now. Previous version had `bottom: 0` which put the
+       banner directly under TikTok / Reels / Shorts caption + UI
+       chrome → operator reported the Kick banner getting clipped on
+       upload. New: bottom is at least 21.875cqh (= 420px on 1920
+       canvas = banner top edge at y=1500). Inside the 360px social
+       UI safe zone documented in the export spec.
+
+       Left/right safe margins are 7.4cqw (~80px on 1080) so the
+       Kick logo + URL never touch the canvas edge. */
     .nc-pv-banner {
       position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
+      left: 7.4cqw;
+      right: 7.4cqw;
+      bottom: 21.875cqh;
       height: 4.113cqh;
       background: var(--pv-banner-color, #53FC18);
       color: #000;
@@ -198,16 +207,20 @@
     .nc-pv-banner.is-hidden { display: none; }
     .nc-pv-banner--kick_repost_page {
       top: auto;
-      bottom: 18%;
+      /* Sits at the top of the safe-zone (y ≈ 1380), well above the
+         social-platform bottom UI which starts at y ≈ 1560. */
+      bottom: 28.125cqh;
       transform: none;
-      left: 0;
-      right: 0;
+      /* Kick-style banner spans full canvas width minus the L/R
+         safety margins from the base rule (inherited). */
+      left: 7.4cqw;
+      right: 7.4cqw;
       background: #000;
       color: #fff;
       padding: 0;
-      height: 3.896cqh;
-      min-height: 3.896cqh;
-      max-height: 3.896cqh;
+      height: 6.25cqh;
+      min-height: 6.25cqh;
+      max-height: 6.25cqh;
       border-radius: 0;
       border: none;
       box-shadow: none;

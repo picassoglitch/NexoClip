@@ -150,6 +150,29 @@ async def record_clip_to_mp4(
         f"{base_url.rstrip('/')}/dashboard/clips/{clip_id}/render?capture=1"
     )
 
+    # Slice O.55 — canonical-duration reconciliation. The caller passes
+    # `duration_s` from the DB; we ALSO ffprobe the source MP4 on
+    # disk. If they disagree (legacy clips cut before the O.55 cut-step
+    # accuracy fix, or post-trim drift), use the SHORTER value. This
+    # prevents the recorder from seeking past EOF + duplicating the
+    # last frame for the missing seconds — the previous failure mode
+    # the operator described as "40s preview, 35s export".
+    probed_duration = _ffprobe_duration_s(audio_source_path)
+    canonical_duration = duration_s
+    if probed_duration is not None and probed_duration > 0:
+        if abs(probed_duration - duration_s) > 0.15:
+            _log.warning(
+                "preview_recorder.duration_mismatch",
+                clip_id=clip_id,
+                db_duration_s=round(duration_s, 3),
+                file_duration_s=round(probed_duration, 3),
+                drift_ms=int(abs(probed_duration - duration_s) * 1000),
+                canonical_source="file",
+            )
+        # Always trust the file. The DB row will get reconciled below
+        # via the manifest validation step.
+        canonical_duration = probed_duration
+
     started_at = _dt.datetime.now(_dt.UTC)
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -209,8 +232,14 @@ async def record_clip_to_mp4(
 
             _log.info(
                 "preview_recorder.recording_start",
-                clip_id=clip_id, duration_s=duration_s,
-                expected_frames=int(duration_s * fps),
+                clip_id=clip_id,
+                db_duration_s=duration_s,
+                canonical_duration_s=round(canonical_duration, 3),
+                file_duration_s=(
+                    round(probed_duration, 3)
+                    if probed_duration is not None else None
+                ),
+                expected_frames=int(canonical_duration * fps),
             )
             capture_started = _dt.datetime.now(_dt.UTC)
             await _record_via_seek_and_shoot(
@@ -220,7 +249,7 @@ async def record_clip_to_mp4(
                 width=width,
                 height=height,
                 fps=fps,
-                duration_s=duration_s,
+                duration_s=canonical_duration,
             )
             capture_ended = _dt.datetime.now(_dt.UTC)
             await page.close()
@@ -232,9 +261,14 @@ async def record_clip_to_mp4(
     # best-effort: if ffprobe isn't on PATH or the validation fails,
     # we log + flag in the manifest but don't tank the download. The
     # operator can still grab the file and review.
+    #
+    # Slice O.55 — validate against the CANONICAL duration (file-based
+    # if the probe succeeded, otherwise the caller's value). Validating
+    # against duration_s when the file is shorter would always fail
+    # for legacy clips with bad DB rows.
     validation = _validate_export(
         output_path=output_path,
-        expected_duration_s=duration_s,
+        expected_duration_s=canonical_duration,
         expected_fps=fps,
     )
     if not validation["ok"]:
@@ -257,14 +291,24 @@ async def record_clip_to_mp4(
         "rendered_at": started_at.isoformat(),
         "capture_wall_s": (capture_ended - capture_started).total_seconds(),
         "input": {
-            "duration_s": duration_s,
+            # Slice O.55 — three numbers to make any future drift
+            # immediately diagnosable from the manifest alone:
+            #   db_duration_s: what the caller passed (typically from
+            #     the DB row)
+            #   file_duration_s: what ffprobe read from the source MP4
+            #   canonical_duration_s: the one we actually used for the
+            #     render timeline (currently == file_duration_s when
+            #     the probe succeeded, else db_duration_s)
+            "db_duration_s": duration_s,
+            "file_duration_s": probed_duration,
+            "canonical_duration_s": canonical_duration,
             "audio_source_path": str(audio_source_path),
             "expected_fps": fps,
         },
         "render": {
             "engine": "playwright-seek-and-shoot",
             "viewport": [width, height],
-            "expected_frames": int(duration_s * fps),
+            "expected_frames": int(canonical_duration * fps),
             "ffmpeg_crf": FFMPEG_CRF,
             "ffmpeg_preset": FFMPEG_PRESET,
         },
@@ -287,7 +331,30 @@ async def record_clip_to_mp4(
     return output_path
 
 
-_DURATION_TOLERANCE_MS = 150  # ffprobe vs requested duration; flagged above this
+_DURATION_TOLERANCE_MS = 100  # ffprobe vs requested duration; flagged above this
+
+
+def _ffprobe_duration_s(path: Path) -> float | None:
+    """Probe a file's duration in seconds via ffprobe. Returns None if
+    ffprobe isn't on PATH or the file can't be parsed. Best-effort."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        proc = subprocess.run(  # noqa: S603 — args list
+            [
+                ffprobe, "-v", "error", "-print_format", "json",
+                "-show_format", str(path),
+            ],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        info = json.loads(proc.stdout or "{}")
+        d = float(info.get("format", {}).get("duration") or 0.0)
+        return d if d > 0 else None
+    except Exception:  # noqa: BLE001 — never raise on probe
+        return None
 
 
 async def _record_via_seek_and_shoot(

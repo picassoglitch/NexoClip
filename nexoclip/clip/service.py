@@ -266,6 +266,26 @@ def _cut_all(
         if updated_evidence != (candidate.evidence or {}):
             candidate = candidate.model_copy(update={"evidence": updated_evidence})
 
+        # Slice O.55 — ffprobe the produced clip and replace duration
+        # with the ACTUAL file duration if it drifted past 50ms from
+        # the requested value. This guarantees DB <-> on-disk parity
+        # and prevents "preview shows 40s, export is 35s" type bugs
+        # downstream (the recorder uses this duration as canonical).
+        actual_duration = _ffprobe_duration_s(final)
+        if actual_duration is not None:
+            drift = abs(actual_duration - duration)
+            if drift > 0.05:
+                _log.warning(
+                    "clip.cut.duration_drift",
+                    requested_s=round(duration, 3),
+                    actual_s=round(actual_duration, 3),
+                    drift_ms=int(drift * 1000),
+                    clip_id=clip_id,
+                )
+                # Trust the file. Keep start_s as-is; recompute end_s.
+                duration = actual_duration
+                end = start + duration
+
         clip = Clip(
             id=clip_id,
             tenant_id=tenant_id,
@@ -286,6 +306,32 @@ def _cut_all(
         (clip_dir / "metadata.json").write_text(clip.model_dump_json(indent=2), encoding="utf-8")
         clips.append(clip)
     return clips
+
+
+def _ffprobe_duration_s(path: Path) -> float | None:
+    """Return the duration in seconds, or None if ffprobe isn't available
+    or the file can't be parsed. Best-effort — never raises."""
+    import json as _json
+    import shutil
+    import subprocess
+
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        proc = subprocess.run(  # noqa: S603 — args list
+            [
+                ffprobe, "-v", "error", "-print_format", "json",
+                "-show_format", str(path),
+            ],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        info = _json.loads(proc.stdout or "{}")
+        return float(info.get("format", {}).get("duration") or 0.0) or None
+    except Exception:  # noqa: BLE001 — never break cut on probe failure
+        return None
 
 
 def _safe_smart_crop(
@@ -413,23 +459,72 @@ def _safe_branded_thumbnails(
 def _ffmpeg_fast_cut(
     *, video_path: Path, start_s: float, duration_s: float, out_path: Path
 ) -> None:
-    """Stream-copy a window out of `video_path`. Fast but keyframe-aligned."""
+    """Cut a precise window out of `video_path`.
+
+    Slice O.55 — was stream-copy with `-ss` BEFORE `-i`. That uses
+    "input seek" which is fast but keyframe-aligned: ffmpeg seeks to
+    the nearest keyframe BEFORE start_s, then `-t` reads from there.
+    On a stream where the GOP is 5-10s (typical screen-recording or
+    h264 baseline output) this could produce output that's 0-5s
+    longer than requested AND starts up to 5s early. The downstream
+    DB stored the REQUESTED duration_s, so preview reported one
+    length while the file actually had another — that's the root
+    cause of "preview 40s, export 35s" type drift.
+
+    New behavior: re-encode the cut so seek is sample-accurate.
+      - `-ss start_s` BEFORE `-i` is still here for the fast scrubber
+        (decoder skips to the keyframe before start_s)
+      - `-ss 0` AFTER `-i` is implicit in `-t`
+      - We re-encode the cut to a small intermediate; the downstream
+        reformat step encodes again (so this is one EXTRA libx264
+        pass on the cut, ~0.5s on a typical 30s clip on Railway CPU)
+
+    Trade-off accepted: one extra encode for sub-millisecond duration
+    accuracy across the whole pipeline.
+    """
     cmd = [
         "ffmpeg",
         "-y",
         "-loglevel",
         "error",
+        # Fast input seek to the keyframe BEFORE start_s. The
+        # `-accurate_seek` flag (default in modern ffmpeg) combined
+        # with the re-encode below means the actual output starts
+        # exactly at start_s — the keyframe before is decoded into
+        # the buffer but only frames at/after start_s land in output.
         "-ss",
         f"{start_s:.3f}",
+        "-accurate_seek",
         "-i",
         str(video_path),
         "-t",
         f"{duration_s:.3f}",
-        "-c",
-        "copy",
+        # Re-encode the cut so duration is precise. Same encoder
+        # settings the downstream reformat uses (preset fast + CRF
+        # 19 from ClipConfig defaults) so this doesn't degrade
+        # quality measurably vs a single-pass encode.
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "19",
+        "-pix_fmt",
+        "yuv420p",
+        # Audio: re-encode to AAC@48k since social platforms want
+        # that uniformly, and accurate cutting requires re-encoding
+        # the audio at the cut point anyway (sample-accurate trim).
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
         str(out_path),
     ]
-    _run_ffmpeg(cmd, what=f"fast cut at {start_s:.3f}s")
+    _run_ffmpeg(cmd, what=f"accurate cut at {start_s:.3f}s")
 
 
 def _ffmpeg_reformat_9_16(

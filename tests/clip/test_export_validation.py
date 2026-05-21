@@ -235,6 +235,158 @@ def test_write_manifest_survives_oserror(tmp_path: Path) -> None:
 
 def test_duration_tolerance_documented() -> None:
     """The tolerance is part of the public contract — guard it from
-    accidental loosening. If you change this, update the docstring +
-    operator docs too."""
-    assert _DURATION_TOLERANCE_MS == 150
+    accidental loosening. The operator's spec requires <= 100ms
+    end-to-end. If you change this, update the docstring + spec docs."""
+    assert _DURATION_TOLERANCE_MS == 100
+
+
+# ---- _ffprobe_duration_s (slice O.55) --------------------------------------
+
+
+def test_ffprobe_duration_returns_seconds(tmp_path: Path) -> None:
+    """The probe should parse ffprobe -show_format JSON into seconds."""
+    from nexoclip.clip.preview_recorder import _ffprobe_duration_s
+
+    fake_file = tmp_path / "clip.mp4"
+    fake_file.write_bytes(b"x")
+    with patch("subprocess.run") as mock_run, \
+         patch("shutil.which", return_value="ffprobe"):
+        mock_run.return_value = _fake_ffprobe(_make_ffprobe_response(40.832))
+        assert _ffprobe_duration_s(fake_file) == 40.832
+
+
+def test_ffprobe_duration_no_binary_returns_none(tmp_path: Path) -> None:
+    """Missing ffprobe binary must NOT raise — return None so callers
+    fall back to the DB duration."""
+    from nexoclip.clip.preview_recorder import _ffprobe_duration_s
+
+    fake_file = tmp_path / "clip.mp4"
+    fake_file.write_bytes(b"x")
+    with patch("shutil.which", return_value=None):
+        assert _ffprobe_duration_s(fake_file) is None
+
+
+def test_ffprobe_duration_nonzero_rc_returns_none(tmp_path: Path) -> None:
+    """An ffprobe error must NOT raise — same fall-back contract."""
+    from nexoclip.clip.preview_recorder import _ffprobe_duration_s
+
+    fake_file = tmp_path / "clip.mp4"
+    fake_file.write_bytes(b"x")
+    with patch("subprocess.run") as mock_run, \
+         patch("shutil.which", return_value="ffprobe"):
+        mock_run.return_value = _fake_ffprobe("", returncode=1)
+        assert _ffprobe_duration_s(fake_file) is None
+
+
+def test_ffprobe_duration_zero_returns_none(tmp_path: Path) -> None:
+    """A 0-second file isn't usable as canonical duration — None
+    forces the caller back to the DB value rather than producing a
+    zero-frame export."""
+    from nexoclip.clip.preview_recorder import _ffprobe_duration_s
+
+    fake_file = tmp_path / "clip.mp4"
+    fake_file.write_bytes(b"x")
+    with patch("subprocess.run") as mock_run, \
+         patch("shutil.which", return_value="ffprobe"):
+        mock_run.return_value = _fake_ffprobe(_make_ffprobe_response(0.0))
+        assert _ffprobe_duration_s(fake_file) is None
+
+
+# ---- 40s preview / 35s export root cause (slice O.55) ----------------------
+
+
+def test_validate_export_uses_canonical_duration(tmp_path: Path) -> None:
+    """If the file is 35s but caller expected 40s and DOESN'T pre-
+    reconcile via _ffprobe_duration_s, validation must surface the
+    mismatch as a failure (this is the bug the operator hit)."""
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"x")
+
+    with patch("subprocess.run") as mock_run:
+        # File is 35s. Expected 40s. Drift = 5000ms.
+        mock_run.return_value = _fake_ffprobe(_make_ffprobe_response(35.0))
+        result = _validate_export(
+            output_path=out, expected_duration_s=40.0, expected_fps=30
+        )
+
+    assert result["ok"] is False
+    assert result["checks"]["duration_drift_ms"] == 5000
+    assert any("drift" in e for e in result["errors"])
+
+
+def test_validate_export_passes_when_caller_pre_reconciles(tmp_path: Path) -> None:
+    """The slice O.55 fix: caller probes the file first and passes
+    file-derived duration into validate. With expected aligned to
+    actual, drift is 0 -> ok=True."""
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"x")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = _fake_ffprobe(_make_ffprobe_response(35.0))
+        # Caller already probed source clip + got 35.0, passes that.
+        result = _validate_export(
+            output_path=out, expected_duration_s=35.0, expected_fps=30
+        )
+
+    assert result["ok"] is True
+    assert result["checks"]["duration_drift_ms"] == 0
+
+
+def test_audio_must_be_aac_48k_for_social(tmp_path: Path) -> None:
+    """Operator spec: output must be H.264 + AAC + 48kHz for TikTok
+    / Reels / Shorts compatibility. The validator records the audio
+    codec + sample rate so the manifest can be diffed; this test
+    pins the contract on what gets stored."""
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"x")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = _fake_ffprobe(_make_ffprobe_response(40.0))
+        result = _validate_export(
+            output_path=out, expected_duration_s=40.0, expected_fps=30
+        )
+
+    assert result["checks"]["audio_codec"] == "aac"
+    assert result["checks"]["audio_sample_rate"] == "48000"
+
+
+# ---- banner safe zone (slice O.55 / Issue C) ------------------------------
+
+
+def test_clip_render_banner_is_inside_safe_zone() -> None:
+    """The Kick banner CSS must place the banner above the social UI
+    bottom strip. Operator spec for 1080x1920:
+      - bottom safe area is 360px (-> banner cannot live below y=1560)
+      - we want banner top edge around y=1380 (kick variant)
+      - we want banner top edge around y=1500 (default variant)
+
+    These translate to cqh values: 28.125 / 21.875 respectively
+    (28.125% of 1920 = 540px from bottom = banner top at y=1380).
+    If anybody changes the banner CSS without updating this test
+    they'll get a failure that points at the social-cropping bug. """
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "nexoclip" / "api" / "templates" / "clip_render.html"
+    )
+    css = template_path.read_text(encoding="utf-8")
+
+    # Default banner must NOT be at bottom: 0 anymore.
+    assert "bottom: 21.875cqh" in css, (
+        "default .nc-pv-banner must sit at bottom: 21.875cqh "
+        "(banner top edge y=1500 on 1920 canvas) so it stays "
+        "above social-platform UI overlays"
+    )
+    # Kick variant must be higher still (it's a richer banner).
+    assert "bottom: 28.125cqh" in css, (
+        ".nc-pv-banner--kick_repost_page must sit at bottom: 28.125cqh "
+        "(banner top edge y=1380 on 1920 canvas)"
+    )
+    # Left/right margins for the safe-zone (80px on a 1080 canvas = 7.4cqw).
+    assert "left: 7.4cqw" in css, (
+        "banner must have at least 80px left margin (7.4cqw) so the "
+        "Kick logo never touches the canvas edge"
+    )
+    assert "right: 7.4cqw" in css, (
+        "banner must have at least 80px right margin (7.4cqw) so the "
+        "URL handle never touches the canvas edge"
+    )

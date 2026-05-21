@@ -222,46 +222,45 @@ async def _record_via_cdp(
 ) -> None:
     """Open a CDP session, screencast JPEG frames, pipe to ffmpeg.
 
-    Why this shape:
-      - Chrome's `Page.startScreencast` only sends the next frame after
-        the previous one is ACK'd via `Page.screencastFrameAck`. We
-        keep the ACK in the same callback as the ffmpeg-write so back-
-        pressure is automatic — if ffmpeg stalls, frames slow down too.
-      - We do NOT count or interpolate frames Python-side. ffmpeg's
-        `-r` flag on the input pipe assumes a constant frame rate;
-        small jitter from Chrome's batching gets smoothed by ffmpeg's
-        video stream encoder. The output is a true 30fps MP4.
+    Slice O.51 — fixed-cadence writer. Chrome's screencast sends frames
+    at a variable rate (one per repaint, which depends on system load
+    + how busy the page is). If we naively forward each frame into
+    ffmpeg with `-framerate 30`, ffmpeg assumes every input frame is
+    1/30s long — so a clip recorded at 15 effective fps comes out
+    half-length and plays back at 2× speed.
+
+    Fix: decouple Chrome's variable input rate from ffmpeg's fixed
+    output rate. A background writer task wakes every 1/fps seconds
+    and writes whatever the "latest frame" reference holds; the
+    screencast callback just updates that reference. If Chrome lags
+    we duplicate the last frame (output stays real-time, no fast-
+    forward); if Chrome is faster than 1/fps we drop intermediate
+    frames (output stays at the requested rate, no slow-mo).
     """
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     cmd = [
         ffmpeg,
         "-y",
         "-loglevel", "error",
-        # Input 0: JPEG frames on stdin. -r tells ffmpeg the assumed
-        # frame rate; it timestamps frames evenly at 1/fps intervals.
+        # Input 0: JPEG frames on stdin at a strict fps. Because the
+        # writer task below feeds exactly fps frames/sec of wall time,
+        # this is now accurate.
         "-f", "image2pipe",
         "-framerate", str(fps),
         "-i", "pipe:0",
-        # Input 1: audio from the source clip MP4 (the same audio the
-        # operator just heard in the editor).
+        # Input 1: audio from the source clip MP4.
         "-i", str(audio_source_path),
-        # Map video from pipe, audio from source.
         "-map", "0:v:0",
         "-map", "1:a:0?",
-        # Video encode. CRF 14 + medium preset = visually transparent
-        # at this resolution band. yuv420p for universal compatibility
-        # (TikTok, Reels, Shorts all reject yuv444p).
         "-c:v", "libx264",
         "-preset", FFMPEG_PRESET,
         "-crf", FFMPEG_CRF,
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
-        # Audio: bit-perfect copy.
         "-c:a", "copy",
         # Clamp output to exactly the requested duration. Chrome can
-        # send a stray frame after we ask it to stop, and the audio
-        # source may run longer than the visual capture; -t prevents
-        # both edge cases from desync'ing the output.
+        # send a stray frame after we ask it to stop; -t prevents
+        # desync between the video + audio tracks.
         "-t", f"{duration_s:.3f}",
         "-movflags", "+faststart",
         str(output_path),
@@ -276,33 +275,25 @@ async def _record_via_cdp(
 
     cdp = await context.new_cdp_session(page)
 
-    # Frame counter for telemetry. Without it we can't tell if Chrome
-    # ever started sending frames vs ffmpeg silently consuming nothing.
-    frame_count = 0
+    # Shared state between the screencast callback (Chrome side) and
+    # the writer task (ffmpeg side).
+    latest_frame: dict[str, bytes | None] = {"jpeg": None}
+    frames_received = 0  # how many Chrome sent (i.e. how many repaints)
+    frames_written = 0   # how many we forwarded to ffmpeg (= duration * fps)
     write_failed = False
+    done_event = asyncio.Event()
 
     def on_screencast_frame(event: dict) -> None:
-        nonlocal frame_count, write_failed
-        if write_failed:
-            return
+        nonlocal frames_received
         try:
-            jpeg_bytes = base64.b64decode(event["data"])
-            assert proc.stdin is not None
-            proc.stdin.write(jpeg_bytes)
-            frame_count += 1
-        except (BrokenPipeError, OSError) as e:
-            # ffmpeg died mid-stream — stop trying to feed it. Final
-            # error surfaces from proc.wait() below.
-            write_failed = True
+            latest_frame["jpeg"] = base64.b64decode(event["data"])
+            frames_received += 1
+        except Exception as e:  # noqa: BLE001
             _log.warning(
-                "preview_recorder.ffmpeg_stdin_closed",
-                frame_count=frame_count, error=str(e),
+                "preview_recorder.frame_decode_failed", error=str(e)
             )
             return
-        # ACK the frame so Chrome sends the next one. session_id is
-        # required even though there's only one screencast running.
-        # Fire-and-forget; if the ACK fails the next frame just doesn't
-        # come and the recording ends slightly short.
+        # ACK so Chrome sends the next frame. Fire-and-forget.
         asyncio.create_task(
             cdp.send(
                 "Page.screencastFrameAck",
@@ -311,6 +302,48 @@ async def _record_via_cdp(
         )
 
     cdp.on("Page.screencastFrame", on_screencast_frame)
+
+    async def writer_loop() -> None:
+        """Feed ffmpeg's stdin at a strict 1/fps cadence.
+
+        Runs from the moment the screencast starts until done_event is
+        set. On every tick: if we have a frame, write it; if not, write
+        nothing (ffmpeg's first input frame must exist or the encode
+        fails — `_wait_first_frame` guards that before this loop starts).
+        """
+        nonlocal frames_written, write_failed
+        loop = asyncio.get_event_loop()
+        frame_interval = 1.0 / float(fps)
+        next_tick = loop.time()
+        while not done_event.is_set():
+            frame = latest_frame["jpeg"]
+            if frame is not None and not write_failed:
+                try:
+                    assert proc.stdin is not None
+                    proc.stdin.write(frame)
+                    frames_written += 1
+                except (BrokenPipeError, OSError) as e:
+                    write_failed = True
+                    _log.warning(
+                        "preview_recorder.ffmpeg_stdin_closed",
+                        frames_written=frames_written, error=str(e),
+                    )
+                    return
+            next_tick += frame_interval
+            sleep_for = next_tick - loop.time()
+            if sleep_for > 0:
+                try:
+                    await asyncio.wait_for(
+                        done_event.wait(), timeout=sleep_for
+                    )
+                    # done_event fired during the sleep — exit cleanly.
+                    return
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                # We fell behind — skip the catch-up sleep and write
+                # next frame immediately. Output stays close to fps.
+                next_tick = loop.time()
 
     # Kick off the screencast. format=jpeg + quality=95 = small frames
     # with no visible compression artifacts. maxWidth/Height match the
@@ -326,24 +359,41 @@ async def _record_via_cdp(
         },
     )
 
+    # Wait briefly for the first frame to land before starting the
+    # writer — otherwise the first 1/fps tick writes nothing and ffmpeg
+    # errors out with "no input data".
+    wait_start = asyncio.get_event_loop().time()
+    while latest_frame["jpeg"] is None:
+        if asyncio.get_event_loop().time() - wait_start > 5.0:
+            await cdp.send("Page.stopScreencast")
+            if proc.stdin is not None:
+                proc.stdin.close()
+            proc.kill()
+            raise PreviewRecordingError(
+                "CDP screencast first frame did not arrive within 5s"
+            )
+        await asyncio.sleep(0.05)
+
+    writer_task = asyncio.create_task(writer_loop())
+
     try:
         await asyncio.sleep(duration_s + TAIL_PAD_S)
     finally:
+        done_event.set()
+        try:
+            await asyncio.wait_for(writer_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
         try:
             await cdp.send("Page.stopScreencast")
         except Exception:  # noqa: BLE001
             pass
-        # Closing stdin signals end-of-stream to ffmpeg's image2pipe
-        # demuxer. Without this, ffmpeg waits forever for more frames.
         if proc.stdin is not None:
             try:
                 proc.stdin.close()
             except Exception:  # noqa: BLE001
                 pass
 
-    # Wait for ffmpeg to flush + close its file handle. A clip with
-    # n seconds of duration + 5s headroom for the last frames to
-    # encode is plenty.
     try:
         proc.wait(timeout=max(60.0, duration_s + 30.0))
     except subprocess.TimeoutExpired as e:
@@ -354,20 +404,24 @@ async def _record_via_cdp(
 
     _log.info(
         "preview_recorder.ffmpeg_done",
-        rc=proc.returncode, frame_count=frame_count,
+        rc=proc.returncode,
+        frames_received=frames_received,
+        frames_written=frames_written,
+        expected_frames=int(duration_s * fps),
     )
     if proc.returncode != 0:
         stderr_tail = (proc.stderr.read() if proc.stderr else b"").decode(
             "utf-8", errors="replace"
         )[-800:]
         raise PreviewRecordingError(
-            f"ffmpeg encode failed (rc={proc.returncode}, frames={frame_count}): "
+            f"ffmpeg encode failed (rc={proc.returncode}, "
+            f"received={frames_received}, written={frames_written}): "
             f"{stderr_tail.strip()}"
         )
-    if frame_count == 0:
+    if frames_written == 0:
         raise PreviewRecordingError(
             "CDP screencast produced zero frames. Render page never repainted "
-            "or the screencast was rejected before any frame fired."
+            "or the writer never ran."
         )
 
 

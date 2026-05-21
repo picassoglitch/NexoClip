@@ -490,9 +490,15 @@
             fill.style.width = "95%";
           }
         }, 0);
-        // Safety auto-restore at 90s. Either the file already arrived
-        // (operator stopped looking — harmless) or the server failed
-        // (operator can retry).
+        // Slice O.51 — safety auto-restore scales with clip duration.
+        // Was: flat 90s. For a 1-minute clip that's fine; for a 5-second
+        // clip the operator sees the button stuck for 85 extra seconds.
+        // New: render time + 15s. Render time = clip duration × encode
+        // factor (already baked into the data-duration-s attribute,
+        // which includes the resolution multiplier). Floor at 25s so
+        // very short clips still get reasonable headroom for the
+        // network round-trip.
+        var safetyMs = Math.max(25000, totalMs + 15000);
         setTimeout(function () {
           btn.classList.remove("is-preparing");
           if (label && origText !== null) label.textContent = origText;
@@ -500,7 +506,30 @@
             fill.style.transition = "none";
             fill.style.width = "0%";
           }
-        }, 90000);
+        }, safetyMs);
+
+        // Also listen for the page becoming visible again after the
+        // download triggers a browser-level save dialog. When the user
+        // dismisses the dialog the page regains focus — at that point
+        // the file has either been saved or canceled, either way the
+        // button should restore.
+        var visibilityHandler = function () {
+          if (document.visibilityState === "visible") {
+            // Small grace period so we don't restore mid-dialog.
+            setTimeout(function () {
+              btn.classList.remove("is-preparing");
+              if (label && origText !== null) label.textContent = origText;
+              if (fill) {
+                fill.style.transition = "none";
+                fill.style.width = "0%";
+              }
+            }, 800);
+            document.removeEventListener(
+              "visibilitychange", visibilityHandler
+            );
+          }
+        };
+        document.addEventListener("visibilitychange", visibilityHandler);
       });
     });
   })();

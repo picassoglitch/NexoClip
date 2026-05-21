@@ -1,36 +1,37 @@
-"""Headless-Chrome recorder for the clip preview (slice O.50).
+"""Headless-Chrome recorder for the clip preview (slices O.50 + O.53).
 
 Renders the same HTML/CSS that the operator sees in the editor (the
 `/dashboard/clips/<id>/render` page from slice O.19) and captures it
-straight to MP4 via Chrome DevTools Protocol screencast — bypassing
-Playwright's built-in MediaRecorder.
+to MP4 via Chrome DevTools Protocol screencast.
 
-Why CDP screencast vs MediaRecorder:
-
+Why CDP screencast vs Playwright's MediaRecorder (slice O.50):
   Playwright's `record_video` uses Chromium's MediaRecorder API which
-  emits VP8/VP9 WebM at a fixed (lowish) bitrate that we can't control.
-  For a 4K-source workflow that intermediate compressed the picture
-  to ~3 Mbps before our final H.264 mux could touch it — visible
-  pixelation operators reported.
+  emits VP8/VP9 WebM at a fixed (lowish) bitrate we can't control.
+  CDP `Page.startScreencast` emits raw JPEG-per-frame events; we
+  encode H.264 at OUR chosen bitrate (CRF 14, medium preset).
+  No intermediate lossy step.
 
-  CDP `Page.startScreencast` emits raw JPEG-per-frame events. We pipe
-  those JPEGs straight into ffmpeg's image2pipe demuxer and encode
-  H.264 at OUR chosen bitrate (CRF 14, medium preset). No intermediate
-  lossy step. Visually indistinguishable from the editor preview at
-  any export resolution.
+Why per-frame timestamps via concat demuxer (slice O.53):
+  Chrome sends screencast frames at a VARIABLE rate (one per repaint,
+  which depends on system load + page activity). Earlier versions
+  forced a constant fps input which made variable-rate captures look
+  fast-forward (O.51 fixed that via duplication) OR jittery (this
+  slice fixes that).
 
-Trade-offs:
-  - Real-time playback. A 15-second clip still takes ~15s to record.
-  - Slightly more CPU than MediaRecorder (JPEG encode on Chrome side).
-  - Frame rate is "best effort" from Chrome's screencast — we ask for
-    every frame but Chrome batches based on repaints. ffmpeg's input
-    `-r 30` smooths to constant frame rate on output.
+  The correct architecture: save each frame to disk with Chrome's
+  reported timestamp, then build a `concat` demuxer playlist where
+  each frame's duration is the gap between its timestamp and the
+  next frame's. ffmpeg then plays back the captured stream at EXACTLY
+  the wall-clock rate Chrome produced — no duplication, no skipping,
+  no fast-forward. Output is encoded at a constant 30fps (ffmpeg
+  resamples from the variable concat input to constant output).
 
-Audio handling:
-  - CDP screencast captures VIDEO ONLY. Same as before.
-  - ffmpeg muxes the source clip's audio track on top of the encoded
-    H.264 stream. Audio is `-c:a copy` so it's bit-perfect — no
-    re-encode.
+Audio sync:
+  Chrome timestamps are normalized to start at 0 (first-frame ts is
+  subtracted from all). The audio source already starts at 0. ffmpeg's
+  `-t duration_s` clamps both to the same end. Result: captions
+  (which are part of the video frames) stay in lockstep with the
+  audio they're transcribing.
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ import asyncio
 import base64
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import structlog
@@ -220,208 +222,243 @@ async def _record_via_cdp(
     fps: int,
     duration_s: float,
 ) -> None:
-    """Open a CDP session, screencast JPEG frames, pipe to ffmpeg.
+    """Open a CDP session, save JPEG frames to disk with their real
+    timestamps, then ffmpeg-encode using the concat demuxer.
 
-    Slice O.51 — fixed-cadence writer. Chrome's screencast sends frames
-    at a variable rate (one per repaint, which depends on system load
-    + how busy the page is). If we naively forward each frame into
-    ffmpeg with `-framerate 30`, ffmpeg assumes every input frame is
-    1/30s long — so a clip recorded at 15 effective fps comes out
-    half-length and plays back at 2× speed.
+    Slice O.53 — timestamp-accurate concat. Earlier versions either:
+      - Forced constant fps -> variable Chrome output looked fast-
+        forward or jittery (mismatch between assumed and actual frame
+        intervals)
+      - Duplicated the last frame on missed ticks -> stutter when
+        Chrome repaint cadence dropped below the target fps
+    Neither matched what Chrome actually rendered. The correct fix is
+    to honor Chrome's per-frame `metadata.timestamp` (seconds since
+    epoch, monotonic) and let ffmpeg's concat demuxer do the math.
 
-    Fix: decouple Chrome's variable input rate from ffmpeg's fixed
-    output rate. A background writer task wakes every 1/fps seconds
-    and writes whatever the "latest frame" reference holds; the
-    screencast callback just updates that reference. If Chrome lags
-    we duplicate the last frame (output stays real-time, no fast-
-    forward); if Chrome is faster than 1/fps we drop intermediate
-    frames (output stays at the requested rate, no slow-mo).
+    Procedure:
+      1. Save each screencast JPEG to <tmpdir>/frame_NNNN.jpg
+      2. Track (filename, chrome_timestamp) tuples
+      3. After capture ends, normalize timestamps so first frame is
+         at t=0 (audio source already starts at t=0)
+      4. Write a concat playlist: each `file ...` line followed by a
+         `duration` line equal to (next_ts - this_ts)
+      5. ffmpeg consumes the playlist + resamples to constant 30 fps
+         output, mux audio bit-perfect from the source clip
     """
+    cdp = await context.new_cdp_session(page)
+
+    # Frame storage. tempfile context auto-cleans on exit; the
+    # playlist file lives inside the same dir so all paths are
+    # relative + portable across OS path separators.
+    with tempfile.TemporaryDirectory(prefix="nexoclip_frames_") as tmpdir:
+        tmp_path = Path(tmpdir)
+        frames_meta: list[tuple[Path, float]] = []  # (filename, ts_seconds)
+        decode_failures = 0
+        done_event = asyncio.Event()
+
+        def on_screencast_frame(event: dict) -> None:
+            nonlocal decode_failures
+            try:
+                jpeg = base64.b64decode(event["data"])
+            except Exception as e:  # noqa: BLE001
+                decode_failures += 1
+                _log.warning(
+                    "preview_recorder.frame_decode_failed", error=str(e)
+                )
+                return
+            # Chrome's metadata.timestamp is seconds since epoch in
+            # the page's monotonic clock. Absolute value doesn't
+            # matter — we'll normalize the first frame to 0 below.
+            md = event.get("metadata") or {}
+            ts = float(md.get("timestamp") or 0.0)
+            idx = len(frames_meta)
+            path = tmp_path / f"frame_{idx:08d}.jpg"
+            try:
+                path.write_bytes(jpeg)
+            except OSError as e:
+                decode_failures += 1
+                _log.warning(
+                    "preview_recorder.frame_write_failed",
+                    error=str(e), idx=idx,
+                )
+                return
+            frames_meta.append((path, ts))
+            # ACK so Chrome sends the next frame. Fire-and-forget.
+            asyncio.create_task(
+                cdp.send(
+                    "Page.screencastFrameAck",
+                    {"sessionId": event["sessionId"]},
+                )
+            )
+
+        cdp.on("Page.screencastFrame", on_screencast_frame)
+
+        # Start the screencast. format=jpeg + quality=95 = visually
+        # transparent at this resolution. maxWidth/Height match the
+        # viewport so Chrome doesn't downscale before encoding.
+        await cdp.send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": SCREENCAST_JPEG_QUALITY,
+                "maxWidth": width,
+                "maxHeight": height,
+                "everyNthFrame": 1,
+            },
+        )
+
+        # Wait for the first frame so we can fail fast if the
+        # screencast never gets going.
+        wait_start = asyncio.get_event_loop().time()
+        while not frames_meta:
+            if asyncio.get_event_loop().time() - wait_start > 5.0:
+                try:
+                    await cdp.send("Page.stopScreencast")
+                except Exception:  # noqa: BLE001
+                    pass
+                raise PreviewRecordingError(
+                    "CDP screencast first frame did not arrive within 5s"
+                )
+            await asyncio.sleep(0.05)
+
+        # Now record for the clip's duration + tail pad. Chrome keeps
+        # firing screencastFrame events; our callback writes them to
+        # disk with their real timestamps.
+        try:
+            await asyncio.sleep(duration_s + TAIL_PAD_S)
+        finally:
+            done_event.set()
+            try:
+                await cdp.send("Page.stopScreencast")
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not frames_meta:
+            raise PreviewRecordingError(
+                "CDP screencast produced zero frames"
+            )
+
+        # Normalize timestamps to start at 0 — audio source already
+        # starts at 0, so this keeps video + audio aligned.
+        t0 = frames_meta[0][1]
+        normalized = [(p, ts - t0) for p, ts in frames_meta]
+
+        # Build the concat playlist. Format:
+        #   file 'frame_00000000.jpg'
+        #   duration 0.033
+        #   file 'frame_00000001.jpg'
+        #   duration 0.041
+        #   ...
+        #   file 'frame_NNNNNNNN.jpg'    <- last frame listed twice
+        # The last file is listed without a duration AND repeated so
+        # ffmpeg's concat demuxer picks up its frame for the tail.
+        playlist_lines: list[str] = []
+        for i, (path, ts) in enumerate(normalized):
+            playlist_lines.append(f"file '{path.name}'")
+            if i + 1 < len(normalized):
+                next_ts = normalized[i + 1][1]
+                dur = max(0.001, next_ts - ts)
+                playlist_lines.append(f"duration {dur:.6f}")
+        # Concat-demuxer quirk: the last file's duration is taken from
+        # the previous duration line OR ignored entirely. Listing the
+        # final file twice (no duration on the dup) makes the demuxer
+        # emit a final frame for the trailing gap. Otherwise the last
+        # frame can get dropped.
+        if normalized:
+            playlist_lines.append(f"file '{normalized[-1][0].name}'")
+        playlist_path = tmp_path / "concat.txt"
+        playlist_path.write_text("\n".join(playlist_lines), encoding="utf-8")
+
+        # Capture stats for telemetry BEFORE invoking ffmpeg so the
+        # log line shows even on encode failure.
+        captured_duration = normalized[-1][1] - normalized[0][1]
+        effective_fps = (
+            len(normalized) / captured_duration if captured_duration > 0 else 0
+        )
+        _log.info(
+            "preview_recorder.capture_done",
+            frames=len(normalized),
+            captured_s=round(captured_duration, 3),
+            effective_fps=round(effective_fps, 2),
+            target_duration_s=duration_s,
+            decode_failures=decode_failures,
+        )
+
+        await _run_ffmpeg_concat_encode(
+            playlist_path=playlist_path,
+            audio_source_path=audio_source_path,
+            output_path=output_path,
+            duration_s=duration_s,
+            fps=fps,
+        )
+
+
+async def _run_ffmpeg_concat_encode(
+    *,
+    playlist_path: Path,
+    audio_source_path: Path,
+    output_path: Path,
+    duration_s: float,
+    fps: int,
+) -> None:
+    """Concat-demuxer ffmpeg encode. Runs sync in a thread so the
+    async event loop isn't blocked while x264 chews."""
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     cmd = [
         ffmpeg,
         "-y",
         "-loglevel", "error",
-        # Input 0: JPEG frames on stdin at a strict fps. Because the
-        # writer task below feeds exactly fps frames/sec of wall time,
-        # this is now accurate.
-        "-f", "image2pipe",
-        "-framerate", str(fps),
-        "-i", "pipe:0",
-        # Input 1: audio from the source clip MP4.
+        # Input 0: concat playlist with per-frame durations from
+        # Chrome's actual timestamps. -safe 0 allows the playlist to
+        # reference files by relative name without a fixed-set guard.
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(playlist_path),
+        # Input 1: audio source.
         "-i", str(audio_source_path),
         "-map", "0:v:0",
         "-map", "1:a:0?",
+        # Video encode: H.264, visually-transparent CRF + medium
+        # preset. -r forces constant 30 fps output; ffmpeg interpolates
+        # / drops frames from the variable concat input to match.
+        # -vsync cfr makes the resample explicit (some ffmpeg builds
+        # default to passthrough which preserves the variable rate
+        # but breaks player seekability).
         "-c:v", "libx264",
         "-preset", FFMPEG_PRESET,
         "-crf", FFMPEG_CRF,
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
+        "-vsync", "cfr",
         "-c:a", "copy",
-        # Clamp output to exactly the requested duration. Chrome can
-        # send a stray frame after we ask it to stop; -t prevents
-        # desync between the video + audio tracks.
+        # Hard clamp to the operator's requested clip duration so we
+        # never overshoot if Chrome streamed past the stop signal.
         "-t", f"{duration_s:.3f}",
         "-movflags", "+faststart",
         str(output_path),
     ]
     _log.info("preview_recorder.ffmpeg_start", cmd=" ".join(cmd))
-    proc = subprocess.Popen(  # noqa: S603 — args list, not shell
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+    loop = asyncio.get_event_loop()
+    proc = await loop.run_in_executor(
+        None,
+        lambda: subprocess.run(  # noqa: S603 — args list, not shell
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=max(120.0, duration_s + 60.0),
+            check=False,
+        ),
     )
-
-    cdp = await context.new_cdp_session(page)
-
-    # Shared state between the screencast callback (Chrome side) and
-    # the writer task (ffmpeg side).
-    latest_frame: dict[str, bytes | None] = {"jpeg": None}
-    frames_received = 0  # how many Chrome sent (i.e. how many repaints)
-    frames_written = 0   # how many we forwarded to ffmpeg (= duration * fps)
-    write_failed = False
-    done_event = asyncio.Event()
-
-    def on_screencast_frame(event: dict) -> None:
-        nonlocal frames_received
-        try:
-            latest_frame["jpeg"] = base64.b64decode(event["data"])
-            frames_received += 1
-        except Exception as e:  # noqa: BLE001
-            _log.warning(
-                "preview_recorder.frame_decode_failed", error=str(e)
-            )
-            return
-        # ACK so Chrome sends the next frame. Fire-and-forget.
-        asyncio.create_task(
-            cdp.send(
-                "Page.screencastFrameAck",
-                {"sessionId": event["sessionId"]},
-            )
-        )
-
-    cdp.on("Page.screencastFrame", on_screencast_frame)
-
-    async def writer_loop() -> None:
-        """Feed ffmpeg's stdin at a strict 1/fps cadence.
-
-        Runs from the moment the screencast starts until done_event is
-        set. On every tick: if we have a frame, write it; if not, write
-        nothing (ffmpeg's first input frame must exist or the encode
-        fails — `_wait_first_frame` guards that before this loop starts).
-        """
-        nonlocal frames_written, write_failed
-        loop = asyncio.get_event_loop()
-        frame_interval = 1.0 / float(fps)
-        next_tick = loop.time()
-        while not done_event.is_set():
-            frame = latest_frame["jpeg"]
-            if frame is not None and not write_failed:
-                try:
-                    assert proc.stdin is not None
-                    proc.stdin.write(frame)
-                    frames_written += 1
-                except (BrokenPipeError, OSError) as e:
-                    write_failed = True
-                    _log.warning(
-                        "preview_recorder.ffmpeg_stdin_closed",
-                        frames_written=frames_written, error=str(e),
-                    )
-                    return
-            next_tick += frame_interval
-            sleep_for = next_tick - loop.time()
-            if sleep_for > 0:
-                try:
-                    await asyncio.wait_for(
-                        done_event.wait(), timeout=sleep_for
-                    )
-                    # done_event fired during the sleep — exit cleanly.
-                    return
-                except asyncio.TimeoutError:
-                    pass
-            else:
-                # We fell behind — skip the catch-up sleep and write
-                # next frame immediately. Output stays close to fps.
-                next_tick = loop.time()
-
-    # Kick off the screencast. format=jpeg + quality=95 = small frames
-    # with no visible compression artifacts. maxWidth/Height match the
-    # viewport so Chrome doesn't downscale.
-    await cdp.send(
-        "Page.startScreencast",
-        {
-            "format": "jpeg",
-            "quality": SCREENCAST_JPEG_QUALITY,
-            "maxWidth": width,
-            "maxHeight": height,
-            "everyNthFrame": 1,
-        },
-    )
-
-    # Wait briefly for the first frame to land before starting the
-    # writer — otherwise the first 1/fps tick writes nothing and ffmpeg
-    # errors out with "no input data".
-    wait_start = asyncio.get_event_loop().time()
-    while latest_frame["jpeg"] is None:
-        if asyncio.get_event_loop().time() - wait_start > 5.0:
-            await cdp.send("Page.stopScreencast")
-            if proc.stdin is not None:
-                proc.stdin.close()
-            proc.kill()
-            raise PreviewRecordingError(
-                "CDP screencast first frame did not arrive within 5s"
-            )
-        await asyncio.sleep(0.05)
-
-    writer_task = asyncio.create_task(writer_loop())
-
-    try:
-        await asyncio.sleep(duration_s + TAIL_PAD_S)
-    finally:
-        done_event.set()
-        try:
-            await asyncio.wait_for(writer_task, timeout=5.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
-        try:
-            await cdp.send("Page.stopScreencast")
-        except Exception:  # noqa: BLE001
-            pass
-        if proc.stdin is not None:
-            try:
-                proc.stdin.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-    try:
-        proc.wait(timeout=max(60.0, duration_s + 30.0))
-    except subprocess.TimeoutExpired as e:
-        proc.kill()
-        raise PreviewRecordingError(
-            f"ffmpeg encode hung past {duration_s + 30:.0f}s timeout"
-        ) from e
-
-    _log.info(
-        "preview_recorder.ffmpeg_done",
-        rc=proc.returncode,
-        frames_received=frames_received,
-        frames_written=frames_written,
-        expected_frames=int(duration_s * fps),
-    )
+    _log.info("preview_recorder.ffmpeg_done", rc=proc.returncode)
     if proc.returncode != 0:
-        stderr_tail = (proc.stderr.read() if proc.stderr else b"").decode(
-            "utf-8", errors="replace"
-        )[-800:]
+        stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-800:]
         raise PreviewRecordingError(
-            f"ffmpeg encode failed (rc={proc.returncode}, "
-            f"received={frames_received}, written={frames_written}): "
-            f"{stderr_tail.strip()}"
+            f"ffmpeg encode failed (rc={proc.returncode}): {stderr_tail.strip()}"
         )
-    if frames_written == 0:
+    if not output_path.exists() or output_path.stat().st_size == 0:
         raise PreviewRecordingError(
-            "CDP screencast produced zero frames. Render page never repainted "
-            "or the writer never ran."
+            "ffmpeg returned 0 but no output file was written"
         )
 
 

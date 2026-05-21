@@ -449,17 +449,24 @@
   }
 </style>
 <script>
-  // Slice O.40 — determinate progress bar. We don't get real progress
-  // events from the server, so the bar runs on a clip-duration-based
-  // estimate (clip_duration_s + 5s mux overhead). The bar caps at 95%
-  // until either the browser actually starts the download (in which
-  // case we leave it parked — the operator is gone) or the 90s safety
-  // net fires (browser is presumably broken; restore the button).
+  // Slice O.52 — bar tracks real render time, not an estimate.
   //
-  // Why determinate and not a spinner: the operator complained the
-  // spinner gave no sense of "how much longer", which made the page
-  // feel hung. A bar that visibly moves over ~clip_duration seconds
-  // matches the actual wait time and feels honest.
+  // Previous shipped: bar filled 0% -> 95% over a duration estimate,
+  // disconnected from the actual server work. So the file could arrive
+  // before the bar finished, or the bar could finish and the operator
+  // sat watching it pegged at 95% for 30s.
+  //
+  // New: intercept the click. Fire the download via fetch() instead of
+  // following the <a> link. Fill the bar 0% -> 90% over the estimate
+  // (still useful — most renders land near the estimate), then snap to
+  // 100% the moment fetch() resolves. Trigger the browser download via
+  // a temporary blob URL so the file save dialog only opens when the
+  // bytes have actually arrived.
+  //
+  // Memory cost: the full MP4 sits in JS memory as a Blob until the
+  // dialog handles it. For a 4K clip that's ~50-200MB; acceptable for
+  // the editor flow. If we ever ship clips > 1GB we'll need a
+  // streaming download endpoint with a separate progress channel.
   (function () {
     document.querySelectorAll(".js-download-btn").forEach(function (btn) {
       var label = btn.querySelector(".js-download-label");
@@ -467,69 +474,83 @@
       var origText = label ? label.textContent : null;
       var busyText = btn.getAttribute("data-label-busy") || "Preparing…";
       var dur = parseFloat(btn.getAttribute("data-duration-s") || "0");
-      if (!isFinite(dur) || dur <= 0) dur = 20;  // sane fallback
-      // +5s covers Playwright launch + ffmpeg mux on a warm box. The
-      // estimate is generous on purpose — operator would rather see
-      // the bar fill slightly slower than have it sit at 95% for
-      // half the wait.
+      if (!isFinite(dur) || dur <= 0) dur = 20;
       var totalMs = (dur + 5) * 1000;
-      btn.addEventListener("click", function () {
-        if (btn.classList.contains("is-preparing")) return;
-        setTimeout(function () {
-          btn.classList.add("is-preparing");
-          if (label) label.textContent = busyText;
-          if (fill) {
-            // Snap to 0% first, force a layout flush, then start the
-            // transition to 95%. Without the flush the browser
-            // collapses both writes into one and the bar jumps.
-            fill.style.transition = "none";
-            fill.style.width = "0%";
-            // eslint-disable-next-line no-unused-expressions
-            fill.offsetWidth;
-            fill.style.transition = "width " + totalMs + "ms linear";
-            fill.style.width = "95%";
-          }
-        }, 0);
-        // Slice O.51 — safety auto-restore scales with clip duration.
-        // Was: flat 90s. For a 1-minute clip that's fine; for a 5-second
-        // clip the operator sees the button stuck for 85 extra seconds.
-        // New: render time + 15s. Render time = clip duration × encode
-        // factor (already baked into the data-duration-s attribute,
-        // which includes the resolution multiplier). Floor at 25s so
-        // very short clips still get reasonable headroom for the
-        // network round-trip.
-        var safetyMs = Math.max(25000, totalMs + 15000);
-        setTimeout(function () {
-          btn.classList.remove("is-preparing");
-          if (label && origText !== null) label.textContent = origText;
-          if (fill) {
-            fill.style.transition = "none";
-            fill.style.width = "0%";
-          }
-        }, safetyMs);
 
-        // Also listen for the page becoming visible again after the
-        // download triggers a browser-level save dialog. When the user
-        // dismisses the dialog the page regains focus — at that point
-        // the file has either been saved or canceled, either way the
-        // button should restore.
-        var visibilityHandler = function () {
-          if (document.visibilityState === "visible") {
-            // Small grace period so we don't restore mid-dialog.
-            setTimeout(function () {
-              btn.classList.remove("is-preparing");
-              if (label && origText !== null) label.textContent = origText;
-              if (fill) {
-                fill.style.transition = "none";
-                fill.style.width = "0%";
-              }
-            }, 800);
-            document.removeEventListener(
-              "visibilitychange", visibilityHandler
-            );
+      function restoreButton() {
+        btn.classList.remove("is-preparing");
+        if (label && origText !== null) label.textContent = origText;
+        if (fill) {
+          fill.style.transition = "none";
+          fill.style.width = "0%";
+        }
+      }
+
+      btn.addEventListener("click", async function (ev) {
+        // Intercept the anchor's default navigation. We'll download
+        // via fetch + blob so the bar can finish exactly when the
+        // server's done, not when the estimate runs out.
+        ev.preventDefault();
+        if (btn.classList.contains("is-preparing")) return;
+        btn.classList.add("is-preparing");
+        if (label) label.textContent = busyText;
+        if (fill) {
+          // Start the bar moving 0% -> 90% over the estimate. Cap at
+          // 90% so it visibly snaps to 100% when the file lands —
+          // operator gets a clear "actually done" signal even if the
+          // estimate was way off.
+          fill.style.transition = "none";
+          fill.style.width = "0%";
+          // eslint-disable-next-line no-unused-expressions
+          fill.offsetWidth;
+          fill.style.transition = "width " + totalMs + "ms linear";
+          fill.style.width = "90%";
+        }
+
+        try {
+          var resp = await fetch(btn.href, { credentials: "same-origin" });
+          if (!resp.ok) {
+            throw new Error("server returned " + resp.status);
           }
-        };
-        document.addEventListener("visibilitychange", visibilityHandler);
+          var blob = await resp.blob();
+
+          // Snap to 100% over a short ease so the operator sees the
+          // bar complete BEFORE the download dialog appears.
+          if (fill) {
+            fill.style.transition = "width 200ms ease-out";
+            fill.style.width = "100%";
+          }
+          // Use the server's suggested filename if present; otherwise
+          // fall back to the clip id.
+          var disp = resp.headers.get("Content-Disposition") || "";
+          var match = disp.match(/filename="?([^"]+)"?/);
+          var filename = match ? match[1] : "nexoclip.mp4";
+
+          var url = URL.createObjectURL(blob);
+          var tempAnchor = document.createElement("a");
+          tempAnchor.href = url;
+          tempAnchor.download = filename;
+          tempAnchor.style.display = "none";
+          document.body.appendChild(tempAnchor);
+          tempAnchor.click();
+          document.body.removeChild(tempAnchor);
+          // Revoke after a tick so the browser actually picks up the
+          // download. Firefox especially is sensitive to early revoke.
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+
+          // Small pause so the operator sees the 100% before reset.
+          setTimeout(restoreButton, 600);
+        } catch (err) {
+          console.error("download failed:", err);
+          if (label) label.textContent = "Download failed — retry";
+          if (fill) {
+            fill.style.transition = "none";
+            fill.style.width = "0%";
+          }
+          // Show the retry label briefly, then restore so the operator
+          // can click again.
+          setTimeout(restoreButton, 2200);
+        }
       });
     });
   })();

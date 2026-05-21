@@ -493,6 +493,17 @@
     {% endif %}
 
     var video = document.getElementById("preview-video");
+
+    // Slice O.54 — capture mode (deterministic seek-and-shoot).
+    // The recorder navigates with ?capture=1 to indicate "DON'T play,
+    // I'll drive currentTime manually". Real-time playback is the
+    // old path (kept for editor previews; broken for export under
+    // Railway CPU load).
+    var _isCaptureMode = new URLSearchParams(window.location.search).get("capture") === "1";
+    if (_isCaptureMode) {
+      document.documentElement.setAttribute("data-capture-mode", "1");
+    }
+
     if (video) {
       video.addEventListener("loadedmetadata", function () {
         window.__nexoclipRender.ready = true;
@@ -505,19 +516,97 @@
         window.__nexoclipRender.playing = true;
         _checkAllReady();
       }
-      video.addEventListener("playing", _markPlaying);
-      video.addEventListener("play", _markPlaying);
-      video.addEventListener("timeupdate", function () {
-        if (video.currentTime > 0) _markPlaying();
-      });
-      // Belt-and-braces: kick off playback explicitly. The `autoplay`
-      // attribute usually handles this but Chromium's autoplay policy
-      // can block silently in headless even with our launch flag, so
-      // we also call .play() ourselves with the muted setter.
-      video.muted = true;
-      var p = video.play();
-      if (p && p.catch) p.catch(function () { /* fall through; recorder retries */ });
+
+      if (_isCaptureMode) {
+        // Capture mode: the recorder will seek frame-by-frame. We
+        // never play. Mark `playing` true once metadata is loaded so
+        // the old `allReady` gate stays usable for any downstream
+        // wait_for_function the recorder may run.
+        video.addEventListener("loadedmetadata", _markPlaying);
+        // Make sure nothing inadvertently starts playback. autoplay
+        // attr would still kick on canplay; explicit pause covers it.
+        video.removeAttribute("autoplay");
+        video.muted = true;
+        video.addEventListener("canplay", function () {
+          try { video.pause(); } catch (_) {}
+        });
+      } else {
+        // Editor / non-capture path: original real-time behavior.
+        video.addEventListener("playing", _markPlaying);
+        video.addEventListener("play", _markPlaying);
+        video.addEventListener("timeupdate", function () {
+          if (video.currentTime > 0) _markPlaying();
+        });
+        // Belt-and-braces: kick off playback explicitly.
+        video.muted = true;
+        var p = video.play();
+        if (p && p.catch) p.catch(function () { /* fall through */ });
+      }
     }
+
+    // Slice O.54 — frame-accurate render API for the headless recorder.
+    //
+    // `captureFrameAt(t)` is the contract between the page and the
+    // recorder: seek the video to clip-relative time `t` (seconds),
+    // wait for the seeked event AND a paint, force the caption
+    // animator to draw at that timestamp, then resolve. The recorder
+    // then takes a screenshot — guaranteed to show the exact pixels
+    // for that timestamp with no real-time stutter.
+    window.__nexoclipRender.captureFrameAt = function (t) {
+      return new Promise(function (resolve, reject) {
+        if (!video) { resolve(); return; }
+        // Clamp to [0, duration - 1ms] so we don't seek past EOF
+        // (some browsers return the wrong frame on overshoot).
+        var dur = video.duration || window.__nexoclipRender.duration_s || 0;
+        var target = Math.max(0, Math.min(t, dur - 0.001));
+
+        var seeked = false;
+        function onSeeked() {
+          if (seeked) return;
+          seeked = true;
+          video.removeEventListener("seeked", onSeeked);
+          // Force the caption animator to draw at this timestamp.
+          // The rAF loop will also tick but calling _renderCaptions
+          // synchronously guarantees the DOM is up to date BEFORE
+          // captureScreenshot fires.
+          try {
+            if (typeof _renderCaptions === "function") _renderCaptions();
+          } catch (_) {}
+          // Wait one rAF tick so the browser commits the layout +
+          // any CSS animations to the current paint. Without this,
+          // sub-pixel-positioned overlays (caption highlight, hook
+          // entrance) can be one frame behind.
+          requestAnimationFrame(function () {
+            requestAnimationFrame(resolve);
+          });
+        }
+        video.addEventListener("seeked", onSeeked);
+        // If the requested time IS the current time, `seeked` may not
+        // fire at all (browser fast-paths zero-delta seeks). Force a
+        // tiny jitter to guarantee a seeked event, then snap back.
+        if (Math.abs(video.currentTime - target) < 0.0001) {
+          video.currentTime = Math.max(0, target - 0.001);
+          // The browser's `seeked` from the jitter will fire and
+          // resolve the promise; no further action needed.
+        }
+        video.currentTime = target;
+        // Safety timeout in case `seeked` never fires (network video,
+        // codec hiccup). After 2s we resolve anyway with whatever
+        // currentTime the browser has settled to.
+        setTimeout(function () {
+          if (!seeked) {
+            seeked = true;
+            video.removeEventListener("seeked", onSeeked);
+            try {
+              if (typeof _renderCaptions === "function") _renderCaptions();
+            } catch (_) {}
+            requestAnimationFrame(function () {
+              requestAnimationFrame(resolve);
+            });
+          }
+        }, 2000);
+      });
+    };
   </script>
 </body>
 </html>

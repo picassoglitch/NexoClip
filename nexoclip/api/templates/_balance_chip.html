@@ -1,20 +1,25 @@
 {# Slice O.47 — token-balance chip fragment.
+   Slice O.56 — hardened against missing / partial dict shapes.
 
    Standalone <a> fragment so the nav can swap it via HTMX every 30s
    AND after token-consuming actions (clip finalize, publish, download)
    without re-rendering the whole nav.
 
-   Three states match the original chip:
-     - cache empty  → muted "— tokens · refresh" (click forces a fetch)
-     - unlimited    → success "∞ tokens"
-     - normal       → warn if <50k, muted otherwise; "Xk tokens"
+   _bal is either None (no cache yet) or a dict with these keys:
+     - remaining (int | None)
+     - unlimited (bool, 0/1, or None)
+     - monthly_used (int | None)
+     - at (iso string | None)
+   We do NOT trust the keys to exist — every access guards with `or`
+   defaults so a partial dict from a future shape change still
+   renders a sensible chip rather than 500ing the HTMX poll. #}
 
-   Click target is always /_balance/refresh — that does the live Nexo
-   AI fetch + bounces back. Polling just keeps the cached number
-   fresh as the outbound usage reporter writes new values to the DB
-   after each LLM call. #}
+{%- set _has_bal = (_bal is not none) -%}
+{%- set _unlimited = (_bal.get('unlimited') if _has_bal else False) -%}
+{%- set _remaining = (_bal.get('remaining') if _has_bal else None) or 0 -%}
+{%- set _monthly_used = (_bal.get('monthly_used') if _has_bal else 0) or 0 -%}
 
-{%- if _bal is none -%}
+{%- if not _has_bal -%}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--muted"
@@ -26,11 +31,11 @@
   <i class="ti ti-coin" aria-hidden="true"></i>
   <span>— tokens · refresh</span>
 </a>
-{%- elif _bal.unlimited -%}
+{%- elif _unlimited -%}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--success"
-   title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}."
+   title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="every 30s, balance-poll from:body"
    hx-swap="outerHTML"
@@ -39,13 +44,12 @@
   <span>∞ tokens</span>
 </a>
 {%- else -%}
-  {%- set _remaining = _bal.remaining or 0 -%}
   {%- set _low = _remaining < 50000 -%}
   {%- set _short = _remaining // 1000 -%}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--{% if _low %}warn{% else %}muted{% endif %}"
-   title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_bal.monthly_used or 0) }}."
+   title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="every 30s, balance-poll from:body"
    hx-swap="outerHTML"

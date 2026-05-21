@@ -75,23 +75,58 @@ async def dashboard_root() -> Response:
 
 
 @router.get("/_balance/chip", response_class=HTMLResponse, include_in_schema=False)
-async def balance_chip(
-    request: Request,
-    tenant_id: str = Depends(tenant_binder),
-) -> Response:
-    """Slice O.47 — HTMX-polled token chip.
+async def balance_chip(request: Request) -> Response:
+    """Slice O.47 — HTMX-polled token chip. Slice O.56 — hardened.
 
-    Returns just the chip's HTML fragment so the nav can swap it in place
-    on a poll (every 30s) AND after token-consuming actions (clip
-    finalize, publish, download). No live Nexo AI fetch — reads the
-    cached values populated by the outbound usage reporter after every
-    LLM call. The "refresh" button now sits inside the chip and forces
-    a live fetch only when the user explicitly clicks it.
+    Returns just the chip's HTML fragment so the nav can swap it in
+    place on a poll (every 30s). No live Nexo AI fetch; reads the
+    cached values populated by the outbound usage reporter.
+
+    Slice O.56 — three changes from the original O.47:
+      - No tenant_binder dependency. The middleware already populates
+        request.state.token_balance for authenticated requests; this
+        route only needs to read it. Removing the binder eliminates
+        a class of 500s where the binder's HTTPException(401) bubbled
+        as a vanilla 500 (HTMX swap target was 500, not the bounce-to-
+        login the binder intended for full-page requests).
+      - Wraps the template render in a try/except so any future
+        template bug returns a safe fallback fragment instead of
+        500-spamming the nav every 30s.
+      - Returns 200 with a muted placeholder chip if the user isn't
+        authenticated (HTMX poll keeps spinning silently rather than
+        re-flashing the login bounce on every tick).
     """
     bal = getattr(request.state, "token_balance", None)
-    return templates.TemplateResponse(
-        "_balance_chip.html", {"request": request, "_bal": bal}
-    )
+    if not getattr(request.state, "tenant_id", None):
+        # Not authenticated. HTMX is polling; just send a placeholder
+        # so the nav stays consistent rather than 401-spamming.
+        return HTMLResponse(
+            '<a class="nc-chip nc-chip--muted" '
+            'id="nc-balance-chip" '
+            'style="text-decoration:none;">'
+            '<i class="ti ti-coin" aria-hidden="true"></i>'
+            '<span>—</span></a>',
+            status_code=200,
+        )
+    try:
+        return templates.TemplateResponse(
+            "_balance_chip.html", {"request": request, "_bal": bal}
+        )
+    except Exception as e:  # noqa: BLE001
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "balance_chip.render_failed", error=str(e), bal_type=type(bal).__name__
+        )
+        # Static fallback so the nav doesn't display a broken chip.
+        return HTMLResponse(
+            '<a href="/dashboard/_balance/refresh" '
+            'class="nc-chip nc-chip--muted" id="nc-balance-chip" '
+            'title="Token balance unavailable. Click to retry." '
+            'style="text-decoration:none;">'
+            '<i class="ti ti-coin" aria-hidden="true"></i>'
+            '<span>— tokens · retry</span></a>',
+            status_code=200,
+        )
 
 
 @router.get("/_balance/refresh", include_in_schema=False)

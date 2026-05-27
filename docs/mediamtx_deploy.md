@@ -1,0 +1,138 @@
+# Deploying MediaMTX for NexoClip live ingest (phase L.1)
+
+This is the operator-side deploy guide for the MediaMTX service that
+sits in front of NexoClip and accepts RTMP push from OBS.
+
+**One-time setup**. Run through this once; MediaMTX then runs as a
+separate Railway service indefinitely.
+
+## Architecture refresher
+
+```
+OBS / Streamlabs
+    │  rtmp://nexoclip-live...railway.app/live/<stream_key>
+    ▼
+┌────────────────────────────┐
+│ MediaMTX (Railway service) │  config: infra/mediamtx.yml
+│ - RTMP on :1935            │
+│ - records to /data/live/   │
+│ - calls NexoClip webhooks  │
+└──────────┬─────────────────┘
+           │ webhooks (auth, started, ended)
+           ▼
+┌────────────────────────────┐
+│ NexoClip (existing service)│
+│ - creates streams row      │
+│ - existing VOD pipeline    │
+└────────────────────────────┘
+```
+
+The two services share the same `/data` volume so MediaMTX's
+recording lands where NexoClip's existing pipeline expects to find
+clip sources.
+
+## Step 1 — Create the MediaMTX Railway service
+
+In your Railway project (the one already running NexoClip):
+
+1. **+ New** → **Empty Service**
+2. Settings → name it `mediamtx`
+3. **Source** → switch to **Image** → use `bluenviron/mediamtx:latest`
+4. **Networking** → enable Public Networking → expose port `1935`
+   (TCP, not HTTP). Railway gives you a TCP proxy URL like
+   `nexoclip-live-production.up.railway.app:NNNN` — note the port.
+5. **Volume** → attach the SAME volume that NexoClip is mounted on
+   (don't create a new one). Mount path `/data`. This is what makes
+   the recording handoff work.
+6. **Variables** → add the four below.
+
+## Step 2 — Environment variables
+
+These three URLs all point at your NexoClip dashboard service
+(same Railway project, different service):
+
+```bash
+NEXOCLIP_AUTH_URL=https://nexoclip-production.up.railway.app/api/internal/live/authorize
+NEXOCLIP_STARTED_URL=https://nexoclip-production.up.railway.app/api/internal/live/started
+NEXOCLIP_ENDED_URL=https://nexoclip-production.up.railway.app/api/internal/live/ended
+NEXOCLIP_INTERNAL_SIGNING_SECRET=<SAME value already set on the NexoClip service>
+```
+
+The signing secret MUST match what's set on the NexoClip side — it's
+the bearer MediaMTX passes back to NexoClip on each webhook.
+
+## Step 3 — Mount the config file
+
+MediaMTX needs `infra/mediamtx.yml` from this repo. Two ways:
+
+**Easy** — bake it into a small Dockerfile and point Railway at that
+instead of the base MediaMTX image. Add a sibling `Dockerfile.mediamtx`:
+
+```dockerfile
+FROM bluenviron/mediamtx:latest
+COPY infra/mediamtx.yml /mediamtx.yml
+CMD ["/mediamtx", "/mediamtx.yml"]
+```
+
+In the MediaMTX service: Source → switch from Image to Dockerfile,
+point at `Dockerfile.mediamtx`.
+
+**Alternative** — use Railway's Config File feature to mount the YAML
+at `/mediamtx.yml`. Slightly more setup; not recommended.
+
+## Step 4 — Set the RTMP URL in NexoClip
+
+On the NexoClip service (not MediaMTX), add the env var so the
+dashboard knows what URL to show operators:
+
+```bash
+NEXOCLIP_LIVE_RTMP_BASE_URL=rtmp://nexoclip-live-production.up.railway.app:NNNN/live
+```
+
+(Replace `NNNN` with the port Railway exposed in step 1.5.)
+
+## Step 5 — Verify
+
+1. Both services should show **Active** in Railway.
+2. From NexoClip's `/dashboard/live` page: the "Push URL for OBS"
+   section should now be populated (not the "not configured" state).
+3. Click "Generate stream key" — the key value should appear.
+4. In OBS: Settings → Stream → Custom → paste the Server URL +
+   Stream Key → OK → Start Streaming.
+5. Within ~5 seconds the Live streams table on `/dashboard/live`
+   should show a new row with status `live` and a pulsing dot.
+6. Stop streaming in OBS — within ~5 seconds the row flips to
+   `live_ended`.
+7. Click "Open + run pipeline" on the row. The existing VOD pipeline
+   runs against the recording.
+
+## Troubleshooting
+
+**OBS says "Failed to connect to server"**:
+- Wrong port. Re-check Railway's exposed TCP port; Railway assigns a
+  random external port that the operator's OBS URL must use.
+- The TCP proxy URL is what Railway shows — copy that, not the HTTPS
+  one.
+
+**OBS connects but the publish is rejected**:
+- Stream key is wrong / revoked. Re-generate from the live dashboard.
+- `NEXOCLIP_AUTH_URL` is unset or wrong on the MediaMTX service.
+- `NEXOCLIP_INTERNAL_SIGNING_SECRET` doesn't match across services.
+
+**Streaming works, recording doesn't appear**:
+- The volume isn't shared between services. Each Railway service must
+  mount the same Volume; check the volume name in both services.
+
+**Recording shows up but the pipeline fails to read it**:
+- The recording path in MediaMTX has to match what the streams row
+  carries as `source_video_path`. The L.1 webhook implementation
+  derives this automatically; if you see a mismatch, check the
+  webhook logs in Railway for the value MediaMTX sent.
+
+## Cost expectation
+
+MediaMTX itself is light: ~50 MB RAM, fractional CPU when no streams.
+The bulk of the cost is bandwidth (recording 1080p at 4-8 Mbps adds
+up over multi-hour streams). For 10 active users each doing 2-hour
+streams a few times a week, expect ~$5-15/mo of Railway egress on
+the MediaMTX service alone.

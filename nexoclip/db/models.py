@@ -137,6 +137,31 @@ class StreamRow(BaseModel):
     source_audio_path: str
     status: str = "ingested"
     created_at: str
+    # Phase L.1 — live RTMP ingest. is_live flips to True the moment
+    # MediaMTX's runOnReady fires; live_started_at / live_ended_at
+    # bracket the actual RTMP push window. status takes 'live' while
+    # the push is active, 'live_ended' for the 24h retention window,
+    # then 'ingested' once the operator runs the pipeline.
+    is_live: bool = False
+    live_started_at: str | None = None
+    live_ended_at: str | None = None
+
+
+class LiveStreamKeyRow(BaseModel):
+    """Phase L.1 — per-tenant RTMP stream key. OBS uses key_value in
+    its push URL: rtmp://nexoclip-live.app/live/<key_value>.
+
+    One active key per tenant at a time. Rotation creates a new row +
+    sets revoked_at on the previous one. Never echo key_value to a
+    response template that mixes admin + tenant scope — it's a secret."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    tenant_id: str
+    key_value: str
+    created_at: str
+    revoked_at: str | None = None
+    last_used_at: str | None = None
 
 
 class TranscriptRow(BaseModel):

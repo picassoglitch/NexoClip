@@ -1,0 +1,105 @@
+# MediaMTX config — phase L.1.
+#
+# This file deploys as the entire MediaMTX configuration. On Railway,
+# mount it at /mediamtx.yml inside the MediaMTX container and set the
+# image's CMD to `mediamtx /mediamtx.yml`.
+#
+# Architecture overview: docs/phase_L_live.md
+# Operator deploy guide: docs/mediamtx_deploy.md
+#
+# What this config does:
+#   - Listens for RTMP on :1935
+#   - Validates publishes via webhook to NexoClip's /api/internal/live/authorize
+#   - On publish-start, fires /api/internal/live/started
+#   - On publish-end, fires /api/internal/live/ended
+#   - Records every accepted publish to /data/live/<stream_id>/source.mp4
+#
+# What it does NOT do (yet):
+#   - HLS muxing (L.2 will enable this for incremental Whisper input)
+#   - Authentication of read/preview attempts (no preview surface yet)
+
+###############################################################################
+# Logging
+###############################################################################
+logLevel: info
+logDestinations: [stdout]
+
+###############################################################################
+# RTMP server
+###############################################################################
+rtmp: yes
+rtmpAddress: :1935
+# rtmps: optional; can be added later if streamers want encrypted push.
+
+###############################################################################
+# Web API + metrics
+###############################################################################
+# Useful for the operator's status checks but NOT exposed to the public
+# Railway URL — bind to localhost only. Use Railway's private network if
+# you need to scrape from NexoClip.
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: yes
+metricsAddress: 127.0.0.1:9998
+
+###############################################################################
+# External authentication — gate every publish through NexoClip
+###############################################################################
+# MediaMTX POSTs to this URL before accepting any publish. The body
+# includes path / action / ip. NexoClip extracts the stream key from
+# the path, validates against live_stream_keys, returns 200 or 401.
+externalAuthenticationURL: ${NEXOCLIP_AUTH_URL}
+
+###############################################################################
+# Path defaults — applied to every path unless overridden below
+###############################################################################
+pathDefaults:
+  # Block reads (preview) by default. L.1 only handles publish flow.
+  source: publisher
+  # The recording is the load-bearing piece for L.1: this MP4 becomes
+  # the source.mp4 the existing VOD pipeline consumes after live ends.
+  record: yes
+  recordPath: /data/live/%path/source
+  recordFormat: mp4
+  # MediaMTX rotates the MP4 every recordSegmentDuration. For L.1 we
+  # want ONE file per stream so the pipeline can ingest it whole.
+  # 24h is the longest plausible stream; this won't trigger in
+  # practice for any sane streaming session.
+  recordSegmentDuration: 24h
+  # If MediaMTX restarts, it preserves the in-progress file rather
+  # than starting a new one — keeps the recording continuous across
+  # platform-level container restarts.
+  recordDeleteAfter: 0
+
+###############################################################################
+# Webhook hooks for stream lifecycle
+###############################################################################
+# Fired when the publish handshake succeeds + recording starts.
+# NexoClip uses this to create the streams row + flip is_live=1.
+hooks:
+  - hook: publishReady
+    runOnPublishRestart: no
+    # Pulled from env so dev / staging / prod can point at different
+    # backends without editing the file.
+    httpRequestOnCreate:
+      url: ${NEXOCLIP_STARTED_URL}
+      method: POST
+      headers:
+        Authorization: Bearer ${NEXOCLIP_INTERNAL_SIGNING_SECRET}
+      timeout: 10s
+  - hook: publishEnded
+    httpRequestOnCreate:
+      url: ${NEXOCLIP_ENDED_URL}
+      method: POST
+      headers:
+        Authorization: Bearer ${NEXOCLIP_INTERNAL_SIGNING_SECRET}
+      timeout: 10s
+
+###############################################################################
+# Allow any path that matches the live/<stream_key> shape.
+###############################################################################
+paths:
+  # Regex: live/ followed by a NexoClip-shaped stream key. Rejects
+  # anything else (no random paths land on disk).
+  ~^live/slk_[A-Za-z0-9_\-]+$:
+    {} # Inherits from pathDefaults.

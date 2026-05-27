@@ -71,7 +71,17 @@ class Settings(BaseSettings):
     # fetch endpoint Modal pulls from. Different secret than the
     # SSO HMAC — this one is purely internal. Pick something random;
     # the audio URL only stays valid for 30 min so a leak is bounded.
+    # Phase L.1 reuses this same secret for the MediaMTX webhook
+    # bearer (internal-trust-only; not user-facing).
     internal_signing_secret: str | None = None
+
+    # Phase L.1 — RTMP base URL the operator pastes into OBS. This is
+    # the MediaMTX endpoint, NOT the NexoClip API host. Example:
+    # `rtmp://nexoclip-live-production.up.railway.app/live`
+    # The dashboard appends the active stream key to this base when
+    # displaying the OBS URL. Unset = the live dashboard renders a
+    # "live ingest not configured" panel instead.
+    live_rtmp_base_url: str | None = None
 
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline
     # work via FastAPI BackgroundTasks on this host (current behavior).

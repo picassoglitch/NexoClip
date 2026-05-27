@@ -37,6 +37,7 @@ from .models import (
     CustomTriggerPhrases,
     DriveWatchRow,
     Event,
+    LiveStreamKeyRow,
     LLMCallRow,
     PersonaRow,
     PublishJob,
@@ -658,6 +659,173 @@ class LLMCallsRepo:
         )
         row = await cur.fetchone()
         return int(row[0]) if row else 0
+
+
+async def _streams_repo_mark_live_started(
+    db: "Database", *, stream_id: str
+) -> StreamRow | None:
+    """Phase L.1 — flip a stream into the 'live' status.
+
+    Free function (not on StreamsRepo) because the MediaMTX webhook
+    runs without a bound tenant — it identifies the tenant via the
+    stream key, then needs to update by id. We expose this here so
+    the webhook handler can call it directly without going through
+    the full tenant-binding ceremony.
+
+    Idempotent: calling twice for the same stream_id is a no-op past
+    the first call (since the row already has is_live=1)."""
+    now = _now()
+    conn = await db.connect()
+    await conn.execute(
+        "UPDATE streams "
+        "SET is_live = 1, "
+        "    live_started_at = COALESCE(live_started_at, ?), "
+        "    status = 'live' "
+        "WHERE id = ?",
+        (now, stream_id),
+    )
+    await conn.commit()
+    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    row = await cur.fetchone()
+    return StreamRow.model_validate(dict(row)) if row else None
+
+
+async def _streams_repo_mark_live_ended(
+    db: "Database", *, stream_id: str, duration_s: float | None = None
+) -> StreamRow | None:
+    """Phase L.1 — flip a stream from 'live' to 'live_ended'.
+
+    Same tenant-free invocation contract as `_streams_repo_mark_live_started`.
+    Optionally accepts the final duration from MediaMTX's
+    runOnNotReady webhook payload so the streams row stops showing 0.
+    """
+    now = _now()
+    conn = await db.connect()
+    if duration_s is not None:
+        await conn.execute(
+            "UPDATE streams "
+            "SET is_live = 0, "
+            "    live_ended_at = ?, "
+            "    status = 'live_ended', "
+            "    duration_s = ? "
+            "WHERE id = ?",
+            (now, float(duration_s), stream_id),
+        )
+    else:
+        await conn.execute(
+            "UPDATE streams "
+            "SET is_live = 0, "
+            "    live_ended_at = ?, "
+            "    status = 'live_ended' "
+            "WHERE id = ?",
+            (now, stream_id),
+        )
+    await conn.commit()
+    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    row = await cur.fetchone()
+    return StreamRow.model_validate(dict(row)) if row else None
+
+
+class LiveStreamKeysRepo:
+    """Phase L.1 — per-tenant RTMP stream keys.
+
+    Operator generates one via the live dashboard, copies the RTMP URL
+    + key into OBS. MediaMTX validates the key on every push via the
+    /api/internal/live/authorize webhook (calls `find_by_value` here).
+
+    Rotation: `rotate_for_tenant` is the one-shot "generate a new key,
+    revoke any existing one" path the dashboard's rotate button uses.
+    Never mutates `key_value` on existing rows — old key stays in the
+    table marked revoked for audit, new key is a new row.
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    @staticmethod
+    def _new_key_value() -> str:
+        """Generate a fresh RTMP stream key. Slug shape `slk_<token>`
+        so the key is grep-able in logs (the secret-looking `_token`
+        suffix is the unguessable bit; the `slk_` prefix is for
+        humans). 32 url-safe bytes = ~43 char token; full key length
+        is ~47 chars, fits comfortably in OBS's URL field."""
+        import secrets
+        return f"slk_{secrets.token_urlsafe(32)}"
+
+    async def get_active_for_tenant(self) -> LiveStreamKeyRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM live_stream_keys "
+            "WHERE tenant_id = ? AND revoked_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        return LiveStreamKeyRow.model_validate(dict(row)) if row else None
+
+    async def find_by_value(self, key_value: str) -> LiveStreamKeyRow | None:
+        """Used by the MediaMTX auth webhook. NO tenant binding —
+        this is the entry point that DECIDES tenant identity from
+        the key value, so binding would create a chicken-and-egg.
+        Caller (the webhook handler) is responsible for not echoing
+        the looked-up tenant outside the live ingest scope.
+        """
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM live_stream_keys WHERE key_value = ?",
+            (key_value,),
+        )
+        row = await cur.fetchone()
+        return LiveStreamKeyRow.model_validate(dict(row)) if row else None
+
+    async def rotate_for_tenant(self) -> LiveStreamKeyRow:
+        """Generate a fresh key for the bound tenant; revoke any
+        existing active key in the same transaction. Returns the new
+        row.
+
+        Idempotent in the sense that calling twice still leaves one
+        active key; the second call just rotates AGAIN. If the
+        operator clicks rotate by accident their OBS streams need to
+        update — surface that in the UI copy."""
+        tenant_id = current_tenant_id()
+        now = _now()
+        new_id = new_id_with_prefix("lsk")
+        new_key = self._new_key_value()
+        conn = await self._db.connect()
+        # Revoke any existing active key for this tenant.
+        await conn.execute(
+            "UPDATE live_stream_keys SET revoked_at = ? "
+            "WHERE tenant_id = ? AND revoked_at IS NULL",
+            (now, tenant_id),
+        )
+        # Insert the new one.
+        await conn.execute(
+            "INSERT INTO live_stream_keys "
+            "(id, tenant_id, key_value, created_at) VALUES (?, ?, ?, ?)",
+            (new_id, tenant_id, new_key, now),
+        )
+        await conn.commit()
+        out = await self.get_active_for_tenant()
+        assert out is not None  # we just inserted it
+        return out
+
+    async def touch_last_used(self, key_id: str) -> None:
+        """Update last_used_at on a successful authorize webhook.
+        Best-effort: a write failure here doesn't block the push."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE live_stream_keys SET last_used_at = ? WHERE id = ?",
+            (_now(), key_id),
+        )
+        await conn.commit()
+
+
+def new_id_with_prefix(prefix: str) -> str:
+    """ULID with an alpha prefix, e.g. `lsk_01XXX`. Mirrors `new_id`
+    but lets callers pass arbitrary prefixes for new entity types
+    that haven't been blessed into the central new_id helper yet."""
+    return new_id(prefix)
 
 
 class EventsRepo:

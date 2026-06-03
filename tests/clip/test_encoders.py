@@ -80,3 +80,58 @@ def test_probe_returns_false_when_ffmpeg_missing(
     monkeypatch.setattr(encoders.shutil, "which", lambda _: None)
     encoders.reset_nvenc_cache()
     assert encoders.has_nvenc() is False
+
+
+def test_probe_returns_false_when_nvenc_encode_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator-hit case: ffmpeg lists h264_nvenc (compiled in) but
+    libcuda.so.1 is missing at runtime. The new probe actually
+    attempts a 1-frame encode; non-zero exit → not available."""
+    monkeypatch.setattr(encoders.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+
+    class _FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "[h264_nvenc @ 0x55] Cannot load libcuda.so.1\n"
+
+    monkeypatch.setattr(
+        encoders.subprocess, "run", lambda *a, **kw: _FakeProc()
+    )
+    encoders.reset_nvenc_cache()
+    assert encoders.has_nvenc() is False
+
+
+def test_probe_returns_true_when_nvenc_encode_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Healthy NVENC host: tiny encode exits 0 → probe says yes."""
+    monkeypatch.setattr(encoders.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        encoders.subprocess, "run", lambda *a, **kw: _FakeProc()
+    )
+    encoders.reset_nvenc_cache()
+    assert encoders.has_nvenc() is True
+
+
+def test_runtime_disable_overrides_cached_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cache says NVENC works, but a runtime failure happened — the
+    runtime-disable flag wins so subsequent calls skip NVENC."""
+    monkeypatch.setattr(encoders, "_probe_nvenc", lambda: True)
+    encoders.reset_nvenc_cache()
+    assert encoders.has_nvenc() is True
+
+    encoders.mark_nvenc_runtime_failure(reason="libcuda missing")
+    assert encoders.has_nvenc() is False
+    # reset_nvenc_cache also clears the runtime-disable so test
+    # isolation works (the autouse fixture restores green state).
+    encoders.reset_nvenc_cache()
+    assert encoders.has_nvenc() is True

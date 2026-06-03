@@ -37,25 +37,54 @@ _log = get_logger("nexoclip.clip.encoders")
 
 # Sentinel: None = not yet probed; True/False = probed result.
 _NVENC_CACHE: bool | None = None
+# Sticky failure flag — the cut pipeline flips this after a runtime
+# NVENC error (libcuda missing, GPU died mid-run, driver crashed).
+# Once True, has_nvenc() returns False for the rest of the process so
+# subsequent clips don't burn time retrying NVENC.
+_NVENC_RUNTIME_DISABLED: bool = False
 
 
 def has_nvenc() -> bool:
-    """Returns True iff `ffmpeg -encoders` lists `h264_nvenc`.
+    """Returns True iff a tiny NVENC encode actually succeeds.
 
     Cached per-process. Any failure mode (no ffmpeg on PATH, probe
-    timeout, exception) resolves to False — we never fail the cut
-    pipeline because the probe blew up.
+    timeout, libcuda missing, encoder exits non-zero) resolves to
+    False — we never fail the cut pipeline because the probe blew up.
+
+    A runtime failure during real encoding (via `mark_nvenc_runtime_failure`)
+    sticks for the rest of the process — once we see "Cannot load
+    libcuda.so.1" once, all subsequent clips skip NVENC.
     """
     global _NVENC_CACHE
+    if _NVENC_RUNTIME_DISABLED:
+        return False
     if _NVENC_CACHE is None:
         _NVENC_CACHE = _probe_nvenc()
     return _NVENC_CACHE
 
 
+def mark_nvenc_runtime_failure(reason: str = "") -> None:
+    """Permanently disable NVENC for this process.
+
+    Called by the cut pipeline when an ffmpeg invocation that USED
+    NVENC fails. The fallback path retries with libx264; this flag
+    keeps subsequent encodes from re-trying NVENC and re-failing the
+    same way.
+    """
+    global _NVENC_RUNTIME_DISABLED
+    if not _NVENC_RUNTIME_DISABLED:
+        _log.warning(
+            "nvenc.runtime_disabled",
+            reason=reason[:200] if reason else "unspecified",
+        )
+    _NVENC_RUNTIME_DISABLED = True
+
+
 def reset_nvenc_cache() -> None:
     """Test hook — discard the cached probe so the next call re-probes."""
-    global _NVENC_CACHE
+    global _NVENC_CACHE, _NVENC_RUNTIME_DISABLED
     _NVENC_CACHE = None
+    _NVENC_RUNTIME_DISABLED = False
 
 
 def pick_video_encoder_args(cfg: ClipConfig) -> list[str]:
@@ -89,22 +118,63 @@ def pick_video_encoder_args(cfg: ClipConfig) -> list[str]:
 
 
 def _probe_nvenc() -> bool:
-    """Run `ffmpeg -encoders` and look for `h264_nvenc` in the listing."""
+    """Verify NVENC is BOTH compiled in AND usable at runtime.
+
+    The naive `ffmpeg -encoders | grep h264_nvenc` probe gives false
+    positives on hosts where ffmpeg was built with nvenc support but
+    `libcuda.so.1` isn't installed (typical for Railway / fly.io CPU
+    images that pull a generic ffmpeg). The encoder lists fine; the
+    first actual encode crashes with "Cannot load libcuda.so.1" and
+    the cut step explodes.
+
+    The robust check is to actually attempt a tiny 1-frame encode and
+    inspect the exit code:
+
+      ffmpeg -hide_banner -loglevel error
+        -f lavfi -i nullsrc=s=64x64:d=1   # synthesized 1-frame source
+        -c:v h264_nvenc -t 1
+        -f null -                          # discard the output
+
+    On a working host this completes in ~300ms. On a CPU-only host the
+    NVENC encoder bails immediately with a libcuda error and exit != 0.
+    Cached per-process so the cost is paid once at first cut.
+    """
     if shutil.which("ffmpeg") is None:
         _log.info("nvenc.probe", available=False, reason="ffmpeg_not_on_path")
         return False
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, check=False, timeout=5.0, text=True,
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "lavfi",
+                "-i", "nullsrc=s=64x64:d=1",
+                "-c:v", "h264_nvenc",
+                "-t", "1",
+                "-f", "null",
+                "-",
+            ],
+            capture_output=True, check=False, timeout=10.0, text=True,
         )
     except Exception as e:  # noqa: BLE001 — probe failure must not break cut
         _log.warning("nvenc.probe.failed", error=str(e))
         return False
-    blob = (proc.stdout or "") + (proc.stderr or "")
-    found = "h264_nvenc" in blob
-    _log.info("nvenc.probe", available=found)
-    return found
+    if proc.returncode == 0:
+        _log.info("nvenc.probe", available=True)
+        return True
+    # Non-zero exit → NVENC unusable. Capture the first line of stderr
+    # so production logs show WHY (libcuda missing, no GPU, driver
+    # too old, etc.) instead of just "available=False".
+    stderr_first_line = (proc.stderr or "").strip().splitlines()
+    reason = stderr_first_line[0][:200] if stderr_first_line else "unknown"
+    _log.info("nvenc.probe", available=False, reason=reason)
+    return False
 
 
-__all__ = ["has_nvenc", "pick_video_encoder_args", "reset_nvenc_cache"]
+__all__ = [
+    "has_nvenc",
+    "mark_nvenc_runtime_failure",
+    "pick_video_encoder_args",
+    "reset_nvenc_cache",
+]

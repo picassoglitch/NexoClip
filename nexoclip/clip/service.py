@@ -44,7 +44,10 @@ if TYPE_CHECKING:
     from nexoclip.detect.framing import FramingVerdict
     from nexoclip.transcribe import Transcript
 
-from .encoders import pick_video_encoder_args
+from .encoders import (
+    mark_nvenc_runtime_failure,
+    pick_video_encoder_args,
+)
 from .frame_pool import ClipFrameBatch, sample_clip_frames
 from .models import Clip, ClipManifest, SmartCropBox
 from .smart_crop import (
@@ -654,43 +657,50 @@ def _ffmpeg_fast_cut(
     pre-Task-1 ladder so behavior is unchanged.
     """
     effective = cfg or ClipConfig()
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        # Fast input seek to the keyframe BEFORE start_s. The
-        # `-accurate_seek` flag (default in modern ffmpeg) combined
-        # with the re-encode below means the actual output starts
-        # exactly at start_s — the keyframe before is decoded into
-        # the buffer but only frames at/after start_s land in output.
-        "-ss",
-        f"{start_s:.3f}",
-        "-accurate_seek",
-        "-i",
-        str(video_path),
-        "-t",
-        f"{duration_s:.3f}",
-        # Task 1b — encoder picker selects libx264 (fast/CRF 19)
-        # or h264_nvenc (p5/CQ matched) consistently with the
-        # reformat step. Same calibration both passes.
-        *pick_video_encoder_args(effective),
-        "-pix_fmt",
-        "yuv420p",
-        # Audio: re-encode to AAC@48k since social platforms want
-        # that uniformly, and accurate cutting requires re-encoding
-        # the audio at the cut point anyway (sample-accurate trim).
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "48000",
-        "-movflags",
-        "+faststart",
-        str(out_path),
-    ]
-    _run_ffmpeg(cmd, what=f"accurate cut at {start_s:.3f}s")
+
+    def _build(encoder_args: list[str]) -> list[str]:
+        # Task 1b — encoder picker selects libx264 (fast/CRF 19) or
+        # h264_nvenc (p5/CQ matched). The wrapper handles fallback
+        # when NVENC fails at runtime (Railway CPU + libcuda missing).
+        return [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            # Fast input seek to the keyframe BEFORE start_s. The
+            # `-accurate_seek` flag (default in modern ffmpeg) combined
+            # with the re-encode below means the actual output starts
+            # exactly at start_s — the keyframe before is decoded into
+            # the buffer but only frames at/after start_s land in output.
+            "-ss",
+            f"{start_s:.3f}",
+            "-accurate_seek",
+            "-i",
+            str(video_path),
+            "-t",
+            f"{duration_s:.3f}",
+            *encoder_args,
+            "-pix_fmt",
+            "yuv420p",
+            # Audio: re-encode to AAC@48k since social platforms want
+            # that uniformly, and accurate cutting requires re-encoding
+            # the audio at the cut point anyway (sample-accurate trim).
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(out_path),
+        ]
+
+    _run_encode_with_fallback(
+        cfg=effective,
+        build_cmd=_build,
+        what=f"accurate cut at {start_s:.3f}s",
+    )
 
 
 def _ffmpeg_reformat_9_16(
@@ -781,22 +791,29 @@ def _ffmpeg_reformat_9_16(
     # - Else if NVENC is on this host and the operator hasn't disabled
     #   it via `cfg.prefer_nvenc=False`, swap in h264_nvenc.
     # - Else libx264. No-NVENC hosts are byte-identical to pre-Task-1.
-    encoder_args = pick_video_encoder_args(cfg)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-i",
-        str(in_path),
-        filter_flag,
-        vf,
-        *encoder_args,
-        "-c:a",
-        "aac",
-        str(out_path),
-    ]
-    _run_ffmpeg(cmd, what=f"9:16 reformat -> {out_path.name}")
+    # _run_encode_with_fallback transparently retries with libx264 if
+    # NVENC blows up at runtime (Railway CPU + libcuda missing).
+    def _build(encoder_args: list[str]) -> list[str]:
+        return [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(in_path),
+            filter_flag,
+            vf,
+            *encoder_args,
+            "-c:a",
+            "aac",
+            str(out_path),
+        ]
+
+    _run_encode_with_fallback(
+        cfg=cfg,
+        build_cmd=_build,
+        what=f"9:16 reformat -> {out_path.name}",
+    )
 
 
 def _brand_kit_drawtext_filter(
@@ -853,6 +870,59 @@ class _UnsetFont:
 
 _UNSET_FONT = _UnsetFont()
 _CACHED_FONT: Path | None | _UnsetFont = _UNSET_FONT
+
+
+def _run_encode_with_fallback(
+    *,
+    cfg: ClipConfig,
+    build_cmd: "Callable[[list[str]], list[str]]",
+    what: str,
+) -> None:
+    """Run an ffmpeg encode and retry with libx264 if NVENC blows up.
+
+    Task 1b shipped NVENC selection but the probe was too optimistic:
+    `h264_nvenc` shows up in `ffmpeg -encoders` whenever ffmpeg was
+    BUILT with NVENC support, regardless of whether libcuda.so.1 is
+    actually loadable at runtime. On Railway CPU hosts that produced
+    "Cannot load libcuda.so.1" on the first cut.
+
+    The probe in `encoders.py` is now more careful (it actually
+    attempts a tiny encode), but this wrapper is the belt-and-braces:
+    if pick_video_encoder_args returned NVENC args AND the encode
+    fails for any reason, we flip the runtime-disable flag, log it,
+    and re-run the same ffmpeg invocation with libx264 args. Any
+    subsequent clip in the run sees `has_nvenc()=False` and skips
+    NVENC outright.
+
+    `build_cmd(encoder_args)` is the caller's cmd-builder that
+    accepts a list of `-c:v ...` flags and splices them into the
+    full argv. Keeps the encoder choice out of the call site so the
+    surrounding ffmpeg structure stays declarative.
+    """
+    encoder_args = pick_video_encoder_args(cfg)
+    used_nvenc = "h264_nvenc" in encoder_args
+    cmd = build_cmd(encoder_args)
+    try:
+        _run_ffmpeg(cmd, what=what)
+    except ClipError as e:
+        if not used_nvenc:
+            raise
+        # NVENC was used and the encode failed. Permanently disable
+        # NVENC for the rest of this process and retry once with the
+        # libx264 fallback. If the fallback ALSO fails, that's a real
+        # cut error and we let it surface.
+        mark_nvenc_runtime_failure(reason=str(e))
+        _log.warning(
+            "clip.encode.nvenc_fallback",
+            what=what, error=str(e)[:300],
+        )
+        fallback_args = [
+            "-c:v", "libx264",
+            "-preset", cfg.preset,
+            "-crf", str(cfg.crf),
+        ]
+        cmd = build_cmd(fallback_args)
+        _run_ffmpeg(cmd, what=f"{what} (libx264 fallback)")
 
 
 def _run_ffmpeg(cmd: list[str], *, what: str) -> None:

@@ -108,6 +108,7 @@ async def record_clip_to_mp4(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     fps: int = DEFAULT_FPS,
+    progress_callback: "object | None" = None,
 ) -> Path:
     """Record the render page for `clip_id` to an MP4 at `output_path`.
 
@@ -437,12 +438,26 @@ async def _record_via_seek_and_shoot(
                     ) from e
 
             # Periodic telemetry on long clips so the log shows progress.
+            # Render Migration T1 — also fires `progress_callback` so the
+            # background runner can flush the % into the DB and the UI
+            # poll surfaces "Rendering 67%..." instead of a flat spinner.
             if i and i % max(1, frame_count // 10) == 0:
+                pct = int(100 * captured / frame_count)
                 _log.info(
                     "preview_recorder.capture_progress",
-                    captured=captured, total=frame_count,
-                    pct=int(100 * captured / frame_count),
+                    captured=captured, total=frame_count, pct=pct,
                 )
+                if progress_callback is not None:
+                    try:
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(pct)
+                        else:
+                            progress_callback(pct)
+                    except Exception:  # noqa: BLE001 — callback never blocks render
+                        _log.warning(
+                            "preview_recorder.progress_callback_failed",
+                            clip_id=clip_id, pct=pct,
+                        )
 
         _log.info(
             "preview_recorder.capture_done",

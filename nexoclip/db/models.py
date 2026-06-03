@@ -225,6 +225,15 @@ class ClipRow(BaseModel):
     # restore them. NULL means the clip has never been trimmed.
     original_start_s: float | None = None
     original_end_s: float | None = None
+    # Render Migration T1 — background-render state machine. Replaces
+    # the legacy "render inline in the HTTP request" path that was
+    # killing Railway requests on long clips. See
+    # nexoclip/db/migrations/020_clip_render_state.sql for the column
+    # rationale.
+    render_state: str = "idle"        # idle | rendering | ready | failed
+    render_progress_pct: int = 0      # 0-100, updated by capture_progress
+    render_error: str | None = None   # short message on failure
+    render_started_at: str | None = None  # ISO timestamp
 
 
 class VariantRow(BaseModel):

@@ -1170,6 +1170,95 @@ class ClipsRepo:
             raise NexoClipError(f"clip {clip_id!r} not found")
         return out
 
+    # ------------------------------------------------------------------
+    # Render state — Migration T1
+    # ------------------------------------------------------------------
+
+    async def mark_render_started(self, clip_id: str) -> None:
+        """Atomically transition the clip into the 'rendering' state.
+
+        Called from the download endpoint right before scheduling the
+        background render task. The atomic check on (state != 'rendering')
+        means a second click on the Download button while the first
+        render is in flight is a no-op — there's exactly one background
+        task per clip at any time, no thundering herd.
+        """
+        tenant_id = current_tenant_id()
+        from datetime import UTC, datetime
+        now_iso = datetime.now(UTC).isoformat()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET render_state = 'rendering', "
+            "render_progress_pct = 0, render_error = NULL, "
+            "render_started_at = ? "
+            "WHERE id = ? AND tenant_id = ? AND render_state != 'rendering'",
+            (now_iso, clip_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def update_render_progress(
+        self, clip_id: str, *, pct: int
+    ) -> None:
+        """Bump the visible progress percentage without touching state.
+
+        Called by the recorder's capture_progress emitter so the UI
+        can show "Rendering 67%..." instead of an opaque spinner.
+        Clamps 0-100 defensively.
+        """
+        tenant_id = current_tenant_id()
+        clamped = max(0, min(100, int(pct)))
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET render_progress_pct = ? "
+            "WHERE id = ? AND tenant_id = ? AND render_state = 'rendering'",
+            (clamped, clip_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def mark_render_ready(self, clip_id: str) -> None:
+        """Terminal: render finished, MP4 is on disk. Clear any prior
+        error from a previous failed attempt."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET render_state = 'ready', "
+            "render_progress_pct = 100, render_error = NULL "
+            "WHERE id = ? AND tenant_id = ?",
+            (clip_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def mark_render_failed(
+        self, clip_id: str, *, error: str
+    ) -> None:
+        """Terminal: render blew up. UI surfaces the message + a retry
+        button. Error truncated to 300 chars so a ffmpeg essay doesn't
+        balloon the column."""
+        tenant_id = current_tenant_id()
+        truncated = (error or "")[:300]
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET render_state = 'failed', "
+            "render_error = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (truncated, clip_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def reset_render_state(self, clip_id: str) -> None:
+        """Reset to 'idle' — used by the overlay-save path (cache
+        invalidation) and the "Retry render" button."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE clips SET render_state = 'idle', "
+            "render_progress_pct = 0, render_error = NULL, "
+            "render_started_at = NULL "
+            "WHERE id = ? AND tenant_id = ?",
+            (clip_id, tenant_id),
+        )
+        await conn.commit()
+
     async def set_trim_bounds(
         self,
         clip_id: str,

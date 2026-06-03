@@ -507,21 +507,19 @@
           fill.style.width = "90%";
         }
 
-        try {
-          var resp = await fetch(btn.href, { credentials: "same-origin" });
-          if (!resp.ok) {
-            throw new Error("server returned " + resp.status);
-          }
+        // Render Migration T1 — the /download endpoint now returns:
+        //   200 + video/mp4 → cache hit, download the bytes (legacy
+        //                     fast path; usually flips here after the
+        //                     first render completes)
+        //   202 + JSON       → render scheduled / in flight; poll the
+        //                     status URL until ready or failed
+        //   409 + JSON       → render failed; show error + Retry button
+        async function deliverBlob(resp) {
           var blob = await resp.blob();
-
-          // Snap to 100% over a short ease so the operator sees the
-          // bar complete BEFORE the download dialog appears.
           if (fill) {
             fill.style.transition = "width 200ms ease-out";
             fill.style.width = "100%";
           }
-          // Use the server's suggested filename if present; otherwise
-          // fall back to the clip id.
           var disp = resp.headers.get("Content-Disposition") || "";
           var match = disp.match(/filename="?([^"]+)"?/);
           var filename = match ? match[1] : "nexoclip.mp4";
@@ -534,12 +532,88 @@
           document.body.appendChild(tempAnchor);
           tempAnchor.click();
           document.body.removeChild(tempAnchor);
-          // Revoke after a tick so the browser actually picks up the
-          // download. Firefox especially is sensitive to early revoke.
           setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
-
-          // Small pause so the operator sees the 100% before reset.
           setTimeout(restoreButton, 600);
+        }
+
+        async function pollUntilReady(statusUrl) {
+          // 1-second polling. Each tick: read state + pct, update the
+          // bar, and either keep polling, fetch the MP4 (ready), or
+          // show the error (failed). Max wait of 15 minutes — past that
+          // something is genuinely stuck and the operator is better off
+          // reloading the page than waiting more.
+          var deadline = Date.now() + 15 * 60 * 1000;
+          while (Date.now() < deadline) {
+            await new Promise(function (r) { setTimeout(r, 1000); });
+            var s = await fetch(statusUrl, { credentials: "same-origin" });
+            if (!s.ok) {
+              throw new Error("status poll returned " + s.status);
+            }
+            var body = await s.json();
+            if (typeof body.progress_pct === "number" && fill) {
+              // Map 0-100% from the server straight onto the bar so
+              // the operator sees true progress, not the old time-
+              // estimate animation.
+              fill.style.transition = "width 200ms linear";
+              fill.style.width = Math.max(0, Math.min(100, body.progress_pct)) + "%";
+            }
+            if (body.state === "ready" && body.download_url) {
+              // Re-fetch the download — now a cache hit returning the
+              // MP4 directly.
+              var got = await fetch(body.download_url, {
+                credentials: "same-origin",
+              });
+              if (!got.ok) throw new Error("download returned " + got.status);
+              return deliverBlob(got);
+            }
+            if (body.state === "failed") {
+              throw new Error(body.error || "render failed");
+            }
+            // Otherwise keep polling.
+          }
+          throw new Error("render timed out — reload the page");
+        }
+
+        try {
+          var resp = await fetch(btn.href, { credentials: "same-origin" });
+          var ctype = (resp.headers.get("Content-Type") || "").toLowerCase();
+          if (resp.status === 200 && ctype.indexOf("video/") === 0) {
+            // Cache hit — deliver immediately.
+            return deliverBlob(resp);
+          }
+          if (resp.status === 202) {
+            // Background render scheduled (or already going). Poll the
+            // status URL until ready / failed.
+            var body202 = await resp.json();
+            if (body202.status_url) {
+              return await pollUntilReady(body202.status_url);
+            }
+            throw new Error("server scheduled render but returned no status_url");
+          }
+          if (resp.status === 409) {
+            // Failed render — surface the error inline + offer retry.
+            var body409 = await resp.json();
+            var msg = body409.error || "render failed";
+            if (label) label.textContent = "Failed — retry";
+            if (fill) {
+              fill.style.transition = "none";
+              fill.style.width = "0%";
+            }
+            // Auto-call retry endpoint then re-trigger the click flow
+            // so the operator just sees "retrying…" without doing it
+            // by hand.
+            if (body409.retry_url) {
+              await fetch(body409.retry_url, {
+                method: "POST", credentials: "same-origin",
+              });
+            }
+            // Brief pause so the operator sees the error label, then
+            // restore so they can click again.
+            console.warn("render failed:", msg);
+            setTimeout(restoreButton, 2200);
+            return;
+          }
+          throw new Error("server returned " + resp.status);
         } catch (err) {
           console.error("download failed:", err);
           if (label) label.textContent = "Download failed — retry";

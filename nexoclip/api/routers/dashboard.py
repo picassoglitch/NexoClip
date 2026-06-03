@@ -3020,6 +3020,13 @@ async def clip_overlay_save(
                     p.unlink()
         except Exception:  # noqa: BLE001 — invalidation is best-effort
             pass
+        # Render Migration T1 — reset the render state along with the
+        # cache files so the UI's polling Download button isn't stuck
+        # reading 'ready' against a now-deleted file.
+        try:
+            await ClipsRepo(db).reset_render_state(clip_id)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
     return RedirectResponse(url=f"/dashboard/clips/{clip_id}", status_code=303)
 
 
@@ -3674,31 +3681,118 @@ def _resolve_export_resolution(tier: str, choice: str) -> tuple[str, int, int]:
     return requested, w, h
 
 
-@router.get("/clips/{clip_id}/download")
-async def clip_download(
+@router.get("/clips/{clip_id}/render-status")
+async def clip_render_status(
     request: Request,
     clip_id: str,
     quality: str = "1080",
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
-) -> FileResponse:
+) -> Response:
+    """Render Migration T1 — JSON status feed for the polling UI.
+
+    The Download button hits this every ~1 s and renders a progress
+    bar / "Download MP4" link / "Failed — retry" affordance based on
+    the response shape:
+
+      {state: "idle",     progress_pct: 0,   error: null}  → operator hasn't clicked yet
+      {state: "rendering",progress_pct: 42,  error: null}  → background task in flight
+      {state: "ready",    progress_pct: 100, error: null,  → cache file exists; UI swaps
+       download_url: "..."}                                 to a direct download link
+      {state: "failed",   progress_pct: ...,error: "..."}  → UI shows retry button
+
+    Falls through to "ready" when the cache file is on disk but the
+    DB column never got promoted (e.g. legacy clips rendered pre-T1
+    or sweeper hasn't run). That keeps backward compat with any
+    already-rendered MP4 the operator's deploy might have.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    original = Path(clip.path)
+    tenant_tier = getattr(request.state, "tenant_tier", "free") or "free"
+    resolved_key, _w, _h = _resolve_export_resolution(tenant_tier, quality)
+    rendered = original.parent / f"clip_render_{resolved_key}.mp4"
+
+    # Cache hit takes precedence over the DB state — covers the legacy
+    # clip that was rendered before this migration ran.
+    if rendered.exists():
+        return JSONResponse(
+            {
+                "state": "ready",
+                "progress_pct": 100,
+                "error": None,
+                "download_url": (
+                    f"/dashboard/clips/{clip_id}/download?quality={quality}"
+                ),
+            }
+        )
+
+    return JSONResponse(
+        {
+            "state": clip.render_state or "idle",
+            "progress_pct": int(clip.render_progress_pct or 0),
+            "error": clip.render_error,
+            # No download_url until state="ready" — UI keeps the button
+            # disabled.
+        }
+    )
+
+
+@router.post("/clips/{clip_id}/render-retry")
+async def clip_render_retry(
+    request: Request,
+    clip_id: str,
+    quality: str = "1080",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Render Migration T1 — UI "Retry" button on a failed render.
+
+    Resets clip.render_state='idle' so the next download click
+    kicks off a fresh background task. We don't enqueue the render
+    here; the download endpoint is the single place that schedules
+    BackgroundTasks. Operator clicks Retry → state goes idle → they
+    click Download again → background render starts.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    await ClipsRepo(db).reset_render_state(clip_id)
+    return JSONResponse({"ok": True, "state": "idle"})
+
+
+@router.get("/clips/{clip_id}/download")
+async def clip_download(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    clip_id: str,
+    quality: str = "1080",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
     """Slice O.21 — download the clip's headless-Chrome rendered MP4.
     Slice J.2a — `quality` query param picks the export resolution
     (1080 / 2k / 4k). Free + pro tiers are capped at 1080; all_access
     can pick higher and pays the extra GPU time via the outbound
     usage report.
 
+    Render Migration T1 — was inline; now backgrounded.
+      - Cache hit (clip_render_<res>.mp4 on disk) → 200 FileResponse,
+        immediate download.
+      - Cache miss + state='idle' → flip state to 'rendering',
+        schedule background runner, return 202 JSON status.
+      - Cache miss + state='rendering' → 202 JSON status (the UI
+        polls /render-status every ~1 s for progress).
+      - Cache miss + state='failed' → 409 JSON status with error
+        message + retry hint (operator hits POST /render-retry to
+        reset to 'idle' then re-clicks Download).
+
     The exported MP4 is produced by Playwright recording the
     `/clips/<id>/render` page at the chosen viewport, then muxing the
     source clip's audio track lossless. By construction the output is
-    pixel-identical to the editor preview — same browser engine renders
-    both, just sized to the picked resolution.
-
-    `overlay_burn.py` is intentionally kept in the repo (slice O.21
-    decision) but no longer called from any endpoint. We retain it as
-    a fallback option in case Playwright fails at runtime — see the
-    except branch below. The fallback always emits 1080×1920 regardless
-    of `quality` since ffmpeg drawtext can't upscale faithfully.
+    pixel-identical to the editor preview — same browser engine
+    renders both, just sized to the picked resolution.
 
     Cache key includes the resolution so 1080 and 4K versions of the
     same clip live as separate files — switching resolutions doesn't
@@ -3718,9 +3812,119 @@ async def clip_download(
     # require a re-record on every switch.
     rendered = original.parent / f"clip_render_{resolved_key}.mp4"
 
-    # Generate on-demand if we don't have a cache. The cache is
-    # invalidated by `clip_overlay_save` (slice O.17), so this regen
-    # only happens once per (clip × overlay_config) pair.
+    # Cache hit — serve immediately, ignore the DB state column.
+    if rendered.exists():
+        pretty = f"nexoclip_{clip_id}.mp4"
+        return FileResponse(
+            path=rendered,
+            media_type="video/mp4",
+            filename=pretty,
+            headers={"Content-Disposition": f'attachment; filename="{pretty}"'},
+        )
+
+    # Failed render — surface the error + tell UI to show retry button.
+    if clip.render_state == "failed":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "state": "failed",
+                "progress_pct": int(clip.render_progress_pct or 0),
+                "error": clip.render_error or "render failed (no details)",
+                "retry_url": f"/dashboard/clips/{clip_id}/render-retry?quality={quality}",
+            },
+        )
+
+    # Render already in flight — return current status.
+    if clip.render_state == "rendering":
+        return JSONResponse(
+            status_code=202,
+            content={
+                "state": "rendering",
+                "progress_pct": int(clip.render_progress_pct or 0),
+                "error": None,
+                "status_url": f"/dashboard/clips/{clip_id}/render-status?quality={quality}",
+            },
+        )
+
+    # Idle (default) — schedule the background render. The repo
+    # transition is atomic on (state != 'rendering') so a concurrent
+    # request for the same clip is a no-op.
+    if not original.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"source clip file missing from disk: {original}",
+        )
+
+    await ClipsRepo(db).mark_render_started(clip_id)
+
+    # Build the base URL the background recorder uses to dial back
+    # into this server. Same logic the legacy inline path used.
+    from nexoclip.settings import get_settings
+    settings = get_settings()
+    cookie_val = request.cookies.get("nexoclip_token", "")
+    explicit_base = (settings.public_url or "").strip()
+    if explicit_base and explicit_base != "http://localhost:8000":
+        base_url = explicit_base
+    else:
+        scheme = (
+            request.headers.get("x-forwarded-proto")
+            or request.url.scheme
+            or "https"
+        )
+        host = request.headers.get("host") or request.url.netloc
+        base_url = f"{scheme}://{host}"
+
+    from nexoclip.api._clip_render import render_clip_in_background
+    background_tasks.add_task(
+        render_clip_in_background,
+        clip_id=clip_id,
+        tenant_id=tenant_id,
+        duration_s=float(clip.duration_s),
+        audio_source_path=original,
+        output_path=rendered,
+        base_url=base_url,
+        auth_cookie_value=cookie_val or None,
+        width=target_w,
+        height=target_h,
+        db_path=settings.db_path,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "state": "rendering",
+            "progress_pct": 0,
+            "error": None,
+            "status_url": f"/dashboard/clips/{clip_id}/render-status?quality={quality}",
+        },
+    )
+
+
+@router.get("/clips/{clip_id}/download-legacy-inline")
+async def clip_download_legacy_inline(
+    request: Request,
+    clip_id: str,
+    quality: str = "1080",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """LEGACY — kept temporarily for any external integration that
+    still expects the old "block until rendered" semantics. Will be
+    removed once T2 (hybrid ffmpeg+overlay) lands and proves stable.
+
+    Same body as the pre-T1 inline render path: awaits
+    record_clip_to_mp4 in the request handler. DO NOT use from the
+    dashboard UI — Railway will kill the request on long clips.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    original = Path(clip.path)
+    tenant_tier = getattr(request.state, "tenant_tier", "free") or "free"
+    resolved_key, target_w, target_h = _resolve_export_resolution(
+        tenant_tier, quality
+    )
+    rendered = original.parent / f"clip_render_{resolved_key}.mp4"
+
     if not rendered.exists() and original.exists():
         # Pass the same session cookie the operator just used so the
         # render page (which sits behind the dashboard auth middleware)

@@ -68,6 +68,21 @@ _STATUS_ERROR = "error"
 # 4 GB VOD doesn't pin all of it in memory.
 _UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 
+# Code-switching prompt — sent to AAI alongside `language_detection=true`
+# so Universal-3 Pro keeps each phrase in the language it was actually
+# spoken in instead of translating English filler ("clip that", "GG")
+# into Spanish or vice versa. Critical for LATAM creators whose streams
+# code-switch naturally.
+_CODE_SWITCHING_PROMPT = (
+    "The spoken language may change throughout the audio, transcribe "
+    "in the original language mix (code-switching), preserving the "
+    "words in the language they are spoken."
+)
+
+# Recognized language_mode values. "auto" enables detection +
+# code-switching; everything else is treated as an ISO 639-1 lock.
+_AUTO_MODES = {"auto", ""}
+
 
 class AssemblyAIProvider:
     """Submits audio to AssemblyAI and returns a Transcript.
@@ -81,10 +96,9 @@ class AssemblyAIProvider:
         self,
         *,
         api_key: str,
-        language_code: str | None = "es",
-        language_detection: bool = False,
+        language_mode: str = "auto",
         speaker_labels: bool = True,
-        speech_model: str = "best",
+        speech_models: list[str] | None = None,
         polling_interval_s: float = _POLL_INTERVAL_S,
         request_timeout_s: float = 3600.0,
     ) -> None:
@@ -93,18 +107,29 @@ class AssemblyAIProvider:
                 "AssemblyAIProvider misconfigured: api_key is required."
             )
         self._api_key = api_key
-        # `None` means "let AssemblyAI auto-detect" (when language_detection
-        # is also True). Otherwise honor the explicit code.
-        self._language_code = language_code
-        self._language_detection = language_detection
+        # `language_mode` accepts:
+        #   "auto" (or "" or None) → AAI language_detection + the
+        #          code-switching prompt. Production default.
+        #   "es" / "en" / etc.    → AAI language_code, no detection,
+        #          no prompt (max accuracy on a monolingual creator).
+        self._language_mode = (language_mode or "auto").strip().lower()
         self._speaker_labels = speaker_labels
-        self._speech_model = speech_model
+        # Model ladder — U3-Pro first (best ES/EN + native code-
+        # switching), U2 second (99-language fallback). Operators
+        # can override via NEXOCLIP_ASSEMBLYAI_SPEECH_MODELS.
+        self._speech_models = list(
+            speech_models or ["universal-3-pro", "universal-2"]
+        )
         self._polling_interval_s = polling_interval_s
         self._timeout_s = request_timeout_s
 
     @property
     def name(self) -> str:
-        return f"assemblyai-{self._speech_model}"
+        # Name reflects the FIRST model in the ladder — the one AAI
+        # tries first. The actual model that ran on a given call is
+        # logged separately as `speech_model_used` after the response.
+        primary = self._speech_models[0] if self._speech_models else "best"
+        return f"assemblyai-{primary}"
 
     def cost_for_duration_micros(self, duration_s: float) -> int:
         """USD micros for a transcript of `duration_s` seconds at the
@@ -140,11 +165,19 @@ class AssemblyAIProvider:
                 file_bytes=req.audio_path.stat().st_size,
             )
             upload_url = await self._upload_audio(client, req.audio_path)
+            # Resolve effective mode for the log line — same precedence
+            # the submit step uses: per-call wins over deployment mode.
+            effective_mode = (
+                (req.language if req.language is not None else self._language_mode)
+                or "auto"
+            ).strip().lower()
             _log.info(
                 "assemblyai.submit",
-                stream_id=req.stream_id, language=self._language_code,
+                stream_id=req.stream_id,
+                language_mode=effective_mode,
+                language_detection=(effective_mode in _AUTO_MODES),
                 speaker_labels=self._speaker_labels,
-                language_detection=self._language_detection,
+                speech_models=self._speech_models,
             )
             transcript_id = await self._submit_transcript(
                 client, upload_url=upload_url, language=req.language,
@@ -225,24 +258,52 @@ class AssemblyAIProvider:
         upload_url: str,
         language: str | None,
     ) -> str:
-        """Submit the transcript request and return its id."""
+        """Submit the transcript request and return its id.
+
+        Language resolution:
+          - The per-call `language` (from the pipeline / API) wins over
+            the provider's default `language_mode`. So an operator who
+            sets the stream's language to "en" on the dashboard gets
+            English-locked transcription even if the deployment-wide
+            default is "auto".
+          - Resolved value of "auto" (or empty / None) → submit with
+            `language_detection=true` + the code-switching prompt.
+            Universal-3 Pro handles ES/EN code-switching natively;
+            the prompt tells it to preserve each phrase in its
+            original language.
+          - Anything else → `language_code=<that>`, no detection,
+            no prompt (cleanest path for monolingual content).
+        """
+        # Per-call wins over deployment default.
+        raw_mode = (language if language is not None else self._language_mode)
+        effective_mode = (raw_mode or "auto").strip().lower()
+        is_auto = effective_mode in _AUTO_MODES
+
         payload: dict[str, Any] = {
             "audio_url": upload_url,
             "speaker_labels": self._speaker_labels,
-            "speech_model": self._speech_model,
+            # Model ladder. AAI tries the first model; if it can't
+            # handle the input, it walks the list. U3-Pro is the
+            # quality target; U2 is the 99-language fallback for
+            # rare exotic accents U3-Pro misses.
+            "speech_models": list(self._speech_models),
             # Always request word-level timestamps — the karaoke caption
             # renderer needs them. Mid-pipeline cost is rounding error.
             "word_boost": [],
         }
-        # Language vs detection are mutually exclusive in the API:
-        # `language_detection=true` requires omitting `language_code`.
-        # Request-level `language` overrides the provider default so
-        # per-stream overrides work.
-        effective_lang = language if language is not None else self._language_code
-        if self._language_detection and effective_lang is None:
+
+        if is_auto:
             payload["language_detection"] = True
+            # Code-switching prompt — instructs U3-Pro to preserve each
+            # phrase in its original language. Without this AAI sometimes
+            # "helpfully" translates English filler into Spanish (or
+            # vice versa) in mixed audio.
+            payload["prompt"] = _CODE_SWITCHING_PROMPT
         else:
-            payload["language_code"] = effective_lang or "es"
+            # Locked language. NEVER send language_detection alongside —
+            # the API rejects the combo. Prompt is also dropped because
+            # there's nothing to code-switch between.
+            payload["language_code"] = effective_mode
 
         try:
             resp = await client.post(f"{_API_BASE}/transcript", json=payload)
@@ -295,10 +356,18 @@ class AssemblyAIProvider:
             body = resp.json()
             status = body.get("status")
             if status == _STATUS_COMPLETED:
+                # Per-job telemetry: which rung of the model ladder
+                # actually ran (U3-Pro vs U2 fallback) + what language
+                # AAI detected. The dashboard / log greps can spot a
+                # ladder-fallback spike or a "we expected ES but got
+                # EN" pattern from these two fields.
                 _log.info(
                     "assemblyai.poll.complete",
                     stream_id=stream_id, transcript_id=transcript_id,
                     polls=polls,
+                    speech_model_used=body.get("speech_model"),
+                    detected_language=body.get("language_code"),
+                    language_confidence=body.get("language_confidence"),
                 )
                 return body
             if status == _STATUS_ERROR:

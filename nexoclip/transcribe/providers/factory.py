@@ -88,10 +88,9 @@ def get_provider() -> TranscribeProvider:
             )
         return AssemblyAIProvider(
             api_key=settings.assemblyai_api_key,
-            language_code=settings.assemblyai_language_code,
-            language_detection=settings.assemblyai_language_detection,
+            language_mode=settings.assemblyai_language_mode,
             speaker_labels=settings.assemblyai_speaker_labels,
-            speech_model=settings.assemblyai_speech_model,
+            speech_models=settings.assemblyai_speech_models,
         )
 
     if choice in {"deepgram", "openai"}:

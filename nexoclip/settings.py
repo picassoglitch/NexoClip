@@ -53,25 +53,42 @@ class Settings(BaseSettings):
     deepgram_api_key: str | None = None
     openai_api_key: str | None = None
 
-    # AssemblyAI tuning. Default ES because that's NexoClip's primary
-    # content language (Spanish-first per CLAUDE.md). Set
-    # `assemblyai_language_detection=true` for mixed ES/EN streams
-    # where the speaker code-switches.
+    # AssemblyAI tuning.
     #
-    # `assemblyai_speech_model`: AssemblyAI's "best" model is the
-    # universal-2 quality target — what their docs recommend for
-    # social/podcast content. "nano" is ~5× cheaper but accuracy
-    # drops on accented Spanish; leave it at "best" until proven
-    # otherwise on real VODs.
+    # `assemblyai_language_mode` — what the AAI submit-time language
+    # contract looks like per call. Three values:
     #
-    # `assemblyai_speaker_labels`: per-video diarization labels
+    #   "auto" (DEFAULT) — submit with `language_detection=true` +
+    #     the code-switching prompt. AAI's Universal-3 Pro model
+    #     handles ES/EN code-switching natively; the prompt
+    #     instructs it to preserve each phrase in its original
+    #     language instead of translating. This is the LATAM-creator
+    #     default — every Mexican / Argentine / Spanish-speaking
+    #     streamer who drops English filler ("clip that", "GG", etc)
+    #     gets faithfully-transcribed captions in BOTH languages.
+    #
+    #   "es" | "en" — lock to a specific language. Submits
+    #     `language_code=<code>` and drops language_detection + the
+    #     code-switching prompt. Best accuracy for monolingual
+    #     creators (most US English streamers, dedicated ES-only
+    #     channels). Per-stream overrides through the existing
+    #     `language` field on the pipeline call.
+    #
+    # `assemblyai_speech_models` — model ladder. The first model is
+    # the quality target (`universal-3-pro` — best ES/EN accuracy +
+    # native code-switching). The second is the 99-language fallback
+    # (`universal-2`) for the rare case U3-Pro misses on an exotic
+    # accent. AAI walks the ladder in order.
+    #
+    # `assemblyai_speaker_labels` — per-video diarization labels
     # (A / B / C). The pipeline reads these instead of running
     # pyannote separately (Task A2). Default True; flip False to
     # drop the ~$0.02/hr diarization upcharge if a particular run
     # doesn't need speaker separation.
-    assemblyai_language_code: str = "es"
-    assemblyai_language_detection: bool = False
-    assemblyai_speech_model: str = "best"
+    assemblyai_language_mode: str = "auto"
+    assemblyai_speech_models: list[str] = Field(
+        default_factory=lambda: ["universal-3-pro", "universal-2"]
+    )
     assemblyai_speaker_labels: bool = True
     # Slice O.44 — Modal Whisper provider. Wired when
     # `transcribe_provider="modal"`. The endpoint is the URL Modal

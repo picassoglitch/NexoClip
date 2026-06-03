@@ -44,11 +44,15 @@ class _FakeAssemblyAI:
     def __init__(self, *, duration_s: float, speaker_labels: bool = True) -> None:
         self._duration_s = duration_s
         self._speaker_labels = speaker_labels
-        self._speech_model = "best"
+        # The service reads `_speech_model` to populate the `model`
+        # column on the LLMCallRow when the provider doesn't expose
+        # one directly. Keep this stub field so the fake stands in
+        # for AssemblyAIProvider's downstream cost-row contract.
+        self._speech_model = "universal-3-pro"
 
     @property
     def name(self) -> str:
-        return "assemblyai-best"
+        return "assemblyai-universal-3-pro"
 
     def cost_for_duration_micros(self, duration_s: float) -> int:
         return assemblyai.cost_micros_for(
@@ -160,7 +164,7 @@ async def test_transcribe_records_cost_when_provider_has_rate(
     assert len(rows) == 1
     row = rows[0]
     assert row.purpose == "transcribe"
-    assert row.provider == "assemblyai-best"
+    assert row.provider == "assemblyai-universal-3-pro"
     assert row.cost_usd_micros == 170_000  # base + diarization
     assert row.status == "ok"
 

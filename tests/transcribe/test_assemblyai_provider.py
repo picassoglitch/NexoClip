@@ -45,10 +45,9 @@ def _patch_client(monkeypatch: pytest.MonkeyPatch, handler) -> None:
 def _make_provider(**overrides) -> assemblyai.AssemblyAIProvider:
     defaults = dict(
         api_key="aai_test_key",
-        language_code="es",
-        language_detection=False,
+        language_mode="auto",
         speaker_labels=True,
-        speech_model="best",
+        speech_models=["universal-3-pro", "universal-2"],
         polling_interval_s=0.01,
         request_timeout_s=2.0,
     )
@@ -104,9 +103,14 @@ def test_constructor_requires_api_key() -> None:
         assemblyai.AssemblyAIProvider(api_key="")
 
 
-def test_provider_name_reflects_model() -> None:
-    p = _make_provider(speech_model="nano")
-    assert p.name == "assemblyai-nano"
+def test_provider_name_reflects_primary_model() -> None:
+    """The name reflects the FIRST model in the ladder — the one AAI
+    tries first. Operators reading logs / events know which provider
+    is the primary, regardless of which fallback ran on a given job."""
+    p = _make_provider(speech_models=["universal-3-pro", "universal-2"])
+    assert p.name == "assemblyai-universal-3-pro"
+    p2 = _make_provider(speech_models=["nano"])
+    assert p2.name == "assemblyai-nano"
 
 
 @pytest.mark.asyncio
@@ -134,8 +138,17 @@ async def test_happy_path_returns_transcript_with_speakers(
             payload = _json.loads(body)
             assert payload["audio_url"] == "https://cdn/audio.bin"
             assert payload["speaker_labels"] is True
-            assert payload["language_code"] == "es"
-            assert "language_detection" not in payload
+            # Default provider (language_mode="auto") uses
+            # language_detection + code-switching prompt, NOT
+            # language_code. AAI's Universal-3 Pro handles mixed
+            # ES/EN audio natively when both are sent together.
+            assert payload["language_detection"] is True
+            assert payload["prompt"] == assemblyai._CODE_SWITCHING_PROMPT
+            assert "language_code" not in payload
+            # Model ladder — primary first, fallback second.
+            assert payload["speech_models"] == [
+                "universal-3-pro", "universal-2",
+            ]
             state["phase"] = "poll"
             return httpx.Response(200, json={"id": "tr_abc", "status": "queued"})
         # poll
@@ -148,7 +161,7 @@ async def test_happy_path_returns_transcript_with_speakers(
     assert isinstance(transcript, Transcript)
     assert transcript.language == "es"
     assert transcript.duration_s == pytest.approx(12.5)
-    assert transcript.model == "assemblyai-best"
+    assert transcript.model == "assemblyai-universal-3-pro"
     assert transcript.speakers == ["A", "B"]
 
     assert len(transcript.segments) == 2
@@ -165,15 +178,8 @@ async def test_happy_path_returns_transcript_with_speakers(
     assert 0.0 <= s0.words[0].prob <= 1.0
 
 
-@pytest.mark.asyncio
-async def test_language_detection_omits_language_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When language_detection=True AND the request has no explicit
-    language, AssemblyAI's payload must use language_detection instead
-    of language_code (they're mutually exclusive in the API)."""
-    captured: dict = {}
-
+def _make_capture_handler(captured: dict):
+    """Tiny helper — mock transport that records the submit payload."""
     def handler(request: httpx.Request) -> httpx.Response:
         if "/v2/upload" in str(request.url):
             return httpx.Response(200, json={"upload_url": "u"})
@@ -182,36 +188,91 @@ async def test_language_detection_omits_language_code(
             captured.update(_json.loads(request.read()))
             return httpx.Response(200, json={"id": "tr_x", "status": "queued"})
         return httpx.Response(200, json=_COMPLETED_BODY)
+    return handler
 
-    _patch_client(monkeypatch, handler)
-    provider = _make_provider(language_code=None, language_detection=True)
+
+@pytest.mark.asyncio
+async def test_auto_mode_sends_detection_plus_code_switching_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default `language_mode="auto"` (LATAM default) submits with
+    language_detection=true PLUS the code-switching prompt. The prompt
+    tells U3-Pro to preserve each phrase in its original language
+    instead of "helpfully" translating English filler to Spanish."""
+    captured: dict = {}
+    _patch_client(monkeypatch, _make_capture_handler(captured))
+    provider = _make_provider(language_mode="auto")
     await provider.transcribe(_req(tmp_path))
-    assert captured.get("language_detection") is True
+    assert captured["language_detection"] is True
+    assert captured["prompt"] == assemblyai._CODE_SWITCHING_PROMPT
     assert "language_code" not in captured
 
 
 @pytest.mark.asyncio
-async def test_request_language_overrides_provider_default(
+async def test_locked_language_drops_detection_and_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The TranscribeRequest's language wins over the provider's
-    constructor default — per-stream overrides work even when the
-    provider was built with language=es."""
+    """Operator locks the deployment to ES via `language_mode="es"`
+    (e.g. dedicated Spanish-only channel) — drops detection + prompt
+    for max-accuracy monolingual transcription. AAI rejects the
+    combination of language_code + language_detection so we must
+    send only one."""
     captured: dict = {}
+    _patch_client(monkeypatch, _make_capture_handler(captured))
+    provider = _make_provider(language_mode="es")
+    await provider.transcribe(_req(tmp_path))
+    assert captured["language_code"] == "es"
+    assert "language_detection" not in captured
+    assert "prompt" not in captured
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "/v2/upload" in str(request.url):
-            return httpx.Response(200, json={"upload_url": "u"})
-        if request.method == "POST":
-            import json as _json
-            captured.update(_json.loads(request.read()))
-            return httpx.Response(200, json={"id": "tr_x", "status": "queued"})
-        return httpx.Response(200, json=_COMPLETED_BODY)
 
-    _patch_client(monkeypatch, handler)
-    provider = _make_provider(language_code="es")
+@pytest.mark.asyncio
+async def test_per_call_language_overrides_provider_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-call `language` (from the pipeline / API) wins over the
+    deployment's default mode. So an operator with an EN-only stream
+    on an otherwise auto-mode deployment locks to EN cleanly."""
+    captured: dict = {}
+    _patch_client(monkeypatch, _make_capture_handler(captured))
+    provider = _make_provider(language_mode="auto")
     await provider.transcribe(_req(tmp_path, language="en"))
     assert captured["language_code"] == "en"
+    assert "language_detection" not in captured
+    assert "prompt" not in captured
+
+
+@pytest.mark.asyncio
+async def test_per_call_auto_switches_back_to_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-call `language="auto"` on a locked deployment switches back
+    to detection mode for that specific stream — symmetric override."""
+    captured: dict = {}
+    _patch_client(monkeypatch, _make_capture_handler(captured))
+    provider = _make_provider(language_mode="es")
+    await provider.transcribe(_req(tmp_path, language="auto"))
+    assert captured["language_detection"] is True
+    assert captured["prompt"] == assemblyai._CODE_SWITCHING_PROMPT
+    assert "language_code" not in captured
+
+
+@pytest.mark.asyncio
+async def test_speech_models_ladder_always_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model ladder is non-optional — every submit carries
+    speech_models so AAI walks U3-Pro → U2 → … in order. Pinned here
+    so a future refactor doesn't accidentally drop the field."""
+    captured: dict = {}
+    _patch_client(monkeypatch, _make_capture_handler(captured))
+    provider = _make_provider(
+        speech_models=["universal-3-pro", "universal-2", "nano"],
+    )
+    await provider.transcribe(_req(tmp_path))
+    assert captured["speech_models"] == [
+        "universal-3-pro", "universal-2", "nano",
+    ]
 
 
 @pytest.mark.asyncio

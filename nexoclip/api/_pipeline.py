@@ -9,8 +9,12 @@ keep working via the re-exports below; new code should import from
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from nexoclip.jobs import PipelineKickoff, PipelineRunner
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _log = logging.getLogger("nexoclip.pipeline.runner")
 
@@ -118,4 +122,108 @@ async def _emit_top_level_failure(
         )
 
 
-__all__ = ["PipelineKickoff", "PipelineRunner", "default_pipeline_runner"]
+async def upload_pipeline_runner(
+    *,
+    tenant_id: str,
+    stream_id: str,
+    persona_id: str,
+    tmp_path: "Path",
+    output_dir: "Path",
+    title: str | None,
+    language: str | None = None,
+) -> None:
+    """Run the full pipeline for an uploaded file in the background.
+
+    The HTTP upload endpoint stashes the request body to a tempfile
+    inline (unavoidable — the bytes have to arrive before we can
+    respond) and then schedules THIS runner so the operator gets a
+    303 to the live progress page immediately. Audio extraction +
+    transcribe + detect + cut all happen here, asynchronously.
+
+    Phases inside this runner:
+
+      1. `ingest_uploaded()` — moves the tempfile to the canonical
+         <output_dir>/<stream_id>/source/video.mp4, extracts audio,
+         writes stream.json.
+      2. UPSERT the StreamRow with the real values now that we know
+         the duration + on-disk paths.
+      3. `process_vod()` — picks up the cached stream.json (skipping
+         ingest_vod's URL path entirely) and runs the rest of the
+         pipeline.
+
+    Failure surfacing matches default_pipeline_runner: any exception
+    that escapes the per-step contexts gets a `pipeline.failed` event
+    so the dashboard's progress card explains the failure instead of
+    spinning forever. We then re-raise so FastAPI logs the traceback.
+    """
+    from nexoclip.db import Database, StreamsRepo
+    from nexoclip.db.adapters import stream_to_row
+    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.pipeline import process_vod
+    from nexoclip.settings import get_settings
+    from nexoclip.tenancy import bound_tenant
+
+    settings = get_settings()
+    db_path = settings.db_path
+
+    try:
+        # Phase 1 — finish ingest (move file + extract audio + persist
+        # stream.json). Idempotent on stream.json: if the operator
+        # somehow re-triggers this run, the second call returns the
+        # cached Stream without re-extracting.
+        stream = await ingest_uploaded(
+            tenant_id=tenant_id,
+            source_path=tmp_path,
+            output_dir=output_dir,
+            stream_id=stream_id,
+            title=title,
+        )
+
+        # Phase 2 — promote the placeholder StreamRow we inserted in
+        # the endpoint to the real values (duration_s, title from
+        # ffprobe, etc.). The pipeline's StreamsRepo.upsert further
+        # along would also do this, but doing it here means the
+        # dashboard's progress page shows real metadata as soon as
+        # ingest finishes instead of waiting for transcribe to start.
+        db = Database(db_path)
+        await db.connect()
+        try:
+            with bound_tenant(tenant_id):
+                await StreamsRepo(db).upsert(stream_to_row(stream))
+        finally:
+            await db.close()
+
+        # Phase 3 — run the full pipeline. process_vod sees the
+        # cached stream.json and skips ingest_vod entirely (the
+        # upload:// pseudo-URL never has to hit yt-dlp).
+        await process_vod(
+            tenant_id=tenant_id,
+            vod_url=stream.vod_url,
+            output_dir=output_dir,
+            persona_id=persona_id,
+            stream_id=stream.id,
+            language=language,
+            db_path=db_path,
+        )
+    except Exception as e:
+        try:
+            await _emit_top_level_failure(
+                db_path=db_path,
+                tenant_id=tenant_id,
+                stream_id=stream_id,
+                error=e,
+            )
+        except Exception:
+            _log.exception(
+                "upload pipeline.failed event write failed for stream=%s",
+                stream_id,
+            )
+        raise
+
+
+__all__ = [
+    "PipelineKickoff",
+    "PipelineRunner",
+    "default_pipeline_runner",
+    "upload_pipeline_runner",
+]

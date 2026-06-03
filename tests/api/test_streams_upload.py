@@ -115,36 +115,68 @@ async def test_dashboard_upload_redirects_to_stream_detail(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The /dashboard/streams/upload form redirects to /dashboard/streams/<id>."""
-    from nexoclip.api import PipelineKickoff
+    """The /dashboard/streams/upload form redirects to /dashboard/streams/<id>.
 
+    UX refactor — the redirect now happens IMMEDIATELY after bytes
+    arrive (placeholder row inserted, background runner scheduled),
+    not after the full ingest_uploaded call. Verify the placeholder
+    has the expected shape: status='pending', duration_s=0, pseudo
+    upload:// URL.
+
+    Bearer auth instead of cookie login because the dashboard cookie
+    flow is pre-broken in test fixtures (slice O.22 redirected login
+    to nexo-ai)."""
     _stub_ffmpeg(monkeypatch)
     monkeypatch.setattr(
         "nexoclip.settings.get_settings",
-        lambda: type("S", (), {"default_output_dir": str(tmp_path / "out")})(),
+        lambda: type("S", (), {
+            "default_output_dir": str(tmp_path / "out"),
+            "db_path": str(tmp_path / "test.db"),
+        })(),
     )
 
-    async def fake_runner(_kickoff: PipelineKickoff) -> None:
-        return None
+    # Block the background runner so we can inspect ONLY the
+    # endpoint's synchronous work (placeholder insert + redirect).
+    # Without this stub the runner would try to call real
+    # process_vod against a fake DB path.
+    scheduled: list[dict] = []
 
-    app = create_app(db=db, pipeline_runner=fake_runner)
+    async def fake_runner(**kwargs: object) -> None:
+        scheduled.append(kwargs)
+
+    monkeypatch.setattr(
+        "nexoclip.api._pipeline.upload_pipeline_runner", fake_runner,
+    )
+
+    app = create_app(db=db)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://api.test"
     ) as c:
-        # Sign in (sets the dashboard cookie).
-        await c.post(
-            "/dashboard/login", data={"token": tenants["alice"]["token"]}
-        )
         files = {"file": ("clip.mp4", b"\x00fakevideo", "video/mp4")}
         r = await c.post(
             "/dashboard/streams/upload",
             files=files,
             data={"persona_id": "aldo"},
+            headers=auth(tenants["alice"]["token"]),
             follow_redirects=False,
         )
-    assert r.status_code == 303
-    assert r.headers["location"].startswith("/dashboard/streams/str_")
+    assert r.status_code == 303, r.text
+    location = r.headers["location"]
+    assert location.startswith("/dashboard/streams/str_")
+    stream_id = location.removeprefix("/dashboard/streams/")
+
+    # Placeholder row landed with the right shape.
+    with bound_tenant(tenants["alice"]["id"]):
+        row = await StreamsRepo(db).get(stream_id)
+    assert row is not None
+    assert row.platform == "upload"
+    assert row.vod_url == "upload://clip.mp4"
+    assert row.status == "pending"
+    # duration_s is 0 in the placeholder — the runner will UPSERT
+    # the real value after ffprobe in the background.
+    assert row.duration_s == 0.0
+    assert row.title == "clip.mp4"
 
 
 async def test_upload_503s_when_ffmpeg_missing(
@@ -195,3 +227,120 @@ async def test_upload_requires_full_scope(
             data={"persona_id": "aldo"},
         )
     assert r.status_code == 401
+
+
+# ---- Dashboard upload — background-runner contract ----
+
+
+async def test_dashboard_upload_does_not_block_on_ingest(
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Operator-visible win — the endpoint redirects BEFORE the audio
+    extract runs. We assert no _extract_audio call happens during the
+    synchronous request lifecycle (background tasks fire AFTER the
+    response is dispatched)."""
+    _stub_ffmpeg(monkeypatch)
+    monkeypatch.setattr(
+        "nexoclip.settings.get_settings",
+        lambda: type("S", (), {
+            "default_output_dir": str(tmp_path / "out"),
+            "db_path": str(tmp_path / "test.db"),
+        })(),
+    )
+
+    # Block the background runner so no real ingest fires after the
+    # response (tests would otherwise hit a real ffmpeg path).
+    async def fake_runner(**kwargs: object) -> None:
+        return None
+    monkeypatch.setattr(
+        "nexoclip.api._pipeline.upload_pipeline_runner", fake_runner,
+    )
+
+    # Tripwire on _extract_audio — if the endpoint synchronously calls
+    # it, this test fails immediately with a clear message.
+    extract_calls: list[tuple] = []
+
+    def trip(video: Path, audio: Path) -> None:
+        extract_calls.append((video, audio))
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"\x00")
+    monkeypatch.setattr("nexoclip.ingest.service._extract_audio", trip)
+
+    app = create_app(db=db)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://api.test"
+    ) as c:
+        files = {"file": ("v.mp4", b"\x00fakevideo", "video/mp4")}
+        r = await c.post(
+            "/dashboard/streams/upload",
+            files=files,
+            data={"persona_id": "aldo"},
+            headers=auth(tenants["alice"]["token"]),
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    # The redirect went out before audio extract ran.
+    assert extract_calls == [], (
+        f"audio extract ran synchronously: {extract_calls}"
+    )
+
+
+async def test_dashboard_upload_schedules_background_runner(
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Endpoint schedules `upload_pipeline_runner` with the placeholder
+    stream_id + tenant + persona + tempfile path. The runner is what
+    actually moves the file + extracts audio + runs the pipeline."""
+    _stub_ffmpeg(monkeypatch)
+    monkeypatch.setattr(
+        "nexoclip.settings.get_settings",
+        lambda: type("S", (), {
+            "default_output_dir": str(tmp_path / "out"),
+            "db_path": str(tmp_path / "test.db"),
+        })(),
+    )
+
+    captured: list[dict] = []
+
+    async def fake_runner(**kwargs: object) -> None:
+        captured.append(kwargs)
+    monkeypatch.setattr(
+        "nexoclip.api._pipeline.upload_pipeline_runner", fake_runner,
+    )
+
+    app = create_app(db=db)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://api.test"
+    ) as c:
+        files = {"file": ("clip.mp4", b"\x00fakevideo", "video/mp4")}
+        r = await c.post(
+            "/dashboard/streams/upload",
+            files=files,
+            data={"persona_id": "aldo"},
+            headers=auth(tenants["alice"]["token"]),
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+
+    # Wait briefly for FastAPI's BackgroundTasks to fire. They run
+    # AFTER the response is sent but during the same task group.
+    import asyncio
+    for _ in range(50):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+    assert len(captured) == 1, "runner not scheduled"
+    kw = captured[0]
+    assert kw["tenant_id"] == tenants["alice"]["id"]
+    assert kw["persona_id"] == "aldo"
+    assert kw["title"] == "clip.mp4"
+    assert kw["stream_id"].startswith("str_")
+    assert kw["tmp_path"].exists()

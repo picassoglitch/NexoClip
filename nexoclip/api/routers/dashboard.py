@@ -782,13 +782,35 @@ async def streams_upload(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Ingest an operator-uploaded video file. The simpler path that sidesteps
-    yt-dlp / Kick auth entirely — the operator drops a recorded VOD on the
-    page and the pipeline runs against it.
+    """Ingest an operator-uploaded video file — mirrors the URL-job flow.
+
+    Previously this endpoint blocked the request on:
+      1. Receiving the upload bytes (unavoidable; HTTP request body)
+      2. ingest_uploaded() — file move + audio extract + ffprobe
+         (~30-60 s for a 1-hour video on Railway CPU)
+      3. Stream row upsert + event emit
+      4. Pipeline dispatch
+    …then redirected. For a 500 MB upload the operator stared at a
+    spinner for minutes before they could see the live progress page.
+
+    Now (matches /dashboard/url-jobs):
+      1. Receive bytes (unavoidable)
+      2. Mint stream_id, insert placeholder StreamRow (status="pending",
+         duration_s=0, canonical paths the runner will write to)
+      3. Emit stream.created
+      4. Schedule `upload_pipeline_runner` as a background task —
+         audio extract + transcribe + detect + cut all happen there
+      5. 303 to /dashboard/streams/{id} immediately
+
+    The live progress page reads the same event surface every other
+    source uses (stream.download.* + stream.audio_extracted +
+    pipeline.step.* + clip.cut.substep).
     """
+    from nexoclip.api._pipeline import upload_pipeline_runner
     from nexoclip.api.routers.streams import _stash_upload_to_tmp
-    from nexoclip.db.adapters import stream_to_row
-    from nexoclip.ingest import ingest_uploaded, is_ffmpeg_available
+    from nexoclip.db.models import StreamRow
+    from nexoclip.ids import new_id
+    from nexoclip.ingest import is_ffmpeg_available
     from nexoclip.settings import get_settings
 
     if not is_ffmpeg_available():
@@ -803,36 +825,59 @@ async def streams_upload(
 
     output_dir = Path(get_settings().default_output_dir)
     tmp_path = await _stash_upload_to_tmp(file, output_dir)
-    try:
-        try:
-            stream = await ingest_uploaded(
-                tenant_id=tenant_id,
-                source_path=tmp_path,
-                output_dir=output_dir,
-                title=file.filename,
-            )
-        except NexoClipError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-    finally:
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
 
-    row = await StreamsRepo(db).upsert(stream_to_row(stream))
-    await EventsRepo(db).emit(type="stream.created", payload={"stream_id": row.id})
-    dispatcher = request.app.state.job_dispatcher
-    await dispatcher.dispatch_pipeline(
-        PipelineKickoff(
-            tenant_id=tenant_id,
-            stream=stream,
-            persona_id=persona_id,
-            output_dir=output_dir,
-        ),
-        background_tasks=background_tasks,
+    # Mint stream_id up-front so the placeholder row + eventual
+    # stream.json + the redirect URL all agree.
+    stream_id = new_id("str")
+    stream_dir = output_dir / stream_id
+    source_dir = stream_dir / "source"
+    placeholder_video = source_dir / "video.mp4"
+    placeholder_audio = source_dir / "audio.wav"
+    pseudo_url = f"upload://{file.filename or 'upload.mp4'}"
+
+    placeholder = StreamRow(
+        id=stream_id,
+        tenant_id=tenant_id,
+        vod_url=pseudo_url,
+        platform="upload",
+        title=file.filename,
+        channel=None,
+        duration_s=0.0,
+        source_video_path=str(placeholder_video),
+        source_audio_path=str(placeholder_audio),
+        status="pending",
+        created_at=_now_iso(),
     )
-    return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
+    await StreamsRepo(db).upsert(placeholder)
+    await EventsRepo(db).emit(
+        type="stream.created",
+        payload={
+            "stream_id": stream_id,
+            "vod_url": pseudo_url,
+            "platform": "upload",
+            "duration_s": 0.0,
+            # `kind=upload_job` flags this row as the new background-
+            # ingest upload path so the dashboard can differentiate it
+            # from legacy inline-ingest uploads in event history.
+            "kind": "upload_job",
+        },
+    )
+
+    # Hand off to the background runner. Audio extract + transcribe +
+    # detect + cut all happen there; the operator hits the progress
+    # page instantly.
+    background_tasks.add_task(
+        upload_pipeline_runner,
+        tenant_id=tenant_id,
+        stream_id=stream_id,
+        persona_id=persona_id,
+        tmp_path=tmp_path,
+        output_dir=output_dir,
+        title=file.filename,
+    )
+    return RedirectResponse(
+        url=f"/dashboard/streams/{stream_id}", status_code=303,
+    )
 
 
 # ---- Task 3 — Drop-a-URL self-serve ingest ----

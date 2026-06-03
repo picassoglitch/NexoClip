@@ -521,9 +521,33 @@
           _captionEl.style.visibility = "hidden";
         }
       }
-      requestAnimationFrame(_renderCaptions);
+      // Drift fix Step 1 — DO NOT self-reschedule via rAF.
+      //
+      // The previous version did `requestAnimationFrame(_renderCaptions)`
+      // at the tail of this function PLUS a `requestAnimationFrame(
+      // _renderCaptions)` kick-off below. The browser invokes a rAF
+      // callback with a `DOMHighResTimeStamp` (ms since page load,
+      // ~1e3-1e5). The function's `typeof forcedT === "number"` check
+      // matched that timestamp and used it as the clip-relative video
+      // time → no caption line ever matched → captions hidden every
+      // tick. The recorder's explicit `_renderCaptions(target)` call
+      // before each screenshot painted the right caption, but the rAF
+      // loop's next tick overwrote it before the screenshot fired →
+      // race condition → empty subtitles in export.
+      //
+      // clip_render.html is ONLY loaded by preview_recorder.py and
+      // hybrid_recorder.py with `?capture=1` / `?capture=alpha`. No
+      // other caller. There's no live playback in this template, so
+      // there's no need to drive the caption animator from a frame
+      // loop — every frame's caption gets painted by an explicit
+      // `_renderCaptions(target)` call inside `captureFrameAt` /
+      // `captureFrameAtAlpha` right before the screenshot. Deleting
+      // the rAF self-feed kills the race; captions become deterministic.
+      //
+      // The editor (clip_detail.html) has its own animator —
+      // `syncCaptionFrame()` driven by timeupdate + a 60ms interval —
+      // and is unaffected by this change.
     }
-    requestAnimationFrame(_renderCaptions);
     {% else %}
     // No captions enabled on this clip — mark the gate true so the
     // recorder doesn't wait for nothing.

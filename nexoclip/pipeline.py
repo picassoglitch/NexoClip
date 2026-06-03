@@ -663,6 +663,12 @@ async def _run_pipeline(
                     compute_type=settings.whisper_compute_type,
                     language=whisper_lang,
                     force=force,
+                    # Task A1b — db wires cost metering through. The
+                    # service consults BudgetGovernor pre-call and
+                    # records an LLMCallRow post-call when the
+                    # provider declares a marginal cost rate
+                    # (AssemblyAI yes, LocalWhisperProvider no).
+                    db=db,
                 )
             else:
                 transcript = await asyncio.wait_for(
@@ -674,6 +680,7 @@ async def _run_pipeline(
                         compute_type=settings.whisper_compute_type,
                         language=whisper_lang,
                         force=force,
+                        db=db,
                     ),
                     timeout=_whisper_timeout,
                 )

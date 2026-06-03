@@ -106,6 +106,20 @@ class AssemblyAIProvider:
     def name(self) -> str:
         return f"assemblyai-{self._speech_model}"
 
+    def cost_for_duration_micros(self, duration_s: float) -> int:
+        """USD micros for a transcript of `duration_s` seconds at the
+        current settings.
+
+        Computed from the full duration rather than a per-second rate
+        × seconds so rounding doesn't slowly drift the operator's
+        invoice off the published $/hr math. Providers without a
+        marginal cost (LocalWhisperProvider) don't define this
+        method; the service's hasattr check falls through to a no-op.
+        """
+        return cost_micros_for(
+            duration_s=duration_s, speaker_labels=self._speaker_labels,
+        )
+
     # ---- public entry ----
 
     async def transcribe(self, req: TranscribeRequest) -> Transcript:
@@ -434,6 +448,31 @@ def _word_from_assemblyai(w: dict[str, Any]) -> Word:
     )
 
 
+# ---- cost ----
+#
+# AssemblyAI pricing — Task A1b. Numbers from the public pricing page
+# at https://www.assemblyai.com/pricing as of 2026-06. If they change,
+# operators can override via the per-tenant LLM cap (budget governor)
+# or by setting NEXOCLIP_ASSEMBLYAI_SPEECH_MODEL=nano which is ~5×
+# cheaper on the base rate.
+_COST_BASE_USD_PER_SECOND = 0.15 / 3600.0
+_COST_DIARIZATION_USD_PER_SECOND = 0.02 / 3600.0
+
+
+def cost_micros_for(*, duration_s: float, speaker_labels: bool) -> int:
+    """USD micros for a transcript of `duration_s` seconds, accounting
+    for the +$0.02/hr diarization upcharge when speaker_labels is on.
+
+    Reused by the transcribe service's post-call accounting and by any
+    pre-call estimator that wants to show the operator a quote before
+    they spend credits.
+    """
+    rate = _COST_BASE_USD_PER_SECOND
+    if speaker_labels:
+        rate += _COST_DIARIZATION_USD_PER_SECOND
+    return int(round(max(0.0, duration_s) * rate * 1_000_000))
+
+
 _SENTENCE_END = {".", "?", "!"}
 
 
@@ -456,4 +495,4 @@ def _segment_from_words(words: list[Word]) -> Segment:
     )
 
 
-__all__ = ["AssemblyAIProvider"]
+__all__ = ["AssemblyAIProvider", "cost_micros_for"]

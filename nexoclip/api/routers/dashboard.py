@@ -860,28 +860,50 @@ async def streams_upload(
 # `require_active_tenant`). No new bypass.
 
 
+@router.get("/start", response_class=HTMLResponse)
+async def start_page(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Unified entry-point page — surface every ingest method (paste URL,
+    upload, Drive watch, live RTMP) as cards on one screen so operators
+    aren't hunting through nav menus to start a job.
+
+    Persona is auto-resolved to the tenant's first persona; per-run
+    override stays on the legacy /dashboard/streams advanced form for
+    operators who need it.
+    """
+    from nexoclip.ingest import is_ffmpeg_available
+    from nexoclip.settings import get_settings
+
+    personas = await PersonasRepo(db).list_for_tenant()
+    default_persona = personas[0] if personas else None
+    s = get_settings()
+    live_configured = bool((getattr(s, "live_rtmp_base_url", "") or "").strip())
+
+    return templates.TemplateResponse(
+        request,
+        "start_page.html",
+        {
+            "personas": personas,
+            "default_persona": default_persona,
+            "ffmpeg_ok": is_ffmpeg_available(),
+            "live_configured": live_configured,
+        },
+    )
+
+
 @router.get("/url-jobs/new", response_class=HTMLResponse)
 async def url_job_form(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Render the single-input paste-URL form (Task 3c)."""
-    from nexoclip.ingest import is_ffmpeg_available
-
-    personas = await PersonasRepo(db).list_for_tenant()
-    persona = personas[0] if personas else None
-    return templates.TemplateResponse(
-        request,
-        "url_job_form.html",
-        {
-            "personas": personas,
-            "persona_id": persona.id if persona else None,
-            "persona_name": persona.name if persona else None,
-            "persona_lang": persona.primary_language if persona else None,
-            "ffmpeg_ok": is_ffmpeg_available(),
-        },
-    )
+    """Backward-compat — bookmarked /dashboard/url-jobs/new redirects to
+    the unified /dashboard/start page (Task UX 9). The old single-field
+    template is left in the tree but no longer rendered."""
+    return RedirectResponse(url="/dashboard/start", status_code=303)
 
 
 @router.post(

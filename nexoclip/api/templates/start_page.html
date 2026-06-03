@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}Start a clip job · NexoClip{% endblock %}
+{% block content %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Start a new clip job</h2>
+    <small>Pick how you want to send us the video. Whatever you choose, the same pipeline runs — download / extract / transcribe / detect / cut. Clips appear as they finish.</small>
+  </div>
+</div>
+
+{% if not personas %}
+<div class="nc-alert nc-alert--danger" style="margin-bottom: 24px;">
+  <div class="nc-alert__icon"><i class="ti ti-user-off" aria-hidden="true"></i></div>
+  <div class="nc-alert__body">
+    <div class="nc-alert__title">You need a persona first</div>
+    <div class="nc-alert__detail">
+      The pipeline writes captions + variants in a persona's voice. Set one up at
+      <a href="/dashboard/personas">/dashboard/personas</a>, then come back here.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if personas and not ffmpeg_ok %}
+<div class="nc-alert nc-alert--danger" style="margin-bottom: 24px;">
+  <div class="nc-alert__icon"><i class="ti ti-alert-triangle" aria-hidden="true"></i></div>
+  <div class="nc-alert__body">
+    <div class="nc-alert__title">ffmpeg is not installed on the server</div>
+    <div class="nc-alert__detail">
+      The pipeline needs ffmpeg to extract audio. Install it (Linux:
+      <code>apt install ffmpeg</code>; macOS: <code>brew install ffmpeg</code>;
+      Windows: <code>winget install --id=Gyan.FFmpeg -e</code>) and restart the
+      dashboard.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if personas %}
+<small class="nc-muted" style="display: block; margin-bottom: 16px;">
+  Using persona <strong>{{ default_persona.name }}</strong> ({{ default_persona.primary_language }}).
+  {% if personas|length > 1 %}
+    Multiple personas configured — the run uses the first one.
+    Per-run override lives on the Streams page's advanced form for now.
+  {% endif %}
+</small>
+{% endif %}
+
+{# Cards grid — each card is one entry point. The visual hierarchy
+   makes the URL paste the primary action because that's the typical
+   first-run flow. Upload + Drive + Live sit alongside but lower
+   priority. #}
+<div class="nc-start-grid"
+     style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; margin-top: 8px;">
+
+  {# ============================================================
+     Card 1 — Paste a URL (Kick / Twitch / YouTube)
+     The primary path. Single field, no persona picker.
+     ============================================================ #}
+  <div class="nc-panel" data-entry="url">
+    <div class="nc-panel__header">
+      <i class="ti ti-link" aria-hidden="true" style="color: var(--nc-blue-bright); font-size: 18px;"></i>
+      <span class="nc-panel__title">Paste a URL</span>
+      <small style="margin-left: auto;">Fastest</small>
+    </div>
+    <div class="nc-panel__body">
+      <p class="nc-help" style="margin-top: 0;">
+        Kick, Twitch, or YouTube VOD. We download it for you.
+      </p>
+      <form id="urlForm" action="/dashboard/url-jobs" method="post">
+        <label class="nc-label" style="margin-bottom: 8px;">VOD URL
+          <input type="url"
+                 id="urlInput"
+                 class="nc-input nc-input--mono"
+                 name="vod_url"
+                 placeholder="https://kick.com/aldovillanueva/videos/…"
+                 autocomplete="off"
+                 required>
+        </label>
+        <div id="urlHint" class="nc-help" style="font-size: 11.5px; min-height: 1.2em;">
+          Supported: kick.com / twitch.tv / youtube.com / youtu.be
+        </div>
+        <div id="urlError"
+             class="nc-alert nc-alert--danger"
+             style="display: none; margin-top: 10px; font-size: 12px; padding: 8px 10px;"
+             role="alert"></div>
+        <button type="submit"
+                id="urlSubmit"
+                class="nc-btn nc-btn--primary nc-btn--full"
+                style="margin-top: 14px;"
+                {% if not personas or not ffmpeg_ok %}disabled{% endif %}>
+          <i class="ti ti-player-play" aria-hidden="true"></i>
+          <span>Start</span>
+        </button>
+      </form>
+      <small style="display: block; margin-top: 10px; color: var(--nc-text-muted); font-size: 11.5px;">
+        Kick + age-gated YouTube need
+        <code>NEXOCLIP_COOKIES_FROM_BROWSER=edge</code> in the server's
+        <code>.env</code>.
+      </small>
+    </div>
+  </div>
+
+  {# ============================================================
+     Card 2 — Upload a video
+     For users who already have a file (recorded VOD / phone video).
+     ============================================================ #}
+  <div class="nc-panel" data-entry="upload">
+    <div class="nc-panel__header">
+      <i class="ti ti-cloud-upload" aria-hidden="true" style="color: var(--nc-blue-bright); font-size: 18px;"></i>
+      <span class="nc-panel__title">Upload a video</span>
+      <small style="margin-left: auto;">No URL needed</small>
+    </div>
+    <div class="nc-panel__body">
+      <p class="nc-help" style="margin-top: 0;">
+        Already-recorded VOD or phone video. MP4 / MKV / WebM / MOV.
+      </p>
+      <form id="uploadForm"
+            action="/dashboard/streams/upload"
+            method="post"
+            enctype="multipart/form-data">
+        <label class="nc-label" style="margin-bottom: 8px;">Video file
+          <input type="file"
+                 id="uploadFile"
+                 class="nc-input"
+                 name="file"
+                 accept="video/*,.mp4,.mkv,.webm,.mov" required>
+        </label>
+        {# Persona is required on this legacy endpoint — auto-fill with the
+           default. Hidden field, no picker UI; the operator who wants a
+           different one can change it from the stream detail page after
+           ingest. #}
+        {% if default_persona %}
+        <input type="hidden" name="persona_id" value="{{ default_persona.id }}">
+        {% endif %}
+        <button type="submit"
+                id="uploadSubmit"
+                class="nc-btn nc-btn--primary nc-btn--full"
+                style="margin-top: 14px;"
+                {% if not personas or not ffmpeg_ok %}disabled{% endif %}>
+          <i class="ti ti-upload" aria-hidden="true"></i>
+          <span>Upload &amp; process</span>
+        </button>
+      </form>
+      <small style="display: block; margin-top: 10px; color: var(--nc-text-muted); font-size: 11.5px;">
+        Large files (&gt; 500 MB) — keep the tab open until the upload finishes.
+      </small>
+    </div>
+  </div>
+
+  {# ============================================================
+     Card 3 — Live RTMP push (OBS / Streamlabs)
+     Only fully wired when NEXOCLIP_LIVE_RTMP_BASE_URL is set;
+     otherwise show a "not configured" hint.
+     ============================================================ #}
+  <div class="nc-panel" data-entry="live">
+    <div class="nc-panel__header">
+      <i class="ti ti-broadcast" aria-hidden="true" style="color: var(--nc-blue-bright); font-size: 18px;"></i>
+      <span class="nc-panel__title">Push live (RTMP)</span>
+      <small style="margin-left: auto;">OBS / Streamlabs</small>
+    </div>
+    <div class="nc-panel__body">
+      {% if live_configured %}
+      <p class="nc-help" style="margin-top: 0;">
+        Paste the RTMP URL + your stream key into OBS. We record the live
+        push and run the pipeline when you stop the broadcast.
+      </p>
+      <a href="/dashboard/live" class="nc-btn nc-btn--full" style="margin-top: 8px;">
+        <i class="ti ti-arrow-right" aria-hidden="true"></i>
+        <span>Open live dashboard</span>
+      </a>
+      {% else %}
+      <p class="nc-help" style="margin-top: 0;">
+        Not configured on this deployment. Set
+        <code>NEXOCLIP_LIVE_RTMP_BASE_URL</code> in env to enable.
+      </p>
+      <button class="nc-btn nc-btn--full" disabled style="margin-top: 8px; opacity: 0.5;">
+        <i class="ti ti-lock" aria-hidden="true"></i>
+        <span>Not available</span>
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ============================================================
+     Card 4 — Google Drive folder watch
+     Optional surface; if you've set up Drive watches elsewhere
+     they appear here. Otherwise we surface "drop a file" as the
+     primary recommendation.
+     ============================================================ #}
+  <div class="nc-panel" data-entry="drive">
+    <div class="nc-panel__header">
+      <i class="ti ti-brand-google-drive" aria-hidden="true" style="color: var(--nc-blue-bright); font-size: 18px;"></i>
+      <span class="nc-panel__title">Watch a Drive folder</span>
+      <small style="margin-left: auto;">Auto-ingest</small>
+    </div>
+    <div class="nc-panel__body">
+      <p class="nc-help" style="margin-top: 0;">
+        Drop new VODs into a Google Drive folder; we pull each one
+        automatically and run the pipeline. Good for team workflows.
+      </p>
+      <a href="/dashboard/drive-watches" class="nc-btn nc-btn--full" style="margin-top: 8px;">
+        <i class="ti ti-arrow-right" aria-hidden="true"></i>
+        <span>Manage Drive watches</span>
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // Same validation regex set the backend uses (nexoclip.ingest.detect_platform).
+  // Mirrored client-side so the operator sees the error before the round-trip.
+  var URL_PATTERNS = [
+    /^https?:\/\/(?:www\.)?kick\.com\//i,
+    /^https?:\/\/(?:www\.)?twitch\.tv\//i,
+    /^https?:\/\/(?:www\.)?youtube\.com\//i,
+    /^https?:\/\/youtu\.be\//i,
+  ];
+  var input = document.getElementById("urlInput");
+  var errorBox = document.getElementById("urlError");
+  var submit = document.getElementById("urlSubmit");
+  var form = document.getElementById("urlForm");
+
+  function validate(url) {
+    if (!url) return "Paste a VOD URL.";
+    var trimmed = url.trim();
+    for (var i = 0; i < URL_PATTERNS.length; i++) {
+      if (URL_PATTERNS[i].test(trimmed)) return null;
+    }
+    return "Only kick.com / twitch.tv / youtube.com / youtu.be URLs are supported.";
+  }
+
+  function showError(msg) {
+    if (msg) {
+      errorBox.textContent = msg;
+      errorBox.style.display = "";
+    } else {
+      errorBox.textContent = "";
+      errorBox.style.display = "none";
+    }
+  }
+
+  if (input) {
+    input.addEventListener("input", function () {
+      var v = input.value.trim();
+      if (v.length === 0 || !/^https?:/i.test(v)) {
+        showError(null);
+        return;
+      }
+      showError(validate(v));
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", function (e) {
+      var msg = validate(input.value);
+      if (msg) {
+        e.preventDefault();
+        showError(msg);
+        input.focus();
+        return;
+      }
+      submit.disabled = true;
+      submit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Starting…</span>';
+    });
+  }
+
+  // Upload card — show a friendly "Uploading…" label so the user
+  // doesn't double-submit on a slow connection.
+  var uploadForm = document.getElementById("uploadForm");
+  var uploadSubmit = document.getElementById("uploadSubmit");
+  if (uploadForm) {
+    uploadForm.addEventListener("submit", function () {
+      if (uploadSubmit) {
+        uploadSubmit.disabled = true;
+        uploadSubmit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Uploading…</span>';
+      }
+    });
+  }
+})();
+</script>
+
+{% endblock %}

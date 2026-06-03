@@ -35,32 +35,57 @@ async def _seed_persona(
         )
 
 
-async def test_url_job_form_renders_when_personas_exist(
+async def test_legacy_url_job_form_redirects_to_unified_start(
+    client: httpx.AsyncClient,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """The old single-input /dashboard/url-jobs/new now 303s to
+    /dashboard/start — bookmarked links from the Task 3 era keep
+    landing the operator somewhere useful."""
+    r = await client.get(
+        "/dashboard/url-jobs/new",
+        headers=auth(tenants["alice"]["token"]),
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/dashboard/start"
+
+
+async def test_unified_start_page_renders_all_entry_points(
     client: httpx.AsyncClient,
     db: Database,
     tenants: dict[str, dict[str, str]],
 ) -> None:
+    """The unified start page surfaces every ingest method as a card:
+    paste URL, upload, live RTMP, Drive watch. Persona is auto-resolved
+    so there's no picker UI."""
     tenant_id = tenants["alice"]["id"]
     await _seed_persona(db, tenant_id)
 
     r = await client.get(
-        "/dashboard/url-jobs/new", headers=auth(tenants["alice"]["token"])
+        "/dashboard/start", headers=auth(tenants["alice"]["token"])
     )
     assert r.status_code == 200, r.text
-    # Single-input form, no persona picker — that's the point of Task 3.
+    # All four entry-point cards present.
+    assert 'data-entry="url"' in r.text
+    assert 'data-entry="upload"' in r.text
+    assert 'data-entry="live"' in r.text
+    assert 'data-entry="drive"' in r.text
+    # Same single-input pattern as Task 3 — no persona picker.
     assert 'name="vod_url"' in r.text
-    assert 'name="persona_id"' not in r.text
-    # The auto-resolved persona surface
-    assert "Using persona" in r.text
+    assert 'name="persona_id"' not in r.text or 'type="hidden"' in r.text
+    # Auto-resolved persona name surfaces (with the hidden field on the
+    # upload form so the legacy endpoint accepts the post).
+    assert "Test Persona" in r.text
 
 
-async def test_url_job_form_disables_submit_without_persona(
+async def test_start_page_warns_when_no_persona(
     client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
 ) -> None:
-    """Operator needs to make a persona first — surface that, don't accept
-    a submit that would 400 the moment they click."""
+    """Operator needs to make a persona first — surface that on the
+    unified page, don't fail at submit time."""
     r = await client.get(
-        "/dashboard/url-jobs/new", headers=auth(tenants["alice"]["token"])
+        "/dashboard/start", headers=auth(tenants["alice"]["token"])
     )
     assert r.status_code == 200, r.text
     assert "You need a persona first" in r.text
@@ -181,25 +206,27 @@ async def test_url_job_accepts_twitch_and_youtube(
         assert row.platform == expected_platform, (url, row.platform)
 
 
-async def test_url_job_form_appears_in_nav(
+async def test_start_page_appears_in_nav(
     client: httpx.AsyncClient,
     db: Database,
     tenants: dict[str, dict[str, str]],
 ) -> None:
-    """The 'Drop URL' nav entry is the entry point for new operators —
-    pin its presence so a future nav cleanup doesn't accidentally hide
-    the first-run aha."""
+    """The '+ New clip' nav entry is THE entry point for new operators
+    — pin its presence so a future nav cleanup doesn't accidentally
+    hide the first-run aha."""
     await _seed_persona(db, tenants["alice"]["id"])
     r = await client.get(
-        "/dashboard/url-jobs/new", headers=auth(tenants["alice"]["token"])
+        "/dashboard/start", headers=auth(tenants["alice"]["token"])
     )
-    assert "/dashboard/url-jobs/new" in r.text
+    assert "/dashboard/start" in r.text
+    assert "+ New clip" in r.text
 
 
-async def test_url_job_returns_303_when_unauth(
+async def test_start_page_returns_303_when_unauth(
     client: httpx.AsyncClient,
 ) -> None:
-    """No auth → bounce. The auth middleware short-circuits before our
-    handler runs, so we don't have to defend the URL endpoint specially."""
-    r = await client.get("/dashboard/url-jobs/new", follow_redirects=False)
+    """No auth → bounce. Same contract every dashboard page has."""
+    r = await client.get("/dashboard/start", follow_redirects=False)
     assert r.status_code in (303, 401), r.text
+
+

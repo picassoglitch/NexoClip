@@ -835,6 +835,189 @@ async def streams_upload(
     return RedirectResponse(url=f"/dashboard/streams/{row.id}", status_code=303)
 
 
+# ---- Task 3 — Drop-a-URL self-serve ingest ----
+#
+# A single-field URL entry point that runs the FULL pipeline (ingest →
+# transcribe → detect → cut) as a background task. The existing
+# `/dashboard/streams` form blocks the request on ingest_vod (which can
+# take 10+ minutes on long Twitch / Kick VODs) and requires the operator
+# to pick a persona by hand. Task 3 changes both:
+#
+#  - persona is auto-resolved to the tenant's first persona (alphabetical
+#    by created_at). If none exist the form shows a friendly "make a
+#    persona first" alert and disables submit.
+#  - ingest runs IN BACKGROUND. The endpoint mints the stream_id up
+#    front, inserts a placeholder StreamRow with the URL + platform, and
+#    redirects immediately to the existing stream detail page. That page
+#    polls `/dashboard/streams/{id}/progress`, which surfaces the new
+#    `stream.download.started` / `.completed` / `.audio_extracted` events
+#    from Task 2a + the `pipeline.step.*` rows + `clip.cut.substep` rows.
+#    Clips list lazily — they appear in the existing stream-detail UI
+#    as the cut step finishes each one.
+#
+# All tenancy / budget / scope guards reuse the dependencies the
+# existing /dashboard/streams flow uses (`require_full_scope`,
+# `require_active_tenant`). No new bypass.
+
+
+@router.get("/url-jobs/new", response_class=HTMLResponse)
+async def url_job_form(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Render the single-input paste-URL form (Task 3c)."""
+    from nexoclip.ingest import is_ffmpeg_available
+
+    personas = await PersonasRepo(db).list_for_tenant()
+    persona = personas[0] if personas else None
+    return templates.TemplateResponse(
+        request,
+        "url_job_form.html",
+        {
+            "personas": personas,
+            "persona_id": persona.id if persona else None,
+            "persona_name": persona.name if persona else None,
+            "persona_lang": persona.primary_language if persona else None,
+            "ffmpeg_ok": is_ffmpeg_available(),
+        },
+    )
+
+
+@router.post(
+    "/url-jobs",
+    dependencies=[Depends(require_full_scope), Depends(require_active_tenant)],
+)
+async def url_job_create(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    vod_url: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create a URL ingest job (Task 3a).
+
+    The full pipeline (ingest → transcribe → detect → cut) runs as a
+    background task. The response redirects to the existing stream detail
+    page which polls progress + lists clips as they finish.
+    """
+    from nexoclip.db.models import StreamRow
+    from nexoclip.ids import new_id
+    from nexoclip.ingest import detect_platform
+    from nexoclip.settings import get_settings
+
+    # Backend URL validation — matches the JS regex set in url_job_form.html
+    # so a curl or scripted submission gets the same answer as the form.
+    clean = (vod_url or "").strip()
+    platform = detect_platform(clean)
+    if not clean or platform == "unknown":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only kick.com, twitch.tv, youtube.com, and youtu.be URLs "
+                "are supported."
+            ),
+        )
+
+    # Auto-resolve persona — Task 3 spec: "zero operator involvement".
+    # Pick the first persona for this tenant. If none exist the form
+    # already shows an alert + disables submit, but a direct POST still
+    # needs an actionable error.
+    personas = await PersonasRepo(db).list_for_tenant()
+    if not personas:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No personas configured for this tenant. Create one at "
+                "/dashboard/personas first."
+            ),
+        )
+    persona = personas[0]
+
+    output_dir = Path(get_settings().default_output_dir)
+    stream_id = new_id("str")
+    stream_dir = output_dir / stream_id
+    source_dir = stream_dir / "source"
+    placeholder_video = source_dir / "video.mp4"
+    placeholder_audio = source_dir / "audio.wav"
+
+    # Insert a placeholder StreamRow so the redirect target page renders
+    # immediately (with "Downloading…" progress) instead of 404'ing while
+    # ingest runs in background. ingest_vod inside process_vod is
+    # idempotent on stream_id — it'll write stream.json and the pipeline
+    # will UPSERT the StreamRow with real metadata (duration, title, etc)
+    # once download lands. The placeholder paths get overwritten with
+    # identical values, so the upsert is a no-op for those fields.
+    # `status="pending"` flags the row as in-flight for any UI / repo
+    # query that wants to differentiate fresh URL jobs from completed
+    # ingests. The pipeline's StreamsRepo.upsert overwrites this with
+    # "ingested" once download lands.
+    placeholder = StreamRow(
+        id=stream_id,
+        tenant_id=tenant_id,
+        vod_url=clean,
+        platform=platform,
+        title=None,
+        channel=None,
+        duration_s=0.0,
+        source_video_path=str(placeholder_video),
+        source_audio_path=str(placeholder_audio),
+        status="pending",
+        created_at=_now_iso(),
+    )
+    await StreamsRepo(db).upsert(placeholder)
+    await EventsRepo(db).emit(
+        type="stream.created",
+        payload={
+            "stream_id": stream_id,
+            "vod_url": clean,
+            "platform": platform,
+            "duration_s": 0.0,
+            # `kind=url_job` lets the dashboard differentiate Task 3
+            # entries from the legacy POST /dashboard/streams flow when
+            # filtering event history.
+            "kind": "url_job",
+        },
+    )
+
+    # Stub Stream for the kickoff envelope. `default_pipeline_runner`
+    # only reads `kickoff.stream.id` + `kickoff.stream.vod_url` — the
+    # paths are placeholders that process_vod's ingest will materialize.
+    from nexoclip.ingest import Stream as StreamModel
+    stub = StreamModel(
+        id=stream_id,
+        tenant_id=tenant_id,
+        vod_url=clean,
+        platform=platform,
+        duration_s=0.0,
+        source_video_path=placeholder_video,
+        source_audio_path=placeholder_audio,
+    )
+    dispatcher = request.app.state.job_dispatcher
+    await dispatcher.dispatch_pipeline(
+        PipelineKickoff(
+            tenant_id=tenant_id,
+            stream=stub,
+            persona_id=persona.id,
+            output_dir=output_dir,
+        ),
+        background_tasks=background_tasks,
+    )
+
+    # Redirect to the existing stream detail page. It already polls
+    # /progress (Task 1d substeps + Task 2a download events show up
+    # there) and lists clips as they're cut.
+    return RedirectResponse(
+        url=f"/dashboard/streams/{stream_id}", status_code=303,
+    )
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC timestamp for placeholder stream rows."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.UTC).isoformat()
+
+
 @router.get("/streams/{stream_id}/progress", response_class=HTMLResponse)
 async def stream_progress(
     request: Request,

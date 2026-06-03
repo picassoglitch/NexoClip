@@ -54,6 +54,10 @@
             still lives at /dashboard/streams (a rename of the route
             would break bookmarks + every internal link).
             Slice O.24 — labels go through t() so es/en switch. -#}
+        {#- Task 3 — single-field paste-URL entry. Lives first so it's
+            the obvious "start here" for new operators. The label is
+            deliberately verb-y so it reads as a call to action. -#}
+        {{ nav_link("/dashboard/url-jobs/new", "+ Drop URL", prefix="/dashboard/url-jobs") }}
         {{ nav_link("/dashboard/streams", t("nav.clips")) }}
         {{ nav_link("/dashboard/inbox", t("nav.inbox")) }}
         {{ nav_link("/dashboard/live", "Live", prefix="/dashboard/live") }}

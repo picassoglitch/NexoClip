@@ -21,6 +21,7 @@ JSON, and the pipeline keeps going.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import time
@@ -35,6 +36,20 @@ from nexoclip.transcribe.models import Segment, Transcript, Word
 from .base import TranscribeRequest
 
 _log = structlog.get_logger(__name__)
+
+# Modal's web-endpoint protocol for long-running functions: the initial
+# POST returns 303 See Other with Location: ?__modal_function_call_id=fc-...,
+# and that polling URL keeps redirecting (302 / 303) until the function
+# completes (200 + body) or fails (4xx / 5xx). The previous version of
+# this provider treated the first 303 as a hard error — that's the bug
+# the operator hit on 06-03: `modal whisper returned 303: ` with empty
+# body, because the body of a 303 is the redirect HTML, not the result.
+_POLL_INTERVAL_S = 5.0
+"""How long to wait between poll requests. Modal's Whisper-small on T4
+takes ~30-90s for a typical VOD, so a 5s cadence is ~6-18 polls per run."""
+_POLL_REDIRECT_STATUSES = (302, 303, 307, 308)
+"""HTTP redirect codes Modal uses to mean 'still running, try the
+Location URL again later'. We treat all four uniformly."""
 
 
 class ModalWhisperProvider:
@@ -107,6 +122,16 @@ class ModalWhisperProvider:
         try:
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
                 resp = await client.post(self._endpoint_url, json=body)
+                # Modal's async-function protocol — POST returns 303 with
+                # a polling Location. Follow until the function completes
+                # (200 + body) or the deadline expires. See module-level
+                # `_POLL_*` constants for cadence rationale.
+                resp = await _poll_until_terminal(
+                    client=client,
+                    initial=resp,
+                    deadline_s=self._timeout_s,
+                    stream_id=req.stream_id,
+                )
                 resp.raise_for_status()
                 raw = resp.json()
         except httpx.HTTPStatusError as e:
@@ -136,6 +161,83 @@ class ModalWhisperProvider:
             f"{self._public_base_url}/api/internal/audio/{stream_id}"
             f"?tenant={tenant_id}&exp={exp}&sig={sig}"
         )
+
+
+async def _poll_until_terminal(
+    *,
+    client: httpx.AsyncClient,
+    initial: httpx.Response,
+    deadline_s: float,
+    stream_id: str,
+) -> httpx.Response:
+    """Follow Modal's redirect-based polling protocol until the response
+    is a terminal one (any non-redirect status).
+
+    Modal's web-endpoint for a long-running function:
+      POST  /  → 303 + Location: /?__modal_function_call_id=fc-...
+      GET   /?__modal_function_call_id=fc-... → 302 / 303 while running,
+                                                  200 once the function
+                                                  returns its body.
+
+    Behavior:
+      * The initial response is the result of the POST. If it's already
+        non-redirect (e.g. small/fast Modal app or short audio), return
+        it immediately.
+      * Otherwise GET the Location URL after `_POLL_INTERVAL_S` and keep
+        looping until either a non-redirect response lands or `deadline_s`
+        elapses.
+      * On timeout we raise — caller's outer try/except surfaces it
+        with the same TranscriptionError shape as a real HTTP failure.
+
+    Same return contract as a direct request: `raise_for_status()` is the
+    caller's responsibility.
+    """
+    if initial.status_code not in _POLL_REDIRECT_STATUSES:
+        return initial
+
+    deadline = time.monotonic() + max(0.0, deadline_s)
+    current = initial
+    polls = 0
+    while current.status_code in _POLL_REDIRECT_STATUSES:
+        location = current.headers.get("location")
+        if not location:
+            # Redirect without a Location — protocol broken; treat the
+            # response as terminal so the caller's raise_for_status
+            # surfaces the unexpected 30x as a clear error.
+            _log.warning(
+                "modal_whisper.poll.no_location",
+                stream_id=stream_id, status=current.status_code,
+            )
+            return current
+        # Resolve the (possibly relative) Location against the response's
+        # own request URL so trailing-slash + query-string cases stay
+        # correct on Modal's hostnames.
+        next_url = httpx.URL(location)
+        if not next_url.is_absolute_url:
+            next_url = httpx.URL(location, base=str(current.request.url))
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TranscriptionError(
+                f"modal whisper poll deadline reached after {polls} polls "
+                f"(deadline={deadline_s:.0f}s)"
+            )
+
+        # Brief backoff before the next poll. Cap by remaining deadline so
+        # the final poll fires at most just-before the deadline rather
+        # than oversleeping past it.
+        await asyncio.sleep(min(_POLL_INTERVAL_S, remaining))
+        polls += 1
+        if polls == 1 or polls % 12 == 0:
+            # Log first poll + once per minute so prod logs show progress
+            # without spamming on every sub-minute poll.
+            _log.info(
+                "modal_whisper.poll",
+                stream_id=stream_id, poll_n=polls,
+                next_url_host=str(next_url.host),
+            )
+        current = await client.get(str(next_url))
+    return current
 
 
 def _modal_response_to_transcript(

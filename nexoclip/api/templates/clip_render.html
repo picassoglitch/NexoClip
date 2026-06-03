@@ -467,10 +467,19 @@
     // by clip-relative time, builds word spans with active/past/
     // upcoming classes. ~10 lines and identical to the editor's
     // minimal path so headless render matches the editor 1:1.
-    function _renderCaptions() {
+    //
+    // `forcedT` is an optional explicit timestamp the seek-and-shoot
+    // recorder passes in. Without it we read `video.currentTime` —
+    // correct for the live editor rAF loop. With it we trust the
+    // caller — necessary for the recorder, because Chromium under
+    // capture-mode load occasionally hasn't propagated the seek into
+    // `currentTime` by the time `onSeeked` runs us synchronously.
+    // That stale read was painting empty caption rows into 1226
+    // screenshots in a row — hence "downloaded MP4 has no subs".
+    function _renderCaptions(forcedT) {
       var v = document.getElementById("preview-video");
       if (v && _captionLines && _captionEl) {
-        var t = v.currentTime;
+        var t = (typeof forcedT === "number") ? forcedT : v.currentTime;
         var activeLine = null;
         for (var i = 0; i < _captionLines.length; i++) {
           var ln = _captionLines[i];
@@ -582,8 +591,15 @@
           // The rAF loop will also tick but calling _renderCaptions
           // synchronously guarantees the DOM is up to date BEFORE
           // captureScreenshot fires.
+          //
+          // Pass `target` explicitly — do NOT rely on video.currentTime
+          // here. On Railway-hosted headless Chromium the `seeked`
+          // event sometimes fires up to one frame ahead of the actual
+          // currentTime propagation, so the animator would read a
+          // stale time, find "no active line", hide the caption row,
+          // and the screenshot would capture an empty caption strip.
           try {
-            if (typeof _renderCaptions === "function") _renderCaptions();
+            if (typeof _renderCaptions === "function") _renderCaptions(target);
           } catch (_) {}
           // Wait one rAF tick so the browser commits the layout +
           // any CSS animations to the current paint. Without this,

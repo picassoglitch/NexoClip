@@ -18,12 +18,14 @@ from `tests/_fakes/fake_transcribe.py`.
 
 from __future__ import annotations
 
+from .assemblyai import AssemblyAIProvider
 from .base import TranscribeProvider, TranscribeRequest
 from .cloud_whisper import CloudWhisperProvider
 from .factory import get_provider
 from .local_whisper import LocalWhisperProvider
 
 __all__ = [
+    "AssemblyAIProvider",
     "CloudWhisperProvider",
     "LocalWhisperProvider",
     "TranscribeProvider",

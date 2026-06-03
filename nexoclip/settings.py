@@ -52,6 +52,27 @@ class Settings(BaseSettings):
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None
     openai_api_key: str | None = None
+
+    # AssemblyAI tuning. Default ES because that's NexoClip's primary
+    # content language (Spanish-first per CLAUDE.md). Set
+    # `assemblyai_language_detection=true` for mixed ES/EN streams
+    # where the speaker code-switches.
+    #
+    # `assemblyai_speech_model`: AssemblyAI's "best" model is the
+    # universal-2 quality target — what their docs recommend for
+    # social/podcast content. "nano" is ~5× cheaper but accuracy
+    # drops on accented Spanish; leave it at "best" until proven
+    # otherwise on real VODs.
+    #
+    # `assemblyai_speaker_labels`: per-video diarization labels
+    # (A / B / C). The pipeline reads these instead of running
+    # pyannote separately (Task A2). Default True; flip False to
+    # drop the ~$0.02/hr diarization upcharge if a particular run
+    # doesn't need speaker separation.
+    assemblyai_language_code: str = "es"
+    assemblyai_language_detection: bool = False
+    assemblyai_speech_model: str = "best"
+    assemblyai_speaker_labels: bool = True
     # Slice O.44 — Modal Whisper provider. Wired when
     # `transcribe_provider="modal"`. The endpoint is the URL Modal
     # exposes for the `transcribe` web function (printed by

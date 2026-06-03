@@ -56,13 +56,30 @@ def test_factory_threads_whisper_settings(monkeypatch: pytest.MonkeyPatch) -> No
     assert "tiny" in p.name and "cpu" in p.name
 
 
-def test_factory_picks_assemblyai_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_picks_real_assemblyai_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task A1 — `transcribe_provider=assemblyai` now returns the real
+    AssemblyAIProvider (replaced the CloudWhisperProvider stub).
+    Deepgram + OpenAI stay on the stub for now."""
+    from nexoclip.transcribe.providers import AssemblyAIProvider
+
     monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_PROVIDER", "assemblyai")
     monkeypatch.setenv("NEXOCLIP_ASSEMBLYAI_API_KEY", "fake-key")
     get_settings.cache_clear()
     p = get_provider()
-    assert isinstance(p, CloudWhisperProvider)
-    assert p.name == "cloud-whisper-assemblyai"
+    assert isinstance(p, AssemblyAIProvider)
+    assert p.name.startswith("assemblyai-")
+
+
+def test_factory_rejects_assemblyai_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_PROVIDER", "assemblyai")
+    monkeypatch.delenv("NEXOCLIP_ASSEMBLYAI_API_KEY", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(NexoClipError, match="requires NEXOCLIP_ASSEMBLYAI_API_KEY"):
+        get_provider()
 
 
 def test_factory_rejects_cloud_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

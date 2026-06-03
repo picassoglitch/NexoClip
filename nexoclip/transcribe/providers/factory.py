@@ -75,7 +75,26 @@ def get_provider() -> TranscribeProvider:
             model=settings.modal_model,
         )
 
-    if choice in {"assemblyai", "deepgram", "openai"}:
+    if choice == "assemblyai":
+        # Task A1 — real AssemblyAI provider. The CloudWhisperProvider
+        # stub stays available behind the legacy "deepgram"/"openai"
+        # spellings until those vendors get their own concrete impls.
+        from .assemblyai import AssemblyAIProvider
+
+        if not settings.assemblyai_api_key:
+            raise NexoClipError(
+                "transcribe_provider='assemblyai' requires "
+                "NEXOCLIP_ASSEMBLYAI_API_KEY in .env"
+            )
+        return AssemblyAIProvider(
+            api_key=settings.assemblyai_api_key,
+            language_code=settings.assemblyai_language_code,
+            language_detection=settings.assemblyai_language_detection,
+            speaker_labels=settings.assemblyai_speaker_labels,
+            speech_model=settings.assemblyai_speech_model,
+        )
+
+    if choice in {"deepgram", "openai"}:
         api_key = getattr(settings, f"{choice}_api_key", None)
         if not api_key:
             raise NexoClipError(

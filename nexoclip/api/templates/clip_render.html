@@ -123,267 +123,45 @@
     [data-render-mode="export"] .nc-pv-rail {
       display: none !important;
     }
+  </style>
 
+  {#- Drift fix Step 2 — overlay CSS is now in a shared partial
+      that clip_detail.html also includes. The duplicate rules that
+      used to live here (and had drifted from the editor's copy in
+      ways the operator noticed — wrong banner position, missing
+      variants, missing caption animations, dead face-zone CSS) are
+      gone. -#}
+  {% include "_overlay_styles.html" %}
+
+  <style>
     /* ============================================================
-       Identical overlay rules to clip_detail.html (slice O.18b
-       cqw/cqh values). When we evolve the editor's CSS we must
-       mirror those changes here — or factor into a shared partial.
-       For now: copy of the rules verbatim.
+       Render-template-only rules below. The shared overlay rules
+       are in _overlay_styles.html (above). Anything specific to
+       the headless capture surface stays inline here.
        ============================================================ */
 
-    /* Title hook */
-    .nc-pv-title {
-      position: absolute;
-      top: 18%;
-      left: 10%;
-      right: 10%;
-      background: rgba(255, 255, 255, 0.96);
-      color: #000;
-      font-family: "Inter", sans-serif;
-      font-weight: 800;
-      font-size: 3.269cqw;
-      line-height: 1.22;
-      padding: 1.082cqh 2.692cqw;
-      border-radius: 2.308cqw;
-      text-align: center;
-      box-shadow:
-        0 0.325cqh 1.923cqw rgba(0, 0, 0, 0.55),
-        0 0.108cqh 0 rgba(0, 0, 0, 0.18) inset;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      z-index: 3;
-      pointer-events: none;
-    }
-    .nc-pv-title.is-empty { display: none; }
-    [data-zone-profile="kick"] .nc-pv-title { top: 14%; }
-    [data-face-zone="top"] .nc-pv-title { top: 46%; }
-
-    /* Top hook (secondary) */
-    .nc-pv-top-hook {
-      position: absolute;
-      top: 11%;
-      left: 14%;
-      right: 14%;
-      text-align: center;
-      font-family: "Inter", sans-serif;
-      font-weight: 800;
-      font-size: 2.115cqw;
-      letter-spacing: 0.02em;
-      line-height: 1.15;
-      padding: 0.433cqh 1.923cqw;
-      border-radius: 999px;
-      box-shadow: 0 0.216cqh 1.154cqw rgba(0, 0, 0, 0.35);
-      pointer-events: none;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      z-index: 3;
-    }
-    [data-zone-profile="kick"] .nc-pv-top-hook { top: 8%; }
-    .nc-pv-top-hook--white_rounded {
-      background: rgba(255, 255, 255, 0.72);
-      color: #000;
-      backdrop-filter: blur(0.769cqw);
-    }
-    .nc-pv-top-hook--black_solid {
-      background: rgba(0, 0, 0, 0.62);
-      color: rgba(255, 255, 255, 0.92);
-      backdrop-filter: blur(0.769cqw);
-    }
-    .nc-pv-top-hook--subtle {
-      background: rgba(255, 255, 255, 0.55);
-      color: #111;
-      backdrop-filter: blur(1.154cqw);
-    }
-
-    /* Banner — base. Slice O.55 — sits above the social-platform
-       safe area now. Previous version had `bottom: 0` which put the
-       banner directly under TikTok / Reels / Shorts caption + UI
-       chrome → operator reported the Kick banner getting clipped on
-       upload. New: bottom is at least 21.875cqh (= 420px on 1920
-       canvas = banner top edge at y=1500). Inside the 360px social
-       UI safe zone documented in the export spec.
-
-       Left/right safe margins are 7.4cqw (~80px on 1080) so the
-       Kick logo + URL never touch the canvas edge. */
-    .nc-pv-banner {
-      position: absolute;
-      left: 7.4cqw;
-      right: 7.4cqw;
-      bottom: 21.875cqh;
-      height: 4.113cqh;
-      background: var(--pv-banner-color, #53FC18);
-      color: #000;
-      display: flex;
-      align-items: center;
-      z-index: 4;
-    }
-    .nc-pv-banner.is-hidden { display: none; }
-    .nc-pv-banner--kick_repost_page {
-      top: auto;
-      /* Sits at the top of the safe-zone (y ≈ 1380), well above the
-         social-platform bottom UI which starts at y ≈ 1560. */
-      bottom: 28.125cqh;
-      transform: none;
-      /* Kick-style banner spans full canvas width minus the L/R
-         safety margins from the base rule (inherited). */
-      left: 7.4cqw;
-      right: 7.4cqw;
-      background: #000;
-      color: #fff;
-      padding: 0;
-      height: 6.25cqh;
-      min-height: 6.25cqh;
-      max-height: 6.25cqh;
-      border-radius: 0;
-      border: none;
-      box-shadow: none;
-      overflow: visible;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .nc-pv-banner--kick_repost_page .nc-pv-banner__platform {
-      position: absolute;
-      left: 1.538cqw;
-      top: 50%;
-      transform: translateY(-62%);
-      width: 26.923cqw;
-      height: 4.762cqh;
-      color: transparent;
-      font-size: 0;
-      line-height: 0;
-      overflow: visible;
-      flex: none;
-      padding: 0;
-      background-image: url("/static/kick-logo.svg");
-      background-repeat: no-repeat;
-      background-position: left center;
-      background-size: contain;
-      filter:
-        drop-shadow(0.385cqw 0 0 #000)
-        drop-shadow(-0.385cqw 0 0 #000)
-        drop-shadow(0 0.216cqh 0 #000)
-        drop-shadow(0 -0.216cqh 0 #000)
-        drop-shadow(0 0.325cqh 0.769cqw rgba(0, 0, 0, 0.55));
-    }
-    .nc-pv-banner--kick_repost_page .nc-pv-banner__url {
-      position: relative;
-      color: #fff;
-      font-family: "Inter Tight", "Inter", sans-serif;
-      font-size: 2.115cqw;
-      font-weight: 900;
-      letter-spacing: 0.038cqw;
-      line-height: 1;
-      text-transform: uppercase;
-      text-shadow: 0 0.108cqh 0.192cqw rgba(0, 0, 0, 0.9);
-      flex: none;
-      overflow: visible;
-      white-space: nowrap;
-      padding: 0;
-      opacity: 1;
-      text-align: center;
-    }
-
-    /* Captions */
-    .nc-pv-caption {
-      position: absolute;
-      left: 8%;
-      right: 8%;
-      text-align: center;
-      font-family: "Inter", sans-serif;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
-      color: #fff;
-      -webkit-text-stroke: 0.481cqw #000;
-      paint-order: stroke fill;
-      text-shadow:
-        0 0.325cqh 1.538cqw rgba(0, 0, 0, 0.85),
-        0 0.108cqh 0 rgba(0, 0, 0, 0.6);
-      font-size: calc(4.231cqw * var(--pv-caption-scale, 1));
-      line-height: 1.05;
-      pointer-events: none;
-      z-index: 3;
-    }
-    .nc-pv-caption--upper_third  { top: 24%; transform: translateY(0); }
-    .nc-pv-caption--centered     { top: 50%; transform: translateY(-50%); }
-    .nc-pv-caption--lower_third  { top: 68%; transform: translateY(-50%); }
-    .nc-pv-caption--bottom       { top: 78%; transform: translateY(-50%); }
-    [data-face-zone="lower"] .nc-pv-caption--lower_third { top: 52%; }
-    .nc-pv-caption__word {
-      display: inline-block;
-      margin: 0 0.12em;
-      color: #fff;
-      opacity: 0.55;
-    }
-    .nc-pv-caption__word.is-active {
-      color: var(--pv-highlight, #ffd84a);
-      transform: scale(1.10);
-      opacity: 1;
-    }
-    .nc-pv-caption__word[data-emphasis="shout"].is-active {
-      font-size: 1.35em;
-      color: #ff3b30;
-      -webkit-text-stroke-width: 0.673cqw;
-      transform: scale(1.25);
-    }
-    .nc-pv-caption__word[data-emphasis="reaction"].is-active {
-      font-size: 1.18em;
-      color: #ffd66b;
-      transform: scale(1.15);
-    }
-    .nc-pv-caption__word[data-emphasis="emphasis"].is-active {
-      font-size: 1.10em;
-      color: var(--pv-highlight, #ffd84a);
-      transform: scale(1.12);
-    }
-    .nc-pv-caption__word.is-past { opacity: 0.40; }
-    .nc-pv-caption__word.is-upcoming { opacity: 0.85; }
-
-    /* Watermark */
-    .nc-pv-watermark {
-      position: absolute;
-      top: 2.4%;
-      right: 3.0%;
-      z-index: 5;
-      pointer-events: none;
-      font-family: "Archivo Black", "Inter", sans-serif;
-      font-weight: 900;
-      font-size: 3.2cqw;
-      line-height: 1;
-      letter-spacing: 0.04em;
-      color: rgba(200, 255, 92, 0.78);
-      text-shadow: 0.385cqw 0.216cqh 0 rgba(0, 0, 0, 0.55);
-      user-select: none;
-    }
+    /* No more overlay rules here — they live in
+       _overlay_styles.html (included above). Anything render-mode-
+       only would go below this comment. */
   </style>
 </head>
 <body>
   {#- The single .nc-preview element. Same data-attrs that the editor
       preview uses, so the same CSS rules cascade. preview_mode + fit
-      mode + zone profile + face zone all come from the saved
-      overlay_config. The renderer code (slice O.20) flips
-      data-render-mode="export" once the page is ready so the
+      mode + zone profile + face zone come from the handler's
+      _resolve_overlay_context helper (one source of truth for both
+      surfaces — drift fix Step 2). The renderer code (slice O.20)
+      flips data-render-mode="export" once the page is ready so the
       simulation layers vanish before the recording window opens. -#}
-  {%- set ov = (clip.overlay_config or {}) -%}
-  {%- set _captions = ov.get('captions') or {} -%}
-  {%- set _banner = ov.get('banner') or {} -%}
-  {%- set _top_hook = ov.get('top_hook') or {} -%}
   {%- set _preview_mode = ov.get('preview_mode') or 'platform' -%}
-  {#- O.14 retro-compat: if a stale 'final' value persists, coerce. -#}
   {%- if _preview_mode == 'final' %}{% set _preview_mode = 'platform' %}{% endif -%}
-  {%- set _fit_mode = ov.get('fit_mode') or 'smart_crop' -%}
-  {%- set _zone_profile = ov.get('target_platform') or 'all' -%}
 
   <div class="nc-preview"
        id="preview"
        data-preview-mode="{{ _preview_mode }}"
        data-fit-mode="{{ _fit_mode }}"
        data-zone-profile="{{ _zone_profile }}"
+       {%- if face_zone %} data-face-zone="{{ face_zone }}"{%- endif %}
        data-render-mode="export"
        style="--pv-highlight: {{ _captions.get('highlight_color') or '#ffd84a' }};
               --pv-banner-color: {{ _banner.get('color') or '#53FC18' }};
@@ -393,32 +171,9 @@
       <source src="/dashboard/clips/{{ clip.id }}/media?source=original">
     </video>
 
-    {% if ov.get('title_text') %}
-    <div class="nc-pv-title" id="pv-title">{{ ov.title_text }}</div>
-    {% endif %}
-
-    {% if _top_hook.get('enabled') and _top_hook.get('text') %}
-    <div class="nc-pv-top-hook nc-pv-top-hook--{{ _top_hook.get('style') or 'white_rounded' }}">
-      {{ _top_hook.text }}
-    </div>
-    {% endif %}
-
-    {% if _banner.get('enabled', False) %}
-    <div class="nc-pv-banner nc-pv-banner--{{ _banner.get('variant') or 'kick_repost_page' }}">
-      <span class="nc-pv-banner__platform"></span>
-      <span class="nc-pv-banner__url">{{ banner_url_display }}</span>
-    </div>
-    {% endif %}
-
-    {% if _captions.get('enabled', True) %}
-    <div class="nc-pv-caption nc-pv-caption--{{ _captions.get('position') or 'bottom' }}"
-         id="pv-caption"
-         data-animation="{{ _captions.get('animation') or 'pop' }}"></div>
-    {% endif %}
-
-    {% if render_watermark %}
-    <div class="nc-pv-watermark">NEXOCLIP</div>
-    {% endif %}
+    {#- Drift fix Step 2 — overlay markup is now in a shared partial
+        clip_detail.html also includes. -#}
+    {% include "_overlay_markup.html" %}
   </div>
 
   <script>

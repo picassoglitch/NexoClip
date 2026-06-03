@@ -4026,6 +4026,140 @@ async def clip_download_legacy_inline(
     )
 
 
+async def _resolve_overlay_context(db: Database, clip: object) -> dict:
+    """Compute the per-clip overlay context that BOTH the editor preview
+    (clip_detail.html) and the headless capture (clip_render.html) need.
+
+    Drift fix Step 2 — collapses three previously-divergent
+    per-handler computations into a single source of truth:
+
+      1. `face_zone` — coarse hint derived from the framing verdict's
+         safe_crop_box.y. CSS rules `[data-face-zone="top|lower"]`
+         shift overlays to dodge the face. Previously computed only
+         in `clip_detail()`; absent in `clip_render_view()` so the
+         export's CSS rules never fired (selectors had no attribute
+         to match). Now computed once here.
+
+      2. `_zone_profile` (brand_kit-aware fallback) — chooses between
+         the per-clip `target_platform` override, then the
+         brand_kit's default, then the catchall `"all"`. Previously
+         the export had only the first half of the chain (no brand_kit
+         fallback) so Kick-targeted brand kits exported without the
+         Kick-platform position tweaks.
+
+      3. `banner_url_display` — normalized "KICK.COM/HANDLE" string.
+         Editor previously did this with inline Jinja (lines 3580-3607
+         of clip_detail.html); export had a half-implementation in
+         the handler. Now both surfaces call _format_kick_url with
+         the same input + show the same output.
+
+    Returns a dict the caller spreads into the template context:
+
+      ov, _captions, _banner, _top_hook, banner_url_display,
+      _zone_profile, _fit_mode, face_zone, render_watermark,
+      show_live_pill, brand_kit
+    """
+    from nexoclip.branding import resolve_brand_kit_for_candidate
+    from nexoclip.db import CandidatesRepo, TenantsRepo
+
+    ov = clip.overlay_config or {}
+    _captions = ov.get("captions") if isinstance(ov.get("captions"), dict) else {}
+    _banner = ov.get("banner") if isinstance(ov.get("banner"), dict) else {}
+    _top_hook = ov.get("top_hook") if isinstance(ov.get("top_hook"), dict) else {}
+
+    # ---- face_zone (was: clip_detail-only) ----
+    face_zone: str | None = None
+    if clip.candidate_id:
+        try:
+            for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
+                if cand.id != clip.candidate_id:
+                    continue
+                ev = cand.evidence or {}
+                framing = ev.get("framing") if isinstance(ev, dict) else None
+                if not isinstance(framing, dict):
+                    break
+                crop = framing.get("safe_crop_box")
+                if not isinstance(crop, dict):
+                    break
+                cy = crop.get("y")
+                if isinstance(cy, int | float):
+                    cy_f = float(cy)
+                    if cy_f < 0.10:
+                        face_zone = "top"
+                    elif cy_f < 0.35:
+                        face_zone = "mid"
+                    else:
+                        face_zone = "lower"
+                break
+        except Exception:  # noqa: BLE001 — face_zone is best-effort
+            face_zone = None
+
+    # ---- brand_kit (used by zone_profile fallback + watermark) ----
+    brand_kit = None
+    try:
+        brand_kit = await resolve_brand_kit_for_candidate(
+            db, stream_id=clip.stream_id, speaker_label=None,
+        )
+    except Exception:  # noqa: BLE001
+        brand_kit = None
+
+    # ---- _zone_profile (was: editor-only fallback chain) ----
+    _zone_profile = ov.get("target_platform")
+    if not _zone_profile and brand_kit is not None:
+        _zone_profile = getattr(brand_kit, "target_platform", None)
+    _zone_profile = _zone_profile or "all"
+
+    # ---- _fit_mode (same in both before, kept here for completeness) ----
+    _fit_mode = ov.get("fit_mode") or "smart_crop"
+
+    # ---- banner_url_display (was: editor inline-Jinja vs export half-impl) ----
+    banner_url_display = ""
+    if _banner.get("enabled", False):
+        # _format_kick_url accepts any of: "aldo", "@aldo", "kick.com/aldo",
+        # "https://kick.com/aldo", "https://www.kick.com/aldo" and emits
+        # canonical "KICK.COM/ALDO". Same helper the burn-step uses, so
+        # the editor preview, the export, and the burned MP4 ALL agree
+        # on what string lands in the banner.
+        from nexoclip.clip.overlay_burn import _format_kick_url  # type: ignore[attr-defined]
+        try:
+            banner_url_display = _format_kick_url(str(_banner.get("url") or ""))
+        except Exception:  # noqa: BLE001
+            banner_url_display = str(_banner.get("url") or "").upper()
+        if not banner_url_display:
+            # Empty input — show a placeholder so the operator sees the
+            # banner shape in the editor before they type a URL.
+            banner_url_display = "KICK.COM/YOURHANDLE"
+
+    show_live_pill = bool(_banner.get("live_badge", False))
+
+    # ---- render_watermark (tier-gated, same in both before) ----
+    render_watermark = True
+    try:
+        tenant = await TenantsRepo(db).get(clip.tenant_id)
+        tier = (tenant.tier if tenant else "free") or "free"
+        if tier != "free":
+            if brand_kit is not None and not getattr(
+                brand_kit, "show_nexoclip_credit", True,
+            ):
+                render_watermark = False
+    except Exception:  # noqa: BLE001
+        render_watermark = True
+
+    return {
+        "ov": ov,
+        "_captions": _captions,
+        "_banner": _banner,
+        "_top_hook": _top_hook,
+        "banner_url_display": banner_url_display,
+        "_zone_profile": _zone_profile,
+        "_fit_mode": _fit_mode,
+        "face_zone": face_zone,
+        "render_watermark": render_watermark,
+        "show_live_pill": show_live_pill,
+        "brand_kit": brand_kit,
+    }
+
+
 @router.get("/clips/{clip_id}/render", response_class=HTMLResponse)
 async def clip_render_view(
     request: Request,
@@ -4041,6 +4175,13 @@ async def clip_render_view(
     1080×1920 and screen-records the playback. What you see here IS
     what gets exported — by construction, no separate burn pipeline.
 
+    Drift fix Step 2 — uses the shared _resolve_overlay_context helper
+    so face_zone / zone_profile / banner_url / brand_kit threading
+    matches the editor's clip_detail handler bit-for-bit. The
+    `_overlay_styles.html` and `_overlay_markup.html` partials in
+    this template's render carry the unified overlay CSS + markup
+    that previously had drifted between the two surfaces.
+
     Tenant-scoped: the underlying ClipsRepo.get filters by current
     tenant context, so cross-tenant clip-id guessing 404s.
     """
@@ -4048,42 +4189,11 @@ async def clip_render_view(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
 
-    # Resolve banner URL like the editor template does, so the chrome
-    # banner shows the canonical "KICK.COM/HANDLE" form.
-    ov = clip.overlay_config or {}
-    banner = ov.get("banner") if isinstance(ov.get("banner"), dict) else {}
-    banner_url_display = ""
-    if isinstance(banner, dict) and banner.get("enabled", False):
-        from nexoclip.clip.overlay_burn import _format_kick_url  # type: ignore[attr-defined]
-        try:
-            banner_url_display = _format_kick_url(str(banner.get("url") or ""))
-        except Exception:  # noqa: BLE001
-            banner_url_display = str(banner.get("url") or "").upper()
-
-    # Tier-aware watermark: free always; pro+ honors brand_kit toggle.
-    render_watermark = True
-    try:
-        from nexoclip.db import TenantsRepo
-        tenant = await TenantsRepo(db).get(clip.tenant_id)
-        tier = (tenant.tier if tenant else "free") or "free"
-        if tier != "free":
-            from nexoclip.branding import resolve_brand_kit_for_candidate
-            kit = await resolve_brand_kit_for_candidate(
-                db, stream_id=clip.stream_id, speaker_label=None
-            )
-            if kit is not None and not getattr(kit, "show_nexoclip_credit", True):
-                render_watermark = False
-    except Exception:  # noqa: BLE001 — best-effort
-        render_watermark = True
-
+    overlay_ctx = await _resolve_overlay_context(db, clip)
     return templates.TemplateResponse(
         request,
         "clip_render.html",
-        {
-            "clip": clip,
-            "banner_url_display": banner_url_display,
-            "render_watermark": render_watermark,
-        },
+        {"clip": clip, **overlay_ctx},
     )
 
 

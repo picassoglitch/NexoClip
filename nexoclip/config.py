@@ -186,6 +186,23 @@ class DiarizationConfig(BaseModel):
         "little signal to risk a wrong merge. Still recorded as VOD-scoped "
         "labels so the user can label them manually.",
     )
+    # Task A2 — when the transcribe provider emits per-utterance
+    # speaker labels natively (AssemblyAI with speaker_labels=true),
+    # we don't need the GPU-bound pyannote pass: we derive the same
+    # Diarization shape from the transcript's segments after the
+    # transcribe step finishes. Set to "transcribe" to opt in. Default
+    # stays "pyannote" so existing setups don't change behavior.
+    #
+    # The "transcribe" mode skips both the pyannote inference AND the
+    # cross-video resolve_speakers step (no embeddings). The speakers
+    # table is still populated with per-VOD labels via the persistence
+    # path that runs after detect. Cross-video persistent identity is
+    # deferred (TODO: re-add via Modal + embeddings later if it drives
+    # conversion).
+    source: str = Field(
+        default="pyannote",
+        description="`pyannote` or `transcribe`. See class docstring.",
+    )
 
 
 class ViralConfig(BaseModel):

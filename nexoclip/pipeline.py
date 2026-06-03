@@ -55,7 +55,12 @@ from nexoclip.detect import (
     detect_viral_moments,
     save_candidates,
 )
-from nexoclip.diarize import Diarization, diarize, resolve_speakers
+from nexoclip.diarize import (
+    Diarization,
+    diarization_from_transcript,
+    diarize,
+    resolve_speakers,
+)
 from nexoclip.errors import DetectionError, NexoClipError, VariantError
 from nexoclip.events import (
     CLIP_READY_FOR_REVIEW,
@@ -588,50 +593,81 @@ async def _run_pipeline(
     # missing / pyannote not installed / worker crashes. Downstream code
     # reads candidate.evidence.get('speaker_label') defensively, so an
     # empty diarization just means no speaker labels on this VOD.
+    #
+    # Task A2 — when `detection.diarization.source="transcribe"` the
+    # operator has opted into using the transcribe provider's
+    # per-utterance speaker labels (AssemblyAI's speaker_labels=true)
+    # instead of the GPU-bound pyannote pass. We mark the diarize
+    # step as deferred here; after the transcribe step finishes we
+    # materialize a Diarization from `transcript.segments` and
+    # overwrite the placeholder. Cross-video identity (resolve_speakers)
+    # is skipped in this mode — no embeddings to match against the
+    # persistent speakers table.
     diarization: Diarization = Diarization(
         stream_id=stream.id, tenant_id=tenant_id, skipped=True
     )
+    use_transcribe_speakers = (
+        str(getattr(config.detection.diarization, "source", "pyannote")).strip().lower()
+        == "transcribe"
+    )
     with _step("diarize", db=db, model=config.detection.diarization.model) as step_ctx:
-        diarization = await diarize(
-            tenant_id=tenant_id,
-            stream=stream,
-            config=config.detection.diarization,
-            force=force,
-        )
-        if diarization.skipped:
+        if use_transcribe_speakers:
+            # Deferred. The transcribe step below will produce the
+            # speaker labels; we patch them in afterward. Mark the
+            # step as skipped-with-reason so the dashboard's progress
+            # surface explains why the diarize bar didn't fill.
+            diarization = Diarization(
+                stream_id=stream.id, tenant_id=tenant_id,
+                skipped=True,
+                skip_reason="deferred to transcribe step (AssemblyAI speaker labels)",
+            )
             step_ctx.skipped = True
-            step_ctx.note = diarization.skip_reason or "diarization disabled"
+            step_ctx.note = "deferred to transcribe"
             _log.info(
-                "diarize.skipped",
-                reason=diarization.skip_reason,
+                "diarize.deferred_to_transcribe",
                 stream_id=stream.id,
             )
         else:
-            _log.info(
-                "diarize.done",
-                segments=len(diarization.segments),
-                speakers=len({s.speaker_label for s in diarization.segments}),
-                embeddings=len(diarization.embeddings),
-                stream_id=stream.id,
+            diarization = await diarize(
+                tenant_id=tenant_id,
+                stream=stream,
+                config=config.detection.diarization,
+                force=force,
             )
-            # Resolve diarization output against the tenant's persistent
-            # speakers table. Auto-create pending rows for unknown voices;
-            # fold matches' embeddings into the existing identity. Safe
-            # no-op when db=None (filesystem-only / test mode).
-            if db is not None:
-                outcome = await resolve_speakers(
-                    db=db,
-                    stream_id=stream.id,
-                    diarization=diarization,
-                    config=config.detection.diarization,
-                )
+            if diarization.skipped:
+                step_ctx.skipped = True
+                step_ctx.note = diarization.skip_reason or "diarization disabled"
                 _log.info(
-                    "speakers.resolved",
+                    "diarize.skipped",
+                    reason=diarization.skip_reason,
                     stream_id=stream.id,
-                    matched=outcome.matched,
-                    created=outcome.created,
-                    unresolved=outcome.unresolved,
                 )
+            else:
+                _log.info(
+                    "diarize.done",
+                    segments=len(diarization.segments),
+                    speakers=len({s.speaker_label for s in diarization.segments}),
+                    embeddings=len(diarization.embeddings),
+                    stream_id=stream.id,
+                )
+                # Resolve diarization output against the tenant's persistent
+                # speakers table. Auto-create pending rows for unknown voices;
+                # fold matches' embeddings into the existing identity. Safe
+                # no-op when db=None (filesystem-only / test mode).
+                if db is not None:
+                    outcome = await resolve_speakers(
+                        db=db,
+                        stream_id=stream.id,
+                        diarization=diarization,
+                        config=config.detection.diarization,
+                    )
+                    _log.info(
+                        "speakers.resolved",
+                        stream_id=stream.id,
+                        matched=outcome.matched,
+                        created=outcome.created,
+                        unresolved=outcome.unresolved,
+                    )
 
     # 2) transcribe
     # Wrapped in asyncio.wait_for: faster-whisper occasionally stalls on
@@ -701,6 +737,24 @@ async def _run_pipeline(
             ) from e
         if db is not None:
             await TranscriptsRepo(db).upsert(transcript_to_row(transcript))
+
+    # Task A2 — materialize the diarization from the transcript's
+    # speaker labels now that transcribe is done. Skipped when:
+    #   * source != "transcribe" (pyannote already ran above), or
+    #   * transcript carries no speaker labels (provider didn't emit
+    #     them — adapter returns Diarization(skipped=True) with a
+    #     clear skip_reason; downstream code already handles that).
+    if use_transcribe_speakers:
+        diarization = diarization_from_transcript(
+            transcript, tenant_id=tenant_id, stream_id=stream.id,
+        )
+        _log.info(
+            "diarize.from_transcript",
+            stream_id=stream.id,
+            speakers=len({s.speaker_label for s in diarization.segments}),
+            segments=len(diarization.segments),
+            skipped=diarization.skipped,
+        )
 
     # 3) detect (also saves candidates.json). Build the router up-front so the
     # viral detector (LLM-based, runs inside this step when enabled) can use

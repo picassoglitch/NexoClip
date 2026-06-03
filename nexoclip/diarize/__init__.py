@@ -16,6 +16,7 @@ pipeline carries on without speaker labels. Downstream code reads
 
 from __future__ import annotations
 
+from .from_transcript import diarization_from_transcript
 from .identity import ResolutionOutcome, resolve_speakers
 from .models import Diarization, DiarizationSegment, SpeakerEmbedding
 from .service import diarize, is_diarization_available
@@ -25,6 +26,7 @@ __all__ = [
     "DiarizationSegment",
     "ResolutionOutcome",
     "SpeakerEmbedding",
+    "diarization_from_transcript",
     "diarize",
     "is_diarization_available",
     "resolve_speakers",

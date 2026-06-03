@@ -61,6 +61,23 @@
       align-items: stretch;
       justify-content: stretch;
     }
+    /* Render Migration T2 — overlay-only capture mode for hybrid
+       ffmpeg+overlay-alpha pipeline. Url has ?capture=alpha:
+         * Transparent background everywhere (html, body, .nc-preview).
+           Playwright's page.screenshot(omit_background=true) then
+           captures the overlay layer with alpha; ffmpeg composites
+           it back over the source video.
+         * Source <video> element hidden (display:none) — ffmpeg
+           handles the source frames directly, ~30× faster than
+           seek-and-shoot full composites. */
+    html[data-capture-alpha="1"], html[data-capture-alpha="1"] body,
+    html[data-capture-alpha="1"] .nc-preview {
+      background: transparent !important;
+    }
+    html[data-capture-alpha="1"] .nc-preview video,
+    html[data-capture-alpha="1"] #preview-video {
+      display: none !important;
+    }
 
     /* Render-mode override of .nc-preview: drop max-width / aspect-ratio
        / border-radius / box-shadow. Fixed 1080×1920 explicitly so the
@@ -521,12 +538,28 @@
     // I'll drive currentTime manually". Real-time playback is the
     // old path (kept for editor previews; broken for export under
     // Railway CPU load).
-    var _isCaptureMode = new URLSearchParams(window.location.search).get("capture") === "1";
+    var _captureParam = (new URLSearchParams(window.location.search)
+                            .get("capture") || "").toLowerCase();
+    var _isCaptureMode = _captureParam === "1" || _captureParam === "alpha";
+    // Render Migration T2 — `?capture=alpha` is the new hybrid path:
+    // hide the source video + paint a transparent background so the
+    // recorder captures ONLY the overlay layer. ffmpeg composites the
+    // alpha PNG sequence over the source MP4 later. The CSS rules
+    // gated on data-capture-alpha do the visual work.
+    var _isCaptureAlpha = _captureParam === "alpha";
     if (_isCaptureMode) {
       document.documentElement.setAttribute("data-capture-mode", "1");
     }
+    if (_isCaptureAlpha) {
+      document.documentElement.setAttribute("data-capture-alpha", "1");
+      // The alpha pipeline doesn't need the source video — ffmpeg has
+      // its own copy. Skip the `playing` gate that waits on it; the
+      // overlay layer is ready as soon as the captions JSON lands.
+      window.__nexoclipRender.playing = true;
+      _checkAllReady();
+    }
 
-    if (video) {
+    if (video && !_isCaptureAlpha) {
       video.addEventListener("loadedmetadata", function () {
         window.__nexoclipRender.ready = true;
       });
@@ -574,6 +607,51 @@
     // animator to draw at that timestamp, then resolve. The recorder
     // then takes a screenshot — guaranteed to show the exact pixels
     // for that timestamp with no real-time stutter.
+    // Render Migration T2 — overlay-only frame paint for the hybrid
+    // alpha pipeline. No `<video>` to seek; just drive the caption
+    // animator at `t` and wait for the layout commit. Faster than
+    // captureFrameAt because we skip the seek's `seeked` event chain.
+    window.__nexoclipRender.captureFrameAtAlpha = function (t) {
+      return new Promise(function (resolve) {
+        try {
+          if (typeof _renderCaptions === "function") _renderCaptions(t);
+        } catch (_) {}
+        // Two rAF ticks: one commits the new caption HTML, the next
+        // lets any CSS transition land at its final pixel before the
+        // screenshot fires.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(resolve);
+        });
+      });
+    };
+
+    // Render Migration T2 — state-hash accessor the recorder uses to
+    // dedup screenshots. The alpha capture loop walks 30 fps × duration
+    // frames but only screenshots when this string changes. Captions
+    // tick at word-frequency (3-5 / sec on a typical clip), not the
+    // 30/sec capture frequency, so dedup skips ~85% of the screenshot
+    // calls and the recorder finishes in seconds instead of minutes.
+    //
+    // The hash captures every DOM bit that affects the visible overlay:
+    // caption innerHTML (active/past/upcoming word classes), banner
+    // markup (mostly static after page load but cheap to include),
+    // hook markup (entrance animation early on, then static).
+    window.__nexoclipRender.getOverlayStateHash = function () {
+      var cap = document.getElementById("pv-caption");
+      var ban = document.querySelector(".nc-pv-banner");
+      var hook = document.querySelector(".nc-pv-top-hook");
+      var title = document.getElementById("pv-title");
+      return [
+        cap ? cap.innerHTML : "",
+        // Substring-cap on outerHTML so a huge banner doesn't dominate
+        // the string-equality compare in the recorder. Caps are well
+        // above each element's typical size.
+        ban ? (ban.outerHTML || "").substring(0, 600) : "",
+        hook ? (hook.outerHTML || "").substring(0, 400) : "",
+        title ? (title.outerHTML || "").substring(0, 200) : "",
+      ].join("|");
+    };
+
     window.__nexoclipRender.captureFrameAt = function (t) {
       return new Promise(function (resolve, reject) {
         if (!video) { resolve(); return; }

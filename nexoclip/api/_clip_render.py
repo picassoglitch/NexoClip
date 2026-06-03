@@ -111,8 +111,19 @@ async def render_clip_in_background(
                     clip_id, pct,
                 )
 
+        # Render Migration T2 — try the hybrid ffmpeg + overlay-alpha
+        # path first (~10-30s for a typical 35s clip). On any failure
+        # we fall back to the legacy seek-and-shoot recorder for one
+        # retry (~5min) — the operator still gets their MP4, just
+        # slower. The fallback path is the same code T1 backgrounded;
+        # the failure-recovery semantics are unchanged.
+        from nexoclip.clip.hybrid_recorder import (
+            HybridRecordingError, record_clip_hybrid,
+        )
+
+        hybrid_failed_with: str | None = None
         try:
-            await record_clip_to_mp4(
+            await record_clip_hybrid(
                 clip_id=clip_id,
                 duration_s=duration_s,
                 audio_source_path=audio_source_path,
@@ -123,6 +134,40 @@ async def render_clip_in_background(
                 height=height,
                 progress_callback=_on_progress,
             )
+        except HybridRecordingError as e:
+            hybrid_failed_with = str(e)
+            _log.warning(
+                "render_clip.hybrid_failed_falling_back clip=%s error=%s",
+                clip_id, str(e)[:300],
+            )
+
+        if hybrid_failed_with is not None:
+            # Reset progress so the legacy path's 0-100% animation
+            # doesn't read as "going backwards" after the hybrid bailed.
+            try:
+                with bound_tenant(tenant_id):
+                    await ClipsRepo(db).update_render_progress(
+                        clip_id, pct=0,
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            if hybrid_failed_with is None:
+                # Hybrid succeeded — output is on disk, skip legacy.
+                pass
+            else:
+                await record_clip_to_mp4(
+                    clip_id=clip_id,
+                    duration_s=duration_s,
+                    audio_source_path=audio_source_path,
+                    output_path=output_path,
+                    base_url=base_url,
+                    auth_cookie_value=auth_cookie_value,
+                    width=width,
+                    height=height,
+                    progress_callback=_on_progress,
+                )
         except PreviewRecordingError as e:
             with bound_tenant(tenant_id):
                 await ClipsRepo(db).mark_render_failed(

@@ -41,6 +41,16 @@ CLIP_CUT_STARTED = "clip.cut.started"
 CLIP_CUT_SUBSTEP = "clip.cut.substep"
 CLIP_CUT_COMPLETED = "clip.cut.completed"
 
+# Task 2a — VOD ingest substeps. Splits the opaque "ingesting" row
+# into download + audio-extract phases with wall-clock + throughput
+# in the payload. The dashboard surfaces this as
+# "Downloading… X MB at Y Mbps via yt-dlp" → "Extracting audio…"
+# so the operator stops wondering whether a 12-minute "ingest" is
+# stuck or just chewing through a 4 GB source.
+STREAM_DOWNLOAD_STARTED = "stream.download.started"
+STREAM_DOWNLOAD_COMPLETED = "stream.download.completed"
+STREAM_AUDIO_EXTRACTED = "stream.audio_extracted"
+
 _log = get_logger("nexoclip.events")
 
 

@@ -459,6 +459,10 @@ async def _run_pipeline(
             stream_id=stream_id,
             force=force,
             chat_replay_source=chat_replay_source,
+            # Task 2a — wire the DB through so ingest emits
+            # stream.download.started / .completed / audio_extracted
+            # events the dashboard can break into substeps.
+            db=db,
         )
         if db is not None:
             await StreamsRepo(db).upsert(stream_to_row(stream))

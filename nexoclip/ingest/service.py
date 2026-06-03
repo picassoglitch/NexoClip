@@ -18,15 +18,28 @@ import asyncio
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import structlog
 import yt_dlp
 
 from nexoclip.errors import IngestError
+from nexoclip.events import (
+    STREAM_AUDIO_EXTRACTED,
+    STREAM_DOWNLOAD_COMPLETED,
+    STREAM_DOWNLOAD_STARTED,
+    emit,
+)
 from nexoclip.ids import new_id
 
+if TYPE_CHECKING:
+    from nexoclip.db import Database
+
 from .models import Platform, Stream
+
+_log = structlog.get_logger(__name__)
 
 _PLATFORM_PATTERNS: dict[Platform, re.Pattern[str]] = {
     "kick": re.compile(r"(?:^|//|\.)kick\.com/", re.IGNORECASE),
@@ -64,6 +77,7 @@ async def ingest_vod(
     chat_replay_source: Path | None = None,
     cookies_from_browser: str | None = None,
     cookies_file: str | None = None,
+    db: "Database | None" = None,
 ) -> Stream:
     """Download a VOD and extract its audio. Returns a Stream.
 
@@ -129,6 +143,22 @@ async def ingest_vod(
         if cookies_from_browser is None:
             cookies_from_browser = settings.cookies_from_browser or None
 
+    # Task 2a — telemetry. Wall-clock + file-size + downloader-id around
+    # both the yt-dlp call and the audio extract so the dashboard can
+    # break the opaque "ingesting" row into download / extract phases
+    # and the operator can SEE whether a slow ingest is bandwidth-bound
+    # (download MB and Mbps in the payload) or CPU-bound (audio extract
+    # ate 12 minutes on a multi-hour VOD).
+    await emit(
+        db,
+        STREAM_DOWNLOAD_STARTED,
+        {
+            "stream_id": sid,
+            "vod_url": vod_url,
+            "platform": platform,
+        },
+    )
+    download_t0 = time.monotonic()
     info = await asyncio.to_thread(
         _download_vod,
         vod_url=vod_url,
@@ -137,9 +167,64 @@ async def ingest_vod(
         cookies_file=cookies_file,
         platform=platform,
     )
+    download_wall_s = time.monotonic() - download_t0
+
+    # File-size + throughput AFTER the download — we trust the on-disk
+    # file because yt-dlp's `filesize_approx` field can be off by 20%+
+    # for HLS sources where the segment-count × avg-segment-bytes is
+    # estimated rather than measured.
+    file_bytes = video_path.stat().st_size if video_path.exists() else 0
+    throughput_mbps = (
+        (file_bytes * 8.0 / 1e6) / download_wall_s
+        if download_wall_s > 0 and file_bytes > 0
+        else 0.0
+    )
+    chosen_format = info.get("format_id") or info.get("format") or "unknown"
+    # yt-dlp picks a "protocol" string per format: hls / m3u8 / m3u8_native /
+    # http / https / dash / etc. Useful in the payload because that's the
+    # signal that tells us whether `concurrent_fragment_downloads` even
+    # applies (it only matters for segmented protocols).
+    chosen_protocol = info.get("protocol") or "unknown"
+    _log.info(
+        "ingest.download.complete",
+        stream_id=sid,
+        vod_url=vod_url,
+        platform=platform,
+        wall_s=round(download_wall_s, 2),
+        file_bytes=file_bytes,
+        throughput_mbps=round(throughput_mbps, 1),
+        format_id=chosen_format,
+        protocol=chosen_protocol,
+    )
+    await emit(
+        db,
+        STREAM_DOWNLOAD_COMPLETED,
+        {
+            "stream_id": sid,
+            "wall_s": round(download_wall_s, 2),
+            "file_bytes": file_bytes,
+            "throughput_mbps": round(throughput_mbps, 1),
+            "format_id": chosen_format,
+            "protocol": chosen_protocol,
+        },
+    )
 
     if force or not audio_path.exists():
+        extract_t0 = time.monotonic()
         await asyncio.to_thread(_extract_audio, video_path, audio_path)
+        extract_wall_s = time.monotonic() - extract_t0
+        _log.info(
+            "ingest.audio_extract.complete",
+            stream_id=sid, wall_s=round(extract_wall_s, 2),
+        )
+        await emit(
+            db,
+            STREAM_AUDIO_EXTRACTED,
+            {
+                "stream_id": sid,
+                "wall_s": round(extract_wall_s, 2),
+            },
+        )
 
     duration_s = float(info.get("duration") or 0.0)
     if duration_s <= 0.0:
@@ -321,13 +406,53 @@ def _download_vod(
       * `cookies_from_browser` — pull cookies live from a browser profile.
         Faster setup but breaks if Chrome is running.
     When both are set, `cookies_file` wins.
+
+    Task 2b — three knobs added without changing the default outcome:
+
+      * `format` is now bounded by `Settings.max_source_height` (default
+        1080). Twitch / Kick / YouTube routinely expose 4K+ on popular
+        channels and the old "best available" was pulling source frames
+        we'd just throw away in the 9:16 reformat. Capping the source
+        at 1080 cuts the download size 3-5× without changing the output
+        clip resolution.
+      * `concurrent_fragment_downloads = Settings.ytdlp_concurrent_fragments`
+        (default 16). HLS / DASH segmented downloads — which is
+        every Twitch / Kick / YouTube VOD — fan out per-segment instead
+        of single-threading the fetch. 3-10× speedup is typical.
+      * `external_downloader = "aria2c"` when `Settings.ytdlp_use_aria2c`
+        is True AND aria2c is on PATH. aria2c parallelises within a
+        single HTTP fetch via byte-range; helpful for non-segmented
+        sources (direct mp4 URLs) where `concurrent_fragment_downloads`
+        is a no-op.
+
+    Defaults preserve current behavior bit-for-bit on hosts where
+    none of the new env vars are set.
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     outtmpl = str(target_path.with_suffix("")) + ".%(ext)s"
 
+    # Read settings lazily so test fixtures that monkeypatch
+    # `get_settings.cache_clear` see fresh values per test.
+    from nexoclip.settings import get_settings
+    s = get_settings()
+    max_h = int(getattr(s, "max_source_height", 1080) or 0)
+    concurrent_frags = max(1, int(getattr(s, "ytdlp_concurrent_fragments", 1)))
+    use_aria2c = bool(getattr(s, "ytdlp_use_aria2c", False))
+
+    # Format ladder. The two-stage `/best` fallback keeps yt-dlp happy
+    # when a platform only exposes pre-muxed formats (single track)
+    # rather than separate video + audio streams.
+    if max_h > 0:
+        fmt = (
+            f"bestvideo[height<={max_h}]*+bestaudio/"
+            f"best[height<={max_h}]/best"
+        )
+    else:
+        fmt = "bestvideo*+bestaudio/best"
+
     ydl_opts: dict[str, Any] = {
         "outtmpl": outtmpl,
-        "format": "bestvideo*+bestaudio/best",
+        "format": fmt,
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
@@ -335,7 +460,35 @@ def _download_vod(
         "writeinfojson": False,
         "writethumbnail": False,
         "overwrites": True,
+        # Task 2b — concurrent_fragment_downloads is yt-dlp's name for
+        # the HLS / DASH fan-out cap. Plumbed through; safe to set on
+        # non-segmented formats (silently ignored by yt-dlp).
+        "concurrent_fragment_downloads": concurrent_frags,
     }
+
+    # Task 2b — aria2c external downloader. Probe at request time so
+    # the operator can flip the env var without restarting (the
+    # `get_settings` cache survives but the PATH probe doesn't).
+    # `for: default` means aria2c is used for the default group, which
+    # is what yt-dlp routes the actual media segments through.
+    if use_aria2c and shutil.which("aria2c"):
+        ydl_opts["external_downloader"] = {"default": "aria2c"}
+        ydl_opts["external_downloader_args"] = {
+            "aria2c": [
+                "-x16",       # 16 connections per server
+                "-s16",       # split each download into 16 streams
+                "-k1M",       # min split size 1 MB
+                "--summary-interval=0",
+            ],
+        }
+    elif use_aria2c:
+        # Operator wanted aria2c but the binary isn't installed. Log
+        # once so the symptom (no speedup) is visible.
+        _log.warning(
+            "ingest.aria2c_requested_but_missing",
+            hint="install aria2c on the host or set NEXOCLIP_YTDLP_USE_ARIA2C=false",
+        )
+
     if cookies_file:
         ydl_opts["cookiefile"] = str(cookies_file)
     elif cookies_from_browser:

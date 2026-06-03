@@ -140,6 +140,32 @@ class Settings(BaseSettings):
     # open. When both this and cookies_from_browser are set, the file wins.
     cookies_file: str | None = None
 
+    # Task 2b — VOD download speed.
+    #
+    # `ytdlp_concurrent_fragments` — yt-dlp's `concurrent_fragment_downloads`
+    # option. Twitch / Kick / YouTube VODs are HLS / DASH segmented; the
+    # native downloader fetches one segment at a time by default. Bumping
+    # this to 16 typically gives 3-10× speedup on bandwidth-constrained
+    # hosts (Railway egress, fly.io edge). Drop to 1 if the upstream CDN
+    # rate-limits parallel fetches and you see 429s.
+    ytdlp_concurrent_fragments: int = 16
+    #
+    # `ytdlp_use_aria2c` — opt into aria2c as the external downloader.
+    # aria2c parallelises within a single segment via byte ranges; on
+    # multi-GB sources it beats yt-dlp's native loop. Only takes effect
+    # when aria2c is actually on PATH (we probe at request time and
+    # silently fall back to the native downloader otherwise). False by
+    # default because aria2c isn't installed on the Railway image yet.
+    ytdlp_use_aria2c: bool = False
+    #
+    # `max_source_height` — cap the resolution yt-dlp asks for. Clips top
+    # out at 1080×1920 for free/pro and 4K for all_access, so pulling
+    # the platform's "best available" (often 4K+ on Kick / YouTube)
+    # wastes bandwidth. Set to 1080 for Phase 0 defaults; tenants on the
+    # all_access tier can bump this per-stream once the resolution-tier
+    # plumbing surfaces it. 0 disables the cap (use platform's best).
+    max_source_height: int = 1080
+
     # Nexo AI integration — slice NX.1.
     # Both are symmetric secrets shared with Nexo AI (which sees them as
     # NEXOCLIP_ADMIN_TOKEN and NEXOCLIP_SSO_SECRET on its side). When unset,

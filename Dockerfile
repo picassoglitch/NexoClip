@@ -1,19 +1,22 @@
 # syntax=docker/dockerfile:1.7
 #
 # NexoClip production image — slim Debian + Python 3.11 + ffmpeg.
-# Targets CPU-only deploys (Railway, Fly.io, Render). For GPU later,
-# swap the base image to `nvidia/cuda:12.4-runtime-ubuntu22.04` and pip-install
-# nvidia-cublas-cu12 / nvidia-cudnn-cu12 — the rest of the layout stays.
+# CPU-only by design. Transcription + diarization run on AssemblyAI
+# (Migration Tasks A1-A3) so there's no torch / faster-whisper /
+# pyannote / CUDA in this image. The `diarize` and `local-whisper`
+# optional extras stay available in pyproject.toml for users who
+# want local-GPU inference; production deploys do NOT install them.
 #
-# IMPORTANT pinning: faster-whisper requires Python <= 3.12 per CLAUDE.md
-# rule #1 of the run.py boot guard. Don't bump to 3.13+ without checking.
+# For a GPU-enabled image: swap the base image to nvidia/cuda:12.4-
+# runtime-ubuntu22.04 and add `pip install '.[local-whisper,diarize]'`
+# below — the rest of the layout stays.
 
 FROM python:3.11-slim-bookworm
 
 # System packages:
 #   ffmpeg          — cut + reformat clips, audio extraction
 #   build-essential — some Python deps compile native extensions
-#   ca-certificates — outbound HTTPS to Anthropic, Resend, Nexo AI, etc.
+#   ca-certificates — outbound HTTPS to Anthropic, Resend, AssemblyAI, etc.
 # Keep the layer minimal: rm apt lists after install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -38,15 +41,14 @@ COPY run.py ./run.py
 # `LLMError: unknown routing purpose: variant_generation`.
 COPY config ./config
 
+# Migration Task A3 — CPU-only deps. The base install pulls only what
+# the AssemblyAI-driven pipeline needs (~150 MB total deps including
+# httpx, FastAPI, opencv-python, Pillow, yt-dlp). No torch, no CUDA.
+# A separate `.[local-whisper,diarize]` install path stays available
+# for self-hosted users who want the GPU-bound stack — see
+# pyproject.toml for the extras' rationale.
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir '.[diarize]'
-# Slice O.29 — install the `diarize` extra so pyannote-audio +
-# speechbrain ship inside the image. Pulls torch (~2-3 GB image
-# bloat). Without this, the diarize step short-circuits with
-# "diarization disabled" even when DiarizationConfig.enabled is
-# True, because the pyannote import fails. Requires HF_TOKEN env
-# var on the host AND the operator to have accepted the
-# pyannote/speaker-diarization-3.1 license on HuggingFace.
+    pip install --no-cache-dir '.'
 
 # Slice O.28 — Playwright + Chromium for the preview-recorder (slice
 # O.20). Without these, `/clips/<id>/download` falls back to the
@@ -72,24 +74,25 @@ RUN pip install --no-cache-dir playwright>=1.50 && \
 # declaration (raw Docker, ECS, K8s), add it back.
 
 # Sensible production defaults. Override any via Railway env-var dashboard.
-#   NEXOCLIP_HOST=0.0.0.0       — bind to all interfaces (required in container)
-#   NEXOCLIP_WHISPER_DEVICE=cpu — no GPU on slim image
-#   NEXOCLIP_WHISPER_MODEL=base — 74 MB. We previously used `small` (244 MB)
-#                                but it leaves no room on Railway's 500 MB free
-#                                tier alongside stream artifacts. `base` is the
-#                                quality floor for production Spanish/English
-#                                streams; bump to `small` / `medium` once the
-#                                volume is on a paid tier (1 GB / 5 GB).
-#   HF_HOME                     — keep model cache on the persistent volume so
-#                                cold-starts don't re-download
-#   PYTHONUNBUFFERED=1          — see logs in real-time (no stdout buffering)
+#   NEXOCLIP_HOST=0.0.0.0                — bind to all interfaces (container)
+#   NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai  — Migration Task A3 default;
+#                                           pipeline.transcribe runs against
+#                                           AssemblyAI's batch API. The
+#                                           operator must set
+#                                           NEXOCLIP_ASSEMBLYAI_API_KEY on
+#                                           the Railway dashboard before the
+#                                           first job runs.
+#   NEXOCLIP_DIARIZATION_SOURCE          — leaves default ("pyannote" in
+#                                           config) but pipeline auto-falls
+#                                           through to skipped on the slim
+#                                           image. Set to "transcribe" to use
+#                                           AssemblyAI utterance speakers
+#                                           directly.
+#   PYTHONUNBUFFERED=1                   — see logs in real-time
 ENV NEXOCLIP_DB_PATH=/data/nexoclip.db \
     NEXOCLIP_DEFAULT_OUTPUT_DIR=/data/out \
     NEXOCLIP_HOST=0.0.0.0 \
-    NEXOCLIP_WHISPER_DEVICE=cpu \
-    NEXOCLIP_WHISPER_COMPUTE_TYPE=int8 \
-    NEXOCLIP_WHISPER_MODEL=base \
-    HF_HOME=/data/hf_cache \
+    NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai \
     PYTHONUNBUFFERED=1
 
 # Documentation only — Railway dynamically assigns $PORT and our CMD

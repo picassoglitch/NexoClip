@@ -16,8 +16,14 @@ dependencies = [
     # VOD ingest
     "yt-dlp>=2024.10.0",
 
-    # Speech-to-text (CUDA build of faster-whisper for GPU; falls back to CPU)
-    "faster-whisper>=1.0.3",
+    # Speech-to-text default is now AssemblyAI (cloud, no GPU dep).
+    # See Migration Tasks A1-A3 in the project root for the rationale:
+    # AssemblyAI does word timestamps + diarization in one API call at
+    # ~$0.17/hr with no GPU/CUDA on the host. The legacy faster-whisper
+    # / pyannote stack is still available as the `local-whisper` and
+    # `diarize` optional extras for setups that want local-GPU inference;
+    # leaving them as optional means a fresh `pip install nexoclip`
+    # doesn't pull torch (~2 GB) for everyone.
 
     # Media (we shell out to ffmpeg binary; ffmpeg-python wraps it cleanly)
     "ffmpeg-python>=0.2.0",
@@ -86,10 +92,25 @@ dev = [
     "pytest-cov>=5.0",
     "respx>=0.21",                      # httpx mock for LLM + Buffer tests
 ]
+local-whisper = [
+    # Local GPU/CPU Whisper via faster-whisper. Required if you set
+    # NEXOCLIP_TRANSCRIBE_PROVIDER=local. Production deploys default
+    # to AssemblyAI (no GPU dep) — this extra exists for self-hosted
+    # users who want local inference. Python <= 3.12 required per the
+    # boot guard in run.py.
+    "faster-whisper>=1.0.3",
+]
 diarize = [
     # pyannote-audio for speaker diarization (voice-markers spec slice B).
     # Pulls torch via dep chain — ~2GB install on Windows. Skip if you
     # don't need per-speaker labeling.
+    #
+    # NOTE: with Migration Task A2 (Aug 2026), production uses AssemblyAI's
+    # built-in speaker_labels=true for diarization — no pyannote install
+    # required for the per-video labels case. This extra stays available
+    # for local-Whisper users + as the cross-video embedding path until
+    # we re-add cross-video identity via a Modal job. Default deploys do
+    # NOT install it.
     #
     # Pinned to 3.3.2: 3.4.0 references torchaudio.AudioMetaData which
     # was removed in torchaudio 2.8+. Likewise huggingface_hub<1.0

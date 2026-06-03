@@ -108,14 +108,27 @@ async def balance_chip(request: Request) -> Response:
             '<span>—</span></a>',
             status_code=200,
         )
+    # Migration Task: scrub the balance dict to scalar-only values
+    # before handing to Jinja. Production log showed
+    # `balance_chip.render_failed: unhashable type: 'dict'` spamming
+    # every 30s — root cause was unclear (could be a future schema
+    # drift, a JSON-decoded nested dict landing in `monthly_used`,
+    # or some Jinja extension hashing under the hood). Coercing each
+    # field to a known scalar shape eliminates the class of failures
+    # without us needing to identify the exact one — and any non-
+    # scalar value falls through to the sensible default the template
+    # already handles. Cosmetic but errored on every 30s poll → spammy
+    # logs → real signals lost.
+    safe_bal = _coerce_balance_to_scalars(bal)
     try:
         return templates.TemplateResponse(
-            "_balance_chip.html", {"request": request, "_bal": bal}
+            "_balance_chip.html", {"request": request, "_bal": safe_bal}
         )
     except Exception as e:  # noqa: BLE001
         from structlog import get_logger
         get_logger(__name__).warning(
-            "balance_chip.render_failed", error=str(e), bal_type=type(bal).__name__
+            "balance_chip.render_failed", error=str(e),
+            bal_type=type(bal).__name__,
         )
         # Static fallback so the nav doesn't display a broken chip.
         return HTMLResponse(
@@ -127,6 +140,68 @@ async def balance_chip(request: Request) -> Response:
             '<span>— tokens · retry</span></a>',
             status_code=200,
         )
+
+
+def _coerce_balance_to_scalars(bal: object) -> dict | None:
+    """Return a normalized balance dict with all values guaranteed
+    to be scalar types the template can safely format / compare.
+
+    The middleware should always populate the standard 4-key shape
+    (remaining: int|None, unlimited: bool, monthly_used: int|None,
+    at: str|None), but production saw a stream of
+    `balance_chip.render_failed: unhashable type: 'dict'` errors
+    that suggest something — schema drift, JSON nested decode,
+    Jinja extension — was hashing somewhere. Easier to scrub upfront
+    than chase the root cause across the dashboard.
+
+    Returns None when bal is None (the template handles this).
+    Returns the scrubbed dict otherwise — non-scalar values become
+    None (for `at`) or 0 (for numeric fields), bool gets a strict
+    bool() coerce so a stray dict-shape collapses to False.
+    """
+    if bal is None:
+        return None
+    if not isinstance(bal, dict):
+        # Unexpected — token_balance is supposed to be a plain dict
+        # set by auth middleware. Coerce to None so the template
+        # falls through to the "no balance" branch instead of trying
+        # to .get() on it.
+        return None
+
+    def _to_int(value: object) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        # str/None/dict/list/etc → fall back to 0
+        return 0
+
+    def _to_bool(value: object) -> bool:
+        # bool() on a dict returns True if non-empty — not what we
+        # want for a boolean flag. Explicit isinstance check first.
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return bool(value)
+        return False
+
+    def _to_str_or_none(value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        # Anything weirder (dict, list, datetime that didn't serialize)
+        # → None so the template doesn't try to render it.
+        return None
+
+    return {
+        "remaining": _to_int(bal.get("remaining")),
+        "unlimited": _to_bool(bal.get("unlimited")),
+        "monthly_used": _to_int(bal.get("monthly_used")),
+        "at": _to_str_or_none(bal.get("at")),
+    }
 
 
 @router.get("/_balance/refresh", include_in_schema=False)

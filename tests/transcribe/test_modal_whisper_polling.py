@@ -176,7 +176,10 @@ async def test_terminal_500_surfaces_as_error(
 
     _patch_client(monkeypatch, handler)
     provider = _make_provider()
-    with pytest.raises(TranscriptionError, match="returned 500"):
+    # Classifier surfaces 5xx as "service error (HTTP N)" instead of
+    # the generic "returned N" — actionable hint to retry first then
+    # fall back to AssemblyAI if Modal stays down.
+    with pytest.raises(TranscriptionError, match="HTTP 500"):
         await provider.transcribe(_req())
 
 
@@ -219,3 +222,111 @@ async def test_polling_respects_deadline(
     )
     with pytest.raises(TranscriptionError, match="poll deadline"):
         await provider.transcribe(_req())
+
+
+# ---- error classification ----
+
+
+@pytest.mark.asyncio
+async def test_429_billing_cap_surfaces_actionable_assemblyai_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator-hit on 06-03: Modal returned 429 with 'workspace billing
+    cycle spend limit reached'. Pre-classifier the message was raw
+    HTTP. Now we tell the operator how to switch to AssemblyAI in
+    one env-var flip."""
+    body = (
+        "modal-http: Webhook failed: workspace billing cycle "
+        "spend limit reached"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text=body)
+
+    _patch_client(monkeypatch, handler)
+    provider = _make_provider()
+    with pytest.raises(TranscriptionError) as excinfo:
+        await provider.transcribe(_req())
+    msg = str(excinfo.value)
+    # The classifier should mention BOTH options the operator has:
+    # AssemblyAI swap + bumping the Modal spend cap.
+    assert "billing/spend cap" in msg or "billing" in msg.lower()
+    assert "NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai" in msg
+    assert "NEXOCLIP_ASSEMBLYAI_API_KEY" in msg
+    assert "modal.com/settings/billing" in msg
+    # Raw body is preserved at the tail so the operator can see what
+    # Modal actually said.
+    assert body in msg
+
+
+@pytest.mark.asyncio
+async def test_401_surfaces_bearer_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="invalid bearer")
+
+    _patch_client(monkeypatch, handler)
+    provider = _make_provider()
+    with pytest.raises(TranscriptionError) as excinfo:
+        await provider.transcribe(_req())
+    msg = str(excinfo.value)
+    assert "NEXOCLIP_MODAL_TOKEN" in msg
+    assert "MODAL_BEARER_TOKEN" in msg
+    # AAI escape hatch still surfaces in the auth path.
+    assert "NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai" in msg
+
+
+@pytest.mark.asyncio
+async def test_503_surfaces_service_down_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Modal worker crashed")
+
+    _patch_client(monkeypatch, handler)
+    provider = _make_provider()
+    with pytest.raises(TranscriptionError) as excinfo:
+        await provider.transcribe(_req())
+    msg = str(excinfo.value)
+    assert "service error" in msg.lower() or "5" in msg
+    assert "Retry" in msg or "retry" in msg
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_400_falls_through_to_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 with no billing/auth keyword goes through the generic
+    'modal whisper returned NNN: …' path — same shape we shipped
+    pre-classifier, so existing log greps still work."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad input")
+
+    _patch_client(monkeypatch, handler)
+    provider = _make_provider()
+    with pytest.raises(TranscriptionError) as excinfo:
+        await provider.transcribe(_req())
+    msg = str(excinfo.value)
+    assert "modal whisper returned 400" in msg
+    assert "bad input" in msg
+
+
+@pytest.mark.asyncio
+async def test_429_without_billing_keyword_falls_through_to_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 429 that's just a rate-limit (no billing) doesn't get the
+    AssemblyAI swap pitch — that's a transient retryable, not a
+    billing cliff."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="too many requests")
+
+    _patch_client(monkeypatch, handler)
+    provider = _make_provider()
+    with pytest.raises(TranscriptionError) as excinfo:
+        await provider.transcribe(_req())
+    msg = str(excinfo.value)
+    assert "modal whisper returned 429" in msg
+    # NO billing-cliff hint when the body doesn't say "billing/spend".
+    assert "NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai" not in msg

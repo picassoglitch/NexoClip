@@ -135,10 +135,7 @@ class ModalWhisperProvider:
                 resp.raise_for_status()
                 raw = resp.json()
         except httpx.HTTPStatusError as e:
-            raise TranscriptionError(
-                f"modal whisper returned {e.response.status_code}: "
-                f"{e.response.text[:500]}"
-            ) from e
+            raise _classify_modal_error(e) from e
         except httpx.HTTPError as e:
             raise TranscriptionError(
                 f"modal whisper transport error: {e}"
@@ -281,3 +278,75 @@ def _modal_response_to_transcript(
             f"modal whisper response unparseable: {e}; raw keys: "
             f"{sorted(raw.keys())[:8]}"
         ) from e
+
+
+# ---- error classification ----
+#
+# Modal's web endpoint surfaces several distinct failure modes through
+# the same HTTP layer; the raw status code alone isn't actionable on
+# the dashboard. The classifier below maps a couple of well-known cases
+# (the operator-hit ones) to specific TranscriptionError messages that
+# tell the operator what to do next. Other errors fall through to the
+# generic "modal whisper returned NNN: …" shape.
+
+
+def _classify_modal_error(exc: httpx.HTTPStatusError) -> TranscriptionError:
+    """Map an HTTPStatusError from the Modal endpoint to a
+    TranscriptionError whose message is actionable.
+
+    Recognized cases:
+
+      * 429 with "billing"/"spend"/"cycle" in the body — Modal's
+        workspace billing cap. Telling the operator to flip
+        `NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai` is the right next
+        step; that's the post-migration default anyway. Mentions the
+        Modal billing page so they can also bump the cap if they want
+        to stay on Modal.
+      * 401 / 403 — bad bearer or expired token. Surface the env-var
+        name they need to fix.
+      * 5xx — Modal worker crashed. Generic "service down" hint.
+      * Everything else — passthrough with status + body.
+    """
+    status = exc.response.status_code
+    body = (exc.response.text or "")[:500]
+    body_lower = body.lower()
+
+    if status == 429 and any(
+        kw in body_lower for kw in ("billing", "spend", "cycle", "quota")
+    ):
+        return TranscriptionError(
+            "Modal whisper hit the workspace billing/spend cap "
+            f"(HTTP 429). Two fixes, in order of least friction:\n"
+            f"  1. Switch this deployment to AssemblyAI for transcription — "
+            f"set NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai and "
+            f"NEXOCLIP_ASSEMBLYAI_API_KEY=<key> on Railway, then redeploy. "
+            f"AssemblyAI ~$0.17/hr does transcription + diarization in one "
+            f"call with no GPU dep (Migration Tasks A1-A3 added this path).\n"
+            f"  2. Raise the Modal workspace spend cap at "
+            f"https://modal.com/settings/billing and re-run the pipeline.\n"
+            f"Raw response: {body}"
+        )
+
+    if status in (401, 403):
+        return TranscriptionError(
+            f"Modal whisper rejected the bearer token (HTTP {status}). "
+            f"Check NEXOCLIP_MODAL_TOKEN on Railway matches the "
+            f"MODAL_BEARER_TOKEN secret in the Modal workspace. Or "
+            f"switch to AssemblyAI: set NEXOCLIP_TRANSCRIBE_PROVIDER="
+            f"assemblyai + NEXOCLIP_ASSEMBLYAI_API_KEY=<key>. "
+            f"Raw response: {body}"
+        )
+
+    if 500 <= status < 600:
+        return TranscriptionError(
+            f"Modal whisper service error (HTTP {status}) — Modal's "
+            f"worker crashed or the function timed out. Retry the run; "
+            f"if it persists, switch to AssemblyAI "
+            f"(NEXOCLIP_TRANSCRIBE_PROVIDER=assemblyai). "
+            f"Raw response: {body}"
+        )
+
+    # Generic fallthrough — same shape we shipped before.
+    return TranscriptionError(
+        f"modal whisper returned {status}: {body}"
+    )

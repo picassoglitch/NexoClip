@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     # SmartCropBox at module top creates a circular import (clip.models
     # is still loading when framing tries to read it back).
     # Type-check-only import keeps the annotation working without the cycle.
+    from nexoclip.clip.frame_pool import ClipFrameBatch
     from nexoclip.clip.models import SmartCropBox
 
 # ---- Type aliases ----
@@ -448,6 +449,65 @@ def _fallback_verdict(reason: str) -> FramingVerdict:
     )
 
 
+def analyze_framing_from_frames(batch: "ClipFrameBatch") -> FramingVerdict:
+    """Same contract as `analyze_framing` but consumes a shared
+    `ClipFrameBatch` instead of re-opening the source video (Task 1c).
+
+    Same orientation classification + horizontal/vertical/square
+    verdict path as the legacy entry — the only difference is the
+    frame source. On any failure (no opencv, empty batch, bad
+    metadata) returns the same `_fallback_verdict` the legacy path
+    would have produced.
+    """
+    if not batch.frames_bgr:
+        return _fallback_verdict("empty frame batch")
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return _fallback_verdict("opencv not available")
+
+    sw, sh = batch.source_w, batch.source_h
+    if sw <= 0 or sh <= 0:
+        return _fallback_verdict("unusable batch metadata")
+
+    orientation: SourceOrientation
+    ratio = sw / max(1, sh)
+    if 0.95 <= ratio <= 1.05:
+        orientation = "square"
+    elif sw > sh:
+        orientation = "horizontal"
+    else:
+        orientation = "vertical"
+
+    detector = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
+    )
+    subjects: list[SubjectBox] = []
+    if not detector.empty():
+        for frame in batch.frames_bgr:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+            )
+            if len(faces) == 0:
+                continue
+            x, y, w, h = max(faces, key=lambda r: int(r[2]) * int(r[3]))
+            subjects.append(SubjectBox(
+                x=float(x) / sw,
+                y=float(y) / sh,
+                w=float(w) / sw,
+                h=float(h) / sh,
+                score=1.0,
+                kind="face",
+            ))
+
+    if orientation == "vertical":
+        return _verdict_vertical(subjects, sw=sw, sh=sh)
+    if orientation == "square":
+        return _verdict_square(subjects, sw=sw, sh=sh)
+    return _verdict_horizontal(subjects, sw=sw, sh=sh)
+
+
 def to_smart_crop_box(box: SubjectBox, *, source_w: int, source_h: int) -> "SmartCropBox":
     """Convert a fractional SubjectBox into the absolute-pixel
     `SmartCropBox` the renderer's `crop=` ffmpeg filter consumes.
@@ -472,5 +532,6 @@ __all__ = [
     "SourceOrientation",
     "SubjectBox",
     "analyze_framing",
+    "analyze_framing_from_frames",
     "to_smart_crop_box",
 ]

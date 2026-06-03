@@ -15,10 +15,14 @@ to carry whatever the upgraded picker decides.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from nexoclip.errors import ClipError
 
 from .models import SmartCropBox
+
+if TYPE_CHECKING:
+    from .frame_pool import ClipFrameBatch
 
 # Aspect ratio is fixed at 9:16 for Phase 1 (matches PHASE_0/1 spec).
 _ASPECT_W = 9
@@ -128,6 +132,55 @@ def _detect_face_centers(
         x, _y, w, _h = max(faces, key=lambda r: int(r[2]) * int(r[3]))
         centers_x.append(float(int(x) + int(w) / 2.0))
     return centers_x
+
+
+def compute_smart_crop_box_from_frames(
+    batch: "ClipFrameBatch",
+) -> SmartCropBox:
+    """Same contract as `compute_smart_crop_box` but reads decoded
+    frames from a shared `ClipFrameBatch` instead of re-opening the
+    source video. Task 1c — the cut pipeline samples frames once and
+    fans them out to crop / framing / thumbnail.
+
+    Identical face-center heuristic: largest detected face per frame,
+    average the X centers, clamp to the source width. Falls back to
+    centered when no face is detected anywhere in the batch.
+    """
+    import cv2
+
+    source_w = batch.source_w
+    source_h = batch.source_h
+    if source_w <= 0 or source_h <= 0:
+        raise ClipError(f"invalid batch dimensions {source_w}x{source_h}")
+
+    crop_w = min(source_w, max(1, (source_h * _ASPECT_W) // _ASPECT_H))
+    crop_h = source_h
+    center_default = source_w / 2.0
+
+    if crop_w >= source_w:
+        return SmartCropBox(x=0, y=0, w=source_w, h=crop_h)
+
+    detector = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
+    )
+    centers_x: list[float] = []
+    if not detector.empty():
+        for frame in batch.frames_bgr:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+            )
+            if len(faces) == 0:
+                continue
+            x, _y, w, _h = max(faces, key=lambda r: int(r[2]) * int(r[3]))
+            centers_x.append(float(int(x) + int(w) / 2.0))
+
+    target_x = (
+        sum(centers_x) / len(centers_x) if centers_x else center_default
+    )
+    x_offset = round(target_x - crop_w / 2.0)
+    x_offset = max(0, min(source_w - crop_w, x_offset))
+    return SmartCropBox(x=x_offset, y=0, w=crop_w, h=crop_h)
 
 
 def crop_box_to_ffmpeg_filter(

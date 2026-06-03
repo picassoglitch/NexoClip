@@ -850,6 +850,12 @@ async def _run_pipeline(
                     force=force,
                     brand_kits=candidate_kits,
                     transcript=transcript,
+                    # Task 1d — wire the DB through so cut_clips can
+                    # emit clip.cut.started / .substep / .completed
+                    # events into the existing event log. The dashboard
+                    # reads these to drive the per-clip substep label
+                    # + X/N progress.
+                    db=db,
                 )
             else:
                 clips = await asyncio.wait_for(
@@ -864,6 +870,7 @@ async def _run_pipeline(
                         # Slice G.1 — dynamic per-candidate windowing snaps each
                         # clip's start/end to transcript sentence boundaries.
                         transcript=transcript,
+                        db=db,
                     ),
                     timeout=_cut_timeout,
                 )

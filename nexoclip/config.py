@@ -290,6 +290,26 @@ class ClipConfig(BaseModel):
     # geometry on every clip (useful when transcripts are unreliable
     # or for debugging the static cut path).
     dynamic_windowing: bool = True
+    # Task 1a — per-candidate cut work runs concurrently up to this
+    # many threads at once. Default 3 balances event-loop
+    # responsiveness against CPU/disk contention on a typical
+    # 8–12 core box; lower it (1) to restore the pre-Task-1 serial
+    # behavior if ffmpeg starts thrashing, raise it on a big NVENC
+    # host where the GPU is the bottleneck and the CPU is idle.
+    cut_concurrency: int = Field(default=3, ge=1, le=16)
+    # Task 1b — at startup we probe `ffmpeg -encoders` for
+    # h264_nvenc. When present AND `prefer_nvenc=True` AND the
+    # operator hasn't overridden `encoder` to something other than
+    # libx264, BOTH the accurate-seek cut and the 9:16 reformat
+    # use NVENC (drops ~20–30s/clip encode → 2–3s on an RTX host).
+    # Set False to force the libx264 path bit-for-bit — rollback
+    # escape hatch if NVENC quality looks wrong on a given source.
+    prefer_nvenc: bool = True
+    # NVENC constant-quality target. Defaulted to match `crf` so
+    # the NVENC path is visually equivalent to the libx264 fallback
+    # at the same operator-perceived quality. The platforms re-encode
+    # aggressively anyway. Only consulted when NVENC is picked.
+    nvenc_cq: int = Field(default=19, ge=0, le=51)
 
 
 class NexoClipConfig(BaseModel):

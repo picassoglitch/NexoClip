@@ -6,6 +6,9 @@ emitted it can't be renamed without breaking historical replay.
 """
 
 from .log import (
+    CLIP_CUT_COMPLETED,
+    CLIP_CUT_STARTED,
+    CLIP_CUT_SUBSTEP,
     CLIP_READY_FOR_REVIEW,
     LLM_EXHAUSTED,
     LLM_FALLBACK,
@@ -15,6 +18,9 @@ from .log import (
 )
 
 __all__ = [
+    "CLIP_CUT_COMPLETED",
+    "CLIP_CUT_STARTED",
+    "CLIP_CUT_SUBSTEP",
     "CLIP_READY_FOR_REVIEW",
     "LLM_EXHAUSTED",
     "LLM_FALLBACK",

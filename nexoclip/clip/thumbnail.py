@@ -22,8 +22,12 @@ the `clips.thumbnail_frame_path` column don't change.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from nexoclip.errors import ClipError
+
+if TYPE_CHECKING:
+    from .frame_pool import ClipFrameBatch
 
 _DEFAULT_SHARPNESS_FLOOR = 500.0
 
@@ -111,6 +115,54 @@ def pick_thumbnail(
         return jpeg_bytes, source_ts, breakdown
     finally:
         cap.release()
+
+
+def pick_thumbnail_from_frames(
+    batch: "ClipFrameBatch",
+) -> tuple[bytes, float, dict[str, float]]:
+    """Same contract as `pick_thumbnail` but reads decoded frames from
+    a shared batch instead of re-opening the source video. Task 1c.
+
+    Identical sharpness × face-presence heuristic, identical breakdown
+    shape — the cut service swaps one for the other transparently.
+    """
+    if not batch.frames_bgr:
+        raise ClipError("empty frame batch — cannot pick thumbnail")
+    import cv2
+
+    face_detector = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
+    )
+    haar_ok = not face_detector.empty()
+
+    best: tuple[float, bytes, float, dict[str, float]] | None = None
+    for frame, ts in zip(batch.frames_bgr, batch.sample_times, strict=True):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        sharpness = min(1.0, lap_var / _DEFAULT_SHARPNESS_FLOOR)
+        has_face = 0.0
+        if haar_ok:
+            faces = face_detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+            )
+            has_face = 1.0 if len(faces) > 0 else 0.0
+        score = sharpness * (1.0 + has_face)
+        if best is None or score > best[0]:
+            ok, jpeg = cv2.imencode(".jpg", frame)
+            if not ok:
+                continue
+            breakdown = {
+                "sharpness": sharpness,
+                "has_face": has_face,
+                "score": score,
+                "ts": float(ts),
+            }
+            best = (score, bytes(jpeg.tobytes()), float(ts), breakdown)
+
+    if best is None:
+        raise ClipError("no encodable frames in batch")
+    _, jpeg_bytes, source_ts, breakdown = best
+    return jpeg_bytes, source_ts, breakdown
 
 
 def save_thumbnail(clip_dir: Path, jpeg_bytes: bytes) -> Path:

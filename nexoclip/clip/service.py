@@ -22,23 +22,37 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from nexoclip.config import ClipConfig
 from nexoclip.detect import Candidate
 from nexoclip.errors import ClipError
+from nexoclip.events import (
+    CLIP_CUT_COMPLETED,
+    CLIP_CUT_STARTED,
+    CLIP_CUT_SUBSTEP,
+    emit,
+)
 from nexoclip.ids import new_id
 from nexoclip.ingest import Stream
 from nexoclip.logging import get_logger
 
 if TYPE_CHECKING:
+    from nexoclip.db import Database
     from nexoclip.detect.framing import FramingVerdict
     from nexoclip.transcribe import Transcript
 
+from .encoders import pick_video_encoder_args
+from .frame_pool import ClipFrameBatch, sample_clip_frames
 from .models import Clip, ClipManifest, SmartCropBox
-from .smart_crop import compute_smart_crop_box, crop_box_to_ffmpeg_filter
-from .thumbnail import pick_thumbnail, save_thumbnail
+from .smart_crop import (
+    compute_smart_crop_box,
+    compute_smart_crop_box_from_frames,
+    crop_box_to_ffmpeg_filter,
+)
+from .thumbnail import pick_thumbnail, pick_thumbnail_from_frames, save_thumbnail
 from .thumbnail_brand import pick_brand_kit_handle, render_branded_thumbnails
 
 _log = get_logger("nexoclip.clip")
@@ -89,6 +103,7 @@ async def cut_clips(
     force: bool = False,
     brand_kits: list[object] | None = None,
     transcript: "Transcript | None" = None,
+    db: "Database | None" = None,
 ) -> list[Clip]:
     """Cut + reformat one clip per candidate. Idempotent on `clips_manifest.json`.
 
@@ -110,6 +125,18 @@ async def cut_clips(
             start/end snaps to sentence boundaries instead of using the
             fixed pre_roll/post_roll. Slice G.1. Pass `None` to keep the
             legacy static-window behavior (existing tests use this path).
+        db: Optional Database — when provided, the cut step emits
+            `clip.cut.started` / `clip.cut.substep` / `clip.cut.completed`
+            events through the standard event log so the dashboard can
+            surface per-clip substeps + X/N progress. Pass None to keep
+            the silent CLI/test behavior (Task 1d).
+
+    Task 1a — candidates run concurrently up to `cfg.cut_concurrency`
+    (default 3). The event loop stays responsive; each candidate's
+    ffmpeg + OpenCV work runs in a worker thread bounded by a semaphore.
+    Output is ORDER-PRESERVING — `asyncio.gather` returns in submission
+    order, so the manifest keeps the same candidate→clip mapping as the
+    serial path. Identical clip files, identical manifest, just faster.
     """
     if tenant_id != stream.tenant_id:
         raise ClipError(f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}")
@@ -127,185 +154,278 @@ async def cut_clips(
     if not stream.source_video_path.exists():
         raise ClipError(f"source video missing: {stream.source_video_path}")
 
-    clips = await asyncio.to_thread(
-        _cut_all,
-        tenant_id=tenant_id,
-        stream=stream,
-        candidates=candidates,
-        clips_dir=clips_dir,
-        cfg=cfg,
-        brand_kits=brand_kits,
-        transcript=transcript,
+    total = len(candidates)
+    concurrency = max(1, int(getattr(cfg, "cut_concurrency", 3)))
+    sem = asyncio.Semaphore(concurrency)
+
+    # Task 1d — thread-safe substep emitter. Worker threads call this
+    # with (clip_id, candidate_idx, step) at each substep boundary; we
+    # schedule the emit() coroutine back on the orchestrator's loop
+    # without blocking the worker. Fire-and-forget — a dropped event
+    # is observability, not correctness.
+    loop = asyncio.get_running_loop()
+
+    def on_substep_threadsafe(
+        clip_id: str, candidate_idx: int, step: str
+    ) -> None:
+        if db is None:
+            return
+        payload = {
+            "stream_id": stream.id,
+            "clip_id": clip_id,
+            "candidate_index": candidate_idx,
+            "total_candidates": total,
+            "step": step,
+        }
+        try:
+            asyncio.run_coroutine_threadsafe(
+                emit(db, CLIP_CUT_SUBSTEP, payload), loop
+            )
+        except Exception:  # noqa: BLE001 — never block the worker
+            pass
+
+    async def _one(idx: int, candidate: Candidate) -> Clip | None:
+        kit = brand_kits[idx] if brand_kits and idx < len(brand_kits) else None
+        async with sem:
+            if db is not None:
+                await emit(
+                    db, CLIP_CUT_STARTED,
+                    {
+                        "stream_id": stream.id,
+                        "candidate_index": idx,
+                        "total_candidates": total,
+                    },
+                )
+            clip = await asyncio.to_thread(
+                _cut_one_sync,
+                tenant_id=tenant_id,
+                stream=stream,
+                candidate=candidate,
+                kit=kit,
+                clips_dir=clips_dir,
+                cfg=cfg,
+                transcript=transcript,
+                idx=idx,
+                on_substep=on_substep_threadsafe,
+            )
+            if clip is not None and db is not None:
+                await emit(
+                    db, CLIP_CUT_COMPLETED,
+                    {
+                        "stream_id": stream.id,
+                        "clip_id": clip.id,
+                        "candidate_index": idx,
+                        "total_candidates": total,
+                    },
+                )
+            return clip
+
+    results = await asyncio.gather(
+        *(_one(i, c) for i, c in enumerate(candidates))
     )
+    clips: list[Clip] = [c for c in results if c is not None]
 
     manifest = ClipManifest(stream_id=stream.id, tenant_id=tenant_id, clips=clips)
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     return clips
 
 
-def _cut_all(
+def _cut_one_sync(
     *,
     tenant_id: str,
     stream: Stream,
-    candidates: list[Candidate],
+    candidate: Candidate,
+    kit: object | None,
     clips_dir: Path,
     cfg: ClipConfig,
-    brand_kits: list[object] | None = None,
-    transcript: "Transcript | None" = None,
-) -> list[Clip]:
-    """Synchronous helper kept off the event loop via `asyncio.to_thread`."""
-    clips: list[Clip] = []
-    for idx, candidate in enumerate(candidates):
-        kit = brand_kits[idx] if brand_kits and idx < len(brand_kits) else None
-        ev = candidate.evidence or {}
-        trigger_kind = str(ev.get("trigger_kind", "forward"))
-        retro_lookback = ev.get("retroactive_lookback_s")
-        retro_lookback_f = float(retro_lookback) if isinstance(retro_lookback, int | float) else None
+    transcript: "Transcript | None",
+    idx: int,
+    on_substep: Callable[[str, int, str], None] | None = None,
+) -> Clip | None:
+    """Run the full cut pipeline for ONE candidate. Sync — must be
+    dispatched via `asyncio.to_thread`. Returns None when the chosen
+    window has zero duration (anchor past stream end), the Clip
+    otherwise.
 
-        # Slice G.1 — dynamic windowing when a transcript is available
-        # AND the operator hasn't disabled it. Falls back to the legacy
-        # static cut_window() so existing tests + callers (without
-        # transcript) keep producing the same boundaries they did before.
-        if transcript is not None and getattr(cfg, "dynamic_windowing", True):
-            from .windowing import plan_clip_window
+    Mirrors the original `_cut_all` per-iteration body 1:1 with three
+    additions vs the pre-Task-1 code:
 
-            plan = plan_clip_window(
-                candidate=candidate,
-                transcript=transcript,
-                stream_duration_s=stream.duration_s,
-                fallback_pre_roll_s=cfg.pre_roll_s,
-                fallback_post_roll_s=cfg.post_roll_s,
-            )
-            start, end, duration = plan.start_s, plan.end_s, plan.duration_s
-            window_plan_evidence: dict[str, object] | None = {
-                "kind": plan.kind,
-                "reason": plan.reason,
-                "duration_s": round(plan.duration_s, 3),
-            }
-        else:
-            start, end, duration = cut_window(
-                timestamp=candidate.timestamp,
-                pre_roll_s=cfg.pre_roll_s,
-                post_roll_s=cfg.post_roll_s,
-                stream_duration_s=stream.duration_s,
-                trigger_kind=trigger_kind,
-                retroactive_lookback_s=retro_lookback_f,
-            )
-            window_plan_evidence = None
+      * Task 1c — one frame-pool decode is shared across smart_crop /
+        framing / thumbnail instead of three independent OpenCV opens.
+      * Task 1d — `on_substep(clip_id, idx, step)` is called at the
+        sampling / cropping / encoding / branding boundaries so the
+        orchestrator can emit progress events. Fire-and-forget;
+        raised exceptions are swallowed.
+      * Slice O.55 duration reconciliation preserved verbatim — after
+        the reformat, ffprobe the file and trust it over the requested
+        duration if drift > 50ms.
+    """
 
-        if duration <= 0.0:
-            continue
+    def _emit(clip_id: str, step: str) -> None:
+        if on_substep is None:
+            return
+        try:
+            on_substep(clip_id, idx, step)
+        except Exception:  # noqa: BLE001 — observability never breaks cut
+            pass
 
-        clip_id = new_id("clp")
-        clip_dir = clips_dir / clip_id
-        clip_dir.mkdir(parents=True, exist_ok=True)
-        intermediate = clip_dir / "_cut.mp4"
-        final = clip_dir / "clip.mp4"
+    ev = candidate.evidence or {}
+    trigger_kind = str(ev.get("trigger_kind", "forward"))
+    retro_lookback = ev.get("retroactive_lookback_s")
+    retro_lookback_f = float(retro_lookback) if isinstance(retro_lookback, int | float) else None
 
-        # Smart crop + thumbnail: pre-decode pass on the source video.
-        # Failures here fall back gracefully — vision deps may be absent
-        # (test stubs with placeholder bytes) or the source may not have
-        # any detectable faces. The clip still ships either way.
-        smart_box = _safe_smart_crop(
-            video_path=stream.source_video_path, start_s=start, end_s=end
+    # Slice G.1 — dynamic windowing when a transcript is available
+    # AND the operator hasn't disabled it. Falls back to the legacy
+    # static cut_window() so existing tests + callers (without
+    # transcript) keep producing the same boundaries they did before.
+    if transcript is not None and getattr(cfg, "dynamic_windowing", True):
+        from .windowing import plan_clip_window
+
+        plan = plan_clip_window(
+            candidate=candidate,
+            transcript=transcript,
+            stream_duration_s=stream.duration_s,
+            fallback_pre_roll_s=cfg.pre_roll_s,
+            fallback_post_roll_s=cfg.post_roll_s,
         )
-
-        # Slice G.3 — framing intelligence. Decides whether this clip
-        # should ship as 9:16 static crop / 9:16 tracking crop /
-        # full-screen horizontal / already-mobile recenter / rejected.
-        # Wrapped so opencv failures fall through to a conservative
-        # default (mobile_crop_static centered) — never breaks cut.
-        framing_verdict = _safe_analyze_framing(
-            video_path=stream.source_video_path, start_s=start, end_s=end
+        start, end, duration = plan.start_s, plan.end_s, plan.duration_s
+        window_plan_evidence: dict[str, object] | None = {
+            "kind": plan.kind,
+            "reason": plan.reason,
+            "duration_s": round(plan.duration_s, 3),
+        }
+    else:
+        start, end, duration = cut_window(
+            timestamp=candidate.timestamp,
+            pre_roll_s=cfg.pre_roll_s,
+            post_roll_s=cfg.post_roll_s,
+            stream_duration_s=stream.duration_s,
+            trigger_kind=trigger_kind,
+            retroactive_lookback_s=retro_lookback_f,
         )
-        thumbnail_path, raw_jpeg = _safe_thumbnail(
+        window_plan_evidence = None
+
+    if duration <= 0.0:
+        return None
+
+    clip_id = new_id("clp")
+    clip_dir = clips_dir / clip_id
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    intermediate = clip_dir / "_cut.mp4"
+    final = clip_dir / "clip.mp4"
+
+    # Task 1c — share one decode across smart_crop / framing /
+    # thumbnail. `sample_clip_frames` returns None on any failure (no
+    # opencv, undecodable codec, test stub video); each _safe_*
+    # helper sees `batch=None` and falls back to its legacy per-pass
+    # open. Behavior identical, three OpenCV seeks → one.
+    _emit(clip_id, "sampling")
+    batch = sample_clip_frames(
+        stream.source_video_path, start_s=start, end_s=end,
+    )
+
+    _emit(clip_id, "cropping")
+    smart_box = _safe_smart_crop(
+        video_path=stream.source_video_path,
+        start_s=start, end_s=end, batch=batch,
+    )
+    # Slice G.3 — framing intelligence. Decides whether this clip
+    # should ship as 9:16 static crop / 9:16 tracking crop /
+    # full-screen horizontal / already-mobile recenter / rejected.
+    framing_verdict = _safe_analyze_framing(
+        video_path=stream.source_video_path,
+        start_s=start, end_s=end, batch=batch,
+    )
+    thumbnail_path, raw_jpeg = _safe_thumbnail(
+        video_path=stream.source_video_path,
+        start_s=start, end_s=end,
+        clip_dir=clip_dir, batch=batch,
+    )
+
+    _emit(clip_id, "encoding")
+    try:
+        _ffmpeg_fast_cut(
             video_path=stream.source_video_path,
             start_s=start,
-            end_s=end,
-            clip_dir=clip_dir,
-        )
-        branded = (
-            _safe_branded_thumbnails(
-                source_jpeg=raw_jpeg, clip_dir=clip_dir, brand_kit=kit
-            )
-            if raw_jpeg is not None
-            else {}
-        )
-
-        try:
-            _ffmpeg_fast_cut(
-                video_path=stream.source_video_path,
-                start_s=start,
-                duration_s=duration,
-                out_path=intermediate,
-            )
-            _ffmpeg_reformat_9_16(
-                in_path=intermediate,
-                out_path=final,
-                cfg=cfg,
-                smart_box=smart_box,
-                brand_kit=kit,
-                framing_verdict=framing_verdict,
-            )
-        finally:
-            if intermediate.exists():
-                intermediate.unlink()
-
-        # Slice G.1 — when the new dynamic-windowing path picked the
-        # boundaries, stamp the plan's metadata onto the candidate's
-        # evidence so it persists with the clip and the dashboard can
-        # display "reaction band 10-22s; snapped end to sentence boundary".
-        # Slice G.3 — same pattern for the framing verdict: persisted
-        # under `evidence.framing` so the dashboard renders the chosen
-        # export-output label and G.5 reads it to drive the renderer.
-        updated_evidence: dict[str, object] = dict(candidate.evidence or {})
-        if window_plan_evidence is not None:
-            updated_evidence["window_plan"] = window_plan_evidence
-        if framing_verdict is not None:
-            updated_evidence["framing"] = _framing_evidence(framing_verdict)
-        if updated_evidence != (candidate.evidence or {}):
-            candidate = candidate.model_copy(update={"evidence": updated_evidence})
-
-        # Slice O.55 — ffprobe the produced clip and replace duration
-        # with the ACTUAL file duration if it drifted past 50ms from
-        # the requested value. This guarantees DB <-> on-disk parity
-        # and prevents "preview shows 40s, export is 35s" type bugs
-        # downstream (the recorder uses this duration as canonical).
-        actual_duration = _ffprobe_duration_s(final)
-        if actual_duration is not None:
-            drift = abs(actual_duration - duration)
-            if drift > 0.05:
-                _log.warning(
-                    "clip.cut.duration_drift",
-                    requested_s=round(duration, 3),
-                    actual_s=round(actual_duration, 3),
-                    drift_ms=int(drift * 1000),
-                    clip_id=clip_id,
-                )
-                # Trust the file. Keep start_s as-is; recompute end_s.
-                duration = actual_duration
-                end = start + duration
-
-        clip = Clip(
-            id=clip_id,
-            tenant_id=tenant_id,
-            stream_id=stream.id,
-            candidate=candidate,
-            start_s=start,
-            end_s=end,
             duration_s=duration,
-            width=cfg.output_width,
-            height=cfg.output_height,
-            path=final,
-            smart_crop_box=smart_box,
-            thumbnail_path=thumbnail_path,
-            thumbnail_16x9_path=branded.get("16x9"),
-            thumbnail_9x16_path=branded.get("9x16"),
-            thumbnail_1x1_path=branded.get("1x1"),
+            out_path=intermediate,
+            cfg=cfg,
         )
-        (clip_dir / "metadata.json").write_text(clip.model_dump_json(indent=2), encoding="utf-8")
-        clips.append(clip)
-    return clips
+        _ffmpeg_reformat_9_16(
+            in_path=intermediate,
+            out_path=final,
+            cfg=cfg,
+            smart_box=smart_box,
+            brand_kit=kit,
+            framing_verdict=framing_verdict,
+        )
+    finally:
+        if intermediate.exists():
+            intermediate.unlink()
+
+    _emit(clip_id, "branding")
+    branded = (
+        _safe_branded_thumbnails(
+            source_jpeg=raw_jpeg, clip_dir=clip_dir, brand_kit=kit
+        )
+        if raw_jpeg is not None
+        else {}
+    )
+
+    # Slice G.1 — when the new dynamic-windowing path picked the
+    # boundaries, stamp the plan's metadata onto the candidate's
+    # evidence so it persists with the clip and the dashboard can
+    # display "reaction band 10-22s; snapped end to sentence boundary".
+    # Slice G.3 — same pattern for the framing verdict: persisted
+    # under `evidence.framing` so the dashboard renders the chosen
+    # export-output label and G.5 reads it to drive the renderer.
+    updated_evidence: dict[str, object] = dict(candidate.evidence or {})
+    if window_plan_evidence is not None:
+        updated_evidence["window_plan"] = window_plan_evidence
+    if framing_verdict is not None:
+        updated_evidence["framing"] = _framing_evidence(framing_verdict)
+    if updated_evidence != (candidate.evidence or {}):
+        candidate = candidate.model_copy(update={"evidence": updated_evidence})
+
+    # Slice O.55 — ffprobe the produced clip and replace duration
+    # with the ACTUAL file duration if it drifted past 50ms from
+    # the requested value. This guarantees DB <-> on-disk parity
+    # and prevents "preview shows 40s, export is 35s" type bugs
+    # downstream (the recorder uses this duration as canonical).
+    actual_duration = _ffprobe_duration_s(final)
+    if actual_duration is not None:
+        drift = abs(actual_duration - duration)
+        if drift > 0.05:
+            _log.warning(
+                "clip.cut.duration_drift",
+                requested_s=round(duration, 3),
+                actual_s=round(actual_duration, 3),
+                drift_ms=int(drift * 1000),
+                clip_id=clip_id,
+            )
+            # Trust the file. Keep start_s as-is; recompute end_s.
+            duration = actual_duration
+            end = start + duration
+
+    clip = Clip(
+        id=clip_id,
+        tenant_id=tenant_id,
+        stream_id=stream.id,
+        candidate=candidate,
+        start_s=start,
+        end_s=end,
+        duration_s=duration,
+        width=cfg.output_width,
+        height=cfg.output_height,
+        path=final,
+        smart_crop_box=smart_box,
+        thumbnail_path=thumbnail_path,
+        thumbnail_16x9_path=branded.get("16x9"),
+        thumbnail_9x16_path=branded.get("9x16"),
+        thumbnail_1x1_path=branded.get("1x1"),
+    )
+    (clip_dir / "metadata.json").write_text(clip.model_dump_json(indent=2), encoding="utf-8")
+    return clip
 
 
 def _ffprobe_duration_s(path: Path) -> float | None:
@@ -335,26 +455,51 @@ def _ffprobe_duration_s(path: Path) -> float | None:
 
 
 def _safe_smart_crop(
-    *, video_path: Path, start_s: float, end_s: float
+    *,
+    video_path: Path,
+    start_s: float,
+    end_s: float,
+    batch: ClipFrameBatch | None = None,
 ) -> SmartCropBox | None:
-    """Run smart_crop, log + skip on failure (e.g. unreadable test stub video)."""
+    """Run smart_crop, log + skip on failure (e.g. unreadable test stub video).
+
+    Task 1c — when a shared `ClipFrameBatch` is supplied, the haar
+    cascade runs against the pre-decoded frames instead of re-opening
+    the source. Falls back to the legacy per-pass open whenever the
+    batch is missing or its `_from_frames` path raises.
+    """
     try:
+        if batch is not None and batch.frames_bgr:
+            return compute_smart_crop_box_from_frames(batch)
         return compute_smart_crop_box(video_path, start_s=start_s, end_s=end_s)
     except ClipError as e:
+        _log.warning("smart_crop.skipped", reason=str(e))
+        return None
+    except Exception as e:  # noqa: BLE001 — never break cut on a cv2 quirk
         _log.warning("smart_crop.skipped", reason=str(e))
         return None
 
 
 def _safe_analyze_framing(
-    *, video_path: Path, start_s: float, end_s: float
+    *,
+    video_path: Path,
+    start_s: float,
+    end_s: float,
+    batch: ClipFrameBatch | None = None,
 ) -> "FramingVerdict | None":
     """Slice G.3 — run analyze_framing inside a guard so unreadable
     test-stub videos / missing opencv never break the cut step. The
     framing module's own internal guards already return a conservative
-    fallback; this layer just adds a belt-and-suspenders catch."""
-    try:
-        from nexoclip.detect.framing import analyze_framing
+    fallback; this layer just adds a belt-and-suspenders catch.
 
+    Task 1c — when `batch` is supplied, runs the framing classifier
+    against the shared decoded frames instead of opening the source
+    video again."""
+    try:
+        if batch is not None and batch.frames_bgr:
+            from nexoclip.detect.framing import analyze_framing_from_frames
+            return analyze_framing_from_frames(batch)
+        from nexoclip.detect.framing import analyze_framing
         return analyze_framing(
             video_path=video_path, start_s=start_s, end_s=end_s,
         )
@@ -385,18 +530,33 @@ def _framing_evidence(verdict: "FramingVerdict") -> dict[str, object]:
 
 
 def _safe_thumbnail(
-    *, video_path: Path, start_s: float, end_s: float, clip_dir: Path
+    *,
+    video_path: Path,
+    start_s: float,
+    end_s: float,
+    clip_dir: Path,
+    batch: ClipFrameBatch | None = None,
 ) -> tuple[Path | None, bytes | None]:
     """Run pick_thumbnail + save_thumbnail; log + skip on failure.
 
     Returns `(path, raw_jpeg_bytes)` so the branded compositor can reuse
     the same decoded frame without another OpenCV pass over the source
     video. On failure both values are None and the caller skips the
-    branded-variant step too."""
+    branded-variant step too.
+
+    Task 1c — picks from the shared frame batch when available;
+    otherwise falls through to the legacy per-pass open.
+    """
     try:
-        jpeg, _ts, _bd = pick_thumbnail(video_path, start_s=start_s, end_s=end_s)
+        if batch is not None and batch.frames_bgr:
+            jpeg, _ts, _bd = pick_thumbnail_from_frames(batch)
+        else:
+            jpeg, _ts, _bd = pick_thumbnail(video_path, start_s=start_s, end_s=end_s)
         return save_thumbnail(clip_dir, jpeg), jpeg
     except ClipError as e:
+        _log.warning("thumbnail.skipped", reason=str(e))
+        return None, None
+    except Exception as e:  # noqa: BLE001 — never break cut
         _log.warning("thumbnail.skipped", reason=str(e))
         return None, None
 
@@ -457,7 +617,12 @@ def _safe_branded_thumbnails(
 
 
 def _ffmpeg_fast_cut(
-    *, video_path: Path, start_s: float, duration_s: float, out_path: Path
+    *,
+    video_path: Path,
+    start_s: float,
+    duration_s: float,
+    out_path: Path,
+    cfg: ClipConfig | None = None,
 ) -> None:
     """Cut a precise window out of `video_path`.
 
@@ -471,17 +636,24 @@ def _ffmpeg_fast_cut(
     length while the file actually had another — that's the root
     cause of "preview 40s, export 35s" type drift.
 
-    New behavior: re-encode the cut so seek is sample-accurate.
+    Behavior: re-encode the cut so seek is sample-accurate.
       - `-ss start_s` BEFORE `-i` is still here for the fast scrubber
         (decoder skips to the keyframe before start_s)
-      - `-ss 0` AFTER `-i` is implicit in `-t`
-      - We re-encode the cut to a small intermediate; the downstream
-        reformat step encodes again (so this is one EXTRA libx264
-        pass on the cut, ~0.5s on a typical 30s clip on Railway CPU)
+      - `-accurate_seek` + re-encode → output starts exactly at start_s
+      - The downstream reformat step encodes again (so this is one
+        EXTRA encode on the cut, ~0.5s libx264 / sub-100ms NVENC on
+        a typical 30s clip)
 
-    Trade-off accepted: one extra encode for sub-millisecond duration
-    accuracy across the whole pipeline.
+    Task 1b — when NVENC is available + preferred, BOTH this cut and
+    the downstream reformat use h264_nvenc, so this extra pass is
+    nearly free on a GPU host. The libx264 fallback still uses the
+    O.55 baseline (`fast` + `crf 19`).
+
+    `cfg=None` is the legacy-call path (kept for explicit-call
+    callers without a config object); defaults match the O.55
+    pre-Task-1 ladder so behavior is unchanged.
     """
+    effective = cfg or ClipConfig()
     cmd = [
         "ffmpeg",
         "-y",
@@ -499,16 +671,10 @@ def _ffmpeg_fast_cut(
         str(video_path),
         "-t",
         f"{duration_s:.3f}",
-        # Re-encode the cut so duration is precise. Same encoder
-        # settings the downstream reformat uses (preset fast + CRF
-        # 19 from ClipConfig defaults) so this doesn't degrade
-        # quality measurably vs a single-pass encode.
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "19",
+        # Task 1b — encoder picker selects libx264 (fast/CRF 19)
+        # or h264_nvenc (p5/CQ matched) consistently with the
+        # reformat step. Same calibration both passes.
+        *pick_video_encoder_args(effective),
         "-pix_fmt",
         "yuv420p",
         # Audio: re-encode to AAC@48k since social platforms want
@@ -607,6 +773,15 @@ def _ffmpeg_reformat_9_16(
     # Detect via the [ character — every multi-stream filter graph
     # mentions at least one labeled pad.
     filter_flag = "-filter_complex" if "[" in vf else "-vf"
+
+    # Task 1b — encoder selection.
+    # - If cfg.encoder is overridden away from "libx264", honor the
+    #   operator's choice with the legacy preset/crf args (preserves
+    #   the libx265 path used by callers + tests).
+    # - Else if NVENC is on this host and the operator hasn't disabled
+    #   it via `cfg.prefer_nvenc=False`, swap in h264_nvenc.
+    # - Else libx264. No-NVENC hosts are byte-identical to pre-Task-1.
+    encoder_args = pick_video_encoder_args(cfg)
     cmd = [
         "ffmpeg",
         "-y",
@@ -616,12 +791,7 @@ def _ffmpeg_reformat_9_16(
         str(in_path),
         filter_flag,
         vf,
-        "-c:v",
-        cfg.encoder,
-        "-preset",
-        cfg.preset,
-        "-crf",
-        str(cfg.crf),
+        *encoder_args,
         "-c:a",
         "aac",
         str(out_path),

@@ -33,6 +33,14 @@ CLIP_READY_FOR_REVIEW = "clip.ready_for_review"
 LLM_FALLBACK = "llm.fallback"
 LLM_EXHAUSTED = "llm.exhausted"
 
+# Task 1d — per-candidate cut progress. The dashboard turns these
+# into a substep label ("Sampling… / Cropping… / Encoding… /
+# Branding…") plus an X/N counter so the operator stops staring
+# at an opaque "Cut (running…)" for minutes.
+CLIP_CUT_STARTED = "clip.cut.started"
+CLIP_CUT_SUBSTEP = "clip.cut.substep"
+CLIP_CUT_COMPLETED = "clip.cut.completed"
+
 _log = get_logger("nexoclip.events")
 
 

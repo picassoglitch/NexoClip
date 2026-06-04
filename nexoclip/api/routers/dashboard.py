@@ -4550,9 +4550,13 @@ async def clip_intelligence(
                     phrase = ev.get("phrase")
                     if isinstance(phrase, str) and phrase:
                         # Convert absolute stream timestamp to clip-
-                        # relative. cand.timestamp is the phrase START
-                        # in the stream; the clip starts at clip.start_s.
-                        clip_rel = max(0.0, float(cand.timestamp) - clip.start_s)
+                        # relative. cand.ts is the phrase START in the
+                        # stream; the clip starts at clip.start_s.
+                        # (DB row uses `ts`; the in-memory detector
+                        # model `nexoclip.detect.models.Candidate`
+                        # uses `timestamp` — easy mix-up that already
+                        # bit this endpoint once with a 500.)
+                        clip_rel = max(0.0, float(cand.ts) - clip.start_s)
                         kind_label = (
                             "Voice trigger fired"
                             if ev.get("trigger_kind") != "retroactive"

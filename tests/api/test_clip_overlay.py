@@ -910,6 +910,64 @@ async def test_intelligence_endpoint_404_for_unknown_clip(
     assert r.status_code == 404
 
 
+async def test_intelligence_endpoint_emits_voice_trigger_marker(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Pins the candidate→trigger-marker path that 500'd in prod with
+    `AttributeError: 'CandidateRow' object has no attribute 'timestamp'`.
+
+    Two parallel models almost shadow each other:
+      - `nexoclip.detect.models.Candidate` (in-memory detector output,
+        field name `timestamp`)
+      - `nexoclip.db.models.CandidateRow` (DB row, field name `ts`)
+
+    `CandidatesRepo.list_for_stream` returns the DB shape, so the
+    endpoint MUST read `.ts`. The pre-fix code used `.timestamp` →
+    AttributeError → 500 on every clip whose candidate carried a
+    voice-trigger phrase. Re-seed with that exact shape and assert the
+    response is 200 with the expected clip-relative ts.
+    """
+    from nexoclip.db import CandidatesRepo
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    # Re-seed the candidate with a non-empty `evidence` so the endpoint
+    # enters the trigger-marker branch. ts=10.0 (stream-absolute) and
+    # the seeded clip starts at 0.0 → clip-relative ts should be 10.0.
+    with bound_tenant(tid):
+        await CandidatesRepo(db).upsert_many(
+            [
+                CandidateRow(
+                    id="cnd_e",
+                    stream_id="str_e",
+                    tenant_id=tid,
+                    ts=10.0,
+                    score=0.9,
+                    reason="voice",
+                    evidence={
+                        "phrase": "que clipearon",
+                        "trigger_kind": "live",
+                        "confidence": 0.87,
+                    },
+                    created_at=_now(),
+                )
+            ]
+        )
+
+    r = await client.get("/dashboard/clips/clp_e/intelligence.json")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    voice_triggers = [m for m in body["markers"] if m["kind"] == "voice_trigger"]
+    assert len(voice_triggers) == 1, body
+    marker = voice_triggers[0]
+    assert marker["ts"] == 10.0  # ts=10 stream-abs minus clip.start_s=0
+    assert marker["score"] == 0.87
+    assert "que clipearon" in marker["label"]
+
+
 async def test_clip_editor_renders_hook_generator_ui(
     client: httpx.AsyncClient,
     db: Database,

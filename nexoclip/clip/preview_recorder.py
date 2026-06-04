@@ -245,12 +245,14 @@ async def record_clip_to_mp4(
             capture_started = _dt.datetime.now(_dt.UTC)
             await _record_via_seek_and_shoot(
                 page=page,
+                clip_id=clip_id,
                 audio_source_path=audio_source_path,
                 output_path=output_path,
                 width=width,
                 height=height,
                 fps=fps,
                 duration_s=canonical_duration,
+                progress_callback=progress_callback,
             )
             capture_ended = _dt.datetime.now(_dt.UTC)
             await page.close()
@@ -361,12 +363,14 @@ def _ffprobe_duration_s(path: Path) -> float | None:
 async def _record_via_seek_and_shoot(
     *,
     page: object,  # playwright Page — typed loosely to avoid the import
+    clip_id: str,
     audio_source_path: Path,
     output_path: Path,
     width: int,
     height: int,
     fps: int,
     duration_s: float,
+    progress_callback: "object | None" = None,
 ) -> None:
     """Deterministic frame-by-frame export.
 

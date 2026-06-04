@@ -365,7 +365,19 @@ def _ffmpeg_composite_alpha_over_source(
         # count doesn't extend the clip a fraction of a second past
         # the audio.
         "-t", f"{duration_s:.3f}",
-        "-movflags", "+faststart",
+        # Render Migration R8 — +faststart REMOVED. On Railway's
+        # persistent volume, ffmpeg's two-pass faststart fails the
+        # re-open step ("Unable to re-open output file for shifting
+        # data, Error writing trailer") and ffmpeg's cleanup deletes
+        # the file as it bails — producing rc=0 + missing output and
+        # exactly the symptom that haunted us for two sessions.
+        # faststart is only useful for in-browser progressive
+        # streaming of an MP4 hosted at a URL; for the operator's
+        # local download + platform upload flow it's irrelevant
+        # (every player handles moov-at-end fine). If we ever need
+        # streaming preview of the rendered MP4, run a SEPARATE
+        # `qt-faststart` pass that doesn't have ffmpeg's
+        # delete-on-failure semantics.
         str(output_path),
     ]
     _log.info("hybrid_recorder.composite_start", cmd=" ".join(cmd))

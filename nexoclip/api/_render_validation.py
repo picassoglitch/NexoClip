@@ -55,14 +55,14 @@ _MIN_SERVABLE_BYTES: Final = 1_000_000
 
 # ISO BMFF major-brand discriminator. The first 4 bytes are the box
 # size (big-endian uint32) and bytes 4-8 are the box type. The
-# top-level box of every MP4 produced by ffmpeg's faststart pass
+# top-level box of every well-formed MP4 (faststart or otherwise)
 # starts with `ftyp`. Without this, the file is not an MP4.
 _FTYP_OFFSET: Final = 4
 _FTYP_MAGIC: Final = b"ftyp"
 
 # How much of the requested duration the produced file must cover for
 # us to call the render trustworthy. 80% is the floor; in practice
-# faststart-muxed files land within 100ms of the request. We pick the
+# ffmpeg-encoded files land within 100ms of the request. We pick the
 # lower bound deliberately loose so transient timestamp glitches
 # don't kill an otherwise-correct render.
 _MIN_DURATION_RATIO: Final = 0.80

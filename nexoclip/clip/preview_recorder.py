@@ -530,7 +530,14 @@ async def _encode_image_sequence(
         # Hard clamp to the requested duration. Belt-and-braces — the
         # frame count already encodes the duration via /fps.
         "-t", f"{duration_s:.3f}",
-        "-movflags", "+faststart",
+        # Render Migration R8 — +faststart REMOVED. See full rationale
+        # in hybrid_recorder.py. Short version: on Railway's volume,
+        # ffmpeg's faststart re-open step fails ("Unable to re-open
+        # output file for shifting data"), ffmpeg cleans the file up
+        # as it bails, we get rc=0 + missing output → R5 raises and
+        # the operator sees a failed render. Faststart only matters
+        # for in-browser streaming preview which we don't do; every
+        # player handles moov-at-end fine for the download flow.
         str(output_path),
     ]
     _log.info("preview_recorder.ffmpeg_start", cmd=" ".join(cmd))

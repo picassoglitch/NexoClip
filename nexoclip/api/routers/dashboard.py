@@ -3658,6 +3658,17 @@ _EXPORT_RESOLUTIONS: dict[str, tuple[int, int, float]] = {
     "2k": (1440, 2560, 1.8),
     "4k": (2160, 3840, 3.6),
 }
+
+# Render Migration R6 — a render that hasn't completed in this many
+# seconds is treated as a zombie (background task crashed before it
+# could mark_render_failed). The /render-status endpoint surfaces it
+# as failed with a retry hint so the operator isn't stuck. We pick
+# 15 min as a wide-but-safe ceiling: the slowest legacy seek-and-shoot
+# path tops out around ~5-7 min for a 35s clip; 4K + future longer
+# clips still have room. If an operator legitimately renders a longer
+# clip and hits this, the next click on Retry triggers a fresh
+# background task and continues.
+_ZOMBIE_RENDERING_TIMEOUT_S: int = 15 * 60
 _TIER_RESOLUTIONS: dict[str, set[str]] = {
     "free": {"1080"},
     "pro": {"1080"},
@@ -3741,6 +3752,68 @@ async def clip_render_status(
         try:
             rendered.unlink(missing_ok=True)
         except OSError:
+            pass
+
+    # Render Migration R6 — zombie detection. The background runner
+    # SHOULD mark_render_failed before returning, but R5 + the outer
+    # guard in render_clip_in_background only fix that going forward;
+    # any clip whose background task crashed BEFORE the guard rolled
+    # out (or got killed by Railway / OOM / process restart) is stuck
+    # with state='rendering' and nobody to flip it. The UI then polls
+    # this endpoint forever (the logs show > 100 polls in a single
+    # minute) and the operator has no way to retry — the Download
+    # button is wired to "is the state stuck"-anchored progress bar.
+    #
+    # If state has been 'rendering' for >= ZOMBIE_RENDERING_TIMEOUT_S
+    # AND no cache file appeared (we'd have returned ready above),
+    # we treat the render as dead. We don't fight the race: we DON'T
+    # mark it failed here (that's a DB write on every status poll;
+    # the next click on Download already calls mark_render_started
+    # atomically so the operator can clear it themselves). We just
+    # tell the UI what the state ACTUALLY is so it can surface a
+    # retry button.
+    if clip.render_state == "rendering" and clip.render_started_at:
+        try:
+            from datetime import UTC, datetime as _dt
+            started = _dt.fromisoformat(clip.render_started_at)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=UTC)
+            age_s = (_dt.now(UTC) - started).total_seconds()
+            if age_s > _ZOMBIE_RENDERING_TIMEOUT_S:
+                # Mark failed once so the retry path works without a
+                # second click. Idempotent — if the background task
+                # is somehow still alive and races us, it'll either
+                # mark_render_ready or mark_render_failed too, and
+                # the operator's next click handles it.
+                try:
+                    await ClipsRepo(db).mark_render_failed(
+                        clip_id,
+                        error=(
+                            f"render timed out after {int(age_s)}s "
+                            "without completing (background task "
+                            "likely crashed)"
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                return JSONResponse(
+                    {
+                        "state": "failed",
+                        "progress_pct": int(clip.render_progress_pct or 0),
+                        "error": (
+                            f"render timed out after {int(age_s)}s "
+                            "without completing (background task "
+                            "likely crashed) — click Retry"
+                        ),
+                        "retry_url": (
+                            f"/dashboard/clips/{clip_id}/render-retry"
+                            f"?quality={quality}"
+                        ),
+                    }
+                )
+        except (ValueError, TypeError):
+            # Bad timestamp → ignore the zombie check, surface
+            # current state.
             pass
 
     return JSONResponse(
@@ -3920,16 +3993,55 @@ async def clip_download(
         )
 
     # Render already in flight — return current status.
+    #
+    # Render Migration R6 — but if render has been 'rendering' for
+    # longer than _ZOMBIE_RENDERING_TIMEOUT_S, the background task
+    # almost certainly crashed and nobody marked failed. Auto-reset
+    # to idle so this very click can schedule a fresh background
+    # task (the code below) instead of returning 202 + hopeless
+    # status poll. This is the recovery path for the two stuck
+    # clips already on the operator's deploy.
     if clip.render_state == "rendering":
-        return JSONResponse(
-            status_code=202,
-            content={
-                "state": "rendering",
-                "progress_pct": int(clip.render_progress_pct or 0),
-                "error": None,
-                "status_url": f"/dashboard/clips/{clip_id}/render-status?quality={quality}",
-            },
-        )
+        is_zombie = False
+        if clip.render_started_at:
+            try:
+                from datetime import UTC, datetime as _dt
+                started = _dt.fromisoformat(clip.render_started_at)
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=UTC)
+                age_s = (_dt.now(UTC) - started).total_seconds()
+                if age_s > _ZOMBIE_RENDERING_TIMEOUT_S:
+                    is_zombie = True
+                    import structlog
+                    structlog.get_logger(
+                        "nexoclip.api.dashboard"
+                    ).warning(
+                        "clip_download.zombie_render_recovered",
+                        clip_id=clip_id,
+                        age_s=int(age_s),
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if is_zombie:
+            try:
+                await ClipsRepo(db).reset_render_state(clip_id)
+                clip.render_state = "idle"
+                clip.render_progress_pct = 0
+                clip.render_error = None
+            except Exception:  # noqa: BLE001
+                pass
+            # Fall through to the schedule-new-render branch below.
+        else:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "state": "rendering",
+                    "progress_pct": int(clip.render_progress_pct or 0),
+                    "error": None,
+                    "status_url": f"/dashboard/clips/{clip_id}/render-status?quality={quality}",
+                },
+            )
 
     # Idle (default) — schedule the background render. The repo
     # transition is atomic on (state != 'rendering') so a concurrent

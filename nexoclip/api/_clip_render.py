@@ -99,6 +99,12 @@ async def render_clip_in_background(
 
     db = Database(db_path)
     await db.connect()
+    # Render Migration R5 — outer guard. ANY unhandled exception below
+    # leaves state stuck at 'rendering' → operator's UI polls forever
+    # with no way to retry. Wrap the whole body so a stray crash (in
+    # validation, mark_render_ready DB write, anywhere) still ends up
+    # at mark_render_failed before this coroutine returns.
+    crashed_with: BaseException | None = None
     try:
         # Throttled progress callback. The recorder calls this many
         # times per second; we debounce to 1 Hz so SQLite writes don't
@@ -155,6 +161,28 @@ async def render_clip_in_background(
                 "render_clip.hybrid_failed_falling_back clip=%s error=%s",
                 clip_id, str(e)[:300],
             )
+        except Exception as e:  # noqa: BLE001
+            # Render Migration R5 — catch ANY exception the hybrid
+            # recorder leaked. Previously only HybridRecordingError
+            # was caught, so a FileNotFoundError (Railway's silent
+            # ffmpeg disk-full failure landed on `output_path.stat()`
+            # in the success-log line) propagated all the way out
+            # of render_clip_in_background → state stuck at
+            # 'rendering' → UI polled /render-status forever with
+            # no way to retry. Treat any non-HybridRecordingError
+            # exception as a hybrid failure → fall through to the
+            # legacy seek-and-shoot path, same as if it had raised
+            # HybridRecordingError properly.
+            hybrid_failed_with = f"{type(e).__name__}: {e}"
+            _log.exception(
+                "render_clip.hybrid_unexpected_exception_falling_back "
+                "clip=%s",
+                clip_id,
+            )
+            # The hybrid path may have left a partial composite file
+            # on disk; wipe before legacy gets a chance to skip-because-
+            # exists or otherwise interact with stale bytes.
+            _safe_unlink(output_path)
 
         if hybrid_failed_with is not None:
             # Reset progress so the legacy path's 0-100% animation
@@ -246,8 +274,42 @@ async def render_clip_in_background(
             output_path.stat().st_size if output_path.exists() else 0,
             duration_s,
         )
+    except BaseException as e:  # noqa: BLE001
+        # R5 outer guard. We caught nested exceptions for each step
+        # above, but ANY uncaught path (validation crash, DB write
+        # crash, import error, etc.) lands here so state always
+        # exits 'rendering' before the coroutine returns. We swallow
+        # rather than re-raise — FastAPI's BackgroundTask runner
+        # would log + drop, leaving the operator with a stuck
+        # spinner and no error message. Only re-raise for
+        # KeyboardInterrupt / SystemExit / asyncio.CancelledError
+        # so the worker can still shut down cleanly.
+        crashed_with = e
+        import asyncio as _asyncio
+        if isinstance(e, (KeyboardInterrupt, SystemExit, _asyncio.CancelledError)):
+            raise
+        _safe_unlink(output_path)
+        try:
+            with bound_tenant(tenant_id):
+                await ClipsRepo(db).mark_render_failed(
+                    clip_id,
+                    error=f"runner crashed: {type(e).__name__}: {e}",
+                )
+        except BaseException:  # noqa: BLE001 — even the DB write may fail
+            _log.exception(
+                "render_clip.outer_guard_mark_failed_crashed clip=%s",
+                clip_id,
+            )
+        _log.exception(
+            "render_clip.outer_guard_caught clip=%s", clip_id,
+        )
     finally:
         await db.close()
+        if crashed_with is not None:
+            _log.warning(
+                "render_clip.finished_via_outer_guard clip=%s",
+                clip_id,
+            )
 
 
 __all__ = ["render_clip_in_background"]

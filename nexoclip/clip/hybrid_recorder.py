@@ -205,10 +205,25 @@ async def record_clip_hybrid(
         )
 
         await _emit_progress(progress_callback, 100)
+        # Telemetry stat — failure here is non-fatal. The post-write
+        # check inside _ffmpeg_composite_alpha_over_source already
+        # raised if the file was missing / 0 bytes, so by the time we
+        # get here we expect it to be on disk. If something deleted it
+        # between now and that check (unlikely but observable on shared
+        # volumes), don't propagate — the runner's validate step in
+        # _clip_render.py is the gatekeeper now.
+        try:
+            output_bytes = output_path.stat().st_size
+        except OSError as e:
+            _log.warning(
+                "hybrid_recorder.stat_failed",
+                clip_id=clip_id, output=str(output_path), error=str(e),
+            )
+            output_bytes = -1
         _log.info(
             "hybrid_recorder.done",
             clip_id=clip_id, output=str(output_path),
-            output_bytes=output_path.stat().st_size,
+            output_bytes=output_bytes,
         )
     return output_path
 
@@ -360,6 +375,36 @@ def _ffmpeg_composite_alpha_over_source(
         raise HybridRecordingError(
             f"ffmpeg composite failed (rc={proc.returncode}): "
             f"{stderr_tail.strip()}"
+        )
+
+    # Render Migration R5 — post-condition. ffmpeg's exit code is NOT
+    # a reliable signal that the output landed: on Railway's persistent
+    # volume we've observed ffmpeg return 0 with the output file
+    # missing (suspected disk-full / mount race; needs more data to
+    # confirm). Without this check, the success path then calls
+    # `output_path.stat()` for telemetry → FileNotFoundError propagates
+    # out of record_clip_hybrid → past _clip_render.py's narrow
+    # exception handler → kills the background task → state stays
+    # 'rendering' → UI polls forever with no way to retry.
+    # Turn the silent failure into a loud one.
+    if not output_path.exists():
+        stderr_tail = (
+            proc.stderr or b""
+        ).decode("utf-8", errors="replace")[-800:]
+        raise HybridRecordingError(
+            f"ffmpeg returned rc=0 but {output_path.name} is missing on "
+            f"disk (likely disk-full or mount race). stderr tail: "
+            f"{stderr_tail.strip() or '(empty)'}"
+        )
+    try:
+        size = output_path.stat().st_size
+    except OSError as e:
+        raise HybridRecordingError(
+            f"stat({output_path.name}) failed after ffmpeg rc=0: {e}"
+        ) from e
+    if size == 0:
+        raise HybridRecordingError(
+            f"ffmpeg returned rc=0 but {output_path.name} is 0 bytes"
         )
 
 

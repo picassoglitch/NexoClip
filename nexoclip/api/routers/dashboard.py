@@ -654,7 +654,6 @@ async def diarize_health(
             }
 
     ctx = {
-        "request": request,
         "pyannote": pyannote,
         "torchaudio": torchaudio,
         "torchaudio_audiometadata": torchaudio_audiometadata,
@@ -666,7 +665,7 @@ async def diarize_health(
         "pipeline_load": pipeline_load,
         "probe_load_requested": bool(probe_load),
     }
-    return templates.TemplateResponse("diarize_health.html", ctx)
+    return templates.TemplateResponse(request, "diarize_health.html", ctx)
 
 
 # ---------- Pipeline queue (admin) ----------
@@ -766,9 +765,9 @@ async def queue_health(
         bucket = "danger"
 
     return templates.TemplateResponse(
+        request,
         "queue_health.html",
         {
-            "request": request,
             "running": running,
             "step_counts": step_counts,
             "total_running": len(running),

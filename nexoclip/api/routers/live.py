@@ -77,9 +77,9 @@ async def live_dashboard(
         if s.is_live or (s.status in ("live_ended", "live"))
     ]
     return templates.TemplateResponse(
+        request,
         "live_dashboard.html",
         {
-            "request": request,
             "active_key": active_key,
             "rtmp_url_base": rtmp_url_base,
             "live_streams": live_streams,

@@ -108,21 +108,18 @@ async def balance_chip(request: Request) -> Response:
             '<span>—</span></a>',
             status_code=200,
         )
-    # Migration Task: scrub the balance dict to scalar-only values
-    # before handing to Jinja. Production log showed
-    # `balance_chip.render_failed: unhashable type: 'dict'` spamming
-    # every 30s — root cause was unclear (could be a future schema
-    # drift, a JSON-decoded nested dict landing in `monthly_used`,
-    # or some Jinja extension hashing under the hood). Coercing each
-    # field to a known scalar shape eliminates the class of failures
-    # without us needing to identify the exact one — and any non-
-    # scalar value falls through to the sensible default the template
-    # already handles. Cosmetic but errored on every 30s poll → spammy
-    # logs → real signals lost.
+    # The `unhashable type: 'dict'` spam was the old Starlette
+    # `TemplateResponse(name, context)` signature breaking under
+    # Starlette 1.0, which moved `request` to the first positional
+    # arg. The dict-shaped context ended up bound to `name`, and
+    # Jinja hashed it for its template cache. Calling with the new
+    # signature kills the error. `_coerce_balance_to_scalars` stays
+    # as defense-in-depth so a future schema drift can't make the
+    # 30s poll spam logs again.
     safe_bal = _coerce_balance_to_scalars(bal)
     try:
         return templates.TemplateResponse(
-            "_balance_chip.html", {"request": request, "_bal": safe_bal}
+            request, "_balance_chip.html", {"_bal": safe_bal}
         )
     except Exception as e:  # noqa: BLE001
         from structlog import get_logger
@@ -3731,9 +3728,19 @@ async def clip_render_status(
     # Render Migration R3 — `.exists()` alone isn't enough: a partial
     # / 0-byte / truncated file from a crashed encode also passes. We
     # delegate to is_servable_cached_mp4 which adds a size floor + ISO
-    # BMFF magic-byte check. A file that exists but fails the check
-    # gets unlinked here so the next click triggers a clean render
-    # instead of seeing the same debris again.
+    # BMFF magic-byte check.
+    #
+    # Render Migration R9 — but DO NOT evict while state='rendering'.
+    # /render-status is polled ~1/s during a render; the in-progress
+    # ffmpeg output is small (< 1MB) for most of the encode, so
+    # is_servable_cached_mp4 returns False. The OLD code then
+    # unlinked the file — on Linux that orphans the inode (ffmpeg's
+    # fd is still open so the encode "succeeds" with rc=0, but the
+    # directory entry is gone), producing the exact symptom the
+    # operator hit: "ffmpeg rc=0 but output missing". R3's race
+    # guard already protects the download endpoint; this lands the
+    # equivalent guard on the polling endpoint that was actually
+    # destroying the file.
     from nexoclip.api._render_validation import is_servable_cached_mp4
     if rendered.exists():
         if is_servable_cached_mp4(rendered):
@@ -3747,12 +3754,19 @@ async def clip_render_status(
                     ),
                 }
             )
-        # Debris on disk — clear it and report current state without
-        # the magical "ready" override.
-        try:
-            rendered.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # File exists but failed the sanity gate. Same two cases as
+        # the download endpoint:
+        #   - state == 'rendering' → ffmpeg is mid-write. Don't
+        #     touch the file. Just surface current render progress
+        #     and let the next poll re-check.
+        #   - state != 'rendering' → debris from a pre-R5 crashed
+        #     render. Unlink so the next download click triggers a
+        #     clean render instead of seeing the same debris again.
+        if clip.render_state != "rendering":
+            try:
+                rendered.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # Render Migration R6 — zombie detection. The background runner
     # SHOULD mark_render_failed before returning, but R5 + the outer

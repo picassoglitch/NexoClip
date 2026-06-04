@@ -229,6 +229,95 @@ async def test_download_auto_recovers_zombie_render(
     assert scheduled[0]["clip_id"] == "clp_zombie_dl"
 
 
+# ---- R9: /render-status race guard ----
+
+
+async def test_render_status_does_not_unlink_during_active_render(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    """The actual root cause that haunted the operator for a third
+    session: /render-status is polled ~1/s during a render. When
+    ffmpeg is partway through writing, the cache file exists but is
+    smaller than the 1 MB servable floor → R3's debris-eviction would
+    unlink it. On Linux that orphans the inode (ffmpeg's fd is still
+    open) and the encode "succeeds" with rc=0 but the directory entry
+    is gone. Operator sees: 'ffmpeg rc=0 but output missing'.
+
+    Pin: while state='rendering', /render-status must NOT touch the
+    cache file even if it's currently sub-1MB."""
+    tenant_id = tenants["alice"]["id"]
+    clip_dir = await _seed_clip_in_state(
+        db, tenant_id,
+        clip_id="clp_mid_encode",
+        render_state="rendering",
+        render_started_at=_ago(2),  # within the 15-min zombie window
+        tmp_path=tmp_path,
+    )
+    # Simulate ffmpeg mid-encode: file exists, has the ftyp box
+    # ffmpeg wrote on open, but is well under the 1 MB threshold.
+    cache_path = clip_dir / "clip_render_1080.mp4"
+    cache_path.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\x00" * 50_000)
+    pre_bytes = cache_path.stat().st_size
+
+    # Poll many times — the operator's UI does this every second.
+    # Each poll used to unlink the file; now each poll must leave
+    # it alone.
+    for _ in range(10):
+        r = await client.get(
+            "/dashboard/clips/clp_mid_encode/render-status",
+            headers=auth(tenants["alice"]["token"]),
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["state"] == "rendering"
+
+    # The file must STILL be on disk after all those polls. If it
+    # vanishes, we've regressed the race.
+    assert cache_path.exists(), (
+        "/render-status unlinked the cache file while state=rendering "
+        "— this races with the in-flight ffmpeg encode and orphans "
+        "the inode"
+    )
+    assert cache_path.stat().st_size == pre_bytes
+
+
+async def test_render_status_still_evicts_debris_when_not_rendering(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    """The R9 guard must NOT break R3's actual purpose: when state is
+    'idle' / 'failed' / 'ready' and the file on disk is debris (sub-
+    1MB), evict it so the next click triggers a clean render."""
+    tenant_id = tenants["alice"]["id"]
+    clip_dir = await _seed_clip_in_state(
+        db, tenant_id,
+        clip_id="clp_stale_debris",
+        # state='ready' but cache is debris — the scenario where a
+        # pre-R5 render crashed and left a partial file. R3 was
+        # designed to clear this.
+        render_state="ready",
+        render_started_at=_ago(20),
+        tmp_path=tmp_path,
+    )
+    cache_path = clip_dir / "clip_render_1080.mp4"
+    cache_path.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\x00" * 500)
+    assert cache_path.exists()
+
+    r = await client.get(
+        "/dashboard/clips/clp_stale_debris/render-status",
+        headers=auth(tenants["alice"]["token"]),
+    )
+    assert r.status_code == 200
+    # Debris was correctly evicted (the eviction path still fires when
+    # there's no race with a running encode).
+    assert not cache_path.exists()
+
+
 async def test_download_does_not_recover_fresh_render(
     client: httpx.AsyncClient,
     db: Database,

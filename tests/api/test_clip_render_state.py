@@ -132,7 +132,14 @@ async def test_render_status_ready_when_cache_on_disk(
     tenant_id = tenants["alice"]["id"]
     clip_path = await _seed_clip(db, tenant_id, output_dir=tmp_path)
     # Pre-create the rendered MP4 in the same dir as the source clip.
-    (clip_path.parent / "clip_render_1080.mp4").write_bytes(b"\x00rendered")
+    # Render Migration R3 — the cache file must look like a real MP4:
+    # ISO BMFF ftyp box at offset 4 + size >= 1 MB. The old test wrote
+    # 9 bytes which is correctly debris under the new sanity gate.
+    cache = clip_path.parent / "clip_render_1080.mp4"
+    cache.write_bytes(
+        b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2mp41"
+        + b"\x00" * 1_100_000,
+    )
 
     r = await client.get(
         "/dashboard/clips/clp_test/render-status",
@@ -168,7 +175,13 @@ async def test_download_cache_hit_returns_mp4(
     tenant_id = tenants["alice"]["id"]
     clip_path = await _seed_clip(db, tenant_id, output_dir=tmp_path)
     rendered = clip_path.parent / "clip_render_1080.mp4"
-    rendered.write_bytes(b"fake mp4 bytes")
+    # Render Migration R3 — must look like a valid MP4 (ftyp box +
+    # >= 1 MB) for the sanity gate to treat it as cache-servable.
+    valid_mp4 = (
+        b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2mp41"
+        + b"\x00" * 1_100_000
+    )
+    rendered.write_bytes(valid_mp4)
 
     r = await client.get(
         "/dashboard/clips/clp_test/download",
@@ -177,7 +190,8 @@ async def test_download_cache_hit_returns_mp4(
     assert r.status_code == 200
     assert r.headers["content-type"] == "video/mp4"
     assert "attachment" in r.headers.get("content-disposition", "")
-    assert r.content == b"fake mp4 bytes"
+    # FileResponse streams the file's actual bytes verbatim.
+    assert r.content == valid_mp4
 
 
 async def test_download_idle_state_kicks_off_background_and_returns_202(

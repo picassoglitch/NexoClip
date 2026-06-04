@@ -38,6 +38,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from nexoclip.api._render_validation import validate_rendered_mp4
+
 if TYPE_CHECKING:
     pass
 
@@ -47,6 +49,19 @@ _log = logging.getLogger("nexoclip.clip_render")
 # back to the DB. Capping at 1/s prevents a 30-fps capture from
 # hammering SQLite with thousands of UPDATE statements.
 _PROGRESS_UPDATE_DEBOUNCE_S = 1.0
+
+
+def _safe_unlink(path: Path) -> None:
+    """Best-effort delete used by the failure paths so a partial /
+    corrupt file is never left for the next download click to serve
+    as a cache hit. We swallow OSError because the only thing worse
+    than a partial file is failing the failure path."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:  # noqa: BLE001 — cleanup never raises
+        _log.warning(
+            "render_clip.unlink_failed path=%s error=%s", path, e,
+        )
 
 
 async def render_clip_in_background(
@@ -169,6 +184,11 @@ async def render_clip_in_background(
                     progress_callback=_on_progress,
                 )
         except PreviewRecordingError as e:
+            # Render Migration R2 — wipe any partial bytes the recorder
+            # left on disk BEFORE marking failed. Otherwise the download
+            # endpoint's rendered.exists() branch serves the fragment
+            # ahead of the 409 + retry hint.
+            _safe_unlink(output_path)
             with bound_tenant(tenant_id):
                 await ClipsRepo(db).mark_render_failed(
                     clip_id, error=f"recorder: {e}",
@@ -178,6 +198,7 @@ async def render_clip_in_background(
             )
             return
         except Exception as e:  # noqa: BLE001 — catch-all so state lands
+            _safe_unlink(output_path)
             with bound_tenant(tenant_id):
                 await ClipsRepo(db).mark_render_failed(
                     clip_id, error=f"{type(e).__name__}: {e}",
@@ -187,24 +208,43 @@ async def render_clip_in_background(
             )
             return
 
-        # Sanity: the file is supposed to exist on success. If it
-        # somehow doesn't, surface that instead of marking ready and
-        # then 404'ing on the download.
-        if not output_path.exists():
+        # Render Migration R1 — validate the produced MP4 BEFORE
+        # marking ready. ffmpeg can return exit 0 and still emit a
+        # malformed container (missing moov atom, broken mux, weird
+        # timestamps). The download path served those as cache hits
+        # → operator got a file Windows refused to open
+        # (0xC00D36C4). Validation now gates the ready flip: a file
+        # that doesn't parse / has no video / has no audio / is
+        # truncated → gets unlinked + the render is marked failed
+        # with a clear reason. Partial bytes never survive into the
+        # download endpoint's cache-hit branch.
+        ok, reason = validate_rendered_mp4(
+            output_path,
+            expected_duration_s=duration_s,
+        )
+        if not ok:
+            _safe_unlink(output_path)
             with bound_tenant(tenant_id):
                 await ClipsRepo(db).mark_render_failed(
                     clip_id,
-                    error=(
-                        f"recorder returned ok but {output_path.name} "
-                        f"is missing on disk"
-                    ),
+                    error=f"output failed validation: {reason}",
                 )
+            _log.warning(
+                "render_clip.validation_failed clip=%s reason=%s",
+                clip_id, (reason or "")[:200],
+            )
             return
 
         with bound_tenant(tenant_id):
             await ClipsRepo(db).mark_render_ready(clip_id)
         _log.info(
-            "render_clip.ready clip=%s output=%s", clip_id, output_path,
+            "render_clip.ready clip=%s output=%s renderer=%s "
+            "bytes=%d duration_s=%.2f",
+            clip_id,
+            output_path,
+            "legacy" if hybrid_failed_with else "hybrid",
+            output_path.stat().st_size if output_path.exists() else 0,
+            duration_s,
         )
     finally:
         await db.close()

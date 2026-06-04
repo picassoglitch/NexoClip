@@ -3716,17 +3716,32 @@ async def clip_render_status(
 
     # Cache hit takes precedence over the DB state — covers the legacy
     # clip that was rendered before this migration ran.
+    #
+    # Render Migration R3 — `.exists()` alone isn't enough: a partial
+    # / 0-byte / truncated file from a crashed encode also passes. We
+    # delegate to is_servable_cached_mp4 which adds a size floor + ISO
+    # BMFF magic-byte check. A file that exists but fails the check
+    # gets unlinked here so the next click triggers a clean render
+    # instead of seeing the same debris again.
+    from nexoclip.api._render_validation import is_servable_cached_mp4
     if rendered.exists():
-        return JSONResponse(
-            {
-                "state": "ready",
-                "progress_pct": 100,
-                "error": None,
-                "download_url": (
-                    f"/dashboard/clips/{clip_id}/download?quality={quality}"
-                ),
-            }
-        )
+        if is_servable_cached_mp4(rendered):
+            return JSONResponse(
+                {
+                    "state": "ready",
+                    "progress_pct": 100,
+                    "error": None,
+                    "download_url": (
+                        f"/dashboard/clips/{clip_id}/download?quality={quality}"
+                    ),
+                }
+            )
+        # Debris on disk — clear it and report current state without
+        # the magical "ready" override.
+        try:
+            rendered.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     return JSONResponse(
         {
@@ -3813,14 +3828,84 @@ async def clip_download(
     rendered = original.parent / f"clip_render_{resolved_key}.mp4"
 
     # Cache hit — serve immediately, ignore the DB state column.
+    #
+    # Render Migration R3 — `.exists()` alone isn't enough: a partial
+    # / truncated / 0-byte file from a crashed encode also passes
+    # `.exists()`. Operators were getting these as Windows-codec-error
+    # downloads (0xC00D36C4). is_servable_cached_mp4 adds a size
+    # floor + ISO BMFF magic-byte gate. If the cache file fails the
+    # gate, we unlink + fall through into the render-scheduling path
+    # so the next response is either a clean cache miss (kicks off
+    # background) or the 409 failed-state hint.
+    from nexoclip.api._render_validation import is_servable_cached_mp4
     if rendered.exists():
-        pretty = f"nexoclip_{clip_id}.mp4"
-        return FileResponse(
-            path=rendered,
-            media_type="video/mp4",
-            filename=pretty,
-            headers={"Content-Disposition": f'attachment; filename="{pretty}"'},
+        if is_servable_cached_mp4(rendered):
+            pretty = f"nexoclip_{clip_id}.mp4"
+            return FileResponse(
+                path=rendered,
+                media_type="video/mp4",
+                filename=pretty,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{pretty}"',
+                },
+            )
+        # File exists but failed the sanity gate. Two cases:
+        #
+        #   a. state == 'rendering' — ffmpeg is mid-write. The file
+        #      is currently small (< 1 MB) but growing; magic bytes
+        #      were written first so a future check will pass. Do
+        #      NOT evict — unlinking under Linux would yank the
+        #      directory entry from underneath the running ffmpeg
+        #      and orphan the inode; on Windows it would fail with
+        #      a sharing violation. Just return 202 and let the UI
+        #      keep polling.
+        #
+        #   b. state != 'rendering' — debris from a crashed render
+        #      (the R1 + R2 fixes should prevent this going forward;
+        #      this branch covers pre-fix debris already on disk).
+        #      Log, unlink, reset state, fall through to the
+        #      schedule-new-render path.
+        if clip.render_state == "rendering":
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "state": "rendering",
+                    "progress_pct": int(clip.render_progress_pct or 0),
+                    "error": None,
+                    "status_url": (
+                        f"/dashboard/clips/{clip_id}/render-status"
+                        f"?quality={quality}"
+                    ),
+                },
+            )
+
+        import structlog
+        try:
+            cache_bytes = rendered.stat().st_size
+        except OSError:
+            cache_bytes = -1
+        structlog.get_logger("nexoclip.api.dashboard").warning(
+            "clip_download.corrupt_cache_evicted",
+            clip_id=clip_id,
+            path=str(rendered),
+            bytes=cache_bytes,
+            prior_state=clip.render_state,
         )
+        try:
+            rendered.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            await ClipsRepo(db).reset_render_state(clip_id)
+            # Mirror the reset onto the local Pydantic row so the
+            # failed/rendering branches below don't read the stale
+            # value and short-circuit before the schedule-new-render
+            # path runs. ClipRow's mutability is default (not frozen).
+            clip.render_state = "idle"
+            clip.render_progress_pct = 0
+            clip.render_error = None
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
 
     # Failed render — surface the error + tell UI to show retry button.
     if clip.render_state == "failed":

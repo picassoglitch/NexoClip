@@ -341,6 +341,16 @@ def _ffmpeg_composite_alpha_over_source(
     """
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     overlay_pattern = str(frames_dir / "overlay_%08d.png")
+    # Render Migration R9 — atomic publish. ffmpeg writes to a sibling
+    # `.partial.mp4` and we `os.replace` into the final cache path only
+    # after the post-conditions pass. Previously ffmpeg wrote directly
+    # to `output_path`, so a download click that landed mid-render hit
+    # FileResponse against a growing file: Content-Length sampled at
+    # response-start, more bytes written before streaming finished →
+    # `Response content longer than Content-Length` + a truncated MP4
+    # the operator's player rejected with 0xC00D36C4. With the rename,
+    # `output_path` only ever exists as a fully-flushed render.
+    partial_path = output_path.with_suffix(".partial.mp4")
     cmd = [
         ffmpeg,
         "-y",
@@ -378,46 +388,65 @@ def _ffmpeg_composite_alpha_over_source(
         # streaming preview of the rendered MP4, run a SEPARATE
         # `qt-faststart` pass that doesn't have ffmpeg's
         # delete-on-failure semantics.
-        str(output_path),
+        str(partial_path),
     ]
-    _log.info("hybrid_recorder.composite_start", cmd=" ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, check=False)
-    if proc.returncode != 0:
-        stderr_tail = proc.stderr.decode("utf-8", errors="replace")[-800:]
-        raise HybridRecordingError(
-            f"ffmpeg composite failed (rc={proc.returncode}): "
-            f"{stderr_tail.strip()}"
-        )
-
-    # Render Migration R5 — post-condition. ffmpeg's exit code is NOT
-    # a reliable signal that the output landed: on Railway's persistent
-    # volume we've observed ffmpeg return 0 with the output file
-    # missing (suspected disk-full / mount race; needs more data to
-    # confirm). Without this check, the success path then calls
-    # `output_path.stat()` for telemetry → FileNotFoundError propagates
-    # out of record_clip_hybrid → past _clip_render.py's narrow
-    # exception handler → kills the background task → state stays
-    # 'rendering' → UI polls forever with no way to retry.
-    # Turn the silent failure into a loud one.
-    if not output_path.exists():
-        stderr_tail = (
-            proc.stderr or b""
-        ).decode("utf-8", errors="replace")[-800:]
-        raise HybridRecordingError(
-            f"ffmpeg returned rc=0 but {output_path.name} is missing on "
-            f"disk (likely disk-full or mount race). stderr tail: "
-            f"{stderr_tail.strip() or '(empty)'}"
-        )
+    _log.info(
+        "hybrid_recorder.composite_start",
+        cmd=" ".join(cmd),
+        partial=str(partial_path),
+        final=str(output_path),
+    )
     try:
-        size = output_path.stat().st_size
-    except OSError as e:
-        raise HybridRecordingError(
-            f"stat({output_path.name}) failed after ffmpeg rc=0: {e}"
-        ) from e
-    if size == 0:
-        raise HybridRecordingError(
-            f"ffmpeg returned rc=0 but {output_path.name} is 0 bytes"
-        )
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+        if proc.returncode != 0:
+            stderr_tail = proc.stderr.decode("utf-8", errors="replace")[-800:]
+            raise HybridRecordingError(
+                f"ffmpeg composite failed (rc={proc.returncode}): "
+                f"{stderr_tail.strip()}"
+            )
+
+        # Render Migration R5 — post-condition. ffmpeg's exit code is
+        # NOT a reliable signal that the output landed: on Railway's
+        # persistent volume we've observed ffmpeg return 0 with the
+        # output file missing (suspected disk-full / mount race; needs
+        # more data to confirm). Without this check, the success path
+        # then calls `output_path.stat()` for telemetry →
+        # FileNotFoundError propagates out of record_clip_hybrid →
+        # past _clip_render.py's narrow exception handler → kills the
+        # background task → state stays 'rendering' → UI polls forever
+        # with no way to retry. Turn the silent failure into a loud
+        # one.
+        if not partial_path.exists():
+            stderr_tail = (
+                proc.stderr or b""
+            ).decode("utf-8", errors="replace")[-800:]
+            raise HybridRecordingError(
+                f"ffmpeg returned rc=0 but {partial_path.name} is "
+                f"missing on disk (likely disk-full or mount race). "
+                f"stderr tail: {stderr_tail.strip() or '(empty)'}"
+            )
+        try:
+            size = partial_path.stat().st_size
+        except OSError as e:
+            raise HybridRecordingError(
+                f"stat({partial_path.name}) failed after ffmpeg rc=0: {e}"
+            ) from e
+        if size == 0:
+            raise HybridRecordingError(
+                f"ffmpeg returned rc=0 but {partial_path.name} is 0 bytes"
+            )
+
+        # Atomic publish. Same-FS rename is atomic on POSIX and Windows;
+        # both paths share a parent so the rename can't cross devices.
+        os.replace(partial_path, output_path)
+    except BaseException:
+        # Any failure path: scrub the partial so it can't accumulate as
+        # debris that a later operator-facing tool mistakes for cache.
+        try:
+            partial_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 async def _emit_progress(callback: Any, pct: int) -> None:

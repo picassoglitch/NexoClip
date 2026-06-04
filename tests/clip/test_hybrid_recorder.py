@@ -232,3 +232,105 @@ def test_composite_nonzero_exit_surfaces_as_hybrid_error(
             fps=30,
             duration_s=10.0,
         )
+
+
+# ---- Render Migration R10 — atomic publish ----
+
+
+def test_composite_writes_to_partial_then_renames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """ffmpeg targets `<output>.partial.mp4`, not the final cache path.
+
+    The download endpoint serves whatever exists at `output_path`. If
+    ffmpeg writes there directly, a concurrent download click hits a
+    growing file → FileResponse stamps Content-Length from the current
+    size, ffmpeg keeps appending, Starlette over-sends → RuntimeError
+    `Response content longer than Content-Length` + a truncated MP4
+    the player rejects (0xC00D36C4). Atomic rename closes the race:
+    `output_path` is never visible to a request until the encode +
+    post-conditions are fully done.
+    """
+    monkeypatch.setattr(hybrid_recorder.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    targets: list[str] = []
+
+    class _Proc:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(cmd: list[str], *args, **kwargs):
+        target = cmd[-1]
+        targets.append(target)
+        out = Path(target)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x00fake mp4 large enough")
+        return _Proc()
+
+    monkeypatch.setattr(hybrid_recorder.subprocess, "run", fake_run)
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00src")
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    out = tmp_path / "clip_render_1080.mp4"
+
+    _ffmpeg_composite_alpha_over_source(
+        source_video=source,
+        frames_dir=frames,
+        output_path=out,
+        fps=30,
+        duration_s=10.0,
+    )
+
+    # ffmpeg was pointed at the partial path, NOT the final.
+    assert targets, "ffmpeg was never called"
+    assert targets[0].endswith(".partial.mp4"), targets[0]
+    assert targets[0] != str(out), (
+        "regression: ffmpeg is writing directly to the cache path again — "
+        "would race a concurrent download click"
+    )
+    # After success, the partial is gone and the final exists.
+    assert not Path(targets[0]).exists(), "partial should be renamed away"
+    assert out.exists(), "atomic publish never happened"
+
+
+def test_composite_failure_scrubs_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """When ffmpeg fails, the `.partial.mp4` shouldn't linger on disk —
+    leftover partials would mislead a future operator-facing tool that
+    walked the output directory. Cleanup runs in the recorder's
+    try/except so the failure path doesn't accumulate debris."""
+    monkeypatch.setattr(hybrid_recorder.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+
+    class _Proc:
+        returncode = 1
+        stderr = b"ffmpeg: broke"
+
+    def fake_run(cmd: list[str], *args, **kwargs):
+        # Simulate ffmpeg leaving a partial behind before bailing.
+        target = Path(cmd[-1])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\x00partial bytes")
+        return _Proc()
+
+    monkeypatch.setattr(hybrid_recorder.subprocess, "run", fake_run)
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"\x00src")
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    out = tmp_path / "clip_render_1080.mp4"
+    partial = out.with_suffix(".partial.mp4")
+
+    with pytest.raises(HybridRecordingError):
+        _ffmpeg_composite_alpha_over_source(
+            source_video=source,
+            frames_dir=frames,
+            output_path=out,
+            fps=30,
+            duration_s=10.0,
+        )
+
+    assert not partial.exists(), "partial should be unlinked on failure"
+    assert not out.exists(), "final cache path must never appear on failure"

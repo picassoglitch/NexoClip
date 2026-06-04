@@ -65,6 +65,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -502,6 +503,12 @@ async def _encode_image_sequence(
     case the JPEG count overshoots by one frame due to rounding.
     """
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    # Render Migration R9 — atomic publish. Same rationale as the
+    # hybrid recorder: ffmpeg writes to a sibling `.partial.mp4` and
+    # we `os.replace` into `output_path` only after the post-conditions
+    # pass. Keeps the download endpoint from ever sampling a growing
+    # file's size for Content-Length and then over-shooting it.
+    partial_path = output_path.with_suffix(".partial.mp4")
     cmd = [
         ffmpeg,
         "-y",
@@ -538,31 +545,46 @@ async def _encode_image_sequence(
         # the operator sees a failed render. Faststart only matters
         # for in-browser streaming preview which we don't do; every
         # player handles moov-at-end fine for the download flow.
-        str(output_path),
+        str(partial_path),
     ]
-    _log.info("preview_recorder.ffmpeg_start", cmd=" ".join(cmd))
-    loop = asyncio.get_event_loop()
-    proc = await loop.run_in_executor(
-        None,
-        lambda: subprocess.run(  # noqa: S603 — args list, not shell
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            timeout=max(120.0, duration_s + 60.0),
-            check=False,
-        ),
+    _log.info(
+        "preview_recorder.ffmpeg_start",
+        cmd=" ".join(cmd),
+        partial=str(partial_path),
+        final=str(output_path),
     )
-    _log.info("preview_recorder.ffmpeg_done", rc=proc.returncode)
-    if proc.returncode != 0:
-        stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-800:]
-        raise PreviewRecordingError(
-            f"ffmpeg encode failed (rc={proc.returncode}): {stderr_tail.strip()}"
+    loop = asyncio.get_event_loop()
+    try:
+        proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(  # noqa: S603 — args list, not shell
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=max(120.0, duration_s + 60.0),
+                check=False,
+            ),
         )
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        raise PreviewRecordingError(
-            "ffmpeg returned 0 but no output file was written"
-        )
+        _log.info("preview_recorder.ffmpeg_done", rc=proc.returncode)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-800:]
+            raise PreviewRecordingError(
+                f"ffmpeg encode failed (rc={proc.returncode}): {stderr_tail.strip()}"
+            )
+        if not partial_path.exists() or partial_path.stat().st_size == 0:
+            raise PreviewRecordingError(
+                "ffmpeg returned 0 but no output file was written"
+            )
+
+        # Atomic publish — sibling paths, single FS, race-free swap.
+        os.replace(partial_path, output_path)
+    except BaseException:
+        try:
+            partial_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _validate_export(

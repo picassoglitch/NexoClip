@@ -268,9 +268,15 @@ class Settings(BaseSettings):
     # upload_post_api_key — single company-wide API key from
     # upload-post.com. Authenticates every call. Tenants never see it.
     # Header shape: `Authorization: Apikey <key>`.
+    #
+    # Env var: NEXOCLIP_UPLOAD_POST_API_KEY (per the class-level
+    # env_prefix="NEXOCLIP_"). Be explicit about this in the deploy
+    # docs — the raw `UPLOAD_POST_API_KEY` (what upload-post's own
+    # docs use as a placeholder) is silently ignored.
     upload_post_api_key: str | None = None
 
     # Base URL. Override only for tests / staging environments.
+    # Env var: NEXOCLIP_UPLOAD_POST_BASE_URL.
     upload_post_base_url: str = "https://api.upload-post.com"
 
 

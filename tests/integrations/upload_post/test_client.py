@@ -140,7 +140,10 @@ async def test_generate_connect_jwt_returns_access_url() -> None:
             link = await _client(http).generate_connect_jwt(
                 "ten_alice",
                 redirect_url="https://nexoclip.test/dashboard/publish/upload-post",
+                redirect_button_text="Back to NexoClip",
                 connect_title="Connect your accounts",
+                connect_description="Link your socials here.",
+                language="en",
             )
     assert link.access_url.startswith("https://app.upload-post.com/connect?token=")
     assert link.duration == "48h"
@@ -150,6 +153,12 @@ async def test_generate_connect_jwt_returns_access_url() -> None:
     assert "ten_alice" in sent_body
     assert "redirect_url" in sent_body
     assert "Connect your accounts" in sent_body
+    # The button text override is the critical one — without it
+    # the upload-post UI shows "Logout connection" as the back-
+    # to-app button, which is confusing.
+    assert "redirect_button_text" in sent_body
+    assert "Back to NexoClip" in sent_body
+    assert "language" in sent_body
 
 
 # ---- upload_video_from_url ----

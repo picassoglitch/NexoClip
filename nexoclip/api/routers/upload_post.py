@@ -268,11 +268,44 @@ async def upload_post_connect(
 
     # Tenant returns to our dashboard once they're done connecting.
     redirect_back = f"{_public_base_url(request)}/dashboard/publish/upload-post"
+
+    # Localize the "back to NexoClip" affordance + page chrome so the
+    # operator's locale carries through to upload-post's UI. Falls
+    # back to English when state.locale isn't set (CLI / cron paths).
+    locale = (getattr(request.state, "locale", None) or "en").lower()
+    if locale.startswith("es"):
+        button_text = "Volver a NexoClip"
+        connect_title = "Conecta tus cuentas de publicación de NexoClip"
+        connect_description = (
+            "Vincula TikTok, Instagram, YouTube y demás. "
+            "Al terminar, pulsa Volver a NexoClip arriba a la derecha."
+        )
+        ui_lang = "es"
+    elif locale.startswith("pt"):
+        button_text = "Voltar para NexoClip"
+        connect_title = "Conecte suas contas de publicação do NexoClip"
+        connect_description = (
+            "Conecte TikTok, Instagram, YouTube e os demais. "
+            "Quando terminar, clique em Voltar para NexoClip."
+        )
+        ui_lang = "pt"
+    else:
+        button_text = "Back to NexoClip"
+        connect_title = "Connect your NexoClip publishing accounts"
+        connect_description = (
+            "Link TikTok, Instagram, YouTube, and others. "
+            "When done, click Back to NexoClip in the top right."
+        )
+        ui_lang = "en"
+
     try:
         jwt_link = await client.generate_connect_jwt(
             username,
             redirect_url=redirect_back,
-            connect_title="Connect your NexoClip publishing accounts",
+            redirect_button_text=button_text,
+            connect_title=connect_title,
+            connect_description=connect_description,
+            language=ui_lang,
         )
     except UploadPostError as e:
         _log.warning(

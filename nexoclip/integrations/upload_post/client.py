@@ -224,22 +224,42 @@ class UploadPostClient:
         username: str,
         *,
         redirect_url: str | None = None,
+        redirect_button_text: str | None = None,
         platforms: list[str] | None = None,
         logo_image: str | None = None,
         connect_title: str | None = None,
+        connect_description: str | None = None,
+        language: str | None = None,
     ) -> UploadJwtLink:
         """POST /api/uploadposts/users/generate-jwt — mint the 48h
         magic link the tenant visits to connect their social
-        accounts on upload-post's hosted UI."""
+        accounts on upload-post's hosted UI.
+
+        `redirect_button_text` is critical: the UI default is the
+        misleading "Logout connection" string, which is actually
+        the "return to your app" button. Always pass something
+        explicit like "Back to NexoClip" so the operator knows
+        how to come home.
+
+        `language` forces upload-post's UI locale (en|es|de|fr|pt).
+        When omitted, upload-post detects from browser headers and
+        falls back to English.
+        """
         payload: dict[str, Any] = {"username": username}
         if redirect_url:
             payload["redirect_url"] = redirect_url
+        if redirect_button_text:
+            payload["redirect_button_text"] = redirect_button_text
         if platforms:
             payload["platforms"] = platforms
         if logo_image:
             payload["logo_image"] = logo_image
         if connect_title:
             payload["connect_title"] = connect_title
+        if connect_description:
+            payload["connect_description"] = connect_description
+        if language:
+            payload["language"] = language
         body = await self._request(
             "POST",
             "/api/uploadposts/users/generate-jwt",

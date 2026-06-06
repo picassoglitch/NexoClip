@@ -273,13 +273,70 @@
     // logic — same data shape, same active/past/upcoming classes —
     // so the karaoke pop-color animation actually paints onto frames.
     var _captionLines = null;
+    var _captionSlots = [];   // R15 — pre-created stable word-spans
     var _captionEl = document.getElementById("pv-caption");
+
+    // Render Migration R15 — pre-create stable span slots.
+    //
+    // R11-R14 proved that page.screenshot in headless Chromium does
+    // not capture DOM elements inserted via innerHTML on a previously
+    // empty server-rendered element, even when:
+    //   - the DOM has the new spans painted at full opacity
+    //     (verified via console: opacity 1, color rgb(255,215,0))
+    //   - the page background is opaque magenta (R14, eliminating
+    //     omit_background as a suspect)
+    //   - animations + transitions are disabled (R12)
+    //   - layout is flushed before screenshot (R13)
+    //   - the recorder waits 20ms for compositor settle (R13)
+    //
+    // The discriminator is the diff between watermark/title/banner
+    // (server-rendered → in the initial paint surface → always in
+    // every screenshot) and the caption spans (JS-inserted per frame
+    // → never in any screenshot). Mutations on EXISTING DOM nodes
+    // go through Chromium's incremental rasterizer; new-element
+    // insertions via innerHTML on a previously-empty parent appear
+    // not to.
+    //
+    // Fix: when captions.json lands, allocate N spans inside
+    // #pv-caption (N = max words in any line). These spans become
+    // part of the initial paint surface once their first frame
+    // is rasterized. _renderCaptions then only mutates each
+    // existing span's textContent + className — no insertions, no
+    // removals.
+    function _allocCaptionSlots(maxWords) {
+      if (!_captionEl) return;
+      // Idempotent — only allocate the FIRST time the spans land
+      // on disk; re-calls (re-fetches) don't grow the slot pool.
+      if (_captionSlots.length >= maxWords) return;
+      var need = maxWords - _captionSlots.length;
+      for (var i = 0; i < need; i++) {
+        var s = document.createElement("span");
+        // Class is reset on every _renderCaptions call; baseline
+        // gives the slot the inactive opacity:0.55 styling so the
+        // first paint surface has the right pixels.
+        s.className = "nc-pv-caption__word";
+        s.textContent = "";
+        s.style.display = "none";
+        _captionEl.appendChild(s);
+        _captionSlots.push(s);
+      }
+    }
+
     fetch("/dashboard/clips/{{ clip.id }}/captions.json",
           { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (data && Array.isArray(data.lines)) {
           _captionLines = data.lines;
+          // Find the widest line so the slot pool fits every frame.
+          var maxWords = 1;
+          for (var i = 0; i < _captionLines.length; i++) {
+            var w = _captionLines[i].words;
+            if (Array.isArray(w) && w.length > maxWords) {
+              maxWords = w.length;
+            }
+          }
+          _allocCaptionSlots(maxWords);
         }
         window.__nexoclipRender.captions = data;
         // Whether or not lines exist, mark captions "ready" so the
@@ -309,31 +366,55 @@
     // screenshots in a row — hence "downloaded MP4 has no subs".
     function _renderCaptions(forcedT) {
       var v = document.getElementById("preview-video");
-      if (v && _captionLines && _captionEl) {
-        var t = (typeof forcedT === "number") ? forcedT : v.currentTime;
-        var activeLine = null;
-        for (var i = 0; i < _captionLines.length; i++) {
-          var ln = _captionLines[i];
-          if (t >= ln.ts && t < ln.end_ts) { activeLine = ln; break; }
-        }
-        if (activeLine && Array.isArray(activeLine.words)) {
-          var html = "";
-          for (var j = 0; j < activeLine.words.length; j++) {
+      if (!v || !_captionLines || !_captionEl) return;
+      var t = (typeof forcedT === "number") ? forcedT : v.currentTime;
+      var activeLine = null;
+      for (var i = 0; i < _captionLines.length; i++) {
+        var ln = _captionLines[i];
+        if (t >= ln.ts && t < ln.end_ts) { activeLine = ln; break; }
+      }
+      // R15 — mutate existing slot spans instead of innerHTML.
+      // innerHTML inserts brand-new DOM nodes; in headless Chromium
+      // those nodes never make it into page.screenshot's output even
+      // when computed style says they're fully painted. textContent
+      // + className changes on pre-allocated nodes (in the initial
+      // paint surface from page load + slot alloc) DO get rasterized
+      // because the compositor already has each slot in its layer
+      // list. See _allocCaptionSlots for the full rationale.
+      if (activeLine && Array.isArray(activeLine.words)) {
+        var nwords = activeLine.words.length;
+        // Defensive: if this line has more words than we allocated
+        // (shouldn't happen — _allocCaptionSlots sized to max), grow.
+        if (_captionSlots.length < nwords) _allocCaptionSlots(nwords);
+        for (var j = 0; j < _captionSlots.length; j++) {
+          var span = _captionSlots[j];
+          if (j < nwords) {
             var w = activeLine.words[j];
             var cls = "nc-pv-caption__word";
             if (t >= w.ts && t < w.end_ts) cls += " is-active";
             else if (t >= w.end_ts) cls += " is-past";
             else cls += " is-upcoming";
-            html += '<span class="' + cls + '"'
-                  + (w.emphasis ? ' data-emphasis="' + w.emphasis + '"' : "")
-                  + '>' + (w.text || "") + '</span>';
+            span.className = cls;
+            if (w.emphasis) span.setAttribute("data-emphasis", w.emphasis);
+            else span.removeAttribute("data-emphasis");
+            span.textContent = w.text || "";
+            span.style.display = "";
+          } else {
+            // Slot is beyond this line's word count — hide.
+            span.className = "nc-pv-caption__word";
+            span.removeAttribute("data-emphasis");
+            span.textContent = "";
+            span.style.display = "none";
           }
-          _captionEl.innerHTML = html;
-          _captionEl.style.visibility = "visible";
-        } else {
-          _captionEl.innerHTML = "";
-          _captionEl.style.visibility = "hidden";
         }
+        _captionEl.style.visibility = "visible";
+      } else {
+        // No active line at this t — hide every slot.
+        for (var j = 0; j < _captionSlots.length; j++) {
+          _captionSlots[j].textContent = "";
+          _captionSlots[j].style.display = "none";
+        }
+        _captionEl.style.visibility = "hidden";
       }
       // Drift fix Step 1 — DO NOT self-reschedule via rAF.
       //

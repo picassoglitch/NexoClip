@@ -312,9 +312,15 @@ async def _capture_overlay_alpha_sequence(
             # caption layout into the screenshot pipeline.
             await asyncio.sleep(0.020)
             try:
+                # R14 — opaque magenta page, no alpha channel needed.
+                # omit_background=True under headless Chromium silently
+                # drops dynamically-injected (innerHTML) elements from
+                # the screenshot, even when the DOM has them painted
+                # at full opacity. Switching to an opaque chroma-key
+                # background avoids that pipeline entirely; ffmpeg's
+                # colorkey filter strips the magenta before overlay.
                 png_bytes = await page.screenshot(
                     type="png",
-                    omit_background=True,
                     full_page=False,
                 )
             except Exception as e:  # noqa: BLE001
@@ -417,17 +423,37 @@ def _ffmpeg_composite_alpha_over_source(
     # the operator's player rejected with 0xC00D36C4. With the rename,
     # `output_path` only ever exists as a fully-flushed render.
     partial_path = output_path.with_suffix(".partial.mp4")
+    # Render Migration R14 — overlay PNGs now have an OPAQUE magenta
+    # background (set by the render template's data-capture-alpha CSS).
+    # The filter graph runs colorkey on the overlay stream FIRST to
+    # replace magenta with full transparency, THEN overlays onto the
+    # source video. This routes around the headless-Chromium bug where
+    # omit_background=true screenshots silently dropped dynamically-
+    # injected DOM nodes (the per-frame innerHTML caption spans). See
+    # the R14 comment block in clip_render.html for the full chain.
+    #
+    # colorkey=0xff00ff:0.10:0.05 — tolerance 0.10 (about 25 RGB
+    # values) catches anti-aliasing fringe around glyph edges; softness
+    # 0.05 fades the edge over a small band so text doesn't have a
+    # hard chroma halo. Values picked to be aggressive enough to clean
+    # the bg without eating into the white/yellow caption pixels (which
+    # are nowhere near magenta in HSV).
+    filter_graph = (
+        "[1:v]colorkey=0xff00ff:0.10:0.05[ovl];"
+        "[0:v][ovl]overlay=0:0:format=auto[v]"
+    )
     cmd = [
         ffmpeg,
         "-y",
         "-loglevel", "error",
         # Source video (audio + already-shaped frames).
         "-i", str(source_video),
-        # Alpha PNG sequence at the export framerate.
+        # Overlay PNG sequence at the export framerate.
         "-framerate", str(fps),
         "-i", overlay_pattern,
-        # Composite.
-        "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[v]",
+        # Composite: colorkey magenta out of overlay, then overlay
+        # the result on the source video.
+        "-filter_complex", filter_graph,
         "-map", "[v]",
         "-map", "0:a?",
         "-c:v", "libx264",

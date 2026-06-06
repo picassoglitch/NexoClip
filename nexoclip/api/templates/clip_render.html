@@ -63,16 +63,38 @@
     }
     /* Render Migration T2 — overlay-only capture mode for hybrid
        ffmpeg+overlay-alpha pipeline. Url has ?capture=alpha:
-         * Transparent background everywhere (html, body, .nc-preview).
-           Playwright's page.screenshot(omit_background=true) then
-           captures the overlay layer with alpha; ffmpeg composites
-           it back over the source video.
          * Source <video> element hidden (display:none) — ffmpeg
            handles the source frames directly, ~30× faster than
-           seek-and-shoot full composites. */
-    html[data-capture-alpha="1"], html[data-capture-alpha="1"] body,
+           seek-and-shoot full composites.
+
+       Render Migration R14 — magenta chroma key instead of alpha.
+
+       R11-R13 chain proved beyond doubt that page.screenshot with
+       omit_background=true was silently dropping the caption pixels
+       even though the DOM held the right element at the right
+       position with opacity:1 — title, banner, watermark all
+       survived (rendered in the initial paint surface from page
+       load) but the per-frame innerHTML-injected caption spans were
+       never committed to the screenshot's alpha output. R12 killed
+       animations, R13 forced layout flush + 20ms compositor settle;
+       neither helped. It's a headless-Chromium omit_background bug
+       with dynamic content, not a CSS or timing issue we can chase.
+
+       The fix routes around it entirely: paint a SOLID MAGENTA
+       (#ff00ff) background instead of transparent, take a normal
+       opaque screenshot (omit_background no longer matters), and
+       have ffmpeg's overlay step colorkey magenta to transparency
+       BEFORE compositing onto the source video. Magenta is the
+       canonical chroma-key color for non-skin-tone overlays
+       precisely because no real video frame contains pure #ff00ff
+       and no overlay element in this codebase uses it (verified:
+       title=white pill+black text, banner=dark+green+white,
+       watermark=lime, captions=white+yellow+black stroke). */
+    html[data-capture-alpha="1"], html[data-capture-alpha="1"] body {
+      background: #ff00ff !important;
+    }
     html[data-capture-alpha="1"] .nc-preview {
-      background: transparent !important;
+      background: #ff00ff !important;
     }
     html[data-capture-alpha="1"] .nc-preview video,
     html[data-capture-alpha="1"] #preview-video {

@@ -140,9 +140,46 @@
        the headless capture surface stays inline here.
        ============================================================ */
 
-    /* No more overlay rules here — they live in
-       _overlay_styles.html (included above). Anything render-mode-
-       only would go below this comment. */
+    /* Render Migration R12 — kill caption animations + transitions
+       in capture mode.
+
+       Symptom that caught us: alpha PNG had title pill, Kick banner,
+       NEXOCLIP watermark — but no caption pixels. captions.json
+       returned 30 lines, captionsReady===true, the DOM had the
+       expected `<span class="nc-pv-caption__word is-active">word
+       </span>` painted (state hash + iframe inspection confirmed).
+       Yet `page.screenshot(omit_background=true)` came back with no
+       caption pixels for any frame across the 35.9s clip.
+
+       Root cause: _renderCaptions REBUILDS innerHTML on every
+       captureFrameAtAlpha call. Each call inserts a fresh
+       .is-active span. CSS animations (nc-caption-slide,
+       nc-caption-fade) start from t=0 on the new node — which means
+       opacity:0 at frame 0 of the animation. captureFrameAtAlpha
+       waits 2 rAF (~33ms) before resolving, but on headless
+       Chromium with --disable-gpu the animation tick is throttled,
+       so the screenshot lands while the active word is still at
+       opacity ≈ 0. Every frame restarts the animation, so every
+       frame loses it.
+
+       The editor's preview shows captions correctly because
+       inspection happens after the animation has actually run for
+       longer than 180ms. The recorder doesn't give the animation
+       that much wall clock.
+
+       Fix: in capture mode, strip animations + transitions from
+       the caption layer so words paint at their static is-active
+       state immediately. Static state: opacity:1, scale 1.10,
+       color = --pv-highlight. That's what the editor visibly
+       converges to anyway after the animation completes. Editor
+       previews are unaffected — this rule is gated on
+       [data-capture-mode="1"] which only the recorder sets. */
+    html[data-capture-mode="1"] .nc-pv-caption,
+    html[data-capture-mode="1"] .nc-pv-caption *,
+    html[data-capture-mode="1"] .nc-pv-caption__word {
+      animation: none !important;
+      transition: none !important;
+    }
   </style>
 </head>
 <body>

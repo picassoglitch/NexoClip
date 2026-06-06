@@ -4471,6 +4471,46 @@ async def clip_media(
     )
 
 
+@router.get("/clips/{clip_id}/debug-alpha-caption.png")
+async def clip_debug_alpha_caption(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> FileResponse:
+    """R11 debug — serve the first caption-bearing alpha PNG the hybrid
+    recorder saved during the most recent render.
+
+    The hybrid recorder dumps one PNG sibling to the final MP4 whenever
+    the page's overlay state hash first contains a caption span. The
+    operator (or the developer chasing "captions missing from export")
+    opens this URL in a browser; transparent areas render against the
+    page background, so opaque title/banner pixels are immediately
+    obvious, and any missing caption text points at a Playwright
+    `omit_background=true` screenshot bug rather than a ffmpeg overlay
+    miscomposite.
+
+    404 when no debug PNG exists yet (clip never rendered, or its
+    render predated the R11 instrumentation).
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    debug_png = Path(clip.path).parent / "debug_alpha_caption.png"
+    if not debug_png.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "no debug alpha PNG on disk — re-render this clip and "
+                "try again (the hybrid recorder saves one per render)."
+            ),
+        )
+    return FileResponse(
+        path=debug_png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/clips/{clip_id}/thumbnail")
 async def clip_thumbnail(
     clip_id: str,

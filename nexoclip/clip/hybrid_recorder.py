@@ -303,6 +303,14 @@ async def _capture_overlay_alpha_sequence(
                 # extra disk space.
                 shutil.copy2(prev_png_path, png_path)
         else:
+            # R13 — compositor settle. captureFrameAtAlpha already
+            # forced a layout flush + 2 rAF + setTimeout(0) before
+            # resolving, but on Railway's headless Chromium with
+            # --disable-gpu the screenshot can still land on a
+            # pre-commit surface. Hold for one vsync frame here so
+            # the compositor has wall clock to incorporate the new
+            # caption layout into the screenshot pipeline.
+            await asyncio.sleep(0.020)
             try:
                 png_bytes = await page.screenshot(
                     type="png",

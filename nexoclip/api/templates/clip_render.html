@@ -431,12 +431,32 @@
       return new Promise(function (resolve) {
         try {
           if (typeof _renderCaptions === "function") _renderCaptions(t);
+          // Render Migration R13 — force layout flush after innerHTML.
+          //
+          // R11+R12 confirmed the DOM holds the right caption (computed
+          // opacity:1, color:yellow, correct bounds inside viewport),
+          // yet page.screenshot(omit_background=true) drops the caption
+          // pixels. Watermark/title/banner survive because they're in
+          // the initial paint surface from page load; captions are
+          // injected via innerHTML per frame and the headless compositor
+          // (running with --disable-gpu) doesn't always commit the new
+          // paint to the screenshot surface within 2 rAF.
+          //
+          // Reading a layout property forces a synchronous style recalc
+          // + layout flush on the freshly-injected spans. The 2 rAF +
+          // setTimeout(0) below then give the compositor enough wall
+          // clock to incorporate the new layout into the screenshot
+          // surface BEFORE Playwright's CDP screenshot request lands.
+          var cap = document.getElementById("pv-caption");
+          if (cap) { void cap.getBoundingClientRect(); }
         } catch (_) {}
-        // Two rAF ticks: one commits the new caption HTML, the next
-        // lets any CSS transition land at its final pixel before the
-        // screenshot fires.
         requestAnimationFrame(function () {
-          requestAnimationFrame(resolve);
+          requestAnimationFrame(function () {
+            // R13 extra commit budget. setTimeout(0) yields to the
+            // browser's compositor scheduler one more time before we
+            // tell Playwright we're ready for the screenshot.
+            setTimeout(resolve, 0);
+          });
         });
       });
     };

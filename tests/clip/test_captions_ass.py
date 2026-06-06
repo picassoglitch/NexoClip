@@ -94,9 +94,11 @@ def test_highlight_color_is_bgr_not_rgb(tmp_path: Path) -> None:
     assert "&H00FFD84A&" not in text, "ASS doesn't take RGB"
 
 
-def test_position_lower_third_pushes_margin_v_to_32_pct(tmp_path: Path) -> None:
-    """`lower_third` means baseline ~68% from top of a 1920-tall canvas
-    → MarginV (distance from bottom for alignment 2) ≈ 32% of height."""
+def test_position_lower_third_pushes_margin_v_to_36_pct(tmp_path: Path) -> None:
+    """`lower_third` baseline sits ~64% from top of a 1920-tall canvas
+    → MarginV (distance from bottom for alignment 2) ≈ 36% of height.
+    Bumped from 32% to 36% after the first R16 render put the caption
+    text uncomfortably close to the Kick banner's top edge."""
     out = tmp_path / "captions.ass"
     generate_ass(
         lines=_lines([("w", 0.0, 0.5)]),
@@ -109,7 +111,7 @@ def test_position_lower_third_pushes_margin_v_to_32_pct(tmp_path: Path) -> None:
     # Fields are comma-separated; MarginV is the 22nd "data" field.
     fields = style_line.split(",")
     margin_v = int(fields[-2])
-    assert 600 <= margin_v <= 620, margin_v
+    assert 680 <= margin_v <= 700, margin_v
 
 
 def test_position_centered_uses_half_height(tmp_path: Path) -> None:

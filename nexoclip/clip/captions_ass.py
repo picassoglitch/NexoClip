@@ -114,12 +114,15 @@ def generate_ass(
     highlight_bgr = _hex_to_bgr(highlight_color_hex)
 
     # MarginV is the distance from the screen edge (bottom for
-    # alignment 2). Tuning matches the CSS lower_third (top: 68%):
-    # baseline sits at 68% of height -> MarginV from bottom = 32%.
+    # alignment 2). lower_third nudged up from 0.32 to 0.36 after the
+    # first operator-visible R16 render put the karaoke text a hair
+    # too close to the top edge of the Kick banner (~50px gap). 0.36
+    # gives ~115px between caption baseline and banner top, matching
+    # the editor preview's visual breathing room.
     position_map = {
         "upper_third": int(height * 0.76),   # baseline ~24% from top
         "centered":    int(height * 0.50),
-        "lower_third": int(height * 0.32),   # baseline ~68% from top
+        "lower_third": int(height * 0.36),   # baseline ~64% from top
         "bottom":      int(height * 0.22),   # baseline ~78% from top
     }
     margin_v = position_map.get(position, position_map["lower_third"])

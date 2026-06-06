@@ -170,18 +170,12 @@ async def record_clip_hybrid(
                         f"render page never reached alpha-capture-ready: {e}"
                     ) from e
 
-                # R11 debug — save the first caption-bearing alpha PNG
-                # sibling to the final clip MP4 so operators can fetch
-                # it via /dashboard/clips/<id>/debug-alpha-caption.png
-                # and SEE whether captions are reaching the PNG layer.
-                debug_png = output_path.parent / "debug_alpha_caption.png"
                 unique_count, total_count = await _capture_overlay_alpha_sequence(
                     page=page,
                     duration_s=duration_s,
                     fps=fps,
                     frames_dir=frames_dir,
                     progress_callback=progress_callback,
-                    debug_caption_png_path=debug_png,
                 )
                 _log.info(
                     "hybrid_recorder.capture_done",
@@ -243,7 +237,6 @@ async def _capture_overlay_alpha_sequence(
     fps: int,
     frames_dir: Path,
     progress_callback: Any,
-    debug_caption_png_path: Path | None = None,
 ) -> tuple[int, int]:
     """Walk frame 0..N at fps. For each frame, read the overlay state
     hash from the page; only call page.screenshot when the hash changes.
@@ -252,16 +245,6 @@ async def _capture_overlay_alpha_sequence(
 
     Returns (unique_screenshots_taken, total_frames_written) so the
     caller can log a dedup ratio.
-
-    debug_caption_png_path — when set, the FIRST screenshot whose state
-    hash contains a `nc-pv-caption__word` span gets copied to this path
-    AS WELL AS the frames_dir. The download endpoint exposes it at
-    `/dashboard/clips/<id>/debug-alpha-caption.png` so operators can
-    diagnose "captions missing from export" by eyeballing the actual
-    rasterized PNG that ffmpeg overlays. Add R11 (live audit). If the
-    caption pixels are absent here, it's a Playwright/Chromium capture
-    bug, not a ffmpeg overlay bug; if present, the overlay step is the
-    culprit. Either way the PNG tells us which.
     """
     frame_count = max(1, int(round(duration_s * fps)))
     frame_dt = 1.0 / float(fps)
@@ -269,7 +252,6 @@ async def _capture_overlay_alpha_sequence(
     prev_state: str | None = None
     prev_png_path: Path | None = None
     unique_screenshots = 0
-    debug_capture_saved = False
 
     # The recorder emits progress in the 0-50% range during capture
     # (the composite step owns 50-95%; final flush 95-100%). Avoid
@@ -306,12 +288,12 @@ async def _capture_overlay_alpha_sequence(
                 shutil.copy2(prev_png_path, png_path)
         else:
             try:
-                # R16 — back to the standard alpha pipeline for the
-                # title / banner / watermark layer. Captions are no
-                # longer rendered in the page (R15's pre-allocated
-                # slots couldn't survive page.screenshot either),
-                # they're burned by ffmpeg's libass filter after
-                # this composite step.
+                # Standard alpha pipeline for the title / banner /
+                # watermark layer. Captions are NOT in these PNGs —
+                # they're burned by ffmpeg's libass filter after the
+                # composite (R16). The page-side caption code paths
+                # were removed in the R16 cleanup; this loop only
+                # ever sees the server-rendered overlay markup.
                 png_bytes = await page.screenshot(
                     type="png",
                     omit_background=True,
@@ -326,51 +308,11 @@ async def _capture_overlay_alpha_sequence(
             prev_state = state
             prev_png_path = png_path
 
-            # R11 debug: keep one caption-bearing PNG for the operator
-            # to inspect. The state-hash check is a cheap proxy for
-            # "this frame's caption row has spans" — if the DOM has a
-            # caption painted, its outerHTML appears in the hash.
-            if (
-                debug_caption_png_path is not None
-                and not debug_capture_saved
-                and "nc-pv-caption__word" in (state or "")
-            ):
-                try:
-                    debug_caption_png_path.parent.mkdir(
-                        parents=True, exist_ok=True,
-                    )
-                    debug_caption_png_path.write_bytes(png_bytes)
-                    debug_capture_saved = True
-                    _log.info(
-                        "hybrid_recorder.debug_caption_saved",
-                        path=str(debug_caption_png_path),
-                        frame_idx=i,
-                        target_t=round(target_t, 3),
-                        png_bytes=len(png_bytes),
-                    )
-                except OSError as e:
-                    _log.warning(
-                        "hybrid_recorder.debug_caption_save_failed",
-                        path=str(debug_caption_png_path),
-                        error=str(e),
-                    )
-
         # Progress 0-50% during capture.
         pct = int(50 * (i + 1) / frame_count)
         if pct - last_emitted_pct >= 5:
             await _emit_progress(progress_callback, pct)
             last_emitted_pct = pct
-
-    if debug_caption_png_path is not None and not debug_capture_saved:
-        _log.warning(
-            "hybrid_recorder.debug_caption_never_saved",
-            note=(
-                "no frame's state hash contained nc-pv-caption__word — "
-                "either captions disabled, no transcript, or the page's "
-                "_renderCaptions never painted any line. Check the "
-                "captions.json endpoint for this clip."
-            ),
-        )
 
     return unique_screenshots, frame_count
 

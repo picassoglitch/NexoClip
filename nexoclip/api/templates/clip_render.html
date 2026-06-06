@@ -253,193 +253,17 @@
       }
     }
 
-    {# Render Migration R16 — the headless page no longer renders
-       captions. The recorder's screenshot pipeline could not capture
-       dynamic innerHTML or appendChild mutations reliably (R11-R15
-       chain). Captions are burned into the final video by ffmpeg's
-       `ass=` filter using a server-generated ASS file (see
-       nexoclip/clip/captions_ass.py). The code below stays only so
-       the existing recorder hooks (captureFrameAtAlpha, state hash)
-       keep working — _renderCaptions is a no-op now, captionsReady
-       flips immediately, no fetch fires. #}
-    {% if False and _captions.get('enabled', True) %}
-    var _captionLines = null;
-    var _captionSlots = [];   // R15 — pre-created stable word-spans
-    var _captionEl = document.getElementById("pv-caption");
-
-    // Render Migration R15 — pre-create stable span slots.
-    //
-    // R11-R14 proved that page.screenshot in headless Chromium does
-    // not capture DOM elements inserted via innerHTML on a previously
-    // empty server-rendered element, even when:
-    //   - the DOM has the new spans painted at full opacity
-    //     (verified via console: opacity 1, color rgb(255,215,0))
-    //   - the page background is opaque magenta (R14, eliminating
-    //     omit_background as a suspect)
-    //   - animations + transitions are disabled (R12)
-    //   - layout is flushed before screenshot (R13)
-    //   - the recorder waits 20ms for compositor settle (R13)
-    //
-    // The discriminator is the diff between watermark/title/banner
-    // (server-rendered → in the initial paint surface → always in
-    // every screenshot) and the caption spans (JS-inserted per frame
-    // → never in any screenshot). Mutations on EXISTING DOM nodes
-    // go through Chromium's incremental rasterizer; new-element
-    // insertions via innerHTML on a previously-empty parent appear
-    // not to.
-    //
-    // Fix: when captions.json lands, allocate N spans inside
-    // #pv-caption (N = max words in any line). These spans become
-    // part of the initial paint surface once their first frame
-    // is rasterized. _renderCaptions then only mutates each
-    // existing span's textContent + className — no insertions, no
-    // removals.
-    function _allocCaptionSlots(maxWords) {
-      if (!_captionEl) return;
-      // Idempotent — only allocate the FIRST time the spans land
-      // on disk; re-calls (re-fetches) don't grow the slot pool.
-      if (_captionSlots.length >= maxWords) return;
-      var need = maxWords - _captionSlots.length;
-      for (var i = 0; i < need; i++) {
-        var s = document.createElement("span");
-        // Class is reset on every _renderCaptions call; baseline
-        // gives the slot the inactive opacity:0.55 styling so the
-        // first paint surface has the right pixels.
-        s.className = "nc-pv-caption__word";
-        s.textContent = "";
-        s.style.display = "none";
-        _captionEl.appendChild(s);
-        _captionSlots.push(s);
-      }
-    }
-
-    fetch("/dashboard/clips/{{ clip.id }}/captions.json",
-          { credentials: "same-origin" })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) {
-        if (data && Array.isArray(data.lines)) {
-          _captionLines = data.lines;
-          // Find the widest line so the slot pool fits every frame.
-          var maxWords = 1;
-          for (var i = 0; i < _captionLines.length; i++) {
-            var w = _captionLines[i].words;
-            if (Array.isArray(w) && w.length > maxWords) {
-              maxWords = w.length;
-            }
-          }
-          _allocCaptionSlots(maxWords);
-        }
-        window.__nexoclipRender.captions = data;
-        // Whether or not lines exist, mark captions "ready" so the
-        // recorder isn't blocked forever on a clip with no transcript.
-        window.__nexoclipRender.captionsReady = true;
-        _checkAllReady();
-      })
-      .catch(function () {
-        // Fetch failed (404, network) — still let the recorder proceed.
-        // Better an export with no captions than a frozen headless tab.
-        window.__nexoclipRender.captionsReady = true;
-        _checkAllReady();
-      });
-
-    // Per-frame caption animator. Runs in rAF; finds the active line
-    // by clip-relative time, builds word spans with active/past/
-    // upcoming classes. ~10 lines and identical to the editor's
-    // minimal path so headless render matches the editor 1:1.
-    //
-    // `forcedT` is an optional explicit timestamp the seek-and-shoot
-    // recorder passes in. Without it we read `video.currentTime` —
-    // correct for the live editor rAF loop. With it we trust the
-    // caller — necessary for the recorder, because Chromium under
-    // capture-mode load occasionally hasn't propagated the seek into
-    // `currentTime` by the time `onSeeked` runs us synchronously.
-    // That stale read was painting empty caption rows into 1226
-    // screenshots in a row — hence "downloaded MP4 has no subs".
-    function _renderCaptions(forcedT) {
-      var v = document.getElementById("preview-video");
-      if (!v || !_captionLines || !_captionEl) return;
-      var t = (typeof forcedT === "number") ? forcedT : v.currentTime;
-      var activeLine = null;
-      for (var i = 0; i < _captionLines.length; i++) {
-        var ln = _captionLines[i];
-        if (t >= ln.ts && t < ln.end_ts) { activeLine = ln; break; }
-      }
-      // R15 — mutate existing slot spans instead of innerHTML.
-      // innerHTML inserts brand-new DOM nodes; in headless Chromium
-      // those nodes never make it into page.screenshot's output even
-      // when computed style says they're fully painted. textContent
-      // + className changes on pre-allocated nodes (in the initial
-      // paint surface from page load + slot alloc) DO get rasterized
-      // because the compositor already has each slot in its layer
-      // list. See _allocCaptionSlots for the full rationale.
-      if (activeLine && Array.isArray(activeLine.words)) {
-        var nwords = activeLine.words.length;
-        // Defensive: if this line has more words than we allocated
-        // (shouldn't happen — _allocCaptionSlots sized to max), grow.
-        if (_captionSlots.length < nwords) _allocCaptionSlots(nwords);
-        for (var j = 0; j < _captionSlots.length; j++) {
-          var span = _captionSlots[j];
-          if (j < nwords) {
-            var w = activeLine.words[j];
-            var cls = "nc-pv-caption__word";
-            if (t >= w.ts && t < w.end_ts) cls += " is-active";
-            else if (t >= w.end_ts) cls += " is-past";
-            else cls += " is-upcoming";
-            span.className = cls;
-            if (w.emphasis) span.setAttribute("data-emphasis", w.emphasis);
-            else span.removeAttribute("data-emphasis");
-            span.textContent = w.text || "";
-            span.style.display = "";
-          } else {
-            // Slot is beyond this line's word count — hide.
-            span.className = "nc-pv-caption__word";
-            span.removeAttribute("data-emphasis");
-            span.textContent = "";
-            span.style.display = "none";
-          }
-        }
-        _captionEl.style.visibility = "visible";
-      } else {
-        // No active line at this t — hide every slot.
-        for (var j = 0; j < _captionSlots.length; j++) {
-          _captionSlots[j].textContent = "";
-          _captionSlots[j].style.display = "none";
-        }
-        _captionEl.style.visibility = "hidden";
-      }
-      // Drift fix Step 1 — DO NOT self-reschedule via rAF.
-      //
-      // The previous version did `requestAnimationFrame(_renderCaptions)`
-      // at the tail of this function PLUS a `requestAnimationFrame(
-      // _renderCaptions)` kick-off below. The browser invokes a rAF
-      // callback with a `DOMHighResTimeStamp` (ms since page load,
-      // ~1e3-1e5). The function's `typeof forcedT === "number"` check
-      // matched that timestamp and used it as the clip-relative video
-      // time → no caption line ever matched → captions hidden every
-      // tick. The recorder's explicit `_renderCaptions(target)` call
-      // before each screenshot painted the right caption, but the rAF
-      // loop's next tick overwrote it before the screenshot fired →
-      // race condition → empty subtitles in export.
-      //
-      // clip_render.html is ONLY loaded by preview_recorder.py and
-      // hybrid_recorder.py with `?capture=1` / `?capture=alpha`. No
-      // other caller. There's no live playback in this template, so
-      // there's no need to drive the caption animator from a frame
-      // loop — every frame's caption gets painted by an explicit
-      // `_renderCaptions(target)` call inside `captureFrameAt` /
-      // `captureFrameAtAlpha` right before the screenshot. Deleting
-      // the rAF self-feed kills the race; captions become deterministic.
-      //
-      // The editor (clip_detail.html) has its own animator —
-      // `syncCaptionFrame()` driven by timeupdate + a 60ms interval —
-      // and is unaffected by this change.
-    }
-    {% else %}
-    // No captions enabled on this clip — mark the gate true so the
-    // recorder doesn't wait for nothing.
+    // Render Migration R16 — the headless page no longer renders
+    // captions. The recorder's screenshot pipeline could not capture
+    // dynamic innerHTML or appendChild mutations reliably (R11-R15
+    // chain). Captions are burned into the final video by ffmpeg's
+    // `ass=` filter using a server-generated ASS file (see
+    // nexoclip/clip/captions_ass.py). The recorder hooks
+    // (captureFrameAt, captureFrameAtAlpha) guard their _renderCaptions
+    // call with `typeof === "function"` so leaving it undefined here
+    // is safe — they just skip the no-op.
     window.__nexoclipRender.captionsReady = true;
     _checkAllReady();
-    {% endif %}
 
     var video = document.getElementById("preview-video");
 
@@ -525,32 +349,14 @@
       return new Promise(function (resolve) {
         try {
           if (typeof _renderCaptions === "function") _renderCaptions(t);
-          // Render Migration R13 — force layout flush after innerHTML.
-          //
-          // R11+R12 confirmed the DOM holds the right caption (computed
-          // opacity:1, color:yellow, correct bounds inside viewport),
-          // yet page.screenshot(omit_background=true) drops the caption
-          // pixels. Watermark/title/banner survive because they're in
-          // the initial paint surface from page load; captions are
-          // injected via innerHTML per frame and the headless compositor
-          // (running with --disable-gpu) doesn't always commit the new
-          // paint to the screenshot surface within 2 rAF.
-          //
-          // Reading a layout property forces a synchronous style recalc
-          // + layout flush on the freshly-injected spans. The 2 rAF +
-          // setTimeout(0) below then give the compositor enough wall
-          // clock to incorporate the new layout into the screenshot
-          // surface BEFORE Playwright's CDP screenshot request lands.
-          var cap = document.getElementById("pv-caption");
-          if (cap) { void cap.getBoundingClientRect(); }
         } catch (_) {}
+        // Two rAF ticks: one commits any layout change, the next lets
+        // the compositor incorporate it before the recorder takes a
+        // screenshot. _renderCaptions is a no-op in the R16 pipeline
+        // (captions handled by libass post-recorder), but kept guarded
+        // so a future page-side caption surface can still hook in.
         requestAnimationFrame(function () {
-          requestAnimationFrame(function () {
-            // R13 extra commit budget. setTimeout(0) yields to the
-            // browser's compositor scheduler one more time before we
-            // tell Playwright we're ready for the screenshot.
-            setTimeout(resolve, 0);
-          });
+          requestAnimationFrame(resolve);
         });
       });
     };

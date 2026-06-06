@@ -3850,17 +3850,51 @@ async def clip_render_retry(
 ) -> Response:
     """Render Migration T1 — UI "Retry" button on a failed render.
 
-    Resets clip.render_state='idle' so the next download click
-    kicks off a fresh background task. We don't enqueue the render
-    here; the download endpoint is the single place that schedules
-    BackgroundTasks. Operator clicks Retry → state goes idle → they
-    click Download again → background render starts.
+    Resets clip.render_state='idle' AND unlinks any cached render at
+    the requested resolution so the next Download click forces a
+    fresh background render. We don't enqueue the render here; the
+    download endpoint is the single place that schedules
+    BackgroundTasks. Operator clicks Retry → cache wiped + state
+    goes idle → they click Download again → background render
+    starts with the latest pipeline.
+
+    Render Migration R17 — added the cache unlink. Without it, the
+    cache-hit branch in clip_download fires before the state check
+    and the operator gets the stale rendered file every time,
+    regardless of how many Retry clicks land. R16's libass pipeline
+    (and any future render-pipeline change) only ships if the cache
+    actually misses.
     """
     clip = await ClipsRepo(db).get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
+    original = Path(clip.path)
+    # Wipe the cached MP4 for the requested resolution AND its sibling
+    # debug / ass files so the next render starts clean.
+    resolved_key, _w, _h = _resolve_export_resolution(
+        getattr(request.state, "tenant_tier", "free") or "free",
+        quality,
+    )
+    cache_path = original.parent / f"clip_render_{resolved_key}.mp4"
+    sidecars = [
+        cache_path,
+        cache_path.with_suffix(".partial.mp4"),
+        cache_path.with_suffix(".ass"),
+        original.parent / "debug_alpha_caption.png",
+    ]
+    for p in sidecars:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
     await ClipsRepo(db).reset_render_state(clip_id)
-    return JSONResponse({"ok": True, "state": "idle"})
+    return JSONResponse(
+        {
+            "ok": True,
+            "state": "idle",
+            "unlinked": [str(p.name) for p in sidecars if not p.exists()],
+        }
+    )
 
 
 @router.get("/clips/{clip_id}/download")

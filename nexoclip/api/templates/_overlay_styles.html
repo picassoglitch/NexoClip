@@ -210,7 +210,17 @@
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     color: #fff;
-    padding: 0;
+    /* LAYOUT — anchor the URL to the right of the absolutely-positioned
+       KICK logo and extend rightward. Before this, the variant used
+       padding:0 + justify-content:center on the full banner width;
+       the KICK logo doesn't take flex space (position:absolute), so a
+       long username like KICK.COM/ALDOV1LLANUEVA bled left and
+       crashed into the green wordmark. padding-left clears the logo
+       (1.538cqw offset + 26.923cqw width + 2.3cqw gap = 30.769cqw);
+       justify-content:flex-start pins the URL at that boundary so it
+       grows rightward only. Short URLs sit just past the logo, long
+       ones extend toward the right edge of the banner. */
+    padding: 0 1.538cqw 0 30.769cqw;
     /* 6.25cqh from export ≈ 120px on 1920 — taller bar
        so the KICK wordmark has breathing room. */
     height: 6.25cqh;
@@ -222,7 +232,7 @@
     overflow: visible;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     animation: none;
     z-index: 4;
   }

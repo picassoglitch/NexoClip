@@ -31,6 +31,7 @@ from .auth import BearerAuthMiddleware
 from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
+from .routers import upload_post as upload_post_router
 from .routers import internal as internal_router
 from .routers import live as live_router
 from .routers import llm_calls as llm_calls_router
@@ -186,6 +187,10 @@ def create_app(
     app.include_router(llm_calls_router.router)
     app.include_router(dashboard_router.router)
     app.include_router(webhooks_router.router)
+    # upload-post.com integration — multi-platform publish dashboard
+    # at /dashboard/publish/upload-post. Replaces the in-house OAuth
+    # surface that lived briefly in Wave 1 + 2 commits.
+    app.include_router(upload_post_router.router)
     # Slice M.4 — OBS-friendly overlay routes. Intentionally NOT
     # auth-protected (OBS Browser Source can't carry credentials).
     # Each route reads its config from query-string params.

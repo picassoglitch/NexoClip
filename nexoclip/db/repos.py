@@ -111,7 +111,8 @@ class TenantsRepo:
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
-            "cached_balance_monthly_used, cached_balance_at "
+            "cached_balance_monthly_used, cached_balance_at, "
+            "upload_post_profile_username "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
@@ -134,7 +135,8 @@ class TenantsRepo:
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
-            "cached_balance_monthly_used, cached_balance_at "
+            "cached_balance_monthly_used, cached_balance_at, "
+            "upload_post_profile_username "
             "FROM tenants WHERE external_user_id = ?",
             (external_user_id,),
         )
@@ -168,7 +170,8 @@ class TenantsRepo:
             "t.retention_vod_days, t.retention_clip_days, t.retention_transcript_days, "
             "t.tier, t.status, t.external_user_id, "
             "t.cached_balance_remaining, t.cached_balance_unlimited, "
-            "t.cached_balance_monthly_used, t.cached_balance_at "
+            "t.cached_balance_monthly_used, t.cached_balance_at, "
+            "t.upload_post_profile_username "
             "FROM tenants t "
             "INNER JOIN users u ON u.tenant_id = t.id "
             "WHERE LOWER(u.email) = ? "
@@ -224,6 +227,22 @@ class TenantsRepo:
         )
         await conn.commit()
 
+    async def set_upload_post_profile_username(
+        self, tenant_id: str, username: str,
+    ) -> None:
+        """Persist the upload-post 'user profile' username for a tenant.
+
+        Set once on first connect/publish via ensure_profile_for_tenant().
+        Subsequent upload-post API calls reuse this value as the `user`
+        field on every request.
+        """
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET upload_post_profile_username = ? WHERE id = ?",
+            (username, tenant_id),
+        )
+        await conn.commit()
+
     async def get_or_raise(self, tenant_id: str) -> Tenant:
         t = await self.get(tenant_id)
         if t is None:
@@ -238,7 +257,8 @@ class TenantsRepo:
             "retention_vod_days, retention_clip_days, retention_transcript_days, "
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
-            "cached_balance_monthly_used, cached_balance_at "
+            "cached_balance_monthly_used, cached_balance_at, "
+            "upload_post_profile_username "
             "FROM tenants ORDER BY created_at"
         )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]

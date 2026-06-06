@@ -2,6 +2,23 @@
 {% block title %}Publish - NexoClip{% endblock %}
 
 {% block content %}
+{# Top banner — points operators at the new upload-post publishing
+   dashboard. The legacy Buffer matrix below stays for now; remove
+   once the upload-post flow is the only one in use. #}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 16px;">
+  <div class="nc-panel__body" style="padding: 12px 16px; display: flex; align-items: center; gap: 12px;">
+    <i class="ti ti-send" aria-hidden="true" style="color: var(--nc-green);"></i>
+    <div style="flex: 1;">
+      <strong>New publish surface:</strong> connect your TikTok / IG / YT / X /
+      LinkedIn / Facebook / Threads / Pinterest / Bluesky accounts in one place
+      and ship clips via upload-post.
+    </div>
+    <a href="/dashboard/publish/upload-post" class="nc-btn nc-btn--primary" style="text-decoration:none;">
+      <i class="ti ti-arrow-right" aria-hidden="true"></i>
+      <span>Open publish dashboard</span>
+    </a>
+  </div>
+</div>
 <style>
   /* Slice O.8 — same progress visuals as the per-stream publish page. */
   @keyframes nc-pub-pulse {

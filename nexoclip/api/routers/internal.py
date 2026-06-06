@@ -1,19 +1,17 @@
-"""Internal endpoints — slice O.44.
+"""Internal endpoints — slice O.44 + upload-post fetch target.
 
-The only route here today is the HMAC-signed audio-fetch endpoint
-the Modal Whisper provider pulls from. The auth model is intentionally
-different from the rest of the API:
+Both routes here share an HMAC-signed-URL auth model that's separate
+from the rest of the API:
 
   - No tenant cookie / bearer required.
   - URL is signed with NEXOCLIP_INTERNAL_SIGNING_SECRET.
-  - Signature binds (stream_id, tenant_id, expiry_unix_ts).
-  - Expiry is 30 min after the URL is minted; anything older 403s.
+  - Signature binds (resource_id, tenant_id, expiry_unix_ts).
+  - Expiry is bounded; anything past TTL 403s.
 
-Why a separate auth scheme: Modal can't carry the operator's session
-cookie. We could store a long-lived service token, but a short-lived
-signed URL is bounded — if it leaks, the worst case is one audio
-extract is exposed for at most 30 min. The signing secret never
-crosses the wire.
+Why: external callers (Modal Whisper, upload-post) can't carry our
+operator session cookie. Short-lived signed URLs are bounded — if
+one leaks, the worst case is one media file is exposed for the
+remaining TTL window. The signing secret never crosses the wire.
 """
 
 from __future__ import annotations
@@ -26,11 +24,74 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from nexoclip.db import Database, StreamsRepo
+from nexoclip.db import ClipsRepo, Database, StreamsRepo
 from nexoclip.settings import get_settings
 from nexoclip.tenancy import bound_tenant
 
 router = APIRouter(prefix="/api/internal", tags=["internal"], include_in_schema=False)
+
+
+def _verify_signed_params(
+    *,
+    resource_id: str,
+    tenant: str,
+    exp: int,
+    sig: str,
+    max_ttl_s: int,
+) -> None:
+    """Shared HMAC + expiry check. Raises HTTPException on any failure.
+
+    `max_ttl_s` upper-bounds the future expiry an attacker can claim
+    — defense in depth against a leaked secret minting essentially-
+    permanent URLs.
+    """
+    settings = get_settings()
+    secret = (settings.internal_signing_secret or "").strip()
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="server not configured for signed-URL access",
+        )
+    if not tenant or not exp or not sig:
+        raise HTTPException(status_code=400, detail="missing signature params")
+
+    now = int(time.time())
+    if int(exp) < now:
+        raise HTTPException(status_code=403, detail="signed URL expired")
+    if int(exp) > now + max_ttl_s:
+        raise HTTPException(status_code=403, detail="signed URL expiry implausible")
+
+    msg = f"{resource_id}|{tenant}|{int(exp)}".encode()
+    expected = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=403, detail="signature mismatch")
+
+
+def mint_signed_clip_url(
+    *,
+    clip_id: str,
+    tenant_id: str,
+    base_url: str,
+    ttl_seconds: int = 3600,
+) -> str:
+    """Helper used by the publish router to build the URL we hand to
+    upload-post. The signature binds (clip_id, tenant_id, exp) so a
+    leaked URL only exposes one clip for at most `ttl_seconds`."""
+    settings = get_settings()
+    secret = (settings.internal_signing_secret or "").strip()
+    if not secret:
+        raise RuntimeError(
+            "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured; "
+            "cannot mint signed clip URL for upload-post"
+        )
+    exp = int(time.time()) + int(ttl_seconds)
+    msg = f"{clip_id}|{tenant_id}|{exp}".encode()
+    sig = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    base = base_url.rstrip("/")
+    return (
+        f"{base}/api/internal/clip/{clip_id}"
+        f"?tenant={tenant_id}&exp={exp}&sig={sig}"
+    )
 
 
 @router.get("/audio/{stream_id}")
@@ -42,28 +103,13 @@ async def fetch_audio_for_transcribe(
     sig: str = "",
 ) -> FileResponse:
     """Serve the stream's source audio if (stream_id, tenant, exp) HMAC checks."""
-    settings = get_settings()
-    secret = (settings.internal_signing_secret or "").strip()
-    if not secret:
-        raise HTTPException(
-            status_code=503,
-            detail="server not configured for internal audio fetch",
-        )
-    if not tenant or not exp or not sig:
-        raise HTTPException(status_code=400, detail="missing signature params")
-
-    now = int(time.time())
-    if int(exp) < now:
-        raise HTTPException(status_code=403, detail="signed URL expired")
-    # Reject far-future expiries too — defense in depth against a
-    # leaked secret minting permanent URLs.
-    if int(exp) > now + 24 * 3600:
-        raise HTTPException(status_code=403, detail="signed URL expiry implausible")
-
-    msg = f"{stream_id}|{tenant}|{int(exp)}".encode()
-    expected = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, sig):
-        raise HTTPException(status_code=403, detail="signature mismatch")
+    _verify_signed_params(
+        resource_id=stream_id,
+        tenant=tenant,
+        exp=exp,
+        sig=sig,
+        max_ttl_s=24 * 3600,
+    )
 
     # The dashboard binds tenants via middleware — for this admin-less
     # path we bind manually to the tenant claim in the signed URL.
@@ -84,4 +130,59 @@ async def fetch_audio_for_transcribe(
         path=audio_path,
         media_type="audio/wav",
         filename=f"nexoclip_{stream_id}.wav",
+    )
+
+
+@router.get("/clip/{clip_id}")
+async def fetch_clip_for_upload_post(
+    clip_id: str,
+    request: Request,
+    tenant: str = "",
+    exp: int = 0,
+    sig: str = "",
+) -> FileResponse:
+    """Serve the rendered clip MP4 to upload-post (or any caller with
+    a valid signed URL).
+
+    Used by the publish router: when we call upload-post's
+    `/api/upload`, the `video` field is a URL pointing here. upload-
+    post downloads the file, re-hosts it, then publishes to each
+    target platform. TTL is wider than the audio path (1h ceiling +
+    24h cap) because upload-post's per-platform pipeline can take
+    several minutes for a 4K clip across 5 platforms.
+
+    Serves the FINAL rendered MP4 (libass captions burned in) when
+    one exists at the 1080-cache path; falls back to the original
+    pre-render clip MP4 only when the rendered version is missing.
+    """
+    _verify_signed_params(
+        resource_id=clip_id,
+        tenant=tenant,
+        exp=exp,
+        sig=sig,
+        max_ttl_s=24 * 3600,
+    )
+
+    db: Database = request.app.state.db
+    with bound_tenant(tenant):
+        clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    original = Path(clip.path)
+    # Prefer the rendered version (overlays + captions burned in)
+    # if it exists. That's the file the operator was looking at on
+    # the editor preview, so it matches what they expect to publish.
+    rendered = original.parent / "clip_render_1080.mp4"
+    final_path = rendered if rendered.exists() else original
+    if not final_path.exists():
+        raise HTTPException(
+            status_code=410,
+            detail=f"clip file missing from disk: {final_path}",
+        )
+
+    return FileResponse(
+        path=final_path,
+        media_type="video/mp4",
+        filename=f"nexoclip_{clip_id}.mp4",
     )

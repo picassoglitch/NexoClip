@@ -255,6 +255,24 @@ class Settings(BaseSettings):
         validation_alias="NEXO_AI_LOGIN_URL",
     )
 
+    # ------------------------------------------------------------------
+    # upload-post.com integration (replaces the in-house OAuth Connect
+    # surface that lived in commits 774e2d9 + 9a89e1a + was scrapped
+    # in fe5da71). upload-post is the multi-platform publish layer:
+    # we hand them a video URL + target platforms, they do the actual
+    # OAuth + posting against TikTok / IG / YT / X / LinkedIn / etc.
+    # Multi-tenant via their "user profile" model — one upload-post
+    # profile per NexoClip tenant.
+    # ------------------------------------------------------------------
+    #
+    # upload_post_api_key — single company-wide API key from
+    # upload-post.com. Authenticates every call. Tenants never see it.
+    # Header shape: `Authorization: Apikey <key>`.
+    upload_post_api_key: str | None = None
+
+    # Base URL. Override only for tests / staging environments.
+    upload_post_base_url: str = "https://api.upload-post.com"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

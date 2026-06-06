@@ -67,6 +67,11 @@ class Tenant(BaseModel):
     cached_balance_unlimited: int = 0   # 0/1 in SQLite; cast to bool when reading
     cached_balance_monthly_used: int | None = None
     cached_balance_at: str | None = None
+    # upload-post integration (migration 022). Each tenant maps to ONE
+    # upload-post "user profile" created lazily on first connect/publish
+    # click. Persisted here so subsequent API calls reuse the same
+    # profile name. NULL = tenant has never started a publish flow.
+    upload_post_profile_username: str | None = None
 
 
 class User(BaseModel):

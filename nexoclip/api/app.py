@@ -30,7 +30,6 @@ from ._pipeline import PipelineKickoff, PipelineRunner, default_pipeline_runner
 from .auth import BearerAuthMiddleware
 from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
-from .routers import connect as connect_router
 from .routers import dashboard as dashboard_router
 from .routers import internal as internal_router
 from .routers import live as live_router
@@ -187,13 +186,6 @@ def create_app(
     app.include_router(llm_calls_router.router)
     app.include_router(dashboard_router.router)
     app.include_router(webhooks_router.router)
-    # Wave 1 native-OAuth Connect tab. Two routers:
-    #   - connect_router.router (/dashboard/connect/*) — cookie auth
-    #   - connect_router.public_router (/connect/*) — signed-state auth
-    # The bearer middleware allowlists /connect/ so the callbacks
-    # actually reach the public_router handlers.
-    app.include_router(connect_router.router)
-    app.include_router(connect_router.public_router)
     # Slice M.4 — OBS-friendly overlay routes. Intentionally NOT
     # auth-protected (OBS Browser Source can't carry credentials).
     # Each route reads its config from query-string params.

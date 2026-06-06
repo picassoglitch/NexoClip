@@ -1433,7 +1433,10 @@ def _variant_from_row(row: aiosqlite.Row) -> VariantRow:
 _ACCOUNT_COLS = (
     "id, tenant_id, platform, external_id, display_name, oauth_blob_json, "
     "created_at, refresh_token, expires_at, scopes_json, status, "
-    # Wave 1 — native OAuth columns (migration 021).
+    # Migration 021 columns kept in the SELECT so prod rows that
+    # touched them validate cleanly. No active code reads these
+    # any more — the in-house Connect flow was scrapped in favor
+    # of upload-post.
     "access_token_encrypted, refresh_token_encrypted, token_type, "
     "platform_user_id, platform_username, platform_avatar_url, "
     "daily_publish_count, daily_publish_window_start"
@@ -1556,114 +1559,6 @@ class ConnectedAccountsRepo:
         existing = await self.get(account_id)
         if existing is None:
             raise NexoClipError(f"connected_account not found: {account_id}")
-        return existing
-
-    async def upsert_oauth_connection(
-        self,
-        *,
-        platform: str,
-        platform_user_id: str,
-        platform_username: str | None,
-        platform_avatar_url: str | None,
-        access_token_encrypted: bytes,
-        refresh_token_encrypted: bytes | None,
-        token_type: str,
-        expires_at: str | None,
-        scopes: list[str],
-        display_name: str | None = None,
-        # Wave 1 transition: also mirror the plaintext access_token
-        # into oauth_blob_json so the existing publish/oauth.py +
-        # publish/service.py paths keep working untouched. Wave 2
-        # cleanup migrates the publisher to read the encrypted
-        # column directly, and this kwarg goes away.
-        access_token_plaintext_mirror: str | None = None,
-    ) -> ConnectedAccount:
-        """Insert or update a tenant's connected account from an OAuth
-        callback. Dedup key is (tenant_id, platform, platform_user_id):
-        re-connecting the same TikTok account refreshes the existing
-        row instead of creating a duplicate.
-
-        Writes encrypted access + refresh tokens (Fernet bytes from the
-        caller — this layer never sees plaintext). Mirrors the plain
-        access token into oauth_blob during Wave 1 so the existing
-        publish flow keeps working; Wave 2 drops the mirror.
-        """
-        tenant_id = current_tenant_id()
-        scopes_json = json.dumps(scopes) if scopes else None
-        oauth_blob_mirror = (
-            json.dumps({"access_token": access_token_plaintext_mirror})
-            if access_token_plaintext_mirror is not None else None
-        )
-
-        conn = await self._db.connect()
-        cur = await conn.execute(
-            "SELECT id FROM connected_accounts "
-            "WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?",
-            (tenant_id, platform, platform_user_id),
-        )
-        existing_id_row = await cur.fetchone()
-
-        if existing_id_row is not None:
-            account_id = existing_id_row[0]
-            await conn.execute(
-                "UPDATE connected_accounts SET "
-                "display_name = COALESCE(?, display_name), "
-                "external_id = ?, "
-                "oauth_blob_json = ?, "
-                "expires_at = ?, "
-                "scopes_json = ?, "
-                "status = 'active', "
-                "access_token_encrypted = ?, "
-                "refresh_token_encrypted = ?, "
-                "token_type = ?, "
-                "platform_username = ?, "
-                "platform_avatar_url = ? "
-                "WHERE id = ? AND tenant_id = ?",
-                (
-                    display_name,
-                    platform_user_id,    # mirror canonical id into external_id
-                    oauth_blob_mirror,
-                    expires_at,
-                    scopes_json,
-                    access_token_encrypted,
-                    refresh_token_encrypted,
-                    token_type,
-                    platform_username,
-                    platform_avatar_url,
-                    account_id,
-                    tenant_id,
-                ),
-            )
-        else:
-            account_id = new_id("acc")
-            await conn.execute(
-                "INSERT INTO connected_accounts ("
-                "id, tenant_id, platform, external_id, display_name, "
-                "oauth_blob_json, created_at, expires_at, scopes_json, status, "
-                "access_token_encrypted, refresh_token_encrypted, token_type, "
-                "platform_user_id, platform_username, platform_avatar_url"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)",
-                (
-                    account_id,
-                    tenant_id,
-                    platform,
-                    platform_user_id,
-                    display_name,
-                    oauth_blob_mirror,
-                    _now(),
-                    expires_at,
-                    scopes_json,
-                    access_token_encrypted,
-                    refresh_token_encrypted,
-                    token_type,
-                    platform_user_id,
-                    platform_username,
-                    platform_avatar_url,
-                ),
-            )
-        await conn.commit()
-        existing = await self.get(account_id)
-        assert existing is not None
         return existing
 
     async def mark_status(self, account_id: str, status: str) -> ConnectedAccount:

@@ -40,10 +40,6 @@ dependencies = [
     # HTTP / async
     "httpx>=0.27",
 
-    # Crypto — Fernet for at-rest encryption of OAuth tokens.
-    # Wave 1 connect-flow lands TikTok; IG + YT follow the same shape.
-    "cryptography>=42",
-
     # IDs
     "python-ulid>=2.7",
 

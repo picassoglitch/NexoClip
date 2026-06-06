@@ -62,12 +62,6 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     # carries its own HMAC signature check, so the bearer-cookie path
     # would only get in the way (Modal can't carry our cookie).
     "/api/internal/",
-    # Wave 1 native-OAuth callbacks. TikTok / IG / YouTube redirect
-    # the operator's browser back to /connect/<platform>/callback
-    # with the auth code in the query — no cookie carry. The handler
-    # verifies the HMAC-signed `state` to bind the callback to the
-    # originating tenant, then writes the encrypted token row.
-    "/connect/",
 )
 _COOKIE_NAME = "nexoclip_token"
 

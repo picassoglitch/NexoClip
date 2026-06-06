@@ -119,26 +119,18 @@ class ConnectedAccount(BaseModel):
     expires_at: str | None = None
     scopes: list[str] = Field(default_factory=list)
     status: str = "active"  # active | auth_failed | disabled
-    # Wave-1 native-OAuth columns (migration 021). The encrypted
-    # blobs are Fernet bytes and never leave the repo layer plaintext;
-    # the integration code calls .decrypted_access_token() / etc. via
-    # a helper that goes through TokenEncryptor. Pydantic carries them
-    # here purely as opaque bytes.
+    # Migration 021 added native-OAuth columns to support an in-house
+    # Connect flow that was later scrapped (switching to upload-post).
+    # The columns are still on disk — leaving them as opaque optional
+    # passthroughs so existing rows keep validating without forcing
+    # a destructive down-migration on prod. Drop in a future cleanup
+    # when nothing else reads them.
     access_token_encrypted: bytes | None = None
     refresh_token_encrypted: bytes | None = None
-    # 'bearer' (TikTok / Google: classic access+refresh) or
-    # 'long_lived' (Meta: refresh the long-lived token itself before
-    # expires_at). Drives the refresh-strategy dispatch.
     token_type: str | None = None
-    # Populated from the provider's user-info call at connect time.
-    # platform_user_id is the canonical provider id (TikTok open_id,
-    # IG-Business id, YouTube channelId); external_id stays around
-    # for backward compat with operator-typed Buffer rows.
     platform_user_id: str | None = None
     platform_username: str | None = None
     platform_avatar_url: str | None = None
-    # TikTok's 25 videos/day per account cap. Reset when the date
-    # rolls; checked by the publisher before scheduling.
     daily_publish_count: int = 0
     daily_publish_window_start: str | None = None
 

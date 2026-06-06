@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Connect - NexoClip{% endblock %}
+{% block content %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Connect</h2>
+    <small>Native OAuth — TikTok ships in Wave 1, Instagram + YouTube in Wave 2.</small>
+  </div>
+</div>
+
+{# Success notice surfaced via ?connected=<platform> after the
+   callback redirects. Cosmetic; not a security boundary. #}
+{% if request.query_params.get('connected') %}
+<div class="nc-panel nc-panel--success" style="border-color: var(--nc-green);">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Connected <strong>{{ request.query_params.get('connected') }}</strong> successfully.
+  </div>
+</div>
+{% endif %}
+
+<div class="nc-grid-3" style="gap: 16px;">
+  {% for card in cards %}
+  <div class="nc-panel" style="display:flex; flex-direction:column;">
+    <div class="nc-panel__header">
+      <i class="ti
+        {% if card.platform == 'tiktok' %}ti-brand-tiktok
+        {% elif card.platform == 'instagram' %}ti-brand-instagram
+        {% else %}ti-brand-youtube{% endif %}"
+        aria-hidden="true"></i>
+      <span class="nc-panel__title">{{ card.platform|capitalize }}</span>
+      {% if card.account and card.account.status == 'active' %}
+      <span class="nc-chip nc-chip--success" style="margin-left:auto;">Connected</span>
+      {% elif card.account %}
+      <span class="nc-chip nc-chip--muted" style="margin-left:auto;">{{ card.account.status }}</span>
+      {% endif %}
+    </div>
+    <div class="nc-panel__body" style="flex:1; display:flex; flex-direction:column; gap:12px;">
+
+      {% if card.account and card.account.platform_username %}
+      {# Read-only post-connect confirmation — handle + avatar fetched
+         from the platform API, never typed. #}
+      <div style="display:flex; align-items:center; gap:12px;">
+        {% if card.account.platform_avatar_url %}
+        <img src="{{ card.account.platform_avatar_url }}"
+             alt="" width="48" height="48"
+             style="border-radius:50%; object-fit:cover;">
+        {% endif %}
+        <div>
+          <div><strong>{{ card.account.platform_username }}</strong></div>
+          <div class="nc-mono nc-mono--muted" style="font-size:11px;">
+            {{ card.account.platform_user_id }}
+          </div>
+        </div>
+      </div>
+      <form action="/dashboard/connect/{{ card.platform }}/disconnect" method="post" style="margin-top:auto;">
+        <input type="hidden" name="account_id" value="{{ card.account.id }}">
+        <button type="submit" class="nc-btn nc-btn--danger">
+          <i class="ti ti-plug-off" aria-hidden="true"></i>
+          <span>Disconnect</span>
+        </button>
+      </form>
+      {% elif card.ready %}
+      <small class="nc-text--muted">
+        Click below to authorize NexoClip to post to your {{ card.platform|capitalize }} account.
+        You'll be redirected to {{ card.platform|capitalize }}'s login if you aren't already signed in.
+      </small>
+      <a href="/dashboard/connect/{{ card.platform }}/authorize"
+         class="nc-btn nc-btn--primary"
+         style="margin-top:auto; text-decoration:none;">
+        <i class="ti ti-link" aria-hidden="true"></i>
+        <span>Connect with {{ card.platform|capitalize }}</span>
+      </a>
+      {% else %}
+      <div class="nc-empty" style="padding: 8px 0;">
+        <div class="nc-empty__title" style="font-size: 13px;">
+          {% if card.not_ready_reason == 'Coming in Wave 2' %}
+          Coming soon
+          {% else %}
+          Not configured
+          {% endif %}
+        </div>
+        <p class="nc-empty__body" style="font-size: 12px;">
+          {{ card.not_ready_reason }}
+        </p>
+      </div>
+      <button type="button" class="nc-btn" disabled style="margin-top:auto;">
+        <i class="ti ti-link-off" aria-hidden="true"></i>
+        <span>Unavailable</span>
+      </button>
+      {% endif %}
+
+      <div class="nc-mono nc-mono--muted" style="font-size:10px;">
+        Redirect URI: {{ card.redirect_uri }}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="nc-panel" style="margin-top: 24px;">
+  <div class="nc-panel__body">
+    <small class="nc-text--muted">
+      Stored encrypted at rest (Fernet, AES-128 + HMAC). Never sent
+      anywhere except the platform's official API. Disconnect at any
+      time — we clear the encrypted token and the account flips to
+      disabled.
+    </small>
+  </div>
+</div>
+
+{% endblock %}

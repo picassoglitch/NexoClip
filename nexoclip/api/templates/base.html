@@ -66,6 +66,9 @@
         {{ nav_link("/dashboard/personas", t("nav.personas")) }}
         {{ nav_link("/dashboard/brand-kits", t("nav.brand_kits")) }}
         {{ nav_link("/dashboard/publish", t("nav.publish")) }}
+        {#- Wave 1 native-OAuth Connect tab. TikTok lives here today;
+            Instagram + YouTube show 'Coming soon' until Wave 2. -#}
+        {{ nav_link("/dashboard/connect", "Connect", prefix="/dashboard/connect") }}
         {#- Slice O.9 — LLM spend + LLM settings are operator-only.
             Driven by NEXOCLIP_ADMIN_TENANT_IDS env var (see auth
             middleware). Regular creators never see them. -#}

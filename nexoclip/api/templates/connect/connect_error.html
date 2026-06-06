@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Connect failed - NexoClip{% endblock %}
+{% block content %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Connect attempt failed</h2>
+    <small>The OAuth round-trip didn't complete. Nothing was saved.</small>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__body">
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i></div>
+      <div class="nc-empty__title">Connection couldn't be completed</div>
+      {# `reason` is server-controlled (no user-typed content reaches
+         here); safe to render without explicit autoescape on. Jinja's
+         default autoescape still applies. #}
+      <p class="nc-empty__body">{{ reason }}</p>
+      <a href="/dashboard/connect" class="nc-btn nc-btn--primary">
+        <i class="ti ti-arrow-left" aria-hidden="true"></i>
+        <span>Back to Connect</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

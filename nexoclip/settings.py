@@ -255,6 +255,46 @@ class Settings(BaseSettings):
         validation_alias="NEXO_AI_LOGIN_URL",
     )
 
+    # ------------------------------------------------------------------
+    # Connect-tab OAuth (Wave 1: TikTok; Wave 2: Instagram + YouTube)
+    # ------------------------------------------------------------------
+    #
+    # Pattern A — NexoClip-the-company owns ONE app per platform on the
+    # respective developer portal. Tenants never see a client_secret;
+    # they click "Connect with TikTok", we redirect them through their
+    # own platform login, the platform calls back with a user-level
+    # auth code, and we exchange that for a user-level access_token +
+    # refresh_token (TikTok / Google) or long-lived token (Meta).
+    #
+    # The redirect URI tenants effectively use is the one WE register
+    # on our own platform apps. Same string for all tenants. Locked to
+    # https://nexoclip.nexo-ai.world (the custom domain in front of
+    # this Railway service); the local-dev redirect is registered
+    # alongside the prod one on each developer portal.
+    #
+    # `nexoclip_creds_key` — base64-encoded 32-byte Fernet key used to
+    # encrypt access_token / refresh_token at rest on
+    # connected_accounts. Generate with `python -c "from
+    # cryptography.fernet import Fernet; print(Fernet.generate_key()
+    # .decode())"` and store in Railway's NEXOCLIP_CREDS_KEY env var.
+    # Init-time validation: any read-or-write of an encrypted column
+    # without this set raises loudly so the failure is at boot, not
+    # at first connect. The connect router refuses to mount when this
+    # is unset.
+    nexoclip_creds_key: str | None = None
+
+    # Base URL the OAuth redirect URIs are built off of. Tenants
+    # register the prod value once on their NexoClip-owned platform
+    # apps. Default matches the nexoclip.nexo-ai.world custom domain
+    # in front of this Railway service.
+    oauth_redirect_base_url: str = "https://nexoclip.nexo-ai.world"
+
+    # TikTok Login Kit + Content Posting API — Pattern A. One app on
+    # developer.tiktok.com, registered with NexoClip's identity.
+    # Required scopes: user.info.basic, video.upload, video.publish.
+    tiktok_client_key: str | None = None
+    tiktok_client_secret: str | None = None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

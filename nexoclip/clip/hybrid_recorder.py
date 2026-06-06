@@ -83,6 +83,7 @@ async def record_clip_hybrid(
     height: int = 1920,
     fps: int = DEFAULT_FPS,
     progress_callback: Any = None,
+    ass_file_path: Path | None = None,
 ) -> Path:
     """Run the hybrid pipeline. Same signature shape as the legacy
     record_clip_to_mp4 so the background runner can swap one for the
@@ -208,6 +209,7 @@ async def record_clip_hybrid(
             output_path=output_path,
             fps=fps,
             duration_s=duration_s,
+            ass_file_path=ass_file_path,
         )
 
         await _emit_progress(progress_callback, 100)
@@ -303,24 +305,16 @@ async def _capture_overlay_alpha_sequence(
                 # extra disk space.
                 shutil.copy2(prev_png_path, png_path)
         else:
-            # R13 — compositor settle. captureFrameAtAlpha already
-            # forced a layout flush + 2 rAF + setTimeout(0) before
-            # resolving, but on Railway's headless Chromium with
-            # --disable-gpu the screenshot can still land on a
-            # pre-commit surface. Hold for one vsync frame here so
-            # the compositor has wall clock to incorporate the new
-            # caption layout into the screenshot pipeline.
-            await asyncio.sleep(0.020)
             try:
-                # R14 — opaque magenta page, no alpha channel needed.
-                # omit_background=True under headless Chromium silently
-                # drops dynamically-injected (innerHTML) elements from
-                # the screenshot, even when the DOM has them painted
-                # at full opacity. Switching to an opaque chroma-key
-                # background avoids that pipeline entirely; ffmpeg's
-                # colorkey filter strips the magenta before overlay.
+                # R16 — back to the standard alpha pipeline for the
+                # title / banner / watermark layer. Captions are no
+                # longer rendered in the page (R15's pre-allocated
+                # slots couldn't survive page.screenshot either),
+                # they're burned by ffmpeg's libass filter after
+                # this composite step.
                 png_bytes = await page.screenshot(
                     type="png",
+                    omit_background=True,
                     full_page=False,
                 )
             except Exception as e:  # noqa: BLE001
@@ -388,6 +382,7 @@ def _ffmpeg_composite_alpha_over_source(
     output_path: Path,
     fps: int,
     duration_s: float,
+    ass_file_path: Path | None = None,
 ) -> None:
     """Composite the alpha PNG sequence over the source video and mux
     the original audio. One ffmpeg pass; one file out.
@@ -423,25 +418,46 @@ def _ffmpeg_composite_alpha_over_source(
     # the operator's player rejected with 0xC00D36C4. With the rename,
     # `output_path` only ever exists as a fully-flushed render.
     partial_path = output_path.with_suffix(".partial.mp4")
-    # Render Migration R14 — overlay PNGs now have an OPAQUE magenta
-    # background (set by the render template's data-capture-alpha CSS).
-    # The filter graph runs colorkey on the overlay stream FIRST to
-    # replace magenta with full transparency, THEN overlays onto the
-    # source video. This routes around the headless-Chromium bug where
-    # omit_background=true screenshots silently dropped dynamically-
-    # injected DOM nodes (the per-frame innerHTML caption spans). See
-    # the R14 comment block in clip_render.html for the full chain.
+    # Render Migration R16 — standard alpha overlay for the operator's
+    # title / banner / watermark layer (server-rendered HTML; captures
+    # reliably from page.screenshot). Captions are NOT in the alpha
+    # PNGs — they're burned in a second filter step by libass against
+    # a server-generated ASS file. R14's magenta colorkey is reverted;
+    # the alpha pipeline works fine for the elements that actually
+    # appeared in the screenshot, and chasing the dynamic-content
+    # screenshot bug further wasn't paying off.
     #
-    # colorkey=0xff00ff:0.10:0.05 — tolerance 0.10 (about 25 RGB
-    # values) catches anti-aliasing fringe around glyph edges; softness
-    # 0.05 fades the edge over a small band so text doesn't have a
-    # hard chroma halo. Values picked to be aggressive enough to clean
-    # the bg without eating into the white/yellow caption pixels (which
-    # are nowhere near magenta in HSV).
-    filter_graph = (
-        "[1:v]colorkey=0xff00ff:0.10:0.05[ovl];"
-        "[0:v][ovl]overlay=0:0:format=auto[v]"
-    )
+    # Filter graph shapes:
+    #
+    #   No captions (ass_file_path is None / file missing):
+    #     [0:v][1:v]overlay=0:0:format=auto[v]
+    #
+    #   With captions (ass_file_path set + readable):
+    #     [0:v][1:v]overlay=0:0:format=auto[ovl];
+    #     [ovl]ass='/abs/path/to/file.ass'[v]
+    #
+    # libass reads the ASS file, rasterizes each Dialogue line at
+    # its [Start, End] with the styled karaoke highlight, and burns
+    # the result directly into the video buffer. No DOM, no
+    # screenshots, no compositor timing to chase.
+    if ass_file_path is not None and ass_file_path.exists():
+        # ffmpeg filter syntax requires single quotes around the
+        # filename AND escaping of `:` and `\` inside it. On POSIX
+        # the cache path is `/data/out/.../*.ass` — no problematic
+        # chars. The escape handles future Windows / containerized
+        # paths defensively.
+        ass_path_escaped = (
+            str(ass_file_path)
+            .replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'")
+        )
+        filter_graph = (
+            f"[0:v][1:v]overlay=0:0:format=auto[ovl];"
+            f"[ovl]ass='{ass_path_escaped}'[v]"
+        )
+    else:
+        filter_graph = "[0:v][1:v]overlay=0:0:format=auto[v]"
     cmd = [
         ffmpeg,
         "-y",
@@ -451,8 +467,7 @@ def _ffmpeg_composite_alpha_over_source(
         # Overlay PNG sequence at the export framerate.
         "-framerate", str(fps),
         "-i", overlay_pattern,
-        # Composite: colorkey magenta out of overlay, then overlay
-        # the result on the source video.
+        # Composite: overlay alpha PNGs, then libass burn-in.
         "-filter_complex", filter_graph,
         "-map", "[v]",
         "-map", "0:a?",

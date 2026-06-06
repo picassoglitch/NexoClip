@@ -51,6 +51,93 @@ _log = logging.getLogger("nexoclip.clip_render")
 _PROGRESS_UPDATE_DEBOUNCE_S = 1.0
 
 
+async def _build_ass_for_clip(
+    *,
+    db: object,
+    tenant_id: str,
+    clip_id: str,
+    output_path: Path,
+    width: int,
+    height: int,
+) -> Path | None:
+    """Generate an ASS subtitle file for the clip's captions.
+
+    Reads the transcript via TranscriptsRepo, slices to the clip's
+    window via `captions_for_clip` (same code path the editor's
+    /captions.json endpoint uses, so the burn matches the preview
+    byte-for-byte), then writes the ASS file sibling to the cache
+    MP4 as `clip_render_<res>.ass`. Returns the path on success,
+    None when there's nothing to burn (no transcript / disabled /
+    empty result) — caller treats None as "skip the libass step".
+
+    Pulls captions config off the clip's overlay_config so a
+    clip-level disable, position pick, or highlight-color override
+    flows through. Defaults match the operator-visible editor
+    preview when no per-clip override is set.
+    """
+    from nexoclip.clip.captions_ass import generate_ass
+    from nexoclip.clip import captions_for_clip, lines_to_json
+    from nexoclip.db import ClipsRepo, TranscriptsRepo
+    from nexoclip.tenancy import bound_tenant
+
+    with bound_tenant(tenant_id):
+        clip = await ClipsRepo(db).get(clip_id)
+        if clip is None:
+            return None
+        ov = clip.overlay_config or {}
+        captions_cfg = ov.get("captions") if isinstance(ov.get("captions"), dict) else {}
+        if not captions_cfg.get("enabled", True):
+            return None
+
+        transcript = await TranscriptsRepo(db).get(clip.stream_id)
+        if transcript is None:
+            return None
+
+        lines = captions_for_clip(
+            transcript.segments_json or "",
+            clip_start_s=clip.start_s,
+            clip_end_s=clip.end_s,
+        )
+        if not lines:
+            return None
+
+        # captions_for_clip returns Pydantic / dataclass objects; the
+        # ASS generator needs plain dict. lines_to_json gives us the
+        # exact serializable shape the /captions.json endpoint exposes
+        # — same shape the editor renders from, so the ASS burn and
+        # the editor preview stay in lockstep.
+        lines_json = lines_to_json(lines)
+
+    highlight = captions_cfg.get("highlight_color") or "#ffd84a"
+    position = captions_cfg.get("position") or "lower_third"
+    font_size_key = captions_cfg.get("font_size") or "medium"
+    # Match the CSS scale * the base size. CSS base is 4.231cqw on a
+    # 1080-px-wide container = ~46 px. Scale to absolute pixels and
+    # scale by the operator's size pick.
+    base_size = int(width * 0.0423)
+    scale = {"small": 0.78, "medium": 1.0, "large": 1.24, "xl": 1.5}.get(
+        font_size_key, 1.0,
+    )
+    font_size = max(16, int(base_size * scale))
+
+    ass_path = output_path.with_suffix(".ass")
+    generate_ass(
+        lines=lines_json,
+        width=width,
+        height=height,
+        output_path=ass_path,
+        highlight_color_hex=highlight,
+        position=position,
+        font_size=font_size,
+    )
+    _log.info(
+        "render_clip.ass_built clip=%s lines=%d ass=%s "
+        "highlight=%s position=%s font_size=%d",
+        clip_id, len(lines_json), ass_path, highlight, position, font_size,
+    )
+    return ass_path
+
+
 def _safe_unlink(path: Path) -> None:
     """Best-effort delete used by the failure paths so a partial /
     corrupt file is never left for the next download click to serve
@@ -142,6 +229,29 @@ async def render_clip_in_background(
             HybridRecordingError, record_clip_hybrid,
         )
 
+        # Render Migration R16 — generate the ASS subtitle file once,
+        # pass it to whichever recorder runs (hybrid first, legacy
+        # fallback). The page no longer renders captions in any form;
+        # libass burns them after the alpha composite. If captions
+        # are disabled on this clip, or the transcript has no
+        # word-level data overlapping the window, we pass None and
+        # the composite skips the ass=filter chain.
+        ass_file_path: Path | None = None
+        try:
+            ass_file_path = await _build_ass_for_clip(
+                db=db,
+                tenant_id=tenant_id,
+                clip_id=clip_id,
+                output_path=output_path,
+                width=width,
+                height=height,
+            )
+        except Exception as e:  # noqa: BLE001 — ASS is enrichment, not gating
+            _log.warning(
+                "render_clip.ass_build_failed clip=%s error=%s",
+                clip_id, str(e)[:300],
+            )
+
         hybrid_failed_with: str | None = None
         try:
             await record_clip_hybrid(
@@ -154,6 +264,7 @@ async def render_clip_in_background(
                 width=width,
                 height=height,
                 progress_callback=_on_progress,
+                ass_file_path=ass_file_path,
             )
         except HybridRecordingError as e:
             hybrid_failed_with = str(e)

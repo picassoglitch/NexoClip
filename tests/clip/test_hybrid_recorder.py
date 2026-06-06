@@ -52,15 +52,12 @@ class _FakePage:
         return None
 
     async def screenshot(self, **kwargs) -> bytes:
-        # R14 — omit_background is intentionally NOT passed any more.
-        # The render page sets an opaque #ff00ff chroma-key background
-        # in capture mode and ffmpeg's colorkey filter strips it. The
-        # old omit_background=True path silently dropped dynamically-
-        # injected DOM (caption spans) from the screenshot.
-        assert "omit_background" not in kwargs, (
-            "screenshot called with omit_background — R14 dropped it; "
-            "we now use a magenta page + ffmpeg colorkey instead"
-        )
+        # R16 — back to omit_background=True (R14's magenta chroma
+        # key was reverted along with all per-page caption rendering).
+        # The alpha pipeline carries only the server-rendered title /
+        # banner / watermark layer; captions are burned by ffmpeg's
+        # libass after the composite.
+        assert kwargs.get("omit_background") is True
         assert kwargs.get("type") == "png"
         self.screenshot_calls += 1
         return self._png_bytes

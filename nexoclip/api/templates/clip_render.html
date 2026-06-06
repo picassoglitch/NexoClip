@@ -63,38 +63,30 @@
     }
     /* Render Migration T2 — overlay-only capture mode for hybrid
        ffmpeg+overlay-alpha pipeline. Url has ?capture=alpha:
+         * Transparent background everywhere (html, body, .nc-preview).
+           Playwright's page.screenshot(omit_background=true) then
+           captures the overlay layer with alpha; ffmpeg composites
+           it back over the source video.
          * Source <video> element hidden (display:none) — ffmpeg
            handles the source frames directly, ~30× faster than
            seek-and-shoot full composites.
 
-       Render Migration R14 — magenta chroma key instead of alpha.
-
-       R11-R13 chain proved beyond doubt that page.screenshot with
-       omit_background=true was silently dropping the caption pixels
-       even though the DOM held the right element at the right
-       position with opacity:1 — title, banner, watermark all
-       survived (rendered in the initial paint surface from page
-       load) but the per-frame innerHTML-injected caption spans were
-       never committed to the screenshot's alpha output. R12 killed
-       animations, R13 forced layout flush + 20ms compositor settle;
-       neither helped. It's a headless-Chromium omit_background bug
-       with dynamic content, not a CSS or timing issue we can chase.
-
-       The fix routes around it entirely: paint a SOLID MAGENTA
-       (#ff00ff) background instead of transparent, take a normal
-       opaque screenshot (omit_background no longer matters), and
-       have ffmpeg's overlay step colorkey magenta to transparency
-       BEFORE compositing onto the source video. Magenta is the
-       canonical chroma-key color for non-skin-tone overlays
-       precisely because no real video frame contains pure #ff00ff
-       and no overlay element in this codebase uses it (verified:
-       title=white pill+black text, banner=dark+green+white,
-       watermark=lime, captions=white+yellow+black stroke). */
-    html[data-capture-alpha="1"], html[data-capture-alpha="1"] body {
-      background: #ff00ff !important;
-    }
+       Render Migration R16 — captions now ship via ffmpeg's `ass=`
+       filter, NOT via in-page DOM rendering. R11-R15 proved that
+       headless Chromium's screenshot pipeline cannot reliably
+       rasterize dynamically-injected (innerHTML or appendChild)
+       content even when computed style says it's painted at full
+       opacity. Server-rendered overlays (title, banner, watermark)
+       survive every screenshot because they're in the initial paint
+       surface from page load; captions, which mutate per-frame, do
+       not. libass burns text directly into the video buffer with
+       sub-pixel precision and karaoke timing — same approach Opus
+       Clip / CapCut / TikTok editors all converge on. R14's magenta
+       chroma key has been reverted; we're back to the standard alpha
+       pipeline for title/banner/watermark. */
+    html[data-capture-alpha="1"], html[data-capture-alpha="1"] body,
     html[data-capture-alpha="1"] .nc-preview {
-      background: #ff00ff !important;
+      background: transparent !important;
     }
     html[data-capture-alpha="1"] .nc-preview video,
     html[data-capture-alpha="1"] #preview-video {
@@ -261,17 +253,16 @@
       }
     }
 
-    {% if _captions.get('enabled', True) %}
-    // Caption lines are fetched from /dashboard/clips/<id>/captions.json
-    // (same endpoint the editor uses) so the karaoke render is
-    // byte-identical between editor preview and headless render.
-    //
-    // Slice O.34 — actually render the captions. Previous version of
-    // this template fetched the JSON but never built the word spans;
-    // captions were forever invisible in the headless recording. We
-    // now port a minimal version of clip_detail.html's syncCaptionFrame
-    // logic — same data shape, same active/past/upcoming classes —
-    // so the karaoke pop-color animation actually paints onto frames.
+    {# Render Migration R16 — the headless page no longer renders
+       captions. The recorder's screenshot pipeline could not capture
+       dynamic innerHTML or appendChild mutations reliably (R11-R15
+       chain). Captions are burned into the final video by ffmpeg's
+       `ass=` filter using a server-generated ASS file (see
+       nexoclip/clip/captions_ass.py). The code below stays only so
+       the existing recorder hooks (captureFrameAtAlpha, state hash)
+       keep working — _renderCaptions is a no-op now, captionsReady
+       flips immediately, no fetch fires. #}
+    {% if False and _captions.get('enabled', True) %}
     var _captionLines = null;
     var _captionSlots = [];   // R15 — pre-created stable word-spans
     var _captionEl = document.getElementById("pv-caption");

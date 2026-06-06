@@ -47,6 +47,19 @@ from nexoclip.integrations.tiktok.auth import (
     query_creator_info,
     build_authorize_url,
 )
+from nexoclip.integrations.instagram.auth import (
+    InstagramAuthError,
+    build_authorize_url as build_ig_authorize_url,
+    exchange_code_for_short_lived,
+    exchange_for_long_lived,
+    list_pages,
+    resolve_ig_business_account,
+)
+from nexoclip.integrations.youtube.auth import (
+    YouTubeAuthError,
+    build_authorize_url as build_yt_authorize_url,
+    exchange_code_for_token as yt_exchange_code,
+)
 from nexoclip.settings import get_settings
 
 from ..deps import get_db, require_full_scope, tenant_binder
@@ -103,14 +116,21 @@ async def connect_landing(
     # the moment the operator lands instead of mid-redirect ("why is
     # this button broken?").
     def _ready_for(platform: str) -> tuple[bool, str | None]:
+        if not settings.nexoclip_creds_key:
+            return False, "NEXOCLIP_CREDS_KEY unset (token encryption)"
         if platform == "tiktok":
             if not settings.tiktok_client_key or not settings.tiktok_client_secret:
                 return False, "TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET unset"
-            if not settings.nexoclip_creds_key:
-                return False, "NEXOCLIP_CREDS_KEY unset (token encryption)"
             return True, None
-        # IG + YT land in Wave 2.
-        return False, "Coming in Wave 2"
+        if platform == "instagram":
+            if not settings.meta_app_id or not settings.meta_app_secret:
+                return False, "META_APP_ID / META_APP_SECRET unset"
+            return True, None
+        if platform == "youtube":
+            if not settings.google_client_id or not settings.google_client_secret:
+                return False, "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET unset"
+            return True, None
+        return False, "Unknown platform"
 
     cards = []
     for platform in _SUPPORTED_PLATFORMS:
@@ -360,6 +380,415 @@ def _render_callback_error(request: Request, *, reason: str) -> Response:
         {"reason": reason},
         status_code=400,
     )
+
+
+# ---------- Instagram (via Facebook Login) ----------
+
+
+@router.get("/instagram/authorize")
+async def instagram_authorize(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+) -> Response:
+    """Step 1 of IG OAuth: 303 to the Facebook Login dialog with our
+    app_id + signed state. Meta returns to /connect/instagram/callback
+    with a code we then trade for short → long-lived tokens, then
+    resolve to an IG-Business account via the linked FB Page."""
+    settings = get_settings()
+    if not settings.meta_app_id or not settings.meta_app_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="META_APP_ID / META_APP_SECRET are not configured.",
+        )
+    if not settings.nexoclip_creds_key:
+        raise HTTPException(
+            status_code=503,
+            detail="NEXOCLIP_CREDS_KEY is not configured.",
+        )
+
+    state = sign_state(platform="instagram", tenant_id=tenant_id)
+    redirect_uri = _redirect_uri("instagram")
+    auth_url = build_ig_authorize_url(
+        app_id=settings.meta_app_id,
+        redirect_uri=redirect_uri,
+        state=state,
+    )
+    _log.info(
+        "connect.instagram.authorize_start tenant=%s redirect=%s",
+        tenant_id, redirect_uri,
+    )
+    return RedirectResponse(url=auth_url, status_code=303)
+
+
+@router.post("/instagram/disconnect")
+async def instagram_disconnect(
+    request: Request,
+    account_id: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Mirror of tiktok_disconnect; same soft-disable semantics."""
+    repo = ConnectedAccountsRepo(db)
+    account = await repo.get(account_id)
+    if account is None or account.platform != "instagram":
+        raise HTTPException(status_code=404, detail="instagram account not found")
+    await repo.update_oauth(
+        account_id,
+        oauth_blob={},
+        refresh_token="",
+        expires_at="",
+        scopes=[],
+    )
+    await repo.mark_status(account_id, "disabled")
+    _log.info(
+        "connect.instagram.disconnect tenant=%s account=%s",
+        tenant_id, account_id,
+    )
+    return RedirectResponse(url="/dashboard/connect", status_code=303)
+
+
+@public_router.get("/instagram/callback")
+async def instagram_callback(
+    request: Request,
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+    error_reason: str = Query(default=""),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Step 2: verify state → short-lived → long-lived → enumerate
+    Pages → first Page with linked IG-Business wins → encrypt + persist.
+
+    Meta's error params on the redirect: `error` + `error_reason`
+    (e.g. error=access_denied&error_reason=user_denied when the user
+    cancels). We surface both verbatim in the structured log; the
+    user sees the canonical "expired or canceled" message.
+    """
+    settings = get_settings()
+    if error:
+        return _render_callback_error(
+            request, reason=f"Meta returned: {error} ({error_reason or 'no reason'})"
+        )
+    if not code or not state:
+        return _render_callback_error(
+            request, reason="Missing `code` or `state` in callback URL."
+        )
+
+    try:
+        claims = verify_state(state)
+    except InvalidState as e:
+        _log.warning("connect.instagram.state_invalid reason=%s", e.reason)
+        return _render_callback_error(
+            request,
+            reason=(
+                "Connect attempt expired or could not be verified. "
+                "Please click Connect again."
+            ),
+        )
+    if claims.platform != "instagram":
+        return _render_callback_error(
+            request, reason="State token does not belong to Instagram."
+        )
+
+    if not settings.meta_app_id or not settings.meta_app_secret:
+        return _render_callback_error(
+            request, reason="Meta credentials are not configured."
+        )
+
+    redirect_uri = _redirect_uri("instagram")
+
+    try:
+        short = await exchange_code_for_short_lived(
+            app_id=settings.meta_app_id,
+            app_secret=settings.meta_app_secret,
+            code=code,
+            redirect_uri=redirect_uri,
+        )
+    except InstagramAuthError as e:
+        _log.warning("connect.instagram.short_exchange_failed err=%s body=%s", e, e.body)
+        return _render_callback_error(
+            request, reason="Meta rejected the authorization code. Click Connect again.",
+        )
+
+    try:
+        long_tok = await exchange_for_long_lived(
+            app_id=settings.meta_app_id,
+            app_secret=settings.meta_app_secret,
+            short_lived_token=short.access_token,
+        )
+    except InstagramAuthError as e:
+        _log.warning("connect.instagram.long_exchange_failed err=%s body=%s", e, e.body)
+        return _render_callback_error(
+            request, reason="Meta would not extend the token. Click Connect again.",
+        )
+
+    try:
+        pages = await list_pages(long_lived_user_token=long_tok.access_token)
+    except InstagramAuthError as e:
+        _log.warning("connect.instagram.list_pages_failed err=%s body=%s", e, e.body)
+        return _render_callback_error(
+            request,
+            reason=(
+                "Couldn't list your Facebook Pages. Make sure the connected "
+                "account admins at least one Page with a linked Instagram "
+                "Business / Creator account."
+            ),
+        )
+    if not pages:
+        return _render_callback_error(
+            request,
+            reason=(
+                "The connected Facebook account doesn't administer any "
+                "Pages. Reels publishing requires an IG Business / Creator "
+                "account linked to a Facebook Page you administer."
+            ),
+        )
+
+    # First Page with a linked IG-Business wins. Wave 2 V1 — if the
+    # user has multiple eligible Pages we'd want a picker UI here,
+    # but that's a follow-up. Most operators have one Page anyway.
+    ig_account = None
+    for page in pages:
+        try:
+            ig_account = await resolve_ig_business_account(page=page)
+        except InstagramAuthError as e:
+            _log.warning(
+                "connect.instagram.ig_resolve_failed page=%s err=%s",
+                page.id, e,
+            )
+            continue
+        if ig_account is not None:
+            break
+    if ig_account is None:
+        return _render_callback_error(
+            request,
+            reason=(
+                "None of your Facebook Pages have a linked Instagram "
+                "Business or Creator account. Link one in IG settings "
+                "and click Connect again."
+            ),
+        )
+
+    try:
+        enc = get_encryptor()
+    except EncryptionKeyMissing as e:
+        _log.error("connect.instagram.encryption_unavailable err=%s", e)
+        return _render_callback_error(
+            request, reason="Token encryption is not configured on the server.",
+        )
+
+    # Meta has no classic refresh token. We store:
+    #   access_token_encrypted  = Page Access Token  (what publishers use)
+    #   refresh_token_encrypted = long-lived USER token (refresh credential)
+    # token_type='long_lived' so the scheduler picks the IG refresh path.
+    access_ct = enc.encrypt(ig_account.page_access_token)
+    refresh_ct = enc.encrypt(long_tok.access_token)
+
+    from nexoclip.tenancy import bound_tenant
+    with bound_tenant(claims.tenant_id):
+        repo = ConnectedAccountsRepo(db)
+        await repo.upsert_oauth_connection(
+            platform="instagram",
+            platform_user_id=ig_account.ig_user_id,
+            platform_username=ig_account.username,
+            platform_avatar_url=ig_account.profile_picture_url,
+            access_token_encrypted=access_ct,    # type: ignore[arg-type]
+            refresh_token_encrypted=refresh_ct,  # type: ignore[arg-type]
+            token_type="long_lived",
+            # Meta's expires_at applies to the long-lived USER token;
+            # the Page Access Token inherits that lifetime. Scheduler
+            # uses this to decide refresh timing.
+            expires_at=long_tok.expires_at,
+            scopes=[],  # Meta doesn't carry scope in token responses
+            display_name=ig_account.name or ig_account.username,
+            access_token_plaintext_mirror=ig_account.page_access_token,
+        )
+    _log.info(
+        "connect.instagram.connected tenant=%s ig_user_id=%s page_id=%s username=%s",
+        claims.tenant_id, ig_account.ig_user_id, ig_account.page_id,
+        ig_account.username,
+    )
+    return RedirectResponse(
+        url="/dashboard/connect?connected=instagram", status_code=303
+    )
+
+
+# ---------- YouTube (Google OAuth) ----------
+
+
+@router.get("/youtube/authorize")
+async def youtube_authorize(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+) -> Response:
+    """Step 1 of YT OAuth: 303 to Google consent with access_type=offline
+    + prompt=consent (mandatory for refresh_token reliability — see the
+    auth module docstring)."""
+    settings = get_settings()
+    if not settings.google_client_id or not settings.google_client_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not configured.",
+        )
+    if not settings.nexoclip_creds_key:
+        raise HTTPException(
+            status_code=503,
+            detail="NEXOCLIP_CREDS_KEY is not configured.",
+        )
+
+    state = sign_state(platform="youtube", tenant_id=tenant_id)
+    redirect_uri = _redirect_uri("youtube")
+    auth_url = build_yt_authorize_url(
+        client_id=settings.google_client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+    )
+    _log.info(
+        "connect.youtube.authorize_start tenant=%s redirect=%s",
+        tenant_id, redirect_uri,
+    )
+    return RedirectResponse(url=auth_url, status_code=303)
+
+
+@router.post("/youtube/disconnect")
+async def youtube_disconnect(
+    request: Request,
+    account_id: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Mirror of tiktok_disconnect."""
+    repo = ConnectedAccountsRepo(db)
+    account = await repo.get(account_id)
+    if account is None or account.platform != "youtube":
+        raise HTTPException(status_code=404, detail="youtube account not found")
+    await repo.update_oauth(
+        account_id,
+        oauth_blob={},
+        refresh_token="",
+        expires_at="",
+        scopes=[],
+    )
+    await repo.mark_status(account_id, "disabled")
+    _log.info(
+        "connect.youtube.disconnect tenant=%s account=%s",
+        tenant_id, account_id,
+    )
+    return RedirectResponse(url="/dashboard/connect", status_code=303)
+
+
+@public_router.get("/youtube/callback")
+async def youtube_callback(
+    request: Request,
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Step 2: verify state → exchange code for access + refresh →
+    persist encrypted. channelId stays NULL on platform_user_id until
+    the first videos.insert response reveals it; we use the random
+    account_id as the dedup key in the meantime.
+
+    Subtle but real: a user with multiple YouTube channels (a Brand
+    Account "channel-switcher") will see Google's account picker
+    even after they're logged in to Google. The refresh_token we
+    receive is bound to the picked channel — if they later want a
+    different channel they have to disconnect and re-OAuth.
+    """
+    settings = get_settings()
+    if error:
+        return _render_callback_error(
+            request, reason=f"Google returned: {error}"
+        )
+    if not code or not state:
+        return _render_callback_error(
+            request, reason="Missing `code` or `state` in callback URL."
+        )
+
+    try:
+        claims = verify_state(state)
+    except InvalidState as e:
+        _log.warning("connect.youtube.state_invalid reason=%s", e.reason)
+        return _render_callback_error(
+            request,
+            reason=(
+                "Connect attempt expired or could not be verified. "
+                "Please click Connect again."
+            ),
+        )
+    if claims.platform != "youtube":
+        return _render_callback_error(
+            request, reason="State token does not belong to YouTube."
+        )
+
+    if not settings.google_client_id or not settings.google_client_secret:
+        return _render_callback_error(
+            request, reason="Google credentials are not configured."
+        )
+
+    try:
+        tok = await yt_exchange_code(
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            code=code,
+            redirect_uri=_redirect_uri("youtube"),
+        )
+    except YouTubeAuthError as e:
+        _log.warning("connect.youtube.exchange_failed err=%s body=%s", e, e.body)
+        return _render_callback_error(
+            request,
+            reason=(
+                "Google rejected the authorization code, or did not return "
+                "a refresh token. Click Connect again."
+            ),
+        )
+
+    try:
+        enc = get_encryptor()
+    except EncryptionKeyMissing as e:
+        _log.error("connect.youtube.encryption_unavailable err=%s", e)
+        return _render_callback_error(
+            request, reason="Token encryption is not configured on the server.",
+        )
+
+    access_ct = enc.encrypt(tok.access_token)
+    refresh_ct = enc.encrypt(tok.refresh_token)  # forced non-None by exchange
+
+    # channelId isn't available until the first videos.insert response.
+    # Until then we use a synthetic platform_user_id derived from the
+    # account_id so the (tenant, platform, platform_user_id) dedup
+    # still produces a stable key — see ConnectedAccountsRepo dedup
+    # index. Real channelId is backfilled by the publish adapter on
+    # first upload.
+    import secrets as _secrets
+    pending_id = f"pending-channel-{_secrets.token_hex(8)}"
+
+    from nexoclip.tenancy import bound_tenant
+    with bound_tenant(claims.tenant_id):
+        repo = ConnectedAccountsRepo(db)
+        await repo.upsert_oauth_connection(
+            platform="youtube",
+            platform_user_id=pending_id,
+            platform_username=None,
+            platform_avatar_url=None,
+            access_token_encrypted=access_ct,    # type: ignore[arg-type]
+            refresh_token_encrypted=refresh_ct,  # type: ignore[arg-type]
+            token_type="bearer",
+            expires_at=tok.expires_at,
+            scopes=[s for s in tok.scope.split() if s],  # space-separated
+            display_name=None,
+            access_token_plaintext_mirror=tok.access_token,
+        )
+    _log.info(
+        "connect.youtube.connected tenant=%s pending_id=%s scope=%s",
+        claims.tenant_id, pending_id, tok.scope,
+    )
+    return RedirectResponse(url="/dashboard/connect?connected=youtube", status_code=303)
 
 
 __all__ = ["router", "public_router"]

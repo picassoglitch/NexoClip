@@ -295,6 +295,26 @@ class Settings(BaseSettings):
     tiktok_client_key: str | None = None
     tiktok_client_secret: str | None = None
 
+    # Meta (Instagram via Facebook Login) — Pattern A. One app on
+    # developers.facebook.com with Facebook Login + Instagram Graph
+    # API products enabled. Required permissions:
+    # instagram_basic, instagram_content_publish, pages_show_list,
+    # pages_read_engagement, business_management.
+    # Meta tokens are long-lived (~60 days) — there is no classic
+    # refresh_token. The refresh job re-exchanges the long-lived
+    # token itself before expires_at; see token_type='long_lived'.
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+
+    # Google (YouTube Data API v3) — Pattern A. OAuth 2.0 web client
+    # on console.cloud.google.com. Scope: youtube.upload (the only
+    # one we need; channels.list is skipped to keep verification
+    # surface minimal — channelId comes from the first videos.insert
+    # response). access_type=offline + prompt=consent is mandatory
+    # for refresh_token reliability.
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

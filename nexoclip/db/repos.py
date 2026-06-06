@@ -228,18 +228,25 @@ class TenantsRepo:
         await conn.commit()
 
     async def set_upload_post_profile_username(
-        self, tenant_id: str, username: str,
+        self, tenant_id: str, username: str | None,
     ) -> None:
-        """Persist the upload-post 'user profile' username for a tenant.
+        """Persist (or clear) the upload-post 'user profile' username
+        for a tenant.
 
-        Set once on first connect/publish via ensure_profile_for_tenant().
-        Subsequent upload-post API calls reuse this value as the `user`
-        field on every request.
+        Set once on first connect/publish via ensure_profile_for_tenant(),
+        explicitly via the /claim endpoint, or cleared via the /unlink
+        endpoint. Subsequent upload-post API calls reuse this value as
+        the `user` field on every request. Pass None or empty string
+        to clear (forget the binding without touching upload-post's
+        side).
         """
+        # Normalize empty string to NULL — the model treats both as
+        # "unbound" but NULL is the canonical storage form.
+        value = username if username else None
         conn = await self._db.connect()
         await conn.execute(
             "UPDATE tenants SET upload_post_profile_username = ? WHERE id = ?",
-            (username, tenant_id),
+            (value, tenant_id),
         )
         await conn.commit()
 

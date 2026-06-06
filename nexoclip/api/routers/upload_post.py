@@ -172,6 +172,71 @@ async def upload_post_dashboard(
 # ---------- Connect ----------
 
 
+@router.post("/claim")
+async def upload_post_claim_existing(
+    request: Request,
+    username: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Bind an EXISTING upload-post profile to this tenant.
+
+    Use case: operator already created a profile manually on
+    upload-post.com (e.g. picked their personal handle like
+    `aldov1llanueva` instead of letting NexoClip derive
+    `ten_<ulid>` from the tenant id). Without this, our
+    ensure_profile_for_tenant() would happily mint a second
+    profile next to the one they hand-created.
+
+    The flow: take the typed username, hit upload-post's
+    GET /users/{username} to confirm it exists (and to surface
+    a clear error if it doesn't), then persist on the tenant row.
+    Subsequent connect/post clicks fast-path off the persisted value.
+
+    upload-post usernames are CASE SENSITIVE (their docs say so
+    in the create-profile confirmation banner). We pass through
+    verbatim — no normalize/lowercase.
+    """
+    username = (username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+
+    client = _build_client()
+    try:
+        profile = await client.get_user_profile(username)
+    except UploadPostError as e:
+        _log.warning(
+            "upload_post.claim.lookup_failed tenant=%s username=%s err=%s status=%s",
+            tenant_id, username, e, e.status_code,
+        )
+        if e.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No upload-post profile exists with username "
+                    f"'{username}'. Check the spelling (case sensitive!) "
+                    f"or click Connect to create a new one."
+                ),
+            ) from e
+        raise HTTPException(
+            status_code=502,
+            detail=f"upload-post profile lookup failed: {e}",
+        ) from e
+
+    await TenantsRepo(db).set_upload_post_profile_username(
+        tenant_id, profile.username,
+    )
+    _log.info(
+        "upload_post.claim.linked tenant=%s username=%s",
+        tenant_id, profile.username,
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish/upload-post?claimed={profile.username}",
+        status_code=303,
+    )
+
+
 @router.post("/connect")
 async def upload_post_connect(
     request: Request,
@@ -223,6 +288,29 @@ async def upload_post_connect(
         tenant_id, username, jwt_link.duration,
     )
     return RedirectResponse(url=jwt_link.access_url, status_code=303)
+
+
+@router.post("/unlink")
+async def upload_post_unlink(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Clear the tenant's upload-post profile binding.
+
+    Does NOT delete the profile on upload-post's side — that's a
+    separate destructive action (DELETE /users) we deliberately
+    keep behind the upload-post UI. This just forgets the local
+    mapping so the next Connect click can mint or claim a different
+    one without touching the existing data.
+    """
+    await TenantsRepo(db).set_upload_post_profile_username(tenant_id, "")
+    _log.info("upload_post.unlink tenant=%s", tenant_id)
+    return RedirectResponse(
+        url="/dashboard/publish/upload-post?unlinked=1",
+        status_code=303,
+    )
 
 
 # ---------- Publish ----------

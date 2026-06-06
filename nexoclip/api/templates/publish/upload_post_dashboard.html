@@ -35,6 +35,25 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('claimed') %}
+<div class="nc-panel" style="border-color: var(--nc-green);">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Linked upload-post profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
+  </div>
+</div>
+{% endif %}
+
+{% if request.query_params.get('unlinked') %}
+<div class="nc-panel" style="border-color: var(--nc-orange);">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
+    Cleared the upload-post profile binding. Click Connect or paste a
+    profile name below to re-link.
+  </div>
+</div>
+{% endif %}
+
 {% if fetch_error %}
 <div class="nc-panel" style="border-color: var(--nc-orange);">
   <div class="nc-panel__body" style="padding: 12px 16px;">
@@ -60,14 +79,23 @@
     {% endif %}
   </div>
   <div class="nc-panel__body">
-    {% if not profile_username %}
-    <p class="nc-text--muted" style="margin: 0 0 12px 0;">
-      Click Connect to open upload-post's hosted authorization page.
-      You'll link your TikTok, Instagram, YouTube, X, LinkedIn,
-      Facebook, Threads, Pinterest, or Bluesky accounts there. Tokens
-      are stored on upload-post — NexoClip never sees them.
-    </p>
-    {% else %}
+    {% if profile_username %}
+    {# Show the bound profile name + unlink option so the operator
+       can see exactly which upload-post profile their tenant maps
+       to. upload-post usernames are CASE SENSITIVE (per their docs)
+       so we display verbatim. #}
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+      <i class="ti ti-user" aria-hidden="true"></i>
+      <span class="nc-text--muted">Linked profile:</span>
+      <span class="nc-mono" style="font-weight: 600;">{{ profile_username }}</span>
+      <form action="/dashboard/publish/upload-post/unlink" method="post" style="margin-left: auto;">
+        <button type="submit" class="nc-btn nc-btn--danger" title="Forget the local binding. The profile stays on upload-post.">
+          <i class="ti ti-unlink" aria-hidden="true"></i>
+          <span>Unlink</span>
+        </button>
+      </form>
+    </div>
+
     <div style="display:flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
       {% if social_accounts %}
         {% for platform, info in social_accounts.items() %}
@@ -90,17 +118,62 @@
         </div>
         {% endfor %}
       {% else %}
-        <span class="nc-text--muted">No social accounts linked yet. Click Connect to add some.</span>
+        <span class="nc-text--muted">No social accounts linked yet. Click <em>Manage connections</em> to add some on upload-post.</span>
       {% endif %}
     </div>
-    {% endif %}
 
     <form action="/dashboard/publish/upload-post/connect" method="post" style="display: inline-block;">
       <button type="submit" class="nc-btn nc-btn--primary">
         <i class="ti ti-link" aria-hidden="true"></i>
-        <span>{% if profile_username %}Manage connections{% else %}Connect accounts{% endif %}</span>
+        <span>Manage connections</span>
       </button>
     </form>
+
+    {% else %}
+    {# Two options for first-time setup: create new (mints a fresh
+       upload-post profile with our derived username) or link an
+       existing one (e.g. the operator already created one manually
+       on upload-post.com — that's the case_sensitive warning their
+       UI shows after profile creation). #}
+    <p class="nc-text--muted" style="margin: 0 0 12px 0;">
+      Two ways to link your upload-post account:
+    </p>
+
+    <div class="nc-grid-2" style="gap: 16px;">
+      <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
+        <strong>Create new profile</strong>
+        <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
+          NexoClip creates a fresh upload-post profile + bounces you
+          to upload-post's hosted UI to connect your TikTok / IG / YT
+          / X / LinkedIn / Facebook / Threads / Pinterest / Bluesky.
+        </p>
+        <form action="/dashboard/publish/upload-post/connect" method="post">
+          <button type="submit" class="nc-btn nc-btn--primary">
+            <i class="ti ti-plus" aria-hidden="true"></i>
+            <span>Create + connect</span>
+          </button>
+        </form>
+      </div>
+
+      <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
+        <strong>Link existing profile</strong>
+        <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
+          If you already created a profile on
+          <a href="https://app.upload-post.com" target="_blank" rel="noopener">upload-post.com</a>
+          (e.g. <span class="nc-mono">aldov1llanueva</span>), paste
+          that username here. <strong>Case sensitive</strong> — copy
+          it exactly.
+        </p>
+        <form action="/dashboard/publish/upload-post/claim" method="post" style="display: flex; gap: 8px;">
+          <input class="nc-input nc-input--mono" name="username" required placeholder="aldov1llanueva" style="flex:1;">
+          <button type="submit" class="nc-btn">
+            <i class="ti ti-link" aria-hidden="true"></i>
+            <span>Link</span>
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 

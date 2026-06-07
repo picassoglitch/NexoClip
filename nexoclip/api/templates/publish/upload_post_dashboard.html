@@ -1,151 +1,273 @@
 {% extends "base.html" %}
-{% block title %}Publish - NexoClip{% endblock %}
+{% block title %}Publish Center - NexoClip{% endblock %}
 {% block content %}
 
-<div class="nc-page-header">
-  <div>
-    <h2>Publish</h2>
-    <small>Native multi-platform publishing via upload-post.</small>
+<style>
+  .nc-pc-acct-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 14px;
+  }
+  .nc-pc-acct-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.02);
+  }
+  .nc-pc-acct-chip.is-connected {
+    border-color: rgba(72, 187, 120, 0.35);
+    background: rgba(72, 187, 120, 0.08);
+    color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-tabs {
+    display: flex; gap: 4px; margin: 16px 0 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .nc-pc-tab {
+    padding: 8px 16px; background: none; border: none;
+    color: var(--nc-text--muted, #aaa); cursor: pointer;
+    font-size: 13px; font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .nc-pc-tab.is-active {
+    color: var(--nc-green, #48bb78);
+    border-bottom-color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-tab-body { display: none; }
+  .nc-pc-tab-body.is-active { display: block; }
+
+  /* Single tab: clip grid */
+  .nc-pc-clip-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .nc-pc-clip-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; overflow: hidden; cursor: pointer;
+    transition: border-color 120ms, transform 120ms;
+  }
+  .nc-pc-clip-card:hover { border-color: rgba(255,255,255,0.15); }
+  .nc-pc-clip-card.is-selected {
+    border-color: var(--nc-green, #48bb78);
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.15);
+  }
+  .nc-pc-clip-card__thumb {
+    aspect-ratio: 9 / 16; background: #0a0a0a;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .nc-pc-clip-card__thumb img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  .nc-pc-clip-card__thumb-fallback {
+    color: rgba(255,255,255,0.2); font-size: 24px;
+  }
+  .nc-pc-clip-card__dur {
+    position: absolute; bottom: 8px; right: 8px;
+    background: rgba(0,0,0,0.7); color: #fff;
+    padding: 2px 6px; border-radius: 4px; font-size: 11px;
+    font-family: monospace;
+  }
+  .nc-pc-clip-card__meta {
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .nc-pc-clip-card__title {
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nc-pc-clip-card__status {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--nc-text--muted, #aaa);
+  }
+
+  /* Publish panel (appears when a clip is selected) */
+  .nc-pc-publish-panel {
+    margin-top: 16px;
+    padding: 16px;
+    background: rgba(72, 187, 120, 0.04);
+    border: 1px solid rgba(72, 187, 120, 0.2);
+    border-radius: 8px;
+    display: none;
+  }
+  .nc-pc-publish-panel.is-active { display: block; }
+  .nc-pc-publish-panel__header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+  }
+  .nc-pc-publish-panel__title {
+    font-size: 15px; font-weight: 600;
+  }
+  .nc-pc-publish-panel__meta {
+    font-size: 11px; color: var(--nc-text--muted, #aaa);
+    font-family: monospace;
+  }
+  .nc-pc-platform-chips {
+    display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0;
+  }
+  .nc-pc-platform-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.02);
+    cursor: pointer; user-select: none;
+    transition: all 100ms;
+  }
+  .nc-pc-platform-chip:hover { border-color: rgba(255,255,255,0.25); }
+  .nc-pc-platform-chip.is-disabled {
+    opacity: 0.35; cursor: not-allowed;
+    background: rgba(255,255,255,0.01);
+  }
+  .nc-pc-platform-chip.is-selected {
+    background: var(--nc-green, #48bb78);
+    color: #000; border-color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-bulk-row {
+    display: grid; grid-template-columns: 80px 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .nc-pc-bulk-row__thumb {
+    width: 80px; aspect-ratio: 9/16; border-radius: 4px;
+    overflow: hidden; background: #0a0a0a;
+  }
+  .nc-pc-bulk-row__thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .nc-pc-bulk-row__meta {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 0;  /* allow truncation */
+  }
+  .nc-pc-bulk-row__title {
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nc-pc-bulk-row__dur {
+    font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace;
+  }
+  .nc-pc-bulk-actions {
+    margin-top: 16px; display: flex; gap: 12px; align-items: center;
+  }
+</style>
+
+{# ----- Flash banners ----- #}
+{% if request.query_params.get('queued') %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span>.
+    Status appears in the History panel below.
   </div>
 </div>
+{% endif %}
 
+{% if request.query_params.get('claimed') %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Linked profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
+  </div>
+</div>
+{% endif %}
+
+{% if request.query_params.get('unlinked') %}
+<div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
+    Cleared. Link or create a profile to publish.
+  </div>
+</div>
+{% endif %}
+
+{# ----- Not configured short-circuit ----- #}
 {% if not configured %}
+<div class="nc-page-header"><div><h2>Publish Center</h2></div></div>
 <div class="nc-panel">
   <div class="nc-panel__body">
     <div class="nc-empty">
       <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
       <div class="nc-empty__title">upload-post not configured</div>
       <p class="nc-empty__body">
-        Set <code class="nc-mono">UPLOAD_POST_API_KEY</code> in the
-        deployment environment and redeploy. Then come back and click
-        Connect.
+        Set <code class="nc-mono">NEXOCLIP_UPLOAD_POST_API_KEY</code>
+        in the deployment environment and redeploy.
       </p>
     </div>
   </div>
 </div>
+
 {% else %}
 
-{% if request.query_params.get('queued') %}
-<div class="nc-panel" style="border-color: var(--nc-green);">
-  <div class="nc-panel__body" style="padding: 12px 16px;">
-    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span>.
-    Status will appear in the feed below once upload-post finishes.
-  </div>
-</div>
-{% endif %}
-
-{% if request.query_params.get('claimed') %}
-<div class="nc-panel" style="border-color: var(--nc-green);">
-  <div class="nc-panel__body" style="padding: 12px 16px;">
-    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    Linked upload-post profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
-  </div>
-</div>
-{% endif %}
-
-{% if request.query_params.get('unlinked') %}
-<div class="nc-panel" style="border-color: var(--nc-orange);">
-  <div class="nc-panel__body" style="padding: 12px 16px;">
-    <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    Cleared the upload-post profile binding. Click Connect or paste a
-    profile name below to re-link.
-  </div>
-</div>
-{% endif %}
-
-{% if fetch_error %}
-<div class="nc-panel" style="border-color: var(--nc-orange);">
-  <div class="nc-panel__body" style="padding: 12px 16px;">
-    <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    {{ fetch_error }}
-  </div>
-</div>
-{% endif %}
-
-{# ---------------------- Connection status ---------------------- #}
-<div class="nc-panel">
-  <div class="nc-panel__header">
-    <i class="ti ti-link" aria-hidden="true"></i>
-    <span class="nc-panel__title">Connected accounts</span>
-    {% if profile_username %}
-    <span class="nc-chip nc-chip--success" style="margin-left:auto;">
-      Linked
-    </span>
-    {% else %}
-    <span class="nc-chip nc-chip--muted" style="margin-left:auto;">
-      Not connected
-    </span>
-    {% endif %}
-  </div>
-  <div class="nc-panel__body">
-    {% if profile_username %}
-    {# Show the bound profile name + unlink option so the operator
-       can see exactly which upload-post profile their tenant maps
-       to. upload-post usernames are CASE SENSITIVE (per their docs)
-       so we display verbatim. #}
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-      <i class="ti ti-user" aria-hidden="true"></i>
-      <span class="nc-text--muted">Linked profile:</span>
-      <span class="nc-mono" style="font-weight: 600;">{{ profile_username }}</span>
-      <form action="/dashboard/publish/upload-post/unlink" method="post" style="margin-left: auto;">
-        <button type="submit" class="nc-btn nc-btn--danger" title="Forget the local binding. The profile stays on upload-post.">
-          <i class="ti ti-unlink" aria-hidden="true"></i>
-          <span>Unlink</span>
-        </button>
-      </form>
-    </div>
-
-    <div style="display:flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
-      {% if social_accounts %}
-        {% for platform, info in social_accounts.items() %}
-        <div class="nc-chip {% if info %}nc-chip--success{% else %}nc-chip--muted{% endif %}">
-          <i class="ti
-            {% if platform == 'tiktok' %}ti-brand-tiktok
-            {% elif platform == 'instagram' %}ti-brand-instagram
-            {% elif platform == 'youtube' %}ti-brand-youtube
-            {% elif platform == 'linkedin' %}ti-brand-linkedin
-            {% elif platform == 'facebook' %}ti-brand-facebook
-            {% elif platform == 'x' %}ti-brand-x
-            {% elif platform == 'threads' %}ti-brand-threads
-            {% elif platform == 'pinterest' %}ti-brand-pinterest
-            {% elif platform == 'bluesky' %}ti-brand-bluesky
-            {% else %}ti-circle{% endif %}"
-            aria-hidden="true"></i>
-          <span>
-            {{ platform|capitalize }}{% if info and info.display_name %} · {{ info.display_name }}{% endif %}
-          </span>
-        </div>
-        {% endfor %}
+<div class="nc-page-header">
+  <div>
+    <h2>Publish Center</h2>
+    <small>
+      {% if profile_username %}
+      Ship clips from your library to every connected platform.
       {% else %}
-        <span class="nc-text--muted">No social accounts linked yet. Click <em>Manage connections</em> to add some on upload-post.</span>
+      Connect or link your upload-post profile to start publishing.
       {% endif %}
-    </div>
+    </small>
+  </div>
+</div>
 
-    <form action="/dashboard/publish/upload-post/connect" method="post" style="display: inline-block;">
-      <button type="submit" class="nc-btn nc-btn--primary">
-        <i class="ti ti-link" aria-hidden="true"></i>
-        <span>Manage connections</span>
+{# =========================================================
+   SECTION 1 — Connected accounts (compact chip row)
+   ========================================================= #}
+{% if profile_username %}
+<div class="nc-panel" style="margin-bottom: 16px;">
+  <div class="nc-pc-acct-row">
+    {% for key, label, icon in supported_platforms %}
+      {% set is_conn = key in connected_set %}
+      <span class="nc-pc-acct-chip {% if is_conn %}is-connected{% endif %}"
+            title="{{ social_accounts.get(key, {}).display_name if is_conn else '' }}">
+        <i class="ti {{ icon }}" aria-hidden="true"></i>
+        <span>{{ label }}</span>
+        {% if is_conn %}<i class="ti ti-check" aria-hidden="true"></i>{% endif %}
+      </span>
+    {% endfor %}
+
+    <span style="flex: 1;"></span>
+
+    <form action="/dashboard/publish/upload-post/connect" method="post" style="margin: 0;">
+      <button type="submit" class="nc-btn" style="padding: 4px 12px; font-size: 12px;">
+        <i class="ti ti-settings" aria-hidden="true"></i>
+        <span>Manage accounts</span>
       </button>
     </form>
+    <form action="/dashboard/publish/upload-post/unlink" method="post" style="margin: 0;"
+          onsubmit="return confirm('Unlink the upload-post profile from this NexoClip tenant? The profile + its connections stay on upload-post.');">
+      <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;" title="Unlink {{ profile_username }}">
+        <i class="ti ti-unlink" aria-hidden="true"></i>
+      </button>
+    </form>
+  </div>
+</div>
 
-    {% else %}
-    {# Two options for first-time setup: create new (mints a fresh
-       upload-post profile with our derived username) or link an
-       existing one (e.g. the operator already created one manually
-       on upload-post.com — that's the case_sensitive warning their
-       UI shows after profile creation). #}
+{% if connect_fetch_failed %}
+<div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i>
+    Could not list connected accounts from upload-post — chips below
+    may be stale. The publish form still works.
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+{# First-time setup — same two-card layout, kept compact #}
+<div class="nc-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__body">
     <p class="nc-text--muted" style="margin: 0 0 12px 0;">
-      Two ways to link your upload-post account:
+      Two ways to set up your upload-post profile:
     </p>
-
     <div class="nc-grid-2" style="gap: 16px;">
       <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
         <strong>Create new profile</strong>
         <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
-          NexoClip creates a fresh upload-post profile + bounces you
-          to upload-post's hosted UI to connect your TikTok / IG / YT
-          / X / LinkedIn / Facebook / Threads / Pinterest / Bluesky.
+          NexoClip creates a fresh upload-post profile + bounces
+          you to upload-post's hosted UI to link your socials.
         </p>
         <form action="/dashboard/publish/upload-post/connect" method="post">
           <button type="submit" class="nc-btn nc-btn--primary">
@@ -154,15 +276,12 @@
           </button>
         </form>
       </div>
-
       <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
         <strong>Link existing profile</strong>
         <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
-          If you already created a profile on
-          <a href="https://app.upload-post.com" target="_blank" rel="noopener">upload-post.com</a>
-          (e.g. <span class="nc-mono">aldov1llanueva</span>), paste
-          that username here. <strong>Case sensitive</strong> — copy
-          it exactly.
+          Already created a profile on
+          <a href="https://app.upload-post.com" target="_blank" rel="noopener">upload-post.com</a>?
+          Paste the exact username (<strong>case sensitive</strong>).
         </p>
         <form action="/dashboard/publish/upload-post/claim" method="post" style="display: flex; gap: 8px;">
           <input class="nc-input nc-input--mono" name="username" required placeholder="aldov1llanueva" style="flex:1;">
@@ -173,95 +292,178 @@
         </form>
       </div>
     </div>
-    {% endif %}
-  </div>
-</div>
-
-{# ---------------------- Publish a clip ---------------------- #}
-{% if profile_username %}
-<div class="nc-panel">
-  <div class="nc-panel__header">
-    <i class="ti ti-send" aria-hidden="true"></i>
-    <span class="nc-panel__title">Publish a clip</span>
-  </div>
-  <div class="nc-panel__body">
-    {% if publishable_clips %}
-    <form id="up-publish-form" method="post" action="" style="display: flex; flex-direction: column; gap: 12px;">
-      <label class="nc-label">
-        Clip
-        <select name="clip_id_picker" id="up-clip-picker" class="nc-input" required>
-          <option value="" disabled selected>Pick a clip…</option>
-          {% for c in publishable_clips %}
-          <option value="{{ c.id }}">
-            {{ c.start_s|round(1) }}s → {{ c.end_s|round(1) }}s · {{ c.id[:18] }}…
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-
-      <label class="nc-label">
-        Platforms
-        <div style="display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 0;">
-          {% for p in ["tiktok", "instagram", "youtube", "x", "linkedin", "facebook", "threads", "pinterest", "bluesky"] %}
-          <label style="display:inline-flex; align-items:center; gap:4px;">
-            <input type="checkbox" name="platform_chk" value="{{ p }}">
-            {{ p|capitalize }}
-          </label>
-          {% endfor %}
-        </div>
-      </label>
-
-      <label class="nc-label">
-        Title
-        <input class="nc-input" name="title" maxlength="140" placeholder="Optional — required by TikTok / Reddit if posting there">
-      </label>
-
-      <label class="nc-label">
-        Description / caption
-        <textarea class="nc-input" name="description" rows="3" placeholder="Optional — applies to all platforms unless overridden"></textarea>
-      </label>
-
-      <button type="submit" class="nc-btn nc-btn--primary" style="align-self: flex-start;">
-        <i class="ti ti-send" aria-hidden="true"></i>
-        <span>Publish</span>
-      </button>
-    </form>
-
-    <script>
-      // Build the comma-separated platforms field + set the form action
-      // based on the picked clip. Defensive against the form being
-      // submitted with zero platforms checked.
-      (function () {
-        var form = document.getElementById("up-publish-form");
-        var picker = document.getElementById("up-clip-picker");
-        form.addEventListener("submit", function (e) {
-          var clipId = picker.value;
-          if (!clipId) { e.preventDefault(); alert("Pick a clip."); return; }
-          var checked = Array.from(form.querySelectorAll("input[name='platform_chk']:checked")).map(function (x) { return x.value; });
-          if (!checked.length) { e.preventDefault(); alert("Pick at least one platform."); return; }
-          form.action = "/dashboard/publish/upload-post/post/" + encodeURIComponent(clipId);
-          // upload_post.py reads `platforms` as a comma-separated form field.
-          var hidden = document.createElement("input");
-          hidden.type = "hidden";
-          hidden.name = "platforms";
-          hidden.value = checked.join(",");
-          form.appendChild(hidden);
-        });
-      })();
-    </script>
-    {% else %}
-    <p class="nc-text--muted">
-      No publishable clips. Cut + approve a clip in the Streams tab,
-      then come back here to publish.
-    </p>
-    {% endif %}
   </div>
 </div>
 {% endif %}
 
-{# ---------------------- Scheduled ---------------------- #}
+{# =========================================================
+   SECTION 2 — Tab switcher
+   ========================================================= #}
+{% if profile_username %}
+<div class="nc-pc-tabs">
+  <button type="button" class="nc-pc-tab is-active" data-tab="single">
+    <i class="ti ti-square" aria-hidden="true"></i>
+    Single Publish
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="bulk">
+    <i class="ti ti-layout-grid" aria-hidden="true"></i>
+    Bulk Publish
+  </button>
+</div>
+
+{# ========== Tab: Single Publish ========== #}
+<div class="nc-pc-tab-body is-active" data-tab-body="single">
+  {% if not publishable_clips %}
+  <div class="nc-panel">
+    <div class="nc-empty">
+      <div class="nc-empty__title">No clips ready to publish</div>
+      <p class="nc-empty__body">
+        Cut + approve a clip in <a href="/dashboard/streams">Streams</a>,
+        then come back here.
+      </p>
+    </div>
+  </div>
+  {% else %}
+  <div class="nc-pc-clip-grid" id="up-clip-grid">
+    {% for c in publishable_clips %}
+    <div class="nc-pc-clip-card"
+         data-clip-id="{{ c.id }}"
+         data-clip-title="{{ c.title }}"
+         data-clip-duration="{{ c.duration_s|round(1) }}">
+      <div class="nc-pc-clip-card__thumb">
+        <img src="{{ c.thumbnail_url }}" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+        <span class="nc-pc-clip-card__thumb-fallback" style="display:none;">
+          <i class="ti ti-photo" aria-hidden="true"></i>
+        </span>
+        <span class="nc-pc-clip-card__dur">{{ c.duration_s|round(0) }}s</span>
+      </div>
+      <div class="nc-pc-clip-card__meta">
+        <div class="nc-pc-clip-card__title">{{ c.title }}</div>
+        <span class="nc-pc-clip-card__status">
+          <i class="ti ti-circle-dot" aria-hidden="true" style="color: var(--nc-green);"></i>
+          Ready to publish
+        </span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ----- Single publish panel (appears when a clip is selected) ----- #}
+  <div class="nc-pc-publish-panel" id="up-publish-panel">
+    <div class="nc-pc-publish-panel__header">
+      <i class="ti ti-send" aria-hidden="true" style="color: var(--nc-green);"></i>
+      <div>
+        <div class="nc-pc-publish-panel__title" id="up-selected-title">—</div>
+        <div class="nc-pc-publish-panel__meta">
+          <span id="up-selected-id">—</span> · <span id="up-selected-dur">—</span>s · 9:16
+        </div>
+      </div>
+    </div>
+
+    <form id="up-single-form" method="post" action="" style="margin: 0;">
+      <div>
+        <small class="nc-text--muted">Platforms — click chips to toggle, grayed-out are not connected.</small>
+        <div class="nc-pc-platform-chips" id="up-platform-chips">
+          {% for key, label, icon in supported_platforms %}
+            {% set is_conn = key in connected_set %}
+            <span class="nc-pc-platform-chip {% if not is_conn %}is-disabled{% endif %}"
+                  data-platform="{{ key }}"
+                  data-connected="{{ '1' if is_conn else '0' }}">
+              <i class="ti {{ icon }}" aria-hidden="true"></i>
+              <span>{{ label }}</span>
+            </span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <label class="nc-label" style="margin-top: 12px;">
+        Title
+        <input class="nc-input" name="title" maxlength="140"
+               placeholder="Optional — required by TikTok / Reddit if posting there">
+      </label>
+
+      <label class="nc-label">
+        Caption
+        <textarea class="nc-input" name="description" rows="3"
+                  placeholder="Optional — applies to all platforms unless overridden"></textarea>
+      </label>
+
+      <div style="display: flex; gap: 8px; margin-top: 12px;">
+        <button type="submit" class="nc-btn nc-btn--primary">
+          <i class="ti ti-send" aria-hidden="true"></i>
+          <span>Publish to <span id="up-platform-count">0</span> platform(s)</span>
+        </button>
+        <button type="button" class="nc-btn" disabled title="Coming soon">
+          <i class="ti ti-calendar-event" aria-hidden="true"></i>
+          <span>Schedule</span>
+        </button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{# ========== Tab: Bulk Publish ========== #}
+<div class="nc-pc-tab-body" data-tab-body="bulk">
+  {% if not publishable_clips %}
+  <div class="nc-panel">
+    <div class="nc-empty">
+      <div class="nc-empty__title">No clips ready to publish</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="nc-panel">
+    <div class="nc-panel__body">
+      <p class="nc-text--muted" style="margin: 0 0 8px 0;">
+        Pick platforms per clip below — chips toggle independently.
+        Hit Publish Selected to fire them all in parallel.
+      </p>
+      <div id="up-bulk-rows">
+        {% for c in publishable_clips %}
+        <div class="nc-pc-bulk-row" data-clip-id="{{ c.id }}">
+          <div class="nc-pc-bulk-row__thumb">
+            <img src="{{ c.thumbnail_url }}" alt="" onerror="this.style.opacity=0">
+          </div>
+          <div class="nc-pc-bulk-row__meta">
+            <div class="nc-pc-bulk-row__title">{{ c.title }}</div>
+            <div class="nc-pc-bulk-row__dur">{{ c.duration_s|round(0) }}s · {{ c.id[:18] }}…</div>
+          </div>
+          <div class="nc-pc-platform-chips" style="margin: 0;">
+            {% for key, label, icon in supported_platforms %}
+              {% set is_conn = key in connected_set %}
+              <span class="nc-pc-platform-chip {% if not is_conn %}is-disabled{% endif %}"
+                    data-platform="{{ key }}"
+                    data-connected="{{ '1' if is_conn else '0' }}"
+                    style="padding: 4px 10px; font-size: 11px;">
+                <i class="ti {{ icon }}" aria-hidden="true"></i>
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="nc-pc-bulk-actions">
+        <button type="button" id="up-bulk-publish" class="nc-btn nc-btn--primary">
+          <i class="ti ti-send" aria-hidden="true"></i>
+          <span>Publish selected (<span id="up-bulk-count">0</span>)</span>
+        </button>
+        <span class="nc-text--muted" style="font-size: 12px;" id="up-bulk-hint">
+          Pick at least one platform per clip to enable.
+        </span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# =========================================================
+   SECTION 4 — Scheduled
+   ========================================================= #}
 {% if scheduled %}
-<div class="nc-panel">
+<div class="nc-panel" style="margin-top: 16px;">
   <div class="nc-panel__header">
     <i class="ti ti-calendar-event" aria-hidden="true"></i>
     <span class="nc-panel__title">Scheduled — {{ scheduled|length }}</span>
@@ -269,12 +471,7 @@
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table">
       <thead>
-        <tr>
-          <th>When</th>
-          <th>Type</th>
-          <th>Title</th>
-          <th>Job</th>
-        </tr>
+        <tr><th>When</th><th>Type</th><th>Title</th><th>Job</th></tr>
       </thead>
       <tbody>
         {% for s in scheduled %}
@@ -291,8 +488,10 @@
 </div>
 {% endif %}
 
-{# ---------------------- History ---------------------- #}
-<div class="nc-panel">
+{# =========================================================
+   SECTION 5 — History
+   ========================================================= #}
+<div class="nc-panel" style="margin-top: 16px;">
   <div class="nc-panel__header">
     <i class="ti ti-history" aria-hidden="true"></i>
     <span class="nc-panel__title">History</span>
@@ -302,14 +501,7 @@
     {% if history %}
     <table class="nc-table">
       <thead>
-        <tr>
-          <th>When</th>
-          <th>Platform</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th>Link</th>
-          <th>Caption</th>
-        </tr>
+        <tr><th>When</th><th>Platform</th><th>Type</th><th>Status</th><th>Link</th><th>Caption</th></tr>
       </thead>
       <tbody>
         {% for h in history %}
@@ -318,20 +510,11 @@
           <td><span class="nc-chip nc-chip--code">{{ h.platform or "?" }}</span></td>
           <td>{{ h.media_type or "—" }}</td>
           <td>
-            {% if h.success %}
-            <span class="nc-chip nc-chip--success">ok</span>
-            {% else %}
-            <span class="nc-chip nc-chip--warn" title="{{ h.error_message or '' }}">{{ h.error_message[:40] if h.error_message else "failed" }}</span>
-            {% endif %}
+            {% if h.success %}<span class="nc-chip nc-chip--success">ok</span>
+            {% else %}<span class="nc-chip nc-chip--warn" title="{{ h.error_message or '' }}">{{ h.error_message[:40] if h.error_message else "failed" }}</span>{% endif %}
           </td>
-          <td>
-            {% if h.post_url %}
-            <a href="{{ h.post_url }}" target="_blank" rel="noopener">open ↗</a>
-            {% else %}—{% endif %}
-          </td>
-          <td style="max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-            {{ h.post_caption or h.post_title or "—" }}
-          </td>
+          <td>{% if h.post_url %}<a href="{{ h.post_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
+          <td style="max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.post_caption or h.post_title or "—" }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -339,11 +522,146 @@
     {% else %}
     <div class="nc-empty">
       <div class="nc-empty__title">No publishes yet</div>
-      <p class="nc-empty__body">Once you publish a clip, results land here.</p>
+      <p class="nc-empty__body">Your first publish will land here.</p>
     </div>
     {% endif %}
   </div>
 </div>
 
 {% endif %}
+
+{# ----- Behavior JS ----- #}
+<script>
+(function () {
+  // ---- Tab switcher ----
+  document.querySelectorAll(".nc-pc-tab").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      var which = tab.getAttribute("data-tab");
+      document.querySelectorAll(".nc-pc-tab").forEach(function (t) {
+        t.classList.toggle("is-active", t === tab);
+      });
+      document.querySelectorAll(".nc-pc-tab-body").forEach(function (b) {
+        b.classList.toggle("is-active", b.getAttribute("data-tab-body") === which);
+      });
+    });
+  });
+
+  // ---- Single Publish: card selection ----
+  var panel = document.getElementById("up-publish-panel");
+  var titleEl = document.getElementById("up-selected-title");
+  var idEl    = document.getElementById("up-selected-id");
+  var durEl   = document.getElementById("up-selected-dur");
+  var form    = document.getElementById("up-single-form");
+  var countEl = document.getElementById("up-platform-count");
+  var grid    = document.getElementById("up-clip-grid");
+
+  if (grid) {
+    grid.addEventListener("click", function (e) {
+      var card = e.target.closest(".nc-pc-clip-card");
+      if (!card) return;
+      grid.querySelectorAll(".nc-pc-clip-card").forEach(function (c) {
+        c.classList.toggle("is-selected", c === card);
+      });
+      var clipId = card.getAttribute("data-clip-id");
+      var title  = card.getAttribute("data-clip-title");
+      var dur    = card.getAttribute("data-clip-duration");
+      if (titleEl) titleEl.textContent = title;
+      if (idEl) idEl.textContent = clipId.slice(0, 18) + "…";
+      if (durEl) durEl.textContent = dur;
+      if (form) form.action = "/dashboard/publish/upload-post/post/" + encodeURIComponent(clipId);
+      if (panel) panel.classList.add("is-active");
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+
+  // ---- Chip toggles (single form) ----
+  var singleChips = document.getElementById("up-platform-chips");
+  if (singleChips) {
+    singleChips.addEventListener("click", function (e) {
+      var chip = e.target.closest(".nc-pc-platform-chip");
+      if (!chip) return;
+      if (chip.getAttribute("data-connected") !== "1") return;
+      chip.classList.toggle("is-selected");
+      var n = singleChips.querySelectorAll(".is-selected").length;
+      if (countEl) countEl.textContent = n;
+    });
+  }
+  if (form) {
+    form.addEventListener("submit", function (e) {
+      var selected = singleChips
+        ? Array.from(singleChips.querySelectorAll(".is-selected"))
+            .map(function (x) { return x.getAttribute("data-platform"); })
+        : [];
+      if (!selected.length) { e.preventDefault(); alert("Pick at least one platform."); return; }
+      if (!form.action) { e.preventDefault(); alert("Pick a clip first."); return; }
+      var hidden = document.createElement("input");
+      hidden.type = "hidden"; hidden.name = "platforms";
+      hidden.value = selected.join(",");
+      form.appendChild(hidden);
+    });
+  }
+
+  // ---- Bulk publish ----
+  var bulkRows = document.getElementById("up-bulk-rows");
+  var bulkBtn = document.getElementById("up-bulk-publish");
+  var bulkCount = document.getElementById("up-bulk-count");
+  var bulkHint = document.getElementById("up-bulk-hint");
+
+  function recomputeBulk() {
+    if (!bulkRows) return [];
+    var rows = bulkRows.querySelectorAll(".nc-pc-bulk-row");
+    var pending = [];
+    rows.forEach(function (row) {
+      var sel = Array.from(row.querySelectorAll(".nc-pc-platform-chip.is-selected"))
+        .map(function (x) { return x.getAttribute("data-platform"); });
+      if (sel.length) {
+        pending.push({ clip_id: row.getAttribute("data-clip-id"), platforms: sel });
+      }
+    });
+    if (bulkCount) bulkCount.textContent = pending.length;
+    if (bulkHint) {
+      bulkHint.textContent = pending.length
+        ? pending.length + " clip(s) ready to ship."
+        : "Pick at least one platform per clip to enable.";
+    }
+    return pending;
+  }
+
+  if (bulkRows) {
+    bulkRows.addEventListener("click", function (e) {
+      var chip = e.target.closest(".nc-pc-platform-chip");
+      if (!chip || chip.getAttribute("data-connected") !== "1") return;
+      chip.classList.toggle("is-selected");
+      recomputeBulk();
+    });
+  }
+
+  if (bulkBtn) {
+    bulkBtn.addEventListener("click", async function () {
+      var pending = recomputeBulk();
+      if (!pending.length) { alert("Pick at least one platform per clip."); return; }
+      bulkBtn.disabled = true;
+      bulkBtn.querySelector("span").textContent = "Sending…";
+      try {
+        var resp = await fetch("/dashboard/publish/upload-post/bulk-post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ clips: pending }),
+        });
+        var body = await resp.json();
+        if (!resp.ok) { throw new Error(body.detail || ("HTTP " + resp.status)); }
+        var ok = (body.results || []).filter(function (r) { return r.ok; }).length;
+        alert(ok + " of " + pending.length + " queued. Reloading…");
+        window.location.reload();
+      } catch (err) {
+        alert("Bulk publish failed: " + err.message);
+        bulkBtn.disabled = false;
+        bulkBtn.querySelector("span").textContent = "Publish selected (" + pending.length + ")";
+      }
+    });
+  }
+})();
+</script>
+
 {% endblock %}

@@ -1390,89 +1390,19 @@ async def stream_detail(
     )
 
 
-@router.get("/publish", response_class=HTMLResponse)
-async def publish_view(
-    request: Request,
-    tenant_id: str = Depends(tenant_binder),
-    db: Database = Depends(get_db),
-) -> Response:
-    """Slice O.8 — global Publish page.
+@router.get("/publish", include_in_schema=False)
+async def publish_view(request: Request) -> Response:
+    """Legacy Slice-O.8 Buffer matrix is gone — every publish flow
+    now lives on the upload-post dashboard. Send anyone hitting the
+    old URL straight to the new home so bookmarks / external links
+    keep working.
 
-    Aggregates every approved (or published) clip across every stream
-    for the current tenant into one matrix. Replaces the legacy
-    Accounts nav tab; account management still happens inline via the
-    chip strip + modal at the top.
+    `/publish/status.json` + `/streams/{id}/publish` + their status
+    JSON sibling stay intact for the per-stream Buffer flow that
+    still uses them (status polling on existing PublishJobs rows).
     """
-    clips = await ClipsRepo(db).list_for_tenant_with_status(
-        ["approved", "published"], limit=300
-    )
-
-    # Need each clip's stream so we can group by stream and show the
-    # stream title as a row header. Cache StreamsRepo.get() per id to
-    # avoid N+1.
-    streams_repo = StreamsRepo(db)
-    streams_by_id: dict[str, object] = {}
-    for c in clips:
-        if c.stream_id not in streams_by_id:
-            stm = await streams_repo.get(c.stream_id)
-            if stm is not None:
-                streams_by_id[c.stream_id] = stm
-
-    # Order: clips appear in the order they were returned (newest first),
-    # but we group them by stream so all clips from the same stream
-    # render consecutively. The template walks `clip_groups` which is
-    # a list of {stream, clips} dicts preserving first-seen order.
-    clip_groups_dict: dict[str, dict[str, object]] = {}
-    for c in clips:
-        if c.stream_id not in clip_groups_dict:
-            stm = streams_by_id.get(c.stream_id)
-            if stm is None:
-                continue
-            clip_groups_dict[c.stream_id] = {"stream": stm, "clips": []}
-        clip_groups_dict[c.stream_id]["clips"].append(c)  # type: ignore[index]
-    clip_groups = list(clip_groups_dict.values())
-
-    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
-    accounts_by_platform: dict[str, list[ConnectedAccount]] = {}
-    for a in accounts:
-        if a.status != "active":
-            continue
-        accounts_by_platform.setdefault(a.platform.lower(), []).append(a)
-
-    pj_repo = PublishJobsRepo(db)
-    existing_jobs: dict[tuple[str, str], str] = {}
-    variants_by_clip: dict[str, str] = {}
-    lead_variant_meta: dict[str, dict[str, object]] = {}
-    for c in clips:
-        for j in await pj_repo.list_for_clip(c.id):
-            existing_jobs[(c.id, j.platform.lower())] = j.status
-        vs = await VariantsRepo(db).list_for_clip(c.id)
-        if vs:
-            variants_by_clip[c.id] = vs[0].id
-            lead_variant_meta[c.id] = {
-                "title": vs[0].title_card_text or "",
-                "caption": vs[0].caption or "",
-                "hashtags": " ".join(vs[0].hashtags or []),
-            }
-
-    return templates.TemplateResponse(
-        request,
-        "publish.html",
-        {
-            "clip_groups": clip_groups,
-            "total_clips": len(clips),
-            "accounts_by_platform": accounts_by_platform,
-            "existing_jobs": existing_jobs,
-            "variants_by_clip": variants_by_clip,
-            "lead_variant_meta": lead_variant_meta,
-            "supported_platforms": [
-                ("tiktok",     "TikTok",  "ti-brand-tiktok"),
-                ("reels",      "Reels",   "ti-brand-instagram"),
-                ("shorts",     "Shorts",  "ti-brand-youtube"),
-                ("kick",       "Kick",    "ti-flame"),
-                ("twitch",     "Twitch",  "ti-brand-twitch"),
-            ],
-        },
+    return RedirectResponse(
+        url="/dashboard/publish/upload-post", status_code=303,
     )
 
 

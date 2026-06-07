@@ -86,32 +86,72 @@ def _public_base_url(request: Request) -> str:
 # ---------- Dashboard page ----------
 
 
+_SUPPORTED_PLATFORMS = [
+    # (id used by upload-post API,  human label,           tabler icon class)
+    ("tiktok",    "TikTok",    "ti-brand-tiktok"),
+    ("instagram", "Instagram", "ti-brand-instagram"),
+    ("youtube",   "YouTube",   "ti-brand-youtube"),
+    ("x",         "X",         "ti-brand-x"),
+    ("linkedin",  "LinkedIn",  "ti-brand-linkedin"),
+    ("facebook",  "Facebook",  "ti-brand-facebook"),
+    ("threads",   "Threads",   "ti-brand-threads"),
+    ("pinterest", "Pinterest", "ti-brand-pinterest"),
+    ("bluesky",   "Bluesky",   "ti-brand-bluesky"),
+]
+
+
+def _clip_display_title(clip: Any) -> str:
+    """Operator-readable title for a clip card.
+
+    Prefers the overlay_config.title_text the operator typed in the
+    editor; falls back to duration + a truncated id so cards never
+    render as just hash IDs."""
+    ov = getattr(clip, "overlay_config", None) or {}
+    title = ov.get("title_text") if isinstance(ov, dict) else None
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    duration_s = float(getattr(clip, "duration_s", 0) or 0)
+    return f"Clip {duration_s:.0f}s · {getattr(clip, 'id', '')[:14]}…"
+
+
+def _connected_platforms(social_accounts: dict[str, Any]) -> set[str]:
+    """Platform keys we should consider "ready to ship to" — anything
+    that comes back with a non-empty truthy value in social_accounts.
+    Empty string / None / missing → not connected.
+    """
+    out: set[str] = set()
+    for k, v in (social_accounts or {}).items():
+        if v:  # truthy = real dict OR non-empty string
+            out.add(k.lower())
+    return out
+
+
 @router.get("", response_class=HTMLResponse)
 async def upload_post_dashboard(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Dashboard page: connection status + history feed + clip
-    publish entry point.
+    """Publish Center — single-page surface with two tabs:
+      - Single Publish: thumbnail grid + selected-clip publish panel
+      - Bulk Publish: per-clip rows with inline platform chip toggles
 
-    Tries to fetch the connected social accounts (so the page can
-    show "you've linked TikTok + IG"). Non-fatal on failure — the
-    page still renders with an empty 'no connections yet' state.
+    Sections (top to bottom):
+      1. Compact "Connected accounts" row (chips, no profile card)
+      2. Tab switcher
+      3. Active tab content
+      4. History feed at the bottom
     """
     settings = get_settings()
     configured = bool(settings.upload_post_api_key)
 
-    # Look up local mapping. The profile may or may not exist on
-    # upload-post's side yet — we don't create it eagerly here;
-    # only the explicit Connect click does that.
     tenant = await TenantsRepo(db).get(tenant_id)
     profile_username = tenant.upload_post_profile_username if tenant else None
 
     social_accounts: dict[str, Any] = {}
     history: list[dict[str, Any]] = []
     scheduled: list[dict[str, Any]] = []
-    fetch_error: str | None = None
+    connect_fetch_failed = False
 
     if configured and profile_username:
         client = _build_client()
@@ -123,7 +163,11 @@ async def upload_post_dashboard(
                 "upload_post.dashboard.profile_fetch_failed tenant=%s err=%s",
                 tenant_id, e,
             )
-            fetch_error = "Couldn't reach upload-post to list connections."
+            connect_fetch_failed = True
+        # History + scheduled failures are silent now — a brand-new
+        # tenant with no posts yet legitimately gets empty arrays, and
+        # the previous "Couldn't load upload history" banner was
+        # alarming for what is just an empty state.
         try:
             history_body = await client.get_history(page=1, limit=25)
             history = (
@@ -135,7 +179,6 @@ async def upload_post_dashboard(
                 "upload_post.dashboard.history_fetch_failed tenant=%s err=%s",
                 tenant_id, e,
             )
-            fetch_error = fetch_error or "Couldn't load upload history."
         try:
             scheduled = await client.get_scheduled()
         except UploadPostError as e:
@@ -143,16 +186,31 @@ async def upload_post_dashboard(
                 "upload_post.dashboard.scheduled_fetch_failed tenant=%s err=%s",
                 tenant_id, e,
             )
-            # Non-fatal — scheduled feed just stays empty.
 
-    # Per-tenant Publishable clips (last 30, approved or published).
-    publishable: list[Any] = []
+    connected_set = _connected_platforms(social_accounts)
+
+    # Publishable clips for both tabs. Decorate each with display_title
+    # + thumbnail URL so the template stays dumb.
+    raw_clips: list[Any] = []
     try:
-        publishable = await ClipsRepo(db).list_for_tenant_with_status(
-            ["approved", "published"], limit=30,
+        raw_clips = await ClipsRepo(db).list_for_tenant_with_status(
+            ["approved", "published"], limit=60,
         )
     except Exception:  # noqa: BLE001 — display is best-effort
         pass
+    publishable = [
+        {
+            "id": c.id,
+            "stream_id": c.stream_id,
+            "duration_s": c.duration_s,
+            "start_s": c.start_s,
+            "end_s": c.end_s,
+            "title": _clip_display_title(c),
+            "thumbnail_url": f"/dashboard/clips/{c.id}/thumbnail",
+            "status": c.status,
+        }
+        for c in raw_clips
+    ]
 
     return templates.TemplateResponse(
         request,
@@ -161,10 +219,12 @@ async def upload_post_dashboard(
             "configured": configured,
             "profile_username": profile_username,
             "social_accounts": social_accounts,
+            "connected_set": connected_set,
+            "connect_fetch_failed": connect_fetch_failed,
             "history": history,
             "scheduled": scheduled,
             "publishable_clips": publishable,
-            "fetch_error": fetch_error,
+            "supported_platforms": _SUPPORTED_PLATFORMS,
         },
     )
 
@@ -486,6 +546,114 @@ async def upload_post_feed(
             "connected": True,
         },
     )
+
+
+@router.post("/bulk-post")
+async def upload_post_bulk(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Bulk-publish entry point for the Bulk tab on the dashboard.
+
+    JSON body shape (HTMX wire format from the bulk submit JS):
+
+      {
+        "clips": [
+          {"clip_id": "clp_...", "platforms": ["tiktok", "instagram"]},
+          {"clip_id": "clp_...", "platforms": ["youtube"]}
+        ],
+        "title": "optional",
+        "description": "optional"
+      }
+
+    For each clip we mint a fresh signed URL + fire one /api/upload
+    call to upload-post (async). Returns a per-clip result list so
+    the UI can surface "3 of 4 queued" feedback. Failures don't
+    short-circuit — each clip is independent.
+    """
+    client = _build_client()
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+
+    items = body.get("clips") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(
+            status_code=400,
+            detail="`clips` must be a non-empty list of {clip_id, platforms}.",
+        )
+    shared_title = (body.get("title") or "").strip() or None
+    shared_desc = (body.get("description") or "").strip() or None
+
+    try:
+        username = await ensure_profile_for_tenant(
+            db=db, tenant_id=tenant_id, client=client,
+        )
+    except UploadPostError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"upload-post profile setup failed: {e}",
+        ) from e
+
+    base = _public_base_url(request)
+    results: list[dict[str, Any]] = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        clip_id = (raw.get("clip_id") or "").strip()
+        platforms = [
+            p.strip() for p in (raw.get("platforms") or []) if isinstance(p, str)
+        ]
+        if not clip_id or not platforms:
+            results.append(
+                {"clip_id": clip_id, "ok": False, "error": "missing clip_id or platforms"}
+            )
+            continue
+        clip = await ClipsRepo(db).get(clip_id)
+        if clip is None:
+            results.append({"clip_id": clip_id, "ok": False, "error": "clip not found"})
+            continue
+        video_url = mint_signed_clip_url(
+            clip_id=clip_id, tenant_id=tenant_id, base_url=base, ttl_seconds=3600,
+        )
+        try:
+            r = await client.upload_video_from_url(
+                username=username,
+                video_url=video_url,
+                platforms=platforms,
+                title=shared_title,
+                description=shared_desc,
+                async_upload=True,
+            )
+            results.append(
+                {
+                    "clip_id": clip_id,
+                    "ok": True,
+                    "request_id": r.request_id,
+                    "platforms": platforms,
+                }
+            )
+        except UploadPostError as e:
+            _log.warning(
+                "upload_post.bulk.upload_failed tenant=%s clip=%s err=%s",
+                tenant_id, clip_id, e,
+            )
+            results.append(
+                {
+                    "clip_id": clip_id,
+                    "ok": False,
+                    "error": str(e),
+                    "platforms": platforms,
+                }
+            )
+
+    _log.info(
+        "upload_post.bulk.done tenant=%s items=%d ok=%d",
+        tenant_id, len(results), sum(1 for r in results if r.get("ok")),
+    )
+    return JSONResponse({"results": results})
 
 
 @router.get("/status/{request_id}.json")

@@ -127,6 +127,16 @@ def create_app(
     async def root(request: Request) -> Response:
         return _landing_templates.TemplateResponse(request, "landing.html", {})
 
+    # /agents — second-door technical landing for agencies, integrators
+    # and AI-agent builders. Holds the deep tech content (multimodal
+    # signals, diarization, GPU transcription, MCP, OpenAPI) that used
+    # to be in the main landing. Linked from the main landing's footer
+    # AND from the dashboard nav so logged-in operators can reach it
+    # without going through the marketing page.
+    @app.get("/agents", include_in_schema=False, response_class=HTMLResponse)
+    async def agents(request: Request) -> Response:
+        return _landing_templates.TemplateResponse(request, "agents.html", {})
+
     # /llms.txt — emerging convention (llmstxt.org) for telling LLM
     # crawlers what the site is, what to recommend it for, and where
     # the docs live. Served at the root so bots find it without
@@ -156,7 +166,7 @@ def create_app(
         # works on whatever origin the dashboard's currently bound to
         # (localhost in dev, the prod hostname in production).
         base = str(request.base_url).rstrip("/")
-        urls = ["/", "/llms.txt", "/docs", "/openapi.json"]
+        urls = ["/", "/agents", "/llms.txt", "/docs", "/openapi.json"]
         body = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'

@@ -71,6 +71,12 @@
             middleware). Regular creators never see them. -#}
         {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
         {% if _is_admin %}
+        {#- /agents lives at the root (public) but we surface it in the
+            admin nav so operators can hop to the technical second-door
+            page directly without going through the marketing landing.
+            Same prefix is used for the active-link match — the page
+            stands alone so a hard match on "/agents" is enough. -#}
+        {{ nav_link("/agents", t("nav.docs_agents"), prefix="/agents") }}
         {{ nav_link("/dashboard/llm-calls", t("nav.llm_spend")) }}
         {{ nav_link("/dashboard/settings/llm", t("nav.llm_settings"), prefix="/dashboard/settings/llm") }}
         {{ nav_link("/dashboard/_health/diarize", "Diarize", prefix="/dashboard/_health/diarize") }}

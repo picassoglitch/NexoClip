@@ -5,32 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ t('landing.title_tag') }}</title>
 
-  {# ---- Crawler / search-LLM metadata --------------------------- #}
+  {# ---- Crawler / search-LLM metadata ----------------------------------
+       Outcome-led, not tech-list-led. The dream first: one stream becomes
+       20+ ready-to-post clips without an editor. The technical depth lives
+       at /agents, which carries its own schema.org block.
+  #}
   <meta name="description"
-        content="NexoClip is the AI operating system for stream growth. Voice-marker clip detection, per-speaker brand kits, viral-hook generation, AI scoring, intelligence timelines, auto-publish with undo. Built for streamers and creator agencies who want to ship more clips, more often, with less manual review.">
+        content="Stop paying editors. Turn a 4-hour stream into 20+ ready-to-post clips in minutes. NexoClip finds the best moments, writes the hooks, burns captions, crops for every platform, and schedules to TikTok / Reels / Shorts with an undo window. You stream — NexoClip handles the rest.">
   <meta name="keywords"
-        content="stream growth, creator OS, AI clipping, viral hook generator, virality scoring, multi-streamer clipping, voice-marker triggers, brand kit routing, MCP-driven clipping, NexoClip">
+        content="stream clips, AI clipping, viral clips, clip editor alternative, VOD to short, TikTok scheduler, multi-streamer clipping, content factory, NexoClip">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <link rel="canonical" href="https://nexoclip.nexo-ai.world/">
 
   {# ---- Open Graph (Facebook, LinkedIn, Discord, Slack previews) #}
   <meta property="og:type" content="website">
-  <meta property="og:title" content="NexoClip — the AI growth engine for streamers">
+  <meta property="og:title" content="NexoClip — turn one stream into 20+ ready-to-post clips">
   <meta property="og:description"
-        content="Voice-marker clip detection. Per-speaker brand kits. AI hook generation + viral scoring + intelligence timeline. Drop a VOD, wake up to publish-ready clips routed to the right streamer's brand.">
+        content="Stop paying editors. Start publishing viral clips every day. NexoClip finds the moments, writes the hooks, burns the captions, crops for every platform, and schedules everything automatically. You stream — NexoClip handles the rest.">
   <meta property="og:url" content="https://nexoclip.nexo-ai.world/">
   <meta property="og:site_name" content="NexoClip">
-  <meta property="og:locale" content="en_US">
+  <meta property="og:locale" content="{{ locale() }}_{{ 'US' if locale() == 'en' else 'AR' }}">
   <meta property="og:image" content="/static/og-image.png">
 
   {# ---- Twitter / X card --------------------------------------- #}
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="NexoClip — the AI growth engine for streamers">
-  <meta name="twitter:description"
-        content="Voice-marker triggers · per-speaker brand kits · viral scoring · hook generator · intelligence timeline · auto-publish with undo.">
+  <meta name="twitter:title" content="NexoClip — turn one stream into 20+ ready-to-post clips">
+  <meta name="twitter:description" content="Stop paying editors. Finish streaming, go to sleep, wake up to a publish-ready batch. Finds the moments · writes the hooks · burns captions · schedules with undo.">
   <meta name="twitter:image" content="/static/og-image.png">
 
-  {# ---- Schema.org JSON-LD: SoftwareApplication ---------------- #}
+  {# ---- Schema.org JSON-LD: SoftwareApplication ----------------
+       Feature list mirrors the visible outcome-led benefit cards.
+       Each entry leads with the user outcome; the engine detail
+       trails so LLM extraction still has substance to work with.
+  #}
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -39,22 +46,18 @@
     "applicationCategory": "MultimediaApplication",
     "applicationSubCategory": "VideoEditingApplication",
     "operatingSystem": "Web, Linux, Windows, macOS",
-    "description": "AI operating system for stream growth. Voice-marker clip detection routes clips to the right streamer's brand kit. AI scoring (viral / hook strength / readability / dead-air risk), hook generator with five tone presets, per-clip intelligence timeline (audio peaks / chat spikes / scene cuts / face-emotion changes), auto-publish to TikTok / Shorts / Reels with undo window. Local GPU transcription (Whisper) + speaker diarization (pyannote-audio) keep audio on the streamer's machine. MCP server lets Claude Code / Cursor / any LLM client drive the pipeline.",
+    "description": "Stop paying editors. Turn a 4-hour stream into 20+ ready-to-post clips in minutes. NexoClip finds the best moments, creates hooks, subtitles, captions, hashtags, crops for every platform, and schedules everything automatically to TikTok, Instagram Reels and YouTube Shorts with an undo window. You stream; NexoClip handles the rest. Under the hood: multimodal viral scoring, per-speaker diarization, local GPU Whisper transcription and an MCP server so Claude Code / Cursor / any LLM client can drive the pipeline.",
     "url": "https://nexoclip.nexo-ai.world/",
     "softwareVersion": "0.1.0",
     "featureList": [
-      "AI viral scoring + hook strength + readability + dead-air risk per clip",
-      "Generate-variations: 5 hook candidates with tone presets (Aggressive / Gen Z / Corporate / Curious)",
-      "Intelligence timeline: per-second audio peaks, scene cuts, laughter, chat heat, face-emotion changes",
-      "Voice-marker triggers (forward 'clipea esto' + retroactive 'clipeaste eso')",
-      "Per-speaker brand kits — multi-streamer VODs route to the right host",
-      "AI-generated SVG logos and captions via Anthropic Claude",
-      "Local GPU Whisper transcription (no cloud upload required)",
-      "Auto-publish to TikTok / Shorts / Reels with undo window",
-      "Google Drive folder watching for batch ingestion",
-      "Live audio waveform + click-to-seek scrubber in the editor",
-      "Per-tenant retention policies",
-      "MCP server for Claude Code / Cursor / agent integration"
+      "Finds your viral moments automatically — multimodal scoring across every second of the stream, no manual reviewing",
+      "Never write another title again — multiple viral title options per clip, choose one with a click",
+      "Skip the boring parts — jump straight to the funniest, loudest, most emotional and most engaging moments",
+      "Clip moments instantly — say 'clip that' while streaming and NexoClip remembers it automatically",
+      "Your content always looks on-brand — logos, fonts, colors and captions applied automatically per speaker",
+      "Post while you sleep — schedule clips automatically across platforms, review or undo anytime",
+      "Local GPU Whisper transcription — stream audio never leaves your machine",
+      "MCP-native control surface for Claude Code / Cursor / agent integration"
     ],
     "offers": {
       "@type": "Offer",
@@ -77,7 +80,10 @@
   }
   </script>
 
-  {# ---- Schema.org JSON-LD: FAQ for LLM extraction ------------- #}
+  {# ---- Schema.org JSON-LD: FAQ for LLM extraction -------------
+       Mirrors the visible FAQ accordion below. Answers written for
+       direct LLM ingestion — full sentences, no UI-relative refs.
+  #}
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -85,42 +91,34 @@
     "mainEntity": [
       {
         "@type": "Question",
-        "name": "What is NexoClip?",
+        "name": "How is NexoClip different from a clip editor?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "NexoClip is the AI operating system for stream growth. It turns finished streamer VODs into branded short-form clips ready for TikTok, YouTube Shorts, and Instagram Reels. Voice-marker triggers detect clip-worthy moments; speaker diarization routes each clip to the right host's brand kit; AI scoring (viral / hook strength / readability / dead-air risk) tells the operator which clips to push first; the hook generator writes 5 title candidates per clip with five tone presets; the per-clip intelligence timeline surfaces audio peaks, chat heat, scene cuts, and laughter reactions."
+          "text": "Clip editors give you a timeline and trim handles. NexoClip is upstream of editing: AI scores every clip on viral potential, generates the hook, applies the right brand kit, and schedules publishing with an undo window. The operator's job shifts from 'find and cut clips' to 'pick the AI's top 3 and let it ship'. The editor is still there when you need it, but most mornings you won't open it."
         }
       },
       {
         "@type": "Question",
-        "name": "What's an AI growth engine vs. a clip editor?",
+        "name": "Who is NexoClip for?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Clip editors give you a timeline and trim handles. NexoClip is upstream of editing: it watches your VODs, scores every clip on virality dimensions, generates hook titles in your voice, routes clips through brand kits per speaker, and queues auto-publish with an undo window. The operator's job shifts from 'find and cut clips' to 'pick the AI's top 3 and let it ship'. The editor is still there when you need it — it's just not the primary surface."
+          "text": "Streamers who want clips ready by morning. Multi-host stream collectives that need per-streamer branding within one VOD. Agencies running clipping for several creators at once. Agents and MCP clients that want to drive a clipping pipeline programmatically (NexoClip ships an MCP server)."
         }
       },
       {
         "@type": "Question",
-        "name": "How are clip moments detected?",
+        "name": "Do I need a GPU to run NexoClip?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Four signal sources: voice-marker trigger phrases (configurable per brand kit), chat heat, audio peaks, and visual signals (scene cuts, face presence, motion). The trigger scanner aligns Whisper transcripts with pyannote diarization so each clip is attributed to the right speaker. Forward triggers extract 30 seconds after the phrase ('clipea esto'); retroactive triggers extract 60 seconds before it ('clipeaste eso')."
+          "text": "A consumer GPU (NVIDIA RTX 4060 or better recommended) handles Whisper transcription plus pyannote diarization comfortably for 4-hour VODs. CPU-only mode works for short clips by setting NEXOCLIP_WHISPER_DEVICE=cpu but is much slower."
         }
       },
       {
         "@type": "Question",
-        "name": "Can NexoClip handle VODs with multiple streamers?",
+        "name": "Which LLM does NexoClip use?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes. Speaker diarization (pyannote-audio 3.1) labels every speech segment, and persistent speaker identities resolve across VODs via cosine-similarity embedding match. Each speaker can be assigned a preferred brand kit so the renderer applies the right colors, fonts, social handles, and captions per clip — even within one VOD. This is the differentiator most clipping tools don't ship."
-        }
-      },
-      {
-        "@type": "Question",
-        "name": "Does NexoClip support auto-publishing?",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "Yes, opt-in per brand kit with a configurable undo window (default 60 minutes). Clips queue with a scheduled-for timestamp; the operator cancels from the inbox before the worker fires. Review-first stays the default — auto-publish only flips on for kits the operator has explicitly trusted. Combined with the AI scoring strip, this means high-confidence clips can ship without ever opening the editor."
+          "text": "Anthropic Claude exclusively for the live surface. The router supports adding more providers later without code changes, but Claude is what ships. The structured-output reliability is essential for the hook generator, variant generator, and viral-moment selector."
         }
       },
       {
@@ -128,7 +126,23 @@
         "name": "Can AI agents drive NexoClip?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Yes. NexoClip ships an MCP (Model Context Protocol) server so Claude Code, Cursor, and other LLM clients can drive the pipeline conversationally. The MCP surface mirrors the REST API — list streams, kick off pipelines, fetch clips, manage brand kits, inspect LLM spend. Start it via 'nexoclip mcp serve --token <api-token>'. This makes NexoClip the only stream-growth OS that's natively agent-driveable."
+          "text": "Yes. NexoClip ships an MCP (Model Context Protocol) server so Claude Code, Cursor, and other LLM clients can drive the pipeline conversationally. The MCP surface mirrors the REST API — list streams, kick off pipelines, fetch clips, manage brand kits, inspect LLM spend. Start it via 'nexoclip mcp serve --token <api-token>'. The technical details live at https://nexoclip.nexo-ai.world/agents."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How does NexoClip handle retention and privacy?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Per-tenant retention windows are configurable (defaults: 30 days for VODs, 90 for clips, 365 for transcripts). A daily sweeper hard-deletes past-cutoff artifacts. There is no soft-delete bin. Audio and video stay on the operator's machine for transcription; only the LLM caption-generation step calls out to Anthropic."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is there a direct API for NexoClip?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The OpenAPI 3.1 spec is at /openapi.json, interactive Swagger UI at /docs. Issue a tenant token via 'nexoclip tokens issue --tenant <id> --scope full' and pass it as 'Authorization: Bearer <token>'. The same token gates the REST API and the MCP server."
         }
       }
     ]
@@ -139,100 +153,321 @@
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
   <style>
-    .nc-landing { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; }
+    /* Page-local layout. All colors / fonts / shadows come from theme tokens
+       (--nc-*). The locked CRT scanline overlay sits in theme.css already.
+       This stylesheet only adds composition + per-section spacing. */
+
+    /* ---- shared container ---- */
+    .nc-page { padding-bottom: 80px; }
+    .nc-section { padding: 56px 20px; }
+    .nc-section--wide { max-width: 1120px; margin: 0 auto; }
+    .nc-section--narrow { max-width: 760px; margin: 0 auto; }
+    .nc-section--center { text-align: center; }
+    .nc-eyebrow {
+      display: inline-block;
+      font-family: var(--nc-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      color: var(--nc-blue-bright);
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    /* ---- HERO ---- */
     .nc-hero {
       text-align: center;
-      padding: 56px 20px 40px;
+      padding: 80px 20px 56px;
       background:
-        radial-gradient(ellipse at top, var(--nc-blue-faint), transparent 60%),
+        radial-gradient(ellipse 80% 60% at 50% 0%, var(--nc-blue-faint), transparent 70%),
         var(--nc-bg-base);
       border-bottom: var(--nc-hairline);
     }
     .nc-hero h1 {
-      font-size: 34px;
+      font-size: clamp(32px, 6vw, 56px);
       font-weight: 500;
       color: var(--nc-text);
-      max-width: 720px;
-      margin: 0 auto 12px;
-      line-height: 1.2;
+      max-width: 900px;
+      margin: 0 auto 22px;
+      line-height: 1.06;
+      letter-spacing: -0.025em;
     }
-    .nc-hero h1 strong { color: var(--nc-blue-bright); font-weight: 500; }
-    .nc-hero p {
-      max-width: 580px;
-      margin: 0 auto 24px;
+    .nc-hero h1 .nc-hero__h1-line { display: block; }
+    .nc-hero h1 .nc-hero__h1-line--accent { color: var(--nc-blue-bright); }
+    .nc-hero p.nc-hero__sub {
+      max-width: 660px;
+      margin: 0 auto 14px;
       color: var(--nc-text-body);
-      font-size: 15px;
+      font-size: clamp(15px, 2vw, 17px);
       line-height: 1.6;
     }
-    .nc-hero__brand {
-      color: var(--nc-blue);
-      font-size: 18px;
-      letter-spacing: 0.06em;
-      margin-bottom: 16px;
-      display: block;
+    .nc-hero__tagline {
+      margin: 22px auto 30px;
+      color: var(--nc-text);
+      font-size: clamp(16px, 2.4vw, 20px);
+      font-weight: 500;
+      line-height: 1.35;
     }
-    .nc-hero__cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-    .nc-features {
+    .nc-hero__tagline span { display: block; }
+    .nc-hero__tagline span:last-child { color: var(--nc-blue-bright); }
+    .nc-hero__ctas { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; align-items: center; }
+    .nc-hero__cta-primary-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+    .nc-hero__cta-micro {
+      font-family: var(--nc-font-mono);
+      font-size: 11.5px;
+      color: var(--nc-text-muted);
+      letter-spacing: 0.02em;
+    }
+    .nc-hero__trustbar {
+      margin-top: 44px;
+      padding-top: 24px;
+      border-top: var(--nc-hairline);
+      max-width: 680px;
+      margin-left: auto;
+      margin-right: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+    .nc-hero__trustbar-logos {
+      display: flex; gap: 10px 18px; flex-wrap: wrap; justify-content: center;
+      color: var(--nc-text-body); font-size: 13.5px; font-weight: 500;
+    }
+    .nc-hero__trustbar-logos span {
+      display: inline-flex; align-items: center; gap: 7px; opacity: 0.9;
+    }
+    .nc-hero__trustbar-logos i { color: var(--nc-blue-bright); font-size: 14px; }
+
+    /* ---- Pain block ---- */
+    .nc-pain {
+      background: var(--nc-bg-surface);
+      border-top: var(--nc-hairline);
+      border-bottom: var(--nc-hairline);
+    }
+    .nc-pain h2 {
+      font-size: clamp(24px, 3.5vw, 36px);
+      color: var(--nc-text);
+      margin: 0 0 18px;
+      letter-spacing: -0.015em;
+      max-width: 760px;
+    }
+    .nc-pain p { color: var(--nc-text-body); font-size: 15.5px; line-height: 1.7; max-width: 700px; margin: 0 0 12px; }
+    .nc-pain p.nc-pain__kicker { color: var(--nc-text); font-weight: 500; }
+    .nc-pain__list {
+      list-style: none; padding: 0; margin: 4px 0 16px;
+      display: flex; flex-direction: column; gap: 8px; max-width: 700px;
+    }
+    .nc-pain__list li { color: var(--nc-text-body); font-size: 15px; display: flex; align-items: center; gap: 11px; }
+    .nc-pain__list li::before { content: "—"; color: var(--nc-text-muted); font-family: var(--nc-font-mono); }
+    .nc-pain__dead { color: var(--nc-blue-bright); font-weight: 500; }
+
+    /* ---- Fix block (upload → clips → publish → done) ---- */
+    .nc-fix { text-align: center; background: var(--nc-bg-base); }
+    .nc-fix h2 {
+      font-size: clamp(24px, 3.5vw, 36px);
+      color: var(--nc-text);
+      margin: 0 0 28px;
+      letter-spacing: -0.015em;
+    }
+    .nc-fix__steps {
+      display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center;
+      max-width: 760px; margin: 0 auto;
+    }
+    .nc-fix__step {
+      background: var(--nc-bg-panel);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius);
+      padding: 14px 24px;
+      color: var(--nc-text);
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .nc-fix__arrow { color: var(--nc-blue-bright); font-family: var(--nc-font-mono); font-size: 16px; }
+
+    /* ---- Value prop (one stream → endless content) ---- */
+    .nc-value {
+      text-align: center;
+      background: var(--nc-bg-surface);
+      border-top: var(--nc-hairline);
+      border-bottom: var(--nc-hairline);
+    }
+    .nc-value h2 {
+      font-size: clamp(28px, 5vw, 48px);
+      color: var(--nc-text);
+      margin: 0;
+      letter-spacing: -0.02em;
+      line-height: 1.08;
+      font-weight: 500;
+    }
+    .nc-value h2 .nc-value__accent { color: var(--nc-blue-bright); display: block; }
+    .nc-value__intro { color: var(--nc-text-body); font-size: 15px; margin: 22px 0 18px; }
+    .nc-value__chips {
+      display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+      max-width: 640px; margin: 0 auto 28px;
+    }
+    .nc-value__chip {
+      background: var(--nc-bg-panel);
+      border: 1px solid var(--nc-blue-dim);
+      border-radius: 999px;
+      padding: 8px 18px;
+      color: var(--nc-text);
+      font-size: 14px;
+    }
+    .nc-value__without {
+      display: flex; flex-direction: column; gap: 6px;
+      color: var(--nc-text-muted); font-size: 14.5px;
+    }
+
+    /* ---- Math block ---- */
+    .nc-math__head { text-align: center; margin-bottom: 28px; }
+    .nc-math__head h2 { font-size: clamp(24px, 3.5vw, 36px); color: var(--nc-text); margin: 0; letter-spacing: -0.015em; }
+    .nc-math__grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 16px;
-      margin: 40px 0;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    @media (min-width: 720px) { .nc-math__grid { grid-template-columns: repeat(3, 1fr); align-items: start; } }
+    .nc-math__card {
+      background: var(--nc-bg-panel);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius-lg);
+      padding: 22px 20px;
+      text-align: center;
+    }
+    .nc-math__card--us {
+      border-color: var(--nc-blue-dim);
+      background: linear-gradient(180deg, var(--nc-blue-faint) 0%, var(--nc-bg-panel) 100%);
+    }
+    .nc-math__label {
+      font-family: var(--nc-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--nc-text-muted);
+      margin-bottom: 10px;
+    }
+    .nc-math__price { font-size: 19px; color: var(--nc-text); font-weight: 500; }
+    .nc-math__card--us .nc-math__price { color: var(--nc-blue-bright); }
+    .nc-math__us-lines {
+      list-style: none; padding: 0; margin: 18px auto 0; max-width: 420px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .nc-math__us-lines li {
+      color: var(--nc-text-body); font-size: 14px;
+      display: flex; align-items: center; gap: 10px; justify-content: center;
+    }
+    .nc-math__us-lines li::before { content: "✓"; color: var(--nc-blue-bright); font-family: var(--nc-font-mono); font-weight: 700; }
+
+    /* ---- Emotional (imagine waking up) ---- */
+    .nc-imagine__heading { font-size: clamp(24px, 3.5vw, 36px); color: var(--nc-text); margin: 0 0 18px; text-align: center; letter-spacing: -0.015em; }
+    .nc-imagine__lead { text-align: center; color: var(--nc-text-body); font-size: 15.5px; line-height: 1.6; margin: 0 0 6px; }
+    .nc-imagine__lead--last { margin-bottom: 24px; }
+    .nc-imagine__list {
+      list-style: none;
+      padding: 0;
+      margin: 0 auto 22px;
+      max-width: 520px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .nc-imagine__list li {
+      background: var(--nc-bg-panel);
+      border: var(--nc-hairline);
+      border-radius: var(--nc-radius);
+      padding: 14px 18px;
+      color: var(--nc-text-body);
+      font-size: 14.5px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .nc-imagine__list li::before {
+      content: "✓";
+      color: var(--nc-blue-bright);
+      font-family: var(--nc-font-mono);
+      font-weight: 700;
+    }
+    .nc-imagine__list li:first-child { border-color: var(--nc-blue-dim); }
+    .nc-imagine__list li:first-child strong { color: var(--nc-blue-bright); font-weight: 600; }
+    .nc-imagine__tagline {
+      text-align: center;
+      color: var(--nc-blue-bright);
+      font-size: 17px;
+      max-width: 580px;
+      margin: 8px auto 0;
+      font-weight: 500;
+    }
+
+    /* ---- Results ---- */
+    .nc-results {
+      text-align: center;
+      background: var(--nc-bg-surface);
+      border-top: var(--nc-hairline);
+      border-bottom: var(--nc-hairline);
+    }
+    .nc-results h2 { font-size: clamp(22px, 3.5vw, 34px); color: var(--nc-text); margin: 0 0 18px; letter-spacing: -0.015em; }
+    .nc-results p { color: var(--nc-text-body); font-size: 15.5px; line-height: 1.6; margin: 0 auto 8px; max-width: 560px; }
+    .nc-results p.nc-results__lead { color: var(--nc-blue-bright); font-weight: 500; font-size: 16px; margin-top: 14px; }
+
+    /* ---- Features grid ---- */
+    .nc-features__head { text-align: center; margin-bottom: 32px; }
+    .nc-features__head h2 { font-size: clamp(24px, 3.5vw, 36px); color: var(--nc-text); margin: 0 0 10px; letter-spacing: -0.015em; }
+    .nc-features__head p { color: var(--nc-text-body); font-size: 15px; max-width: 540px; margin: 0 auto; }
+    .nc-features__grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
     }
     .nc-feature {
       background: var(--nc-bg-panel);
       border: var(--nc-hairline);
       border-radius: var(--nc-radius-lg);
-      padding: 20px;
+      padding: 22px 20px;
     }
-    .nc-feature__icon {
-      color: var(--nc-blue-bright);
-      font-size: 22px;
-      margin-bottom: 10px;
-      display: block;
+    .nc-feature__icon { color: var(--nc-blue-bright); font-size: 22px; margin-bottom: 12px; display: block; }
+    .nc-feature h3 { color: var(--nc-text); font-size: 15.5px; margin: 0 0 8px; line-height: 1.3; }
+    .nc-feature p { color: var(--nc-text-body); font-size: 13.5px; line-height: 1.6; margin: 0; }
+    .nc-feature code { font-family: var(--nc-font-mono); background: var(--nc-bg-base); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--nc-blue-bright); }
+
+    /* ---- Statement (giant mid-page) ---- */
+    .nc-statement {
+      text-align: center;
+      padding: 84px 20px;
+      background:
+        radial-gradient(circle at 50% 50%, var(--nc-blue-faint), transparent 70%),
+        var(--nc-bg-surface);
+      border-top: var(--nc-hairline);
+      border-bottom: var(--nc-hairline);
     }
-    .nc-feature h3 {
+    .nc-statement h2 {
+      font-size: clamp(34px, 7vw, 68px);
       color: var(--nc-text);
-      font-size: 15px;
-      margin: 0 0 6px;
+      margin: 0 auto;
+      max-width: 920px;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      font-weight: 500;
     }
-    .nc-feature p {
-      color: var(--nc-text-body);
-      font-size: 13px;
-      line-height: 1.55;
-      margin: 0;
+    .nc-statement h2 span { display: block; }
+    .nc-statement h2 span:last-child { color: var(--nc-blue-bright); }
+
+    /* ---- Final CTA ---- */
+    .nc-final { text-align: center; }
+    .nc-final h2 {
+      font-size: clamp(26px, 4vw, 42px);
+      color: var(--nc-text);
+      margin: 0 auto 16px;
+      max-width: 760px;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      font-weight: 500;
     }
-    .nc-flow {
-      background: var(--nc-bg-panel);
-      border: var(--nc-hairline);
-      border-radius: var(--nc-radius-lg);
-      padding: 24px;
-      margin: 40px 0;
-    }
-    .nc-flow h2 { margin-top: 0; }
-    .nc-flow__steps {
-      list-style: none;
-      padding: 0;
-      margin: 16px 0 0;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-    }
-    .nc-flow__step {
-      background: var(--nc-bg-raised);
-      border: var(--nc-hairline);
-      border-radius: var(--nc-radius);
-      padding: 14px;
-    }
-    .nc-flow__step b {
-      color: var(--nc-blue-bright);
-      font-family: var(--nc-font-mono);
-      font-size: 11px;
-      display: block;
-      margin-bottom: 4px;
-    }
-    .nc-flow__step strong { color: var(--nc-text); font-size: 13px; }
-    .nc-flow__step p { color: var(--nc-text-muted); font-size: 12px; margin: 4px 0 0; }
-    .nc-faq { margin-top: 40px; }
+    .nc-final p { color: var(--nc-text-body); font-size: 15.5px; line-height: 1.6; max-width: 580px; margin: 0 auto 28px; }
+    .nc-final__cta-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+    .nc-final__cta-micro { font-family: var(--nc-font-mono); font-size: 11.5px; color: var(--nc-text-muted); }
+
+    /* ---- FAQ accordion ---- */
+    .nc-faq { max-width: 760px; margin: 0 auto; }
+    .nc-faq h2 { font-size: clamp(24px, 3.5vw, 32px); color: var(--nc-text); margin: 0 0 24px; text-align: center; letter-spacing: -0.015em; }
     .nc-faq details {
       border: var(--nc-hairline);
       border-radius: var(--nc-radius);
@@ -241,9 +476,9 @@
       margin-bottom: 8px;
     }
     .nc-faq summary {
-      padding: 14px 18px;
+      padding: 16px 20px;
       color: var(--nc-text);
-      font-size: 14px;
+      font-size: 14.5px;
       font-weight: 500;
       cursor: pointer;
       list-style: none;
@@ -252,229 +487,354 @@
     .nc-faq summary::before {
       content: "▸";
       color: var(--nc-text-muted);
-      margin-right: 10px;
+      margin-right: 12px;
       transition: transform 120ms ease;
       display: inline-block;
     }
-    .nc-faq details[open] summary::before { transform: rotate(90deg); }
+    .nc-faq details[open] summary::before { transform: rotate(90deg); color: var(--nc-blue-bright); }
     .nc-faq__body {
-      padding: 0 18px 14px;
+      padding: 0 20px 18px;
       color: var(--nc-text-body);
-      font-size: 13px;
-      line-height: 1.6;
+      font-size: 13.5px;
+      line-height: 1.65;
     }
+    .nc-faq__body code { font-family: var(--nc-font-mono); background: var(--nc-bg-base); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+    .nc-faq__body a { color: var(--nc-blue-bright); text-decoration: underline; text-underline-offset: 3px; }
+
+    /* ---- Footer ---- */
     .nc-foot {
-      margin-top: 60px;
-      padding-top: 20px;
+      margin-top: 0;
+      padding: 40px 20px 20px;
       border-top: var(--nc-hairline);
       color: var(--nc-text-muted);
-      font-size: 12px;
+      font-size: 12.5px;
       text-align: center;
+      background: var(--nc-bg-surface);
+    }
+    .nc-foot__links { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; margin-bottom: 14px; }
+    .nc-foot__links a { color: var(--nc-text-body); text-decoration: none; }
+    .nc-foot__links a:hover { color: var(--nc-blue-bright); }
+    .nc-foot__tagline { font-family: var(--nc-font-mono); font-size: 11.5px; letter-spacing: 0.04em; }
+
+    /* ---- Phone breakpoint (380px is the locked minimum) ---- */
+    @media (max-width: 480px) {
+      .nc-section { padding: 44px 16px; }
+      .nc-hero { padding: 64px 16px 44px; }
+      .nc-hero__ctas { flex-direction: column; }
+      .nc-hero__cta-primary-wrap { width: 100%; }
+      .nc-hero__cta-primary-wrap .nc-btn { width: 100%; }
+      .nc-features__grid { grid-template-columns: 1fr; }
+      .nc-fix__steps { flex-direction: column; }
+      .nc-fix__step { width: 100%; }
+      .nc-fix__arrow { transform: rotate(90deg); }
     }
   </style>
 </head>
 <body>
+
+  {# ===========================================================
+       HERO — two-line headline, outcome first. The dream is sold
+       before any feature: stop paying editors, start publishing.
+     =========================================================== #}
   <header class="nc-hero">
-    <span class="nc-hero__brand">{{ t('landing.hero.brand') }}</span>
-    <h1>{{ t('landing.hero.headline_html') | safe }}</h1>
-    <p>{{ t('landing.hero.subhead') }}</p>
-    <div class="nc-hero__cta">
-      <a href="/dashboard/login" class="nc-btn nc-btn--primary">
-        <i class="ti ti-login" aria-hidden="true"></i>
-        <span>{{ t('landing.hero.cta_sign_in') }}</span>
+    <span class="nc-eyebrow">{{ t('landing.hero.eyebrow') }}</span>
+    <h1>
+      <span class="nc-hero__h1-line">{{ t('landing.hero.h1_line1') }}</span>
+      <span class="nc-hero__h1-line nc-hero__h1-line--accent">{{ t('landing.hero.h1_line2') }}</span>
+    </h1>
+    <p class="nc-hero__sub">{{ t('landing.hero.sub_line1') }}</p>
+    <p class="nc-hero__sub">{{ t('landing.hero.sub_line2') }}</p>
+
+    <p class="nc-hero__tagline">
+      <span>{{ t('landing.hero.tagline_a') }}</span>
+      <span>{{ t('landing.hero.tagline_b') }}</span>
+    </p>
+
+    <div class="nc-hero__ctas">
+      <span class="nc-hero__cta-primary-wrap">
+        <a href="/dashboard/login" class="nc-btn nc-btn--primary">
+          <i class="ti ti-upload" aria-hidden="true"></i>
+          <span>{{ t('landing.hero.cta_primary') }}</span>
+        </a>
+        <span class="nc-hero__cta-micro">{{ t('landing.hero.cta_primary_micro') }}</span>
+      </span>
+      <a href="#how-it-works" class="nc-btn">
+        <i class="ti ti-player-play" aria-hidden="true"></i>
+        <span>{{ t('landing.hero.cta_secondary') }}</span>
       </a>
-      <a href="/docs" class="nc-btn">
-        <i class="ti ti-book" aria-hidden="true"></i>
-        <span>{{ t('landing.hero.cta_api_docs') }}</span>
-      </a>
-      <a href="/llms.txt" class="nc-btn">
-        <i class="ti ti-robot" aria-hidden="true"></i>
-        <span>{{ t('landing.hero.cta_for_llms') }}</span>
-      </a>
+    </div>
+
+    {#
+      Trust bar — platforms NexoClip targets. TikTok / Reels / Shorts are
+      the publish targets; Twitch VODs + Kick streams are ingest sources.
+
+      TODO(operator): if publish OAuth isn't green on all three publish
+      targets at launch, soften this to "Coming soon to:" so we don't
+      overclaim auto-posting on a platform that isn't wired yet.
+    #}
+    <div class="nc-hero__trustbar">
+      <div class="nc-hero__trustbar-logos">
+        <span><i class="ti ti-check" aria-hidden="true"></i>{{ t('landing.trust.t1') }}</span>
+        <span><i class="ti ti-check" aria-hidden="true"></i>{{ t('landing.trust.t2') }}</span>
+        <span><i class="ti ti-check" aria-hidden="true"></i>{{ t('landing.trust.t3') }}</span>
+        <span><i class="ti ti-check" aria-hidden="true"></i>{{ t('landing.trust.t4') }}</span>
+        <span><i class="ti ti-check" aria-hidden="true"></i>{{ t('landing.trust.t5') }}</span>
+      </div>
     </div>
   </header>
 
-  <main class="nc-landing">
+  <main class="nc-page">
 
-    <section>
-      <h2>{{ t('landing.why.heading') }}</h2>
-      <div class="nc-features">
-
-        <div class="nc-feature">
-          <i class="ti ti-trending-up nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.scoring.title') }}</h3>
-          <p>{{ t('landing.why.scoring.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.hook.title') }}</h3>
-          <p>{{ t('landing.why.hook.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-chart-line nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.intel.title') }}</h3>
-          <p>{{ t('landing.why.intel.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-microphone-2 nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.voice.title') }}</h3>
-          <p>{{ t('landing.why.voice.body_html') | safe }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-users nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.brandkits.title') }}</h3>
-          <p>{{ t('landing.why.brandkits.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-cpu nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.gpu.title') }}</h3>
-          <p>{{ t('landing.why.gpu.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-rocket nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.publish.title') }}</h3>
-          <p>{{ t('landing.why.publish.body') }}</p>
-        </div>
-
-        <div class="nc-feature">
-          <i class="ti ti-robot nc-feature__icon" aria-hidden="true"></i>
-          <h3>{{ t('landing.why.agents.title') }}</h3>
-          <p>{{ t('landing.why.agents.body') }}</p>
-        </div>
-
+    {# =========================================================
+         PAIN — editing is killing your growth. Output is the
+         problem, not talent. Tight, declarative.
+       ========================================================= #}
+    <section class="nc-section nc-pain">
+      <div class="nc-section--narrow">
+        <h2>{{ t('landing.pain.heading') }}</h2>
+        <p>{{ t('landing.pain.line1') }}</p>
+        <p>{{ t('landing.pain.line2') }}</p>
+        <p class="nc-pain__kicker">{{ t('landing.pain.line3') }}</p>
+        <ul class="nc-pain__list">
+          <li>{{ t('landing.pain.item1') }}</li>
+          <li>{{ t('landing.pain.item2') }}</li>
+          <li>{{ t('landing.pain.item3') }}</li>
+          <li>{{ t('landing.pain.item4') }}</li>
+        </ul>
+        <p>{{ t('landing.pain.line4') }}</p>
+        <p class="nc-pain__dead">{{ t('landing.pain.line5') }}</p>
       </div>
     </section>
 
-    <section class="nc-flow">
-      <h2>The growth loop</h2>
-      <p>
-        The one thing a streamer (or their agency) touches each morning:
-      </p>
-      <ol class="nc-flow__steps">
-        <li class="nc-flow__step">
-          <b>1 · ingest</b>
-          <strong>Drop VOD · watch Drive · pull from platform</strong>
-          <p>Drag-drop, OBS-to-Drive auto-watch, or Twitch / Kick VOD pull. Single ingest endpoint, three sources.</p>
-        </li>
-        <li class="nc-flow__step">
-          <b>2 · diarize + transcribe</b>
-          <strong>Speakers labeled, words timestamped</strong>
-          <p>pyannote-audio + faster-whisper, both on your GPU. Audio never leaves your machine.</p>
-        </li>
-        <li class="nc-flow__step">
-          <b>3 · detect + score</b>
-          <strong>Multimodal candidate-finding + AI scoring</strong>
-          <p>Voice markers, chat heat, audio peaks, scene cuts → candidate windows. Each candidate gets a viral score, hook strength, and dead-air risk.</p>
-        </li>
-        <li class="nc-flow__step">
-          <b>4 · cut + brand</b>
-          <strong>Vertical clips routed to the right host</strong>
-          <p>ffmpeg cuts each window, smart-crops 9:16 around the active face, applies the resolved speaker's brand kit.</p>
-        </li>
-        <li class="nc-flow__step">
-          <b>5 · hook + variants</b>
-          <strong>Title + caption + hashtags per platform</strong>
-          <p>Claude generates 5 viral-hook titles per tone preset, captions per persona, hashtags per platform. Operator picks one or skips and accepts the AI default.</p>
-        </li>
-        <li class="nc-flow__step">
-          <b>6 · ship</b>
-          <strong>Auto-publish with undo · or manual review</strong>
-          <p>Trusted brand kits queue with a scheduled-for + undo window. Untrusted kits land in the inbox grouped by VOD/speaker. Same flow either way.</p>
-        </li>
-      </ol>
+    {# =========================================================
+         FIX — the four-word loop. Upload → clips → publish → done.
+       ========================================================= #}
+    <section class="nc-section nc-fix">
+      <h2>{{ t('landing.fix.heading') }}</h2>
+      <div class="nc-fix__steps">
+        <span class="nc-fix__step">{{ t('landing.fix.s1') }}</span>
+        <span class="nc-fix__arrow">→</span>
+        <span class="nc-fix__step">{{ t('landing.fix.s2') }}</span>
+        <span class="nc-fix__arrow">→</span>
+        <span class="nc-fix__step">{{ t('landing.fix.s3') }}</span>
+        <span class="nc-fix__arrow">→</span>
+        <span class="nc-fix__step">{{ t('landing.fix.s4') }}</span>
+      </div>
     </section>
 
-    <section class="nc-faq">
-      <h2>Frequently asked</h2>
-
-      <details>
-        <summary>Why call it a "growth engine" instead of a clip editor?</summary>
-        <div class="nc-faq__body">
-          Clip editors give you a timeline and trim handles. NexoClip is upstream
-          of editing: AI scores every clip on virality dimensions, generates the
-          hook, routes to the right brand kit, and queues publish with an undo
-          window. The operator's job shifts from "find and cut clips" to "pick
-          the AI's top 3 and let it ship". The editor's still there when you need
-          it — most mornings you won't.
-        </div>
-      </details>
-
-      <details>
-        <summary>Who is NexoClip for?</summary>
-        <div class="nc-faq__body">
-          Streamers who want clips ready by morning. Multi-host stream collectives
-          that need per-streamer branding within one VOD. Agencies running clipping
-          for several creators at once. Agents / MCP clients that want to drive a
-          clipping pipeline programmatically (we're the only stream-growth OS
-          built agent-first).
-        </div>
-      </details>
-
-      <details>
-        <summary>Do I need a GPU?</summary>
-        <div class="nc-faq__body">
-          A consumer GPU (RTX 4060+ recommended) handles Whisper + pyannote
-          comfortably for ~4hr VODs. CPU-only mode works for short clips
-          (set <code>NEXOCLIP_WHISPER_DEVICE=cpu</code>) but is much slower.
-        </div>
-      </details>
-
-      <details>
-        <summary>Which LLM does NexoClip use?</summary>
-        <div class="nc-faq__body">
-          Anthropic Claude exclusively for the live surface. The router supports
-          adding more providers later without code changes, but Claude is what
-          ships — the structured-output reliability is essential for the hook
-          generator, variant generator, and viral-moment selector.
-        </div>
-      </details>
-
-      <details>
-        <summary>How do I integrate NexoClip into an agent workflow?</summary>
-        <div class="nc-faq__body">
-          Run <code>nexoclip mcp serve --token &lt;api-token&gt;</code> to expose
-          the MCP server over stdio. Claude Code, Cursor, and other MCP clients
-          will see tools for listing streams, kicking off pipelines, fetching
-          clips, and managing brand kits. The same tenant token gates the JSON
-          REST API at <code>/streams</code>, <code>/clips</code>, etc.
-        </div>
-      </details>
-
-      <details>
-        <summary>What about retention and data privacy?</summary>
-        <div class="nc-faq__body">
-          Per-tenant retention windows (default 30 days for VODs, 90 for clips,
-          365 for transcripts) — all configurable. Daily sweeper hard-deletes
-          past-cutoff artifacts. No soft-delete bin. Audio + video stay on your
-          machine for transcription; only the LLM caption-generation step calls
-          out to Anthropic.
-        </div>
-      </details>
-
-      <details>
-        <summary>Is there an API I can call directly?</summary>
-        <div class="nc-faq__body">
-          Yes. <a href="/openapi.json">OpenAPI spec</a> +
-          <a href="/docs">interactive Swagger UI</a>. Issue a token via
-          <code>nexoclip tokens issue --tenant &lt;id&gt; --scope full</code>
-          and pass it as <code>Authorization: Bearer &lt;token&gt;</code>.
-        </div>
-      </details>
-
+    {# =========================================================
+         VALUE PROP — one stream, endless content.
+       ========================================================= #}
+    <section class="nc-section nc-value">
+      <h2>
+        {{ t('landing.value.heading_line1') }}
+        <span class="nc-value__accent">{{ t('landing.value.heading_line2') }}</span>
+      </h2>
+      <p class="nc-value__intro">{{ t('landing.value.intro') }}</p>
+      <div class="nc-value__chips">
+        <span class="nc-value__chip">{{ t('landing.value.item1') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item2') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item3') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item4') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item5') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item6') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item7') }}</span>
+        <span class="nc-value__chip">{{ t('landing.value.item8') }}</span>
+      </div>
+      <div class="nc-value__without">
+        <span>{{ t('landing.value.without1') }}</span>
+        <span>{{ t('landing.value.without2') }}</span>
+        <span>{{ t('landing.value.without3') }}</span>
+      </div>
     </section>
 
-    <p class="nc-foot">
-      NexoClip · multi-tenant SaaS for VOD-to-clip workflows ·
-      <a href="/llms.txt">llms.txt</a> ·
-      <a href="/docs">API docs</a> ·
-      <a href="/dashboard/login">Sign in</a>
-    </p>
+    {# =========================================================
+         MONEY — what does one editor cost?
+       ========================================================= #}
+    <section class="nc-section nc-section--wide">
+      <div class="nc-math__head">
+        <h2>{{ t('landing.math.heading') }}</h2>
+      </div>
+      <div class="nc-math__grid">
+        <div class="nc-math__card">
+          <div class="nc-math__label">{{ t('landing.math.freelancer_label') }}</div>
+          <div class="nc-math__price">{{ t('landing.math.freelancer_price') }}</div>
+        </div>
+        <div class="nc-math__card">
+          <div class="nc-math__label">{{ t('landing.math.agency_label') }}</div>
+          <div class="nc-math__price">{{ t('landing.math.agency_price') }}</div>
+        </div>
+        <div class="nc-math__card nc-math__card--us">
+          <div class="nc-math__label">{{ t('landing.math.us_label') }}</div>
+          {# TODO(operator): replace $__ with the real launch price in i18n.py. #}
+          <div class="nc-math__price">{{ t('landing.math.us_price') }}</div>
+        </div>
+      </div>
+      <ul class="nc-math__us-lines">
+        <li>{{ t('landing.math.us_line1') }}</li>
+        <li>{{ t('landing.math.us_line2') }}</li>
+        <li>{{ t('landing.math.us_line3') }}</li>
+        <li>{{ t('landing.math.us_line4') }}</li>
+        <li>{{ t('landing.math.us_line5') }}</li>
+      </ul>
+    </section>
+
+    {# =========================================================
+         EMOTIONAL — imagine waking up to this.
+         First checklist item is the concrete "17 clips generated".
+       ========================================================= #}
+    <section class="nc-section nc-section--narrow">
+      <h2 class="nc-imagine__heading">{{ t('landing.imagine.heading') }}</h2>
+      <p class="nc-imagine__lead">{{ t('landing.imagine.line1') }}</p>
+      <p class="nc-imagine__lead">{{ t('landing.imagine.line2') }}</p>
+      <p class="nc-imagine__lead nc-imagine__lead--last">{{ t('landing.imagine.line3') }}</p>
+      <ul class="nc-imagine__list">
+        <li><strong>{{ t('landing.imagine.item1') }}</strong></li>
+        <li>{{ t('landing.imagine.item2') }}</li>
+        <li>{{ t('landing.imagine.item3') }}</li>
+        <li>{{ t('landing.imagine.item4') }}</li>
+        <li>{{ t('landing.imagine.item5') }}</li>
+        <li>{{ t('landing.imagine.item6') }}</li>
+        <li>{{ t('landing.imagine.item7') }}</li>
+      </ul>
+      <p class="nc-imagine__tagline">{{ t('landing.imagine.tagline') }}</p>
+    </section>
+
+    {# =========================================================
+         RESULTS — more clips = more chances to go viral.
+       ========================================================= #}
+    <section class="nc-section nc-results">
+      <div class="nc-section--narrow">
+        <h2>{{ t('landing.results.heading') }}</h2>
+        <p>{{ t('landing.results.line1') }}</p>
+        <p>{{ t('landing.results.line2') }}</p>
+        <p>{{ t('landing.results.line3') }}</p>
+        <p class="nc-results__lead">{{ t('landing.results.line4') }}</p>
+      </div>
+    </section>
+
+    {# =========================================================
+         FEATURES — six outcome-led benefit cards. The engine
+         detail stays in the body; the headline is the outcome.
+       ========================================================= #}
+    <section id="how-it-works" class="nc-section nc-section--wide">
+      <div class="nc-features__head">
+        <h2>{{ t('landing.features.heading') }}</h2>
+        <p>{{ t('landing.features.intro') }}</p>
+      </div>
+
+      <div class="nc-features__grid">
+        <div class="nc-feature">
+          <i class="ti ti-trending-up nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.viral.title') }}</h3>
+          <p>{{ t('landing.features.viral.body') }}</p>
+        </div>
+        <div class="nc-feature">
+          <i class="ti ti-sparkles nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.hook.title') }}</h3>
+          <p>{{ t('landing.features.hook.body') }}</p>
+        </div>
+        <div class="nc-feature">
+          <i class="ti ti-player-skip-forward nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.timeline.title') }}</h3>
+          <p>{{ t('landing.features.timeline.body') }}</p>
+        </div>
+        <div class="nc-feature">
+          <i class="ti ti-microphone-2 nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.voice.title') }}</h3>
+          <p>{{ t('landing.features.voice.body_html') | safe }}</p>
+        </div>
+        <div class="nc-feature">
+          <i class="ti ti-palette nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.brand.title') }}</h3>
+          <p>{{ t('landing.features.brand.body') }}</p>
+        </div>
+        <div class="nc-feature">
+          <i class="ti ti-calendar-time nc-feature__icon" aria-hidden="true"></i>
+          <h3>{{ t('landing.features.publish.title') }}</h3>
+          <p>{{ t('landing.features.publish.body') }}</p>
+        </div>
+      </div>
+    </section>
+
+    {# =========================================================
+         BIG MID-PAGE STATEMENT — three lines, giant.
+       ========================================================= #}
+    <section class="nc-statement">
+      <h2>
+        <span>{{ t('landing.statement_line1') }}</span>
+        <span>{{ t('landing.statement_line2') }}</span>
+        <span>{{ t('landing.statement_line3') }}</span>
+      </h2>
+    </section>
+
+    {# =========================================================
+         FINAL CTA — the secret, said plainly: one stream → 20
+         pieces of content. The dream, then the button.
+       ========================================================= #}
+    <section class="nc-section nc-final">
+      <h2>{{ t('landing.final.heading') }}</h2>
+      <p>{{ t('landing.final.body') }}</p>
+      <span class="nc-final__cta-wrap">
+        <a href="/dashboard/login" class="nc-btn nc-btn--primary">
+          <i class="ti ti-upload" aria-hidden="true"></i>
+          <span>{{ t('landing.final.cta') }}</span>
+        </a>
+        <span class="nc-final__cta-micro">{{ t('landing.final.cta_micro') }}</span>
+      </span>
+    </section>
+
+    {# =========================================================
+         FAQ
+       ========================================================= #}
+    <section class="nc-section nc-faq">
+      <h2>{{ t('landing.faq.heading') }}</h2>
+
+      <details>
+        <summary>{{ t('landing.faq.q1') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a1') }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q2') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a2') }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q3') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a3') }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q4') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a4') }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q5') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a5_html') | safe }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q6') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a6') }}</div>
+      </details>
+      <details>
+        <summary>{{ t('landing.faq.q7') }}</summary>
+        <div class="nc-faq__body">{{ t('landing.faq.a7_html') | safe }}</div>
+      </details>
+    </section>
+
   </main>
+
+  {# =========================================================
+       FOOTER — agent-readability entry points stay here.
+       The /agents link is the "second door" for technical buyers.
+     ========================================================= #}
+  <footer class="nc-foot">
+    <div class="nc-foot__links">
+      <a href="/agents">{{ t('landing.foot.link_agents') }}</a>
+      <a href="/docs">{{ t('landing.foot.link_docs') }}</a>
+      <a href="/llms.txt">{{ t('landing.foot.link_llms') }}</a>
+      <a href="/dashboard/login">{{ t('landing.foot.link_signin') }}</a>
+    </div>
+    <div class="nc-foot__tagline">{{ t('landing.foot.tagline') }}</div>
+  </footer>
+
 </body>
 </html>

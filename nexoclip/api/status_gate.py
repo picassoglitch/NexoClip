@@ -72,12 +72,17 @@ def require_active_tenant(request: Request) -> None:
 # Free can still ingest VODs, generate clips, and DOWNLOAD them — only
 # outbound publishing is paywalled. The watermark applies separately at the
 # clip-export layer (see brand_kits.show_nexoclip_credit + tier check there).
-_PAID_TIERS: frozenset[str] = frozenset({"pro", "all_access"})
+#
+# Tier sets live in nexoclip.tiers (single source of truth). request.state
+# .tenant_tier is already normalized to a canonical tier by the auth
+# middleware, so these gates compare directly.
+from nexoclip.tiers import PAID_TIERS as _PAID_TIERS
+from nexoclip.tiers import TOP_TIERS as _TOP_TIERS
 
 
 def require_paid_tier(request: Request) -> None:
-    """Block free-tier tenants from publishing. Free can still create + download
-    clips locally with watermark; publishing to TikTok/YouTube/IG is paid.
+    """Block free-tier tenants from any paid perk. Free can still create +
+    download clips locally with a watermark.
 
     Returns 402 Payment Required — the canonical HTTP code for "you need to
     pay to use this feature". The JSON detail gives the client a paywall hint
@@ -89,12 +94,41 @@ def require_paid_tier(request: Request) -> None:
     raise HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail={
+            "reason": "paywall_paid",
+            "current_tier": tier,
+            "message": (
+                "Esta función requiere el plan Pro o All-Access. Puedes "
+                "descargar el clip con la marca de agua de NexoClip, o subir "
+                "tu plan."
+            ),
+            "upgrade_url": "https://nexo-ai.world/app/subscription",
+        },
+    )
+
+
+def require_top_tier(request: Request) -> None:
+    """Block everything below the TOP tier (all_access) from publishing.
+
+    Publishing to TikTok / YouTube / Instagram via upload-post is a
+    top-tier-only feature. `pro` (mid tier) gets Drive export instead
+    (task #31); `free` downloads locally with a watermark. The top tier
+    includes Nexo AI's `partner` alias, normalized to all_access at the
+    auth read choke point.
+
+    Returns 402 Payment Required with a paywall hint.
+    """
+    tier: str = getattr(request.state, "tenant_tier", "free") or "free"
+    if tier in _TOP_TIERS:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={
             "reason": "paywall_publish",
             "current_tier": tier,
             "message": (
-                "Publishing a TikTok/YouTube/Instagram requiere el plan Pro o "
-                "All-Access. Puedes descargar el clip con la marca de agua de "
-                "NexoClip y publicarlo manualmente, o subir tu plan."
+                "Publicar en TikTok/YouTube/Instagram requiere el plan "
+                "All-Access. Puedes descargar el clip y publicarlo "
+                "manualmente, o subir tu plan."
             ),
             "upgrade_url": "https://nexo-ai.world/app/subscription",
         },

@@ -156,11 +156,25 @@ async def provision_tenant_for_nexo_ai(
 async def sync_tenant_tier(db: Database, *, tenant_id: str, tier: str) -> None:
     """Idempotent tier write. Called from /auth/sso on every login so the
     user's tier stays in sync with what Nexo AI thinks it should be. No-op if
-    the tier didn't change."""
-    tenant = await TenantsRepo(db).get(tenant_id)
-    if tenant is None or tenant.tier == tier:
+    the tier didn't change.
+
+    Normalizes the incoming label first: Nexo AI sends aliases like
+    `partner` for our top tier `all_access`. An UNRECOGNIZED label
+    (typo / brand-new tier we haven't mapped) resolves to None and we
+    SKIP the write — better to keep the tenant's current tier than to
+    silently overwrite it with garbage. The pre-normalization version
+    wrote `partner` verbatim, so partner tenants ended up with a tier
+    string no gate recognized → treated as free everywhere.
+    """
+    from nexoclip.tiers import resolve_tier_alias
+
+    canonical = resolve_tier_alias(tier)
+    if canonical is None:
         return
-    await _set_tier(db, tenant_id, tier)
+    tenant = await TenantsRepo(db).get(tenant_id)
+    if tenant is None or tenant.tier == canonical:
+        return
+    await _set_tier(db, tenant_id, canonical)
 
 
 async def _set_tier(db: Database, tenant_id: str, tier: str) -> None:

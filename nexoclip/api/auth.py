@@ -126,8 +126,17 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # render a "paused by Nexo AI" banner.
         try:
             from nexoclip.db import TenantsRepo
+            from nexoclip.tiers import normalize_tier
             tenant = await TenantsRepo(self._db).get(token_row.tenant_id)
-            request.state.tenant_tier = (tenant.tier if tenant else "free") or "free"
+            # Normalize at the read choke point so EVERY downstream gate
+            # (require_paid_tier, require_top_tier, export resolution)
+            # sees a canonical tier. This also upgrades any tenant whose
+            # DB row still holds a raw alias like `partner` (written
+            # verbatim before the sync-normalization fix) → `all_access`,
+            # without needing a data migration.
+            request.state.tenant_tier = normalize_tier(
+                tenant.tier if tenant else None
+            )
             request.state.tenant_status = (
                 (tenant.status if tenant else "active") or "active"
             )

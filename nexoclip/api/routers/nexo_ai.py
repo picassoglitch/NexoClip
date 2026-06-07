@@ -99,10 +99,10 @@ def _decode_sso_payload_unsigned(token: str):
 # enough to accept any address a real auth provider would issue.
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
-# Tier values Nexo AI sends — lowercase to match NexoClip's tenants.tier
-# column convention (free is the migration default; pro / all_access are
-# the upgrade tiers). Anything else gets coerced to 'free' for safety.
-_VALID_TIERS: frozenset[str] = frozenset({"free", "pro", "all_access"})
+# Tier handling lives in nexoclip.tiers (single source of truth). Nexo AI
+# sends aliases like `partner` for our top tier `all_access`; resolve_tier_alias
+# maps them and returns None for anything we don't recognize.
+from nexoclip.tiers import resolve_tier_alias as _resolve_tier_alias
 
 
 class _ProvisionRequest(BaseModel):
@@ -127,12 +127,13 @@ class _ProvisionRequest(BaseModel):
     @field_validator("tier")
     @classmethod
     def _coerce_tier(cls, v: str | None) -> str | None:
+        # Map Nexo AI's label to our canonical tier (partner → all_access).
+        # Unknown / misspelled values resolve to None so we keep the
+        # tenant's existing tier rather than 400ing onboarding or
+        # downgrading them. None for "not provided" passes through too.
         if v is None:
             return None
-        normalized = v.lower().strip()
-        # Silently drop unknown tier values rather than 400ing — we never
-        # want a misspelled tier to block the whole onboarding flow.
-        return normalized if normalized in _VALID_TIERS else None
+        return _resolve_tier_alias(v)
 
 
 class _ProvisionResponse(BaseModel):

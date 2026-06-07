@@ -456,13 +456,33 @@ async def upload_post_post_clip(
         ) from e
 
     # Build the signed URL upload-post will GET to download the MP4.
+    # mint_signed_clip_url raises RuntimeError when
+    # NEXOCLIP_INTERNAL_SIGNING_SECRET is unset on this deploy —
+    # catch + surface a clear 503 so the operator sees an
+    # actionable message instead of an opaque 500.
     base = _public_base_url(request)
-    video_url = mint_signed_clip_url(
-        clip_id=clip_id,
-        tenant_id=tenant_id,
-        base_url=base,
-        ttl_seconds=3600,
-    )
+    try:
+        video_url = mint_signed_clip_url(
+            clip_id=clip_id,
+            tenant_id=tenant_id,
+            base_url=base,
+            ttl_seconds=3600,
+        )
+    except RuntimeError as e:
+        _log.error(
+            "upload_post.post.signing_secret_missing tenant=%s clip=%s err=%s",
+            tenant_id, clip_id, e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured on "
+                "this NexoClip instance. Add it to Railway env (same "
+                "secret used for the Modal Whisper audio fetch) and "
+                "redeploy. upload-post needs a signed URL to download "
+                "your clip MP4."
+            ),
+        ) from e
 
     try:
         result = await client.upload_video_from_url(
@@ -481,6 +501,17 @@ async def upload_post_post_clip(
         raise HTTPException(
             status_code=502,
             detail=f"upload-post upload failed: {e}",
+        ) from e
+    except Exception as e:  # noqa: BLE001 — defensive catch-all so 500s
+        # surface a real error message instead of FastAPI's opaque
+        # "Internal Server Error". Unknown failure paths get logged
+        # at exception level so we can diagnose from the structured logs.
+        _log.exception(
+            "upload_post.post.unexpected tenant=%s clip=%s", tenant_id, clip_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"upload-post call crashed: {type(e).__name__}: {e}",
         ) from e
 
     _log.info(
@@ -615,9 +646,23 @@ async def upload_post_bulk(
         if clip is None:
             results.append({"clip_id": clip_id, "ok": False, "error": "clip not found"})
             continue
-        video_url = mint_signed_clip_url(
-            clip_id=clip_id, tenant_id=tenant_id, base_url=base, ttl_seconds=3600,
-        )
+        try:
+            video_url = mint_signed_clip_url(
+                clip_id=clip_id, tenant_id=tenant_id, base_url=base, ttl_seconds=3600,
+            )
+        except RuntimeError as e:
+            # Same root cause as the single-post path — surface clearly
+            # on every row instead of crashing the whole batch.
+            _log.error(
+                "upload_post.bulk.signing_secret_missing tenant=%s clip=%s err=%s",
+                tenant_id, clip_id, e,
+            )
+            results.append({
+                "clip_id": clip_id, "ok": False,
+                "error": "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured",
+                "platforms": platforms,
+            })
+            continue
         try:
             r = await client.upload_video_from_url(
                 username=username,

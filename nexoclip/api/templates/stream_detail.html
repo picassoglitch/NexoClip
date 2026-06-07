@@ -384,10 +384,11 @@
   </div>
 </div>
 
-{#- Slice O.2 — "Send to publishing" CTA at the end of the stream
-    page. Surfaces only when there's at least one approved clip
-    ready to ship. Routes to /streams/{id}/publish where the operator
-    picks which connected accounts each clip ships to. -#}
+{#- "Ready to publish" CTA at the end of the stream page. Surfaces
+    only when there's at least one approved clip ready to ship.
+    Routes to the unified Publish Center (upload-post dashboard) so
+    every publish flow in the app converges on one surface. The old
+    per-stream Buffer matrix is now a 303 there too. -#}
 {% if _ready_count %}
 <div class="nc-panel nc-panel--cta-rail" style="margin-top: 16px;">
   <div class="nc-panel__body" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px;">
@@ -397,10 +398,10 @@
         Ready to publish · {{ _ready_count }} clip{% if _ready_count != 1 %}s{% endif %}
       </div>
       <small style="color:var(--nc-text-muted);">
-        Push approved clips to your connected TikTok / Reels / Shorts / Kick accounts.
+        Ship to your connected TikTok / Instagram / YouTube / X / LinkedIn / Facebook / Threads / Pinterest / Bluesky accounts.
       </small>
     </div>
-    <a href="/dashboard/streams/{{ stream.id }}/publish"
+    <a href="/dashboard/publish/upload-post"
        class="nc-btn nc-btn--primary"
        style="white-space:nowrap;">
       <i class="ti ti-arrow-right" aria-hidden="true"></i>

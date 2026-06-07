@@ -1542,93 +1542,19 @@ async def publish_submit(
     )
 
 
-@router.get("/streams/{stream_id}/publish", response_class=HTMLResponse)
-async def stream_publish_view(
-    request: Request,
-    stream_id: str,
-    tenant_id: str = Depends(tenant_binder),
-    db: Database = Depends(get_db),
-) -> Response:
-    """Slice O.2 — publishing page.
+@router.get("/streams/{stream_id}/publish", include_in_schema=False)
+async def stream_publish_view(stream_id: str) -> Response:
+    """Legacy Slice-O.2 per-stream Buffer matrix is gone — every
+    publish flow now lives on the unified upload-post dashboard.
 
-    The page after Approve. Shows every approved/published clip on
-    this stream alongside the tenant's connected social accounts,
-    and lets the operator pick which clips ship to which platforms.
-
-    Lists pre-existing publish_jobs per clip so the operator sees
-    what's already queued / sent / failed — `Publish to TikTok`
-    becomes greyed out for clips that already have a TikTok job.
+    Bookmarks + the "Go to publishing" CTA on the stream page used
+    to point here; both keep working via this 303. The
+    `/streams/{id}/publish-status.json` sibling stays intact for
+    existing PublishJobs status polling on rows that ran before the
+    cutover.
     """
-    stream = await StreamsRepo(db).get(stream_id)
-    if stream is None:
-        raise HTTPException(status_code=404, detail="stream not found")
-
-    all_clips = await ClipsRepo(db).list_for_stream(stream_id)
-    # Only ship clips the operator has approved (or already published).
-    clips = [c for c in all_clips if c.status in ("approved", "published")]
-
-    # Connected accounts → group by platform so the editor can render
-    # one section per platform with the account it'd post to.
-    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
-    accounts_by_platform: dict[str, list[ConnectedAccount]] = {}
-    for a in accounts:
-        if a.status != "active":
-            continue
-        accounts_by_platform.setdefault(a.platform.lower(), []).append(a)
-
-    # Existing publish jobs per clip → operator sees what's already
-    # queued. Keyed (clip_id, platform) → status.
-    pj_repo = PublishJobsRepo(db)
-    existing_jobs: dict[tuple[str, str], str] = {}
-    for c in clips:
-        for j in await pj_repo.list_for_clip(c.id):
-            existing_jobs[(c.id, j.platform.lower())] = j.status
-
-    # Pull the first variant per clip so we have a variant_id ready
-    # for the enqueue path (publish_jobs requires a variant_id).
-    # Operators can refine variant choice in the per-clip editor;
-    # the bulk page uses the lead variant by default.
-    variants_by_clip: dict[str, str] = {}
-    # Slice O.6 — also surface the lead variant's title / caption /
-    # hashtags so the per-platform overrides editor can prefill its
-    # fields. Operator typed a great caption in the variant editor →
-    # the publish page should reuse it instead of forcing a re-type.
-    lead_variant_meta: dict[str, dict[str, object]] = {}
-    for c in clips:
-        vs = await VariantsRepo(db).list_for_clip(c.id)
-        if vs:
-            variants_by_clip[c.id] = vs[0].id
-            lead_variant_meta[c.id] = {
-                "title": vs[0].title_card_text or "",
-                "caption": vs[0].caption or "",
-                "hashtags": " ".join(vs[0].hashtags or []),
-            }
-
-    return templates.TemplateResponse(
-        request,
-        "stream_publish.html",
-        {
-            "stream": stream,
-            "clips": clips,
-            "accounts_by_platform": accounts_by_platform,
-            "existing_jobs": existing_jobs,
-            "variants_by_clip": variants_by_clip,
-            "lead_variant_meta": lead_variant_meta,
-            # Convenience: the five platforms we support today, in the
-            # order we want to render them. Account presence drives
-            # whether each section is enabled or shows a "connect" CTA.
-            # Slice O.3 — Twitch joined the list. Clips routed to
-            # Twitch ship as channel highlights / clip uploads via the
-            # Helix API (operator pastes a user access token w/
-            # clips:edit + channel:manage:videos scopes).
-            "supported_platforms": [
-                ("tiktok",     "TikTok",  "ti-brand-tiktok"),
-                ("reels",      "Reels",   "ti-brand-instagram"),
-                ("shorts",     "Shorts",  "ti-brand-youtube"),
-                ("kick",       "Kick",    "ti-flame"),
-                ("twitch",     "Twitch",  "ti-brand-twitch"),
-            ],
-        },
+    return RedirectResponse(
+        url="/dashboard/publish/upload-post", status_code=303,
     )
 
 

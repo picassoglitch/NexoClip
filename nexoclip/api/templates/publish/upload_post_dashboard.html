@@ -37,59 +37,78 @@
   .nc-pc-tab-body { display: none; }
   .nc-pc-tab-body.is-active { display: block; }
 
-  /* Single tab: clip grid */
-  .nc-pc-clip-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+  /* Single tab: clip LIST (one row per clip, click to expand inline) */
+  .nc-pc-clip-list {
+    display: flex; flex-direction: column;
+    gap: 8px;
   }
-  .nc-pc-clip-card {
+  .nc-pc-clip-row {
+    display: grid;
+    grid-template-columns: 100px 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 8px 12px;
     background: rgba(255,255,255,0.02);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 8px; overflow: hidden; cursor: pointer;
-    transition: border-color 120ms, transform 120ms;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 120ms, background 120ms;
   }
-  .nc-pc-clip-card:hover { border-color: rgba(255,255,255,0.15); }
-  .nc-pc-clip-card.is-selected {
+  .nc-pc-clip-row:hover { border-color: rgba(255,255,255,0.15); }
+  .nc-pc-clip-row.is-expanded {
     border-color: var(--nc-green, #48bb78);
-    transform: translateY(-1px);
-    box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.15);
+    background: rgba(72, 187, 120, 0.05);
   }
-  .nc-pc-clip-card__thumb {
-    aspect-ratio: 9 / 16; background: #0a0a0a;
+  .nc-pc-clip-row__thumb {
+    width: 100px; aspect-ratio: 9 / 16;
+    border-radius: 4px; overflow: hidden;
+    background: #0a0a0a; position: relative;
     display: flex; align-items: center; justify-content: center;
-    position: relative;
   }
-  .nc-pc-clip-card__thumb img {
+  .nc-pc-clip-row__thumb img {
     width: 100%; height: 100%; object-fit: cover; display: block;
   }
-  .nc-pc-clip-card__thumb-fallback {
+  .nc-pc-clip-row__thumb-fallback {
     color: rgba(255,255,255,0.2); font-size: 24px;
   }
-  .nc-pc-clip-card__dur {
-    position: absolute; bottom: 8px; right: 8px;
-    background: rgba(0,0,0,0.7); color: #fff;
-    padding: 2px 6px; border-radius: 4px; font-size: 11px;
+  .nc-pc-clip-row__dur {
+    position: absolute; bottom: 4px; right: 4px;
+    background: rgba(0,0,0,0.75); color: #fff;
+    padding: 1px 5px; border-radius: 3px; font-size: 10px;
     font-family: monospace;
   }
-  .nc-pc-clip-card__meta {
-    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  .nc-pc-clip-row__meta {
+    display: flex; flex-direction: column; gap: 4px;
+    min-width: 0;
   }
-  .nc-pc-clip-card__title {
-    font-size: 13px; font-weight: 500;
+  .nc-pc-clip-row__title {
+    font-size: 14px; font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .nc-pc-clip-card__status {
+  .nc-pc-clip-row__id {
+    font-size: 11px; color: var(--nc-text--muted, #888);
+    font-family: monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nc-pc-clip-row__status {
     display: inline-flex; align-items: center; gap: 4px;
     font-size: 11px; color: var(--nc-text--muted, #aaa);
   }
+  .nc-pc-clip-row__caret {
+    color: var(--nc-text--muted, #aaa);
+    transition: transform 120ms, color 120ms;
+    font-size: 18px;
+  }
+  .nc-pc-clip-row.is-expanded .nc-pc-clip-row__caret {
+    transform: rotate(180deg);
+    color: var(--nc-green, #48bb78);
+  }
 
-  /* Publish panel (appears when a clip is selected) */
+  /* Publish panel (gets DOM-moved to sit right after the selected row) */
   .nc-pc-publish-panel {
-    margin-top: 16px;
+    margin: 0;
     padding: 16px;
     background: rgba(72, 187, 120, 0.04);
-    border: 1px solid rgba(72, 187, 120, 0.2);
+    border: 1px solid rgba(72, 187, 120, 0.25);
     border-radius: 8px;
     display: none;
   }
@@ -324,27 +343,29 @@
     </div>
   </div>
   {% else %}
-  <div class="nc-pc-clip-grid" id="up-clip-grid">
+  <div class="nc-pc-clip-list" id="up-clip-list">
     {% for c in publishable_clips %}
-    <div class="nc-pc-clip-card"
+    <div class="nc-pc-clip-row"
          data-clip-id="{{ c.id }}"
          data-clip-title="{{ c.title }}"
          data-clip-duration="{{ c.duration_s|round(1) }}">
-      <div class="nc-pc-clip-card__thumb">
+      <div class="nc-pc-clip-row__thumb">
         <img src="{{ c.thumbnail_url }}" alt=""
              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-        <span class="nc-pc-clip-card__thumb-fallback" style="display:none;">
+        <span class="nc-pc-clip-row__thumb-fallback" style="display:none;">
           <i class="ti ti-photo" aria-hidden="true"></i>
         </span>
-        <span class="nc-pc-clip-card__dur">{{ c.duration_s|round(0) }}s</span>
+        <span class="nc-pc-clip-row__dur">{{ c.duration_s|round(0) }}s</span>
       </div>
-      <div class="nc-pc-clip-card__meta">
-        <div class="nc-pc-clip-card__title">{{ c.title }}</div>
-        <span class="nc-pc-clip-card__status">
+      <div class="nc-pc-clip-row__meta">
+        <div class="nc-pc-clip-row__title">{{ c.title }}</div>
+        <div class="nc-pc-clip-row__id">{{ c.id }}</div>
+        <span class="nc-pc-clip-row__status">
           <i class="ti ti-circle-dot" aria-hidden="true" style="color: var(--nc-green);"></i>
           Ready to publish
         </span>
       </div>
+      <i class="ti ti-chevron-down nc-pc-clip-row__caret" aria-hidden="true"></i>
     </div>
     {% endfor %}
   </div>
@@ -546,30 +567,60 @@
     });
   });
 
-  // ---- Single Publish: card selection ----
+  // ---- Single Publish: row selection (inline panel) ----
+  // Layout intent: each clip is a list row. Clicking a row expands
+  // it in place and inserts the publish panel as its next sibling,
+  // so the form sits *adjacent* to the clip the operator picked
+  // instead of dropping at the bottom of the whole list.
   var panel = document.getElementById("up-publish-panel");
   var titleEl = document.getElementById("up-selected-title");
   var idEl    = document.getElementById("up-selected-id");
   var durEl   = document.getElementById("up-selected-dur");
   var form    = document.getElementById("up-single-form");
   var countEl = document.getElementById("up-platform-count");
-  var grid    = document.getElementById("up-clip-grid");
+  var list    = document.getElementById("up-clip-list");
 
-  if (grid) {
-    grid.addEventListener("click", function (e) {
-      var card = e.target.closest(".nc-pc-clip-card");
-      if (!card) return;
-      grid.querySelectorAll(".nc-pc-clip-card").forEach(function (c) {
-        c.classList.toggle("is-selected", c === card);
+  if (list && panel) {
+    list.addEventListener("click", function (e) {
+      var row = e.target.closest(".nc-pc-clip-row");
+      if (!row) return;
+
+      // Re-click the already-expanded row → collapse + park the
+      // panel back at the bottom of the list (hidden).
+      if (row.classList.contains("is-expanded")) {
+        row.classList.remove("is-expanded");
+        panel.classList.remove("is-active");
+        list.appendChild(panel);   // detach inline; keeps DOM clean
+        return;
+      }
+
+      // Collapse any other expanded row.
+      list.querySelectorAll(".nc-pc-clip-row.is-expanded").forEach(function (r) {
+        r.classList.remove("is-expanded");
       });
-      var clipId = card.getAttribute("data-clip-id");
-      var title  = card.getAttribute("data-clip-title");
-      var dur    = card.getAttribute("data-clip-duration");
+      row.classList.add("is-expanded");
+
+      // Fill the panel header with the clicked row's identity.
+      var clipId = row.getAttribute("data-clip-id");
+      var title  = row.getAttribute("data-clip-title");
+      var dur    = row.getAttribute("data-clip-duration");
       if (titleEl) titleEl.textContent = title;
-      if (idEl) idEl.textContent = clipId.slice(0, 18) + "…";
+      if (idEl) idEl.textContent = clipId;
       if (durEl) durEl.textContent = dur;
       if (form) form.action = "/dashboard/publish/upload-post/post/" + encodeURIComponent(clipId);
-      if (panel) panel.classList.add("is-active");
+
+      // Wipe stale chip selections + reset the live count.
+      var chipsHost = document.getElementById("up-platform-chips");
+      if (chipsHost) {
+        chipsHost.querySelectorAll(".is-selected").forEach(function (c) {
+          c.classList.remove("is-selected");
+        });
+      }
+      if (countEl) countEl.textContent = "0";
+
+      // DOM-move the panel to sit right after this row, then show it.
+      row.parentNode.insertBefore(panel, row.nextSibling);
+      panel.classList.add("is-active");
       panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
   }

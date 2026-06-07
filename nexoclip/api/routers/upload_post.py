@@ -338,7 +338,10 @@ async def upload_post_connect(
         )
         raise HTTPException(
             status_code=502,
-            detail=f"upload-post profile setup failed: {e}",
+            detail=(
+                f"upload-post profile setup failed: {e}"
+                f" | upload-post response: {e.body}"
+            ),
         ) from e
 
     # Tenant returns to our dashboard once they're done connecting.
@@ -467,7 +470,10 @@ async def upload_post_post_clip(
         )
         raise HTTPException(
             status_code=502,
-            detail=f"upload-post profile setup failed: {e}",
+            detail=(
+                f"upload-post profile setup failed: {e}"
+                f" | upload-post response: {e.body}"
+            ),
         ) from e
 
     # Build the signed URL upload-post will GET to download the MP4.
@@ -651,7 +657,10 @@ async def upload_post_bulk(
     except UploadPostError as e:
         raise HTTPException(
             status_code=502,
-            detail=f"upload-post profile setup failed: {e}",
+            detail=(
+                f"upload-post profile setup failed: {e}"
+                f" | upload-post response: {e.body}"
+            ),
         ) from e
 
     base = _public_base_url(request)

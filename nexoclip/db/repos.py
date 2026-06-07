@@ -35,6 +35,7 @@ from .models import (
     ClipRow,
     ConnectedAccount,
     CustomTriggerPhrases,
+    DriveExportSettingsRow,
     DriveWatchRow,
     Event,
     LiveStreamKeyRow,
@@ -3066,6 +3067,133 @@ class DriveWatchesRepo:
         await conn.execute(
             "DELETE FROM drive_watches WHERE id = ? AND tenant_id = ?",
             (watch_id, tenant_id),
+        )
+        await conn.commit()
+
+
+_DRIVE_EXPORT_COLS = (
+    "tenant_id, enabled, folder_id, folder_name, refresh_token, "
+    "access_token, access_token_expires_at, created_at, updated_at"
+)
+
+
+def _drive_export_from_row(row: aiosqlite.Row) -> DriveExportSettingsRow:
+    d = dict(row)
+    d["enabled"] = bool(d["enabled"])
+    return DriveExportSettingsRow.model_validate(d)
+
+
+class DriveExportSettingsRepo:
+    """CRUD for `drive_export_settings` — a tenant's clip → Drive export
+    destination (task #31). One row per tenant (tenant_id is the PK).
+
+    The auto-save-on-render hook + the manual per-clip export button
+    both read this. Tokens are written by the OAuth connect flow
+    (deferred follow-up)."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def get(self) -> DriveExportSettingsRow | None:
+        """The current tenant's export settings, or None if they've
+        never touched Drive export."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_DRIVE_EXPORT_COLS} FROM drive_export_settings "
+            "WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        return _drive_export_from_row(row) if row else None
+
+    async def _ensure_row(self) -> None:
+        """Insert an empty (disabled, unconnected) row if none exists, so
+        the set_* methods can UPDATE unconditionally."""
+        tenant_id = current_tenant_id()
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT OR IGNORE INTO drive_export_settings "
+            "(tenant_id, enabled, created_at, updated_at) "
+            "VALUES (?, 0, ?, ?)",
+            (tenant_id, now, now),
+        )
+        await conn.commit()
+
+    async def set_enabled(self, enabled: bool) -> DriveExportSettingsRow:
+        """Flip the auto-save-on-render toggle."""
+        await self._ensure_row()
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_export_settings SET enabled = ?, updated_at = ? "
+            "WHERE tenant_id = ?",
+            (1 if enabled else 0, _now(), tenant_id),
+        )
+        await conn.commit()
+        out = await self.get()
+        assert out is not None
+        return out
+
+    async def set_destination(
+        self, *, folder_id: str, folder_name: str | None
+    ) -> DriveExportSettingsRow:
+        """Pick the destination folder (from the connect flow's folder
+        picker)."""
+        await self._ensure_row()
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_export_settings SET folder_id = ?, "
+            "folder_name = ?, updated_at = ? WHERE tenant_id = ?",
+            (folder_id, folder_name, _now(), tenant_id),
+        )
+        await conn.commit()
+        out = await self.get()
+        assert out is not None
+        return out
+
+    async def set_tokens(
+        self,
+        *,
+        refresh_token: str,
+        access_token: str | None = None,
+        access_token_expires_at: str | None = None,
+    ) -> DriveExportSettingsRow:
+        """Persist OAuth tokens from the connect flow / a refresh."""
+        await self._ensure_row()
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_export_settings SET refresh_token = ?, "
+            "access_token = ?, access_token_expires_at = ?, updated_at = ? "
+            "WHERE tenant_id = ?",
+            (
+                refresh_token,
+                access_token,
+                access_token_expires_at,
+                _now(),
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+        out = await self.get()
+        assert out is not None
+        return out
+
+    async def disconnect(self) -> None:
+        """Clear tokens + destination (operator unlinks their Drive).
+        Keeps the row so the enabled toggle's history isn't lost, but
+        wipes credentials so exports stop."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE drive_export_settings SET refresh_token = NULL, "
+            "access_token = NULL, access_token_expires_at = NULL, "
+            "folder_id = NULL, folder_name = NULL, enabled = 0, "
+            "updated_at = ? WHERE tenant_id = ?",
+            (_now(), tenant_id),
         )
         await conn.commit()
 

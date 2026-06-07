@@ -562,3 +562,31 @@ class DriveWatchRow(BaseModel):
     enabled: bool = True
     created_at: str
     updated_at: str
+
+
+class DriveExportSettingsRow(BaseModel):
+    """One row in `drive_export_settings` — a tenant's clip → Drive
+    EXPORT destination (task #31). The OUTPUT mirror of DriveWatchRow.
+
+    `enabled` is the auto-save-on-render toggle. `is_connected`
+    (refresh_token present) gates the per-clip manual export button
+    independently of `enabled`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str
+    enabled: bool = False
+    folder_id: str | None = None
+    folder_name: str | None = None
+    refresh_token: str | None = None
+    access_token: str | None = None
+    access_token_expires_at: str | None = None
+    created_at: str
+    updated_at: str
+
+    @property
+    def is_connected(self) -> bool:
+        """True once the OAuth connect flow has stored a refresh token
+        AND a destination folder is chosen — i.e. exports can actually
+        run."""
+        return bool(self.refresh_token and self.folder_id)

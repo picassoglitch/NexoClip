@@ -169,17 +169,62 @@
   .nc-pc-bulk-actions {
     margin-top: 16px; display: flex; gap: 12px; align-items: center;
   }
+
+  /* Stats strip — at-a-glance counts above the connected-accounts row */
+  .nc-pc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px; margin-bottom: 16px;
+  }
+  .nc-pc-stat {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .nc-pc-stat__n { font-size: 22px; font-weight: 700; font-family: monospace; }
+  .nc-pc-stat__label {
+    font-size: 11px; color: var(--nc-text--muted, #888);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .nc-pc-stat--ok { border-left: 3px solid var(--nc-green, #48bb78); }
+  .nc-pc-stat--ok .nc-pc-stat__n { color: var(--nc-green, #48bb78); }
+  .nc-pc-stat--fail { border-left: 3px solid #ff7575; }
+  .nc-pc-stat--fail .nc-pc-stat__n { color: #ff7575; }
+  .nc-pc-stat--sched { border-left: 3px solid #ffd84a; }
+  .nc-pc-stat--sched .nc-pc-stat__n { color: #ffd84a; }
+  .nc-pc-stat--total { border-left: 3px solid rgba(255,255,255,0.2); }
+
+  /* History row clickability */
+  .nc-pc-history-row {
+    cursor: pointer; transition: background 100ms;
+  }
+  .nc-pc-history-row:hover { background: rgba(72, 187, 120, 0.05); }
+  .nc-pc-history-row--inert { cursor: default; }
+  .nc-pc-history-row--inert:hover { background: transparent; }
+
+  /* Queued banner becomes a link */
+  .nc-pc-queued-banner {
+    display: flex; align-items: center; gap: 8px;
+    text-decoration: none; color: inherit;
+  }
+  .nc-pc-queued-banner:hover { color: var(--nc-green, #48bb78); }
+  .nc-pc-queued-banner__cta { margin-left: auto; font-weight: 500; }
 </style>
 
 {# ----- Flash banners ----- #}
 {% if request.query_params.get('queued') %}
-<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
-  <div class="nc-panel__body" style="padding: 12px 16px;">
+<a href="/dashboard/publish/upload-post/job/{{ request.query_params.get('queued') }}"
+   class="nc-panel nc-pc-queued-banner"
+   style="border-color: var(--nc-green); margin-bottom: 12px; display: block;">
+  <div class="nc-panel__body" style="padding: 12px 16px; display:flex; align-items:center; gap:10px;">
     <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span>.
-    Status appears in the History panel below.
+    <span>Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span></span>
+    <span class="nc-pc-queued-banner__cta">
+      View status <i class="ti ti-arrow-right" aria-hidden="true"></i>
+    </span>
   </div>
-</div>
+</a>
 {% endif %}
 
 {% if request.query_params.get('claimed') %}
@@ -230,6 +275,34 @@
     </small>
   </div>
 </div>
+
+{# =========================================================
+   Stats strip — at-a-glance counts derived from the last
+   25 history rows + the live scheduled list. Clicking a tile
+   would deep-link into a filtered view in a future pass; for
+   now they're just numbers so the operator sees how the loop
+   is doing without scrolling.
+   ========================================================= #}
+{% if profile_username %}
+<div class="nc-pc-stats">
+  <div class="nc-pc-stat nc-pc-stat--ok">
+    <div class="nc-pc-stat__n">{{ stats.published }}</div>
+    <div class="nc-pc-stat__label">Published</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--fail">
+    <div class="nc-pc-stat__n">{{ stats.failed }}</div>
+    <div class="nc-pc-stat__label">Failed</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--sched">
+    <div class="nc-pc-stat__n">{{ stats.scheduled }}</div>
+    <div class="nc-pc-stat__label">Scheduled</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--total">
+    <div class="nc-pc-stat__n">{{ stats.total }}</div>
+    <div class="nc-pc-stat__label">Last 25</div>
+  </div>
+</div>
+{% endif %}
 
 {# =========================================================
    SECTION 1 — Connected accounts (compact chip row)
@@ -526,7 +599,13 @@
       </thead>
       <tbody>
         {% for h in history %}
-        <tr>
+        {# Whole row clicks through to the per-job detail page when
+           a request_id is present. Rows from upload-post's older
+           jobs that don't carry a request_id stay inert. The Link
+           column's <a> still wins clicks because it stopPropagation()s
+           below in JS. #}
+        <tr class="nc-pc-history-row {% if not h.request_id %}nc-pc-history-row--inert{% endif %}"
+            {% if h.request_id %}data-href="/dashboard/publish/upload-post/job/{{ h.request_id }}"{% endif %}>
           <td><span class="nc-mono nc-mono--muted">{{ (h.upload_timestamp or "")[:19] }}</span></td>
           <td><span class="nc-chip nc-chip--code">{{ h.platform or "?" }}</span></td>
           <td>{{ h.media_type or "—" }}</td>
@@ -534,12 +613,28 @@
             {% if h.success %}<span class="nc-chip nc-chip--success">ok</span>
             {% else %}<span class="nc-chip nc-chip--warn" title="{{ h.error_message or '' }}">{{ h.error_message[:40] if h.error_message else "failed" }}</span>{% endif %}
           </td>
-          <td>{% if h.post_url %}<a href="{{ h.post_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
+          <td>
+            {% if h.post_url %}
+            <a href="{{ h.post_url }}" target="_blank" rel="noopener"
+               onclick="event.stopPropagation();">open ↗</a>
+            {% else %}—{% endif %}
+          </td>
           <td style="max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.post_caption or h.post_title or "—" }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    <script>
+    // Delegated click handler so rows with data-href navigate to the
+    // job detail page. Cheaper than putting an onclick on every row.
+    (function () {
+      document.querySelectorAll(".nc-pc-history-row[data-href]").forEach(function (tr) {
+        tr.addEventListener("click", function () {
+          window.location.href = tr.getAttribute("data-href");
+        });
+      });
+    })();
+    </script>
     {% else %}
     <div class="nc-empty">
       <div class="nc-empty__title">No publishes yet</div>

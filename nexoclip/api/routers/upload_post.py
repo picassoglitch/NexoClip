@@ -212,6 +212,20 @@ async def upload_post_dashboard(
         for c in raw_clips
     ]
 
+    # Stats strip — single pass over the history list (already
+    # capped at 25 by get_history(limit=25)). For "all time" counts
+    # we'd need to paginate, but 25 is plenty for the at-a-glance
+    # tiles operators actually read. Scheduled count comes from the
+    # separate /schedule endpoint which is already a complete list.
+    pub_count = sum(1 for h in history if h.get("success"))
+    fail_count = sum(1 for h in history if not h.get("success"))
+    stats = {
+        "published": pub_count,
+        "failed": fail_count,
+        "scheduled": len(scheduled),
+        "total": len(history),
+    }
+
     return templates.TemplateResponse(
         request,
         "publish/upload_post_dashboard.html",
@@ -225,6 +239,7 @@ async def upload_post_dashboard(
             "scheduled": scheduled,
             "publishable_clips": publishable,
             "supported_platforms": _SUPPORTED_PLATFORMS,
+            "stats": stats,
         },
     )
 
@@ -710,6 +725,55 @@ async def upload_post_bulk(
         tenant_id, len(results), sum(1 for r in results if r.get("ok")),
     )
     return JSONResponse({"results": results})
+
+
+@router.get("/job/{request_id}", response_class=HTMLResponse)
+async def upload_post_job_detail(
+    request: Request,
+    request_id: str,
+    tenant_id: str = Depends(tenant_binder),
+) -> Response:
+    """Per-request detail page.
+
+    Reached from the queued banner ("View status →") and from
+    history rows that have a request_id. Renders one card per
+    platform that upload-post tried to publish to, with success/
+    error per platform + a link to the live post when present.
+
+    The page auto-polls /status/{id}.json every 3s while any
+    platform is still PENDING/PROCESSING, then halts once they're
+    all settled (FINISHED or ERROR).
+    """
+    client = _build_client()
+    overall_status = "UNKNOWN"
+    per_platform: dict[str, Any] = {}
+    fetch_error: str | None = None
+    try:
+        status = await client.get_status(request_id=request_id)
+        overall_status = status.status
+        # status.result.platforms is the canonical per-platform
+        # dict. May be None until upload-post starts dispatching.
+        if status.result and isinstance(status.result, dict):
+            plats = status.result.get("platforms")
+            if isinstance(plats, dict):
+                per_platform = plats
+    except UploadPostError as e:
+        _log.warning(
+            "upload_post.job.status_fetch_failed tenant=%s request_id=%s err=%s",
+            tenant_id, request_id, e,
+        )
+        fetch_error = f"Couldn't load status from upload-post: {e}"
+
+    return templates.TemplateResponse(
+        request,
+        "publish/upload_post_job.html",
+        {
+            "request_id": request_id,
+            "overall_status": overall_status,
+            "per_platform": per_platform,
+            "fetch_error": fetch_error,
+        },
+    )
 
 
 @router.get("/status/{request_id}.json")

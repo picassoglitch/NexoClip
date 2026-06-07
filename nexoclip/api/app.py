@@ -125,7 +125,26 @@ def create_app(
 
     @app.get("/", include_in_schema=False, response_class=HTMLResponse)
     async def root(request: Request) -> Response:
-        return _landing_templates.TemplateResponse(request, "landing.html", {})
+        # Slice O.57 — the price shown in the landing's editor-cost
+        # comparison is operator-editable from /dashboard/settings/site,
+        # not hard-coded. Read both locale variants here; the template
+        # picks by `locale()` and falls back to the i18n placeholder when
+        # unset. Wrapped so a DB hiccup never takes down the public page.
+        from nexoclip.db import PlatformSettingsRepo
+        price_es = price_en = ""
+        try:
+            vals = await PlatformSettingsRepo(request.app.state.db).get_many(
+                ["landing_price_es", "landing_price_en"]
+            )
+            price_es = vals.get("landing_price_es", "")
+            price_en = vals.get("landing_price_en", "")
+        except Exception:  # noqa: BLE001 — landing must render regardless
+            pass
+        return _landing_templates.TemplateResponse(
+            request,
+            "landing.html",
+            {"landing_price_es": price_es, "landing_price_en": price_en},
+        )
 
     # /agents — second-door technical landing for agencies, integrators
     # and AI-agent builders. Holds the deep tech content (multimodal

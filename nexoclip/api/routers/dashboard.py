@@ -36,6 +36,7 @@ from nexoclip.db import (
     EventsRepo,
     LLMCallsRepo,
     PersonasRepo,
+    PlatformSettingsRepo,
     PublishJobsRepo,
     StreamsRepo,
     TenantsRepo,
@@ -5222,6 +5223,67 @@ async def llm_settings_view(
         "llm_settings.html",
         {"providers": cfg.providers, "routing": cfg.routing},
     )
+
+
+# ---------- Site / landing settings (admin) ----------
+#
+# Slice O.57 — operator-editable landing values that we don't want to
+# hard-code in i18n.py + redeploy for. Currently the NexoClip price shown
+# in the landing's "what does an editor cost" comparison; the backing
+# table (platform_settings) is a generic key/value store so future
+# site-wide knobs land here too.
+#
+# Admin-gated the same way as the other operator-only pages
+# (_health/diarize, _health/queue): non-admins get a 404 so the page
+# isn't even discoverable. The public landing reads these keys at render
+# time (see api/app.py root()).
+
+_LANDING_PRICE_ES_KEY = "landing_price_es"
+_LANDING_PRICE_EN_KEY = "landing_price_en"
+
+
+@router.get("/settings/site", response_class=HTMLResponse, include_in_schema=False)
+async def site_settings_view(
+    request: Request,
+    saved: int = 0,
+    db: Database = Depends(get_db),
+) -> Response:
+    """Admin-only site settings form. 404 for non-admins."""
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+    values = await PlatformSettingsRepo(db).get_many(
+        [_LANDING_PRICE_ES_KEY, _LANDING_PRICE_EN_KEY]
+    )
+    return templates.TemplateResponse(
+        request,
+        "site_settings.html",
+        {
+            "price_es": values.get(_LANDING_PRICE_ES_KEY, ""),
+            "price_en": values.get(_LANDING_PRICE_EN_KEY, ""),
+            "saved": bool(saved),
+        },
+    )
+
+
+@router.post(
+    "/settings/site",
+    include_in_schema=False,
+    dependencies=[Depends(require_full_scope)],
+)
+async def site_settings_save(
+    request: Request,
+    price_es: str = Form(""),
+    price_en: str = Form(""),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Persist the landing price strings. Empty values clear back to the
+    i18n placeholder on the landing. Admin-only; 404 for non-admins."""
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+    repo = PlatformSettingsRepo(db)
+    await repo.set(_LANDING_PRICE_ES_KEY, price_es.strip())
+    await repo.set(_LANDING_PRICE_EN_KEY, price_en.strip())
+    return RedirectResponse(url="/dashboard/settings/site?saved=1", status_code=303)
 
 
 # ---------- Brand kits (voice-markers spec slice C.3) ----------

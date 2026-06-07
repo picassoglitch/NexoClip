@@ -79,6 +79,10 @@
         {{ nav_link("/agents", t("nav.docs_agents"), prefix="/agents") }}
         {{ nav_link("/dashboard/llm-calls", t("nav.llm_spend")) }}
         {{ nav_link("/dashboard/settings/llm", t("nav.llm_settings"), prefix="/dashboard/settings/llm") }}
+        {#- Slice O.57 — operator-only site settings (landing price, etc).
+            Lives under /dashboard/settings/site; the public landing reads
+            the values it persists. -#}
+        {{ nav_link("/dashboard/settings/site", t("nav.site_settings"), prefix="/dashboard/settings/site") }}
         {{ nav_link("/dashboard/_health/diarize", "Diarize", prefix="/dashboard/_health/diarize") }}
         {{ nav_link("/dashboard/_health/queue", "Queue", prefix="/dashboard/_health/queue") }}
         {% endif %}

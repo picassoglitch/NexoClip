@@ -81,6 +81,61 @@ class _Unset:
 _UNSET = _Unset()
 
 
+class PlatformSettingsRepo:
+    """Global key/value store for site-wide operator settings.
+
+    Deliberately NOT tenant-scoped — like TenantsRepo, this is one of the
+    few tables that holds platform-level rows rather than per-tenant data.
+    Backs the admin "Site / Landing" page (operator-editable landing copy
+    such as the displayed price) so those values change without a redeploy.
+
+    Keys are free-form strings; values are stored as TEXT and the caller
+    owns any parsing. Reads are safe to call from public routes (the
+    landing page reads the price here at render time).
+    """
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def get(self, key: str, default: str | None = None) -> str | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT value FROM platform_settings WHERE key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        return row[0] if row is not None else default
+
+    async def get_many(self, keys: list[str]) -> dict[str, str]:
+        """Fetch several keys in one round-trip. Missing keys are simply
+        absent from the returned dict (callers use dict.get with a default)."""
+        if not keys:
+            return {}
+        conn = await self._db.connect()
+        placeholders = ",".join("?" for _ in keys)
+        cur = await conn.execute(
+            f"SELECT key, value FROM platform_settings WHERE key IN ({placeholders})",
+            tuple(keys),
+        )
+        rows = await cur.fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    async def set(self, key: str, value: str) -> None:
+        """Upsert a single key. Uses INSERT OR REPLACE (same idiom as the
+        migration runner) so it's create-or-update in one statement."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT OR REPLACE INTO platform_settings (key, value, updated_at) "
+            "VALUES (?, ?, ?)",
+            (key, value, _now()),
+        )
+        await conn.commit()
+
+    async def delete(self, key: str) -> None:
+        conn = await self._db.connect()
+        await conn.execute("DELETE FROM platform_settings WHERE key = ?", (key,))
+        await conn.commit()
+
+
 class TenantsRepo:
     """Tenants table — the one place where we don't filter by tenant_id."""
 

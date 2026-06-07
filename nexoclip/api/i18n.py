@@ -351,8 +351,36 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav.publish": "Publish",
         "nav.llm_spend": "LLM spend",
         "nav.llm_settings": "LLM settings",
+        "nav.site_settings": "Site / Landing",
         "nav.docs_agents": "Docs / Agents",
         "nav.logout": "Logout",
+
+        # ============================================================
+        # SITE SETTINGS (admin — operator-editable landing values)
+        # ============================================================
+        "settings.site.title": "Site settings",
+        "settings.site.heading": "Site / landing",
+        "settings.site.intro": (
+            "Operator-editable values shown on the public landing page. "
+            "Changes go live immediately — no redeploy."
+        ),
+        "settings.site.section_price": "Landing price",
+        "settings.site.price_help": (
+            "shown in the 'what does an editor cost' comparison"
+        ),
+        "settings.site.price_es_label": "Price (Spanish landing)",
+        "settings.site.price_en_label": "Price (English landing)",
+        "settings.site.placeholder_es": "e.g. US$ 29 / mes",
+        "settings.site.placeholder_en": "e.g. $29 / month",
+        "settings.site.preview_note": (
+            "Type the full string exactly as it should appear, including "
+            "currency and period (e.g. '$29 / month'). Leave a field blank "
+            "to fall back to the other language, or to the default "
+            "placeholder if both are empty."
+        ),
+        "settings.site.save": "Save",
+        "settings.site.saved": "Saved. The landing is updated.",
+        "settings.site.view_landing": "View landing",
 
         # ============================================================
         # SSO failure page
@@ -679,8 +707,36 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav.publish": "Publicar",
         "nav.llm_spend": "Gasto LLM",
         "nav.llm_settings": "Ajustes LLM",
+        "nav.site_settings": "Sitio / Landing",
         "nav.docs_agents": "Docs / Agentes",
         "nav.logout": "Salir",
+
+        # ============================================================
+        # SITE SETTINGS (admin — valores del landing editables por el operador)
+        # ============================================================
+        "settings.site.title": "Ajustes del sitio",
+        "settings.site.heading": "Sitio / landing",
+        "settings.site.intro": (
+            "Valores editables por el operador que se muestran en el landing "
+            "público. Los cambios salen al instante — sin redeploy."
+        ),
+        "settings.site.section_price": "Precio del landing",
+        "settings.site.price_help": (
+            "se muestra en la comparación '¿cuánto cuesta un editor?'"
+        ),
+        "settings.site.price_es_label": "Precio (landing en español)",
+        "settings.site.price_en_label": "Precio (landing en inglés)",
+        "settings.site.placeholder_es": "ej. US$ 29 / mes",
+        "settings.site.placeholder_en": "ej. $29 / month",
+        "settings.site.preview_note": (
+            "Escribí el texto completo tal cual querés que aparezca, "
+            "incluyendo la moneda y el período (ej. 'US$ 29 / mes'). Dejá un "
+            "campo vacío para que use el otro idioma, o el placeholder por "
+            "defecto si los dos están vacíos."
+        ),
+        "settings.site.save": "Guardar",
+        "settings.site.saved": "Guardado. El landing quedó actualizado.",
+        "settings.site.view_landing": "Ver landing",
 
         # ============================================================
         # SSO failure page

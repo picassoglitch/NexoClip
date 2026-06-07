@@ -666,8 +666,14 @@
         </div>
         <div class="nc-math__card nc-math__card--us">
           <div class="nc-math__label">{{ t('landing.math.us_label') }}</div>
-          {# TODO(operator): replace $__ with the real launch price in i18n.py. #}
-          <div class="nc-math__price">{{ t('landing.math.us_price') }}</div>
+          {# Price is operator-editable from /dashboard/settings/site
+             (stored in platform_settings, injected by app.root()). Pick
+             the current locale's value; fall back to the other locale,
+             then to the i18n placeholder when neither is set. #}
+          {% set _price_es = landing_price_es | default('') %}
+          {% set _price_en = landing_price_en | default('') %}
+          {% set _price = (_price_es if locale() == 'es' else _price_en) or _price_en or _price_es %}
+          <div class="nc-math__price">{{ _price or t('landing.math.us_price') }}</div>
         </div>
       </div>
       <ul class="nc-math__us-lines">

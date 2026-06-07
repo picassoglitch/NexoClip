@@ -9,7 +9,7 @@ Deploy plan:
         NEXOCLIP_MODAL_TOKEN=<long random string, same on both sides>
         NEXOCLIP_INTERNAL_SIGNING_SECRET=<long random string>
         NEXOCLIP_MODAL_MODEL=small  (optional; default small)
-        NEXOCLIP_PUBLIC_URL=https://nexoclip-production.up.railway.app  (already
+        NEXOCLIP_PUBLIC_URL=https://nexoclip.nexo-ai.world  (already
             set; Modal pulls audio from this base + signed query)
   3. On Modal side, create the secret the app expects:
         modal secret create nexoclip-modal-token MODAL_BEARER_TOKEN=<same>
@@ -97,7 +97,7 @@ class ModalWhisperProvider:
             raise TranscriptionError(
                 "ModalWhisperProvider misconfigured: NEXOCLIP_PUBLIC_URL must "
                 "be set to the externally-reachable base URL (e.g. "
-                "https://nexoclip-production.up.railway.app) so Modal can "
+                "https://nexoclip.nexo-ai.world) so Modal can "
                 "fetch the audio."
             )
 

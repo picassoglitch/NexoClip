@@ -353,7 +353,7 @@ Vision tokens are tracked separately from text tokens in `llm_calls` — costs a
 - Quantor → SQS GPU worker (Whisper + local vision)
 - Onboarding flow + marketing site
 - Free tier quota enforcement (text + vision tokens)
-- **Exit:** `nexoclip.app` live, beta users.
+- **Exit:** `nexoclip.nexo-ai.world` live, beta users.
 
 **Phase 4 — Public launch.**
 **Phase 5 — Paid tier (Stripe, Pro/Scale flags, BYO keys).**

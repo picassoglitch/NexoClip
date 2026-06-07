@@ -18,7 +18,7 @@ the `nexo-ai` repo for the calling code.
    to **provision a tenant** keyed by the Nexo AI user id, and stores the
    returned `tenant_id` + `api_token` in its own database.
 3. When the user clicks "Abrir NexoClip" in Nexo AI, Nexo AI redirects to
-   `https://nexoclip.app/auth/sso?token=<signed>` — NexoClip verifies the
+   `https://nexoclip.nexo-ai.world/auth/sso?token=<signed>` — NexoClip verifies the
    signature, creates its own session cookie, and renders its dashboard.
 
 NexoClip stays independently deployable. No shared database. No CORS gymnastics.
@@ -38,7 +38,7 @@ NEXO_AI_ADMIN_TOKEN=...
 NEXO_AI_SSO_SECRET=...
 
 # Where NexoClip's user dashboard lives — used as the post-SSO redirect target.
-NEXOCLIP_PUBLIC_URL=https://nexoclip.app
+NEXOCLIP_PUBLIC_URL=https://nexoclip.nexo-ai.world
 ```
 
 On the Nexo AI side (`.env.local`) the same two secrets are:

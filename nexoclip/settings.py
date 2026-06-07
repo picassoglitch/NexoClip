@@ -115,7 +115,7 @@ class Settings(BaseSettings):
 
     # Phase L.1 — RTMP base URL the operator pastes into OBS. This is
     # the MediaMTX endpoint, NOT the NexoClip API host. Example:
-    # `rtmp://nexoclip-live-production.up.railway.app/live`
+    # `rtmp://live.nexoclip.nexo-ai.world/live`
     # The dashboard appends the active stream key to this base when
     # displaying the OBS URL. Unset = the live dashboard renders a
     # "live ingest not configured" panel instead.

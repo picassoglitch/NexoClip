@@ -168,7 +168,7 @@ class StreamRow(BaseModel):
 
 class LiveStreamKeyRow(BaseModel):
     """Phase L.1 — per-tenant RTMP stream key. OBS uses key_value in
-    its push URL: rtmp://nexoclip-live.app/live/<key_value>.
+    its push URL: rtmp://live.nexoclip.nexo-ai.world/live/<key_value>.
 
     One active key per tenant at a time. Rotation creates a new row +
     sets revoked_at on the previous one. Never echo key_value to a

@@ -10,7 +10,7 @@ separate Railway service indefinitely.
 
 ```
 OBS / Streamlabs
-    │  rtmp://nexoclip-live...railway.app/live/<stream_key>
+    │  rtmp://live.nexoclip.nexo-ai.world/live/<stream_key>
     ▼
 ┌────────────────────────────┐
 │ MediaMTX (Railway service) │  config: infra/mediamtx.yml
@@ -39,8 +39,9 @@ In your Railway project (the one already running NexoClip):
 2. Settings → name it `mediamtx`
 3. **Source** → switch to **Image** → use `bluenviron/mediamtx:latest`
 4. **Networking** → enable Public Networking → expose port `1935`
-   (TCP, not HTTP). Railway gives you a TCP proxy URL like
-   `nexoclip-live-production.up.railway.app:NNNN` — note the port.
+   (TCP, not HTTP). The host gives you a TCP proxy host + port; CNAME
+   `live.nexoclip.nexo-ai.world` to that host in DNS so the public
+   endpoint is `live.nexoclip.nexo-ai.world:NNNN` — note the port.
 5. **Volume** → attach the SAME volume that NexoClip is mounted on
    (don't create a new one). Mount path `/data`. This is what makes
    the recording handoff work.
@@ -52,9 +53,9 @@ These three URLs all point at your NexoClip dashboard service
 (same Railway project, different service):
 
 ```bash
-NEXOCLIP_AUTH_URL=https://nexoclip-production.up.railway.app/api/internal/live/authorize
-NEXOCLIP_STARTED_URL=https://nexoclip-production.up.railway.app/api/internal/live/started
-NEXOCLIP_ENDED_URL=https://nexoclip-production.up.railway.app/api/internal/live/ended
+NEXOCLIP_AUTH_URL=https://nexoclip.nexo-ai.world/api/internal/live/authorize
+NEXOCLIP_STARTED_URL=https://nexoclip.nexo-ai.world/api/internal/live/started
+NEXOCLIP_ENDED_URL=https://nexoclip.nexo-ai.world/api/internal/live/ended
 NEXOCLIP_INTERNAL_SIGNING_SECRET=<SAME value already set on the NexoClip service>
 ```
 
@@ -86,7 +87,7 @@ On the NexoClip service (not MediaMTX), add the env var so the
 dashboard knows what URL to show operators:
 
 ```bash
-NEXOCLIP_LIVE_RTMP_BASE_URL=rtmp://nexoclip-live-production.up.railway.app:NNNN/live
+NEXOCLIP_LIVE_RTMP_BASE_URL=rtmp://live.nexoclip.nexo-ai.world:NNNN/live
 ```
 
 (Replace `NNNN` with the port Railway exposed in step 1.5.)

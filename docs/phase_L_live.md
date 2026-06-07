@@ -48,7 +48,7 @@ it doesn't refactor the editor / publish / billing surfaces.
 ```
                   ┌────────────────────────────────────────────┐
                   │   Streamer's OBS / Streamlabs              │
-                  │   RTMP push: rtmp://nexoclip-live.app/live │
+                  │   RTMP push: rtmp://live.nexoclip.nexo-ai.world/live│
                   │   /<stream_key>                             │
                   └────────────────────┬───────────────────────┘
                                        │ RTMP
@@ -159,7 +159,7 @@ and are NOT affected by the live retention sweep.
 
 ## RTMP authentication
 
-OBS hits `rtmp://nexoclip-live.app/live/<stream_key>`. MediaMTX is
+OBS hits `rtmp://live.nexoclip.nexo-ai.world/live/<stream_key>`. MediaMTX is
 configured to POST to NexoClip's auth webhook before accepting:
 
 ```

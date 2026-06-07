@@ -750,7 +750,11 @@ async def upload_post_job_detail(
     fetch_error: str | None = None
     try:
         status = await client.get_status(request_id=request_id)
-        overall_status = status.status
+        # upload-post returns status as lowercase ("processing",
+        # "finished"), but the template's CSS selectors and the JS
+        # poll-control logic key on UPPERCASE values. Normalize here
+        # so the rest of the stack reads one consistent shape.
+        overall_status = (status.status or "UNKNOWN").upper()
         # status.result.platforms is the canonical per-platform
         # dict. May be None until upload-post starts dispatching.
         if status.result and isinstance(status.result, dict):
@@ -800,7 +804,10 @@ async def upload_post_status(
     return JSONResponse(
         {
             "request_id": status.request_id,
-            "status": status.status,
+            # Match the /job/{id} HTML handler — upload-post returns
+            # lowercase ("processing"); we surface UPPERCASE so the
+            # poll JS comparisons hit consistently.
+            "status": (status.status or "UNKNOWN").upper(),
             "result": status.result,
         }
     )

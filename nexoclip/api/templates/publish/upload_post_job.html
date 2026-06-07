@@ -77,7 +77,7 @@
     <h2>Publish job</h2>
     <small class="nc-mono nc-mono--muted">{{ request_id }}</small>
   </div>
-  <div>
+  <div style="display:flex; align-items:center; gap: 10px;">
     <span id="up-job-status-pill"
           class="nc-pj-status-pill"
           data-s="{{ overall_status }}">
@@ -86,6 +86,13 @@
             style="{% if overall_status not in ['PENDING','PROCESSING'] %}display:none;{% endif %}"></span>
       <span id="up-job-status-text">{{ overall_status }}</span>
     </span>
+    <button type="button" id="up-job-refresh-btn"
+            class="nc-btn"
+            title="Force a status fetch even if the auto-poll stopped"
+            style="padding: 4px 10px; font-size: 12px;">
+      <i class="ti ti-refresh" aria-hidden="true"></i>
+      <span>Refresh</span>
+    </button>
   </div>
 </div>
 
@@ -174,11 +181,22 @@
   // PENDING or PROCESSING. Stop polling once FINISHED or ERROR.
   // Re-renders the platform grid in place so the operator can
   // watch each platform settle without a full page reload.
+  //
+  // Defensive normalize() on every status string we touch — the
+  // server now upper-cases, but upload-post historically returned
+  // lowercase and we don't want a future provider quirk to silently
+  // halt the poll again (the original bug that left the operator
+  // stuck on "Waiting for upload-post" forever).
   var REQUEST_ID = {{ request_id|tojson }};
   var pollTimer = null;
 
+  function normalize(s) {
+    return String(s || "UNKNOWN").toUpperCase();
+  }
+
   function shouldKeepPolling(s) {
-    return s === "PENDING" || s === "PROCESSING" || s === "UNKNOWN";
+    var n = normalize(s);
+    return n === "PENDING" || n === "PROCESSING" || n === "UNKNOWN";
   }
 
   var initialStatus = document.getElementById("up-job-status-pill").getAttribute("data-s");
@@ -187,15 +205,31 @@
   }
 
   function setStatus(s) {
+    var n = normalize(s);
     var pill = document.getElementById("up-job-status-pill");
     var spinner = document.getElementById("up-job-status-spinner");
     var text = document.getElementById("up-job-status-text");
-    pill.setAttribute("data-s", s || "UNKNOWN");
-    text.textContent = s || "UNKNOWN";
-    spinner.style.display = shouldKeepPolling(s) ? "" : "none";
-    if (!shouldKeepPolling(s) && pollTimer) {
+    pill.setAttribute("data-s", n);
+    text.textContent = n;
+    spinner.style.display = shouldKeepPolling(n) ? "" : "none";
+    if (!shouldKeepPolling(n) && pollTimer) {
       clearInterval(pollTimer); pollTimer = null;
     }
+  }
+
+  // Manual Refresh button — runs the same refresh() the auto-poll
+  // does. Useful when the auto-poll has halted (job already in a
+  // terminal state) but the operator wants to re-verify, or when
+  // a tab has been backgrounded long enough that setInterval is
+  // throttled by the browser.
+  var refreshBtn = document.getElementById("up-job-refresh-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", function () {
+      refreshBtn.disabled = true;
+      refresh().finally(function () {
+        setTimeout(function () { refreshBtn.disabled = false; }, 400);
+      });
+    });
   }
 
   function platformIconClass(p) {

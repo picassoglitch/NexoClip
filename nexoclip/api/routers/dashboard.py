@@ -1318,6 +1318,139 @@ async def stream_progress(
     )
 
 
+# ---- stream_detail view-model (creator-facing redesign) --------------
+
+# Map a detector `reason` + evidence into human, trust-building bullets.
+# Creators don't know what "audio_energy 0.182" means — they DO understand
+# "Audio energy spike — laughter / crowd reaction".
+_REASON_HUMAN: dict[str, str] = {
+    "voice": "Voice trigger — a clip phrase was spoken",
+    "audio": "Audio energy spike — laughter / crowd / emphasis",
+    "chat": "Chat heat — the audience reacted in real time",
+    "visual": "Visual moment — scene change / on-screen action",
+    "viral": "AI flagged a viral-shaped moment",
+}
+
+
+def _humanize_candidate(candidate: object | None) -> list[str]:
+    """Turn a candidate's reason + evidence into a short list of
+    human-readable signals for the clip card's 'AI Analysis' block."""
+    if candidate is None:
+        return []
+    out: list[str] = []
+    reason = (getattr(candidate, "reason", "") or "").lower()
+    out.append(_REASON_HUMAN.get(reason, "AI-detected highlight"))
+    ev = getattr(candidate, "evidence", None) or {}
+    if isinstance(ev, dict):
+        phrase = ev.get("phrase") or ev.get("transcript_snippet")
+        if isinstance(phrase, str) and phrase.strip():
+            snippet = phrase.strip()
+            if len(snippet) > 80:
+                snippet = snippet[:77] + "…"
+            out.append(f'Said: "{snippet}"')
+        speaker = ev.get("speaker_label")
+        if isinstance(speaker, str) and speaker.strip():
+            out.append(f"Speaker: {speaker.strip()}")
+        # An LLM rescore confirmation reads as a strong trust signal.
+        if ev.get("rescore"):
+            out.append("Confirmed by a second AI pass")
+    return out
+
+
+def _viral_score(clip: object, candidate: object | None) -> int | None:
+    """0-100 'viral score' for a clip. Prefers the publishability score
+    (set during clip review); falls back to the detector's confidence
+    (candidate.score, 0-1) so un-reviewed clips still show a number."""
+    pub = getattr(clip, "publishability_score", None)
+    if isinstance(pub, int) and pub > 0:
+        return pub
+    if candidate is not None:
+        raw = getattr(candidate, "rescore_score", None)
+        if raw is None:
+            raw = getattr(candidate, "score", None)
+        if isinstance(raw, (int, float)) and raw > 0:
+            return max(1, min(100, round(float(raw) * 100)))
+    return None
+
+
+def _perf_label(score: int | None) -> str:
+    if score is None:
+        return "—"
+    if score >= 80:
+        return "High"
+    if score >= 60:
+        return "Medium"
+    return "Building"
+
+
+def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
+    """Creator-facing view model: outcome-first summary, per-clip viral
+    scores + humanized AI signals, a visual timeline, and a 'best pick'.
+    Keeps all the derivation in one place so the template stays dumb."""
+    status = (getattr(stream, "status", "") or "").lower()
+    if status in ("done", "ingested", "ready"):
+        status_kind = "complete"
+    elif status in ("running", "processing", "ingesting"):
+        status_kind = "running"
+    elif status == "failed":
+        status_kind = "failed"
+    else:
+        status_kind = "pending"
+
+    cand_by_id = {getattr(c, "id", None): c for c in candidates}
+    duration = float(getattr(stream, "duration_s", 0) or 0) or 1.0
+
+    enriched: list[dict] = []
+    for clip in clips:
+        cand = cand_by_id.get(getattr(clip, "candidate_id", None))
+        score = _viral_score(clip, cand)
+        start = float(getattr(clip, "start_s", 0) or 0)
+        end = float(getattr(clip, "end_s", 0) or 0)
+        enriched.append(
+            {
+                "clip": clip,
+                "candidate": cand,
+                "viral_score": score,
+                "signals": _humanize_candidate(cand),
+                "timeline_left_pct": max(0.0, min(100.0, start / duration * 100)),
+                "timeline_width_pct": max(
+                    1.5, min(100.0, (end - start) / duration * 100)
+                ),
+            }
+        )
+
+    # Best pick — highest viral score (None scores sort last).
+    scored = [e for e in enriched if e["viral_score"] is not None]
+    best = max(scored, key=lambda e: e["viral_score"]) if scored else None
+
+    ready = [
+        c for c in clips
+        if (getattr(c, "status", "") in ("approved", "published"))
+    ]
+    rejected = [c for c in clips if getattr(c, "status", "") == "rejected"]
+
+    # Time-saved heuristic: manually finding, cutting, captioning +
+    # reformatting one short-form clip is ~8 min of editing. Honest
+    # order-of-magnitude, not a precise claim.
+    time_saved_min = len(clips) * 8
+
+    return {
+        "status_kind": status_kind,
+        "total_clips": len(clips),
+        "ready_count": len(ready),
+        "rejected_count": len(rejected),
+        "moments_detected": len(candidates),
+        "enriched_clips": enriched,
+        "best": best,
+        "best_score": best["viral_score"] if best else None,
+        "perf_label": _perf_label(best["viral_score"] if best else None),
+        "time_saved_min": time_saved_min,
+        "duration_s": duration,
+        # Static for now — could read brand_kit.target_platform later.
+        "suggested_platforms": ["TikTok", "Instagram Reels", "YouTube Shorts"],
+    }
+
+
 @router.get("/streams/{stream_id}", response_class=HTMLResponse)
 async def stream_detail(
     request: Request,
@@ -1331,6 +1464,7 @@ async def stream_detail(
     candidates = await CandidatesRepo(db).list_for_stream(stream_id)
     clips = await ClipsRepo(db).list_for_stream(stream_id)
     personas = await _merged_personas(db)
+    overview = _stream_overview(stream, clips, candidates)
 
     # Pre-run estimate. Uses stream duration + a heuristic for clip count
     # to produce an upper-bound token count, then divides by the user's
@@ -1378,6 +1512,7 @@ async def stream_detail(
             "stream": stream,
             "candidates": candidates,
             "clips": clips,
+            "overview": overview,
             "personas": personas,
             "estimate": estimate_single,
             "estimate_total_fmt": format_tokens(estimate_single.total_tokens),

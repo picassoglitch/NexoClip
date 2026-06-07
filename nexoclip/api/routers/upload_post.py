@@ -37,6 +37,7 @@ from nexoclip.integrations.upload_post import (
 from nexoclip.settings import get_settings
 
 from ..deps import get_db, require_full_scope, tenant_binder
+from ..status_gate import require_top_tier
 from .internal import mint_signed_clip_url
 
 _log = logging.getLogger("nexoclip.api.upload_post")
@@ -253,6 +254,7 @@ async def upload_post_claim_existing(
     username: str = Form(...),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Bind an EXISTING upload-post profile to this tenant.
@@ -317,6 +319,7 @@ async def upload_post_connect(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Mint a 48h JWT magic link on upload-post and 303 the operator
@@ -436,6 +439,7 @@ async def upload_post_post_clip(
     description: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Publish a rendered clip to one or more platforms via upload-post.
@@ -616,6 +620,7 @@ async def upload_post_bulk(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Bulk-publish entry point for the Bulk tab on the dashboard.

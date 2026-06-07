@@ -48,7 +48,7 @@ from nexoclip.tenancy import hash_token
 
 from .._pipeline import PipelineKickoff
 from ..deps import get_db, require_full_scope, tenant_binder
-from ..status_gate import require_active_tenant, require_paid_tier
+from ..status_gate import require_active_tenant, require_top_tier
 from .clips import _VALID_STATUS_TRANSITIONS
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -1468,7 +1468,7 @@ async def publish_status_json(
     dependencies=[
         Depends(require_full_scope),
         Depends(require_active_tenant),
-        Depends(require_paid_tier),
+        Depends(require_top_tier),
     ],
 )
 async def publish_submit(
@@ -1629,7 +1629,7 @@ async def stream_publish_status_json(
     dependencies=[
         Depends(require_full_scope),
         Depends(require_active_tenant),
-        Depends(require_paid_tier),
+        Depends(require_top_tier),
     ],
 )
 async def stream_publish_submit(

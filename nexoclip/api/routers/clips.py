@@ -15,7 +15,7 @@ from nexoclip.db import (
 from nexoclip.errors import TenancyError
 
 from ..deps import get_db, require_full_scope, tenant_binder
-from ..status_gate import require_active_tenant, require_paid_tier
+from ..status_gate import require_active_tenant, require_top_tier
 from ..schemas import (
     ClipResponse,
     ClipUpdateRequest,
@@ -96,7 +96,7 @@ async def update_clip(
     dependencies=[
         Depends(require_full_scope),
         Depends(require_active_tenant),
-        Depends(require_paid_tier),
+        Depends(require_top_tier),
     ],
 )
 async def publish_clip(

@@ -133,6 +133,45 @@ async def test_sso_diag_detects_trailing_newline(
         get_settings.cache_clear()
 
 
+# ---- upload-post key (same wrong-variable trap) ----
+
+
+async def test_sso_diag_upload_post_flags_wrong_variable(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The classic upload-post 403: the real key is in the bare
+    UPLOAD_POST_API_KEY (upload-post's own doc name) while the app
+    reads only the NEXOCLIP_-prefixed var. The diag must surface both
+    env fingerprints + what the app actually loaded so the operator
+    sees the mismatch at a glance."""
+    real_key = "real_uploadpost_key_value"
+    stale_key = "stale_or_placeholder_value"
+    monkeypatch.setenv("NEXO_AI_ADMIN_TOKEN", _ADMIN)
+    # App reads the NEXOCLIP_-prefixed var — set it to the STALE value.
+    monkeypatch.setenv("NEXOCLIP_UPLOAD_POST_API_KEY", stale_key)
+    # Operator put the REAL key in the unprefixed var (ignored by app).
+    monkeypatch.setenv("UPLOAD_POST_API_KEY", real_key)
+    get_settings.cache_clear()
+    try:
+        r = await client.get(f"/api/admin/sso-diag?key={_ADMIN}")
+        up = r.json()["upload_post"]
+        # The app loaded the NEXOCLIP_-prefixed (stale) value.
+        assert up["loaded_by_app"]["fingerprint"] == _fp(stale_key)
+        assert up["env_NEXOCLIP_UPLOAD_POST_API_KEY"]["fingerprint"] == _fp(
+            stale_key
+        )
+        assert up["env_UPLOAD_POST_API_KEY"]["fingerprint"] == _fp(real_key)
+        # The whole point: the two env vars DISAGREE → operator put the
+        # key in the wrong name.
+        assert (
+            up["env_NEXOCLIP_UPLOAD_POST_API_KEY"]["fingerprint"]
+            != up["env_UPLOAD_POST_API_KEY"]["fingerprint"]
+        )
+    finally:
+        get_settings.cache_clear()
+
+
 # ---- token decode + strict verify ----
 
 

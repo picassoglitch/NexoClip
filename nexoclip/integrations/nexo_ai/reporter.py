@@ -72,6 +72,10 @@ async def report_llm_usage(
             "report skipped: NEXO_AI_ADMIN_TOKEN unset · tenant=%s call=%s",
             tenant_id, llm_call_id,
         )
+        await _record_status(
+            db, tenant_id, ok=False, at_iso=occurred_at_iso,
+            error="NEXO_AI_ADMIN_TOKEN not configured on this instance",
+        )
         return
 
     # Resolve the tenant's Nexo AI user id. CLI-created tenants don't have one.
@@ -125,11 +129,19 @@ async def report_llm_usage(
             "report failed: timeout · tenant=%s url=%s amount=%d",
             tenant_id, url, amount,
         )
+        await _record_status(
+            db, tenant_id, ok=False, at_iso=occurred_at_iso,
+            error=f"timeout after {_REPORT_TIMEOUT_S:.0f}s contacting Nexo AI",
+        )
         return
-    except Exception:  # noqa: BLE001 — best-effort, never propagate
+    except Exception as e:  # noqa: BLE001 — best-effort, never propagate
         _log.exception(
             "report failed: unexpected error · tenant=%s url=%s amount=%d",
             tenant_id, url, amount,
+        )
+        await _record_status(
+            db, tenant_id, ok=False, at_iso=occurred_at_iso,
+            error=f"network error: {type(e).__name__}",
         )
         return
 
@@ -137,6 +149,13 @@ async def report_llm_usage(
         _log.warning(
             "report rejected by Nexo AI: %d · tenant=%s body=%s",
             response.status_code, tenant_id, response.text[:300],
+        )
+        await _record_status(
+            db, tenant_id, ok=False, at_iso=occurred_at_iso,
+            error=(
+                f"Nexo AI rejected the report: HTTP {response.status_code}"
+                + (" (check NEXO_AI_ADMIN_TOKEN)" if response.status_code in (401, 403) else "")
+            ),
         )
         return
 
@@ -162,6 +181,9 @@ async def report_llm_usage(
             _log.exception("balance cache update failed · tenant=%s", tenant_id)
             # Don't return — the report itself succeeded.
 
+    # Success — clear any prior failure so the chip stops warning.
+    await _record_status(db, tenant_id, ok=True, at_iso=occurred_at_iso)
+
     _log.info(
         "reported %d tokens · tenant=%s call=%s · remaining=%s (unlimited=%s)",
         amount,
@@ -170,6 +192,27 @@ async def report_llm_usage(
         balance.get("remaining") if isinstance(balance, dict) else "?",
         balance.get("unlimited") if isinstance(balance, dict) else "?",
     )
+
+
+async def _record_status(
+    db: Database,
+    tenant_id: str,
+    *,
+    ok: bool,
+    at_iso: str,
+    error: str | None = None,
+) -> None:
+    """Persist the report outcome, best-effort. Never raises — this is
+    observability for a fire-and-forget path; failing to record a
+    failure must not itself blow up the background task."""
+    try:
+        await TenantsRepo(db).set_usage_report_status(
+            tenant_id, ok=ok, at_iso=at_iso, error=error,
+        )
+    except Exception:  # noqa: BLE001 — observability never blocks
+        _log.warning(
+            "usage report status write failed · tenant=%s ok=%s", tenant_id, ok,
+        )
 
 
 def schedule_report(

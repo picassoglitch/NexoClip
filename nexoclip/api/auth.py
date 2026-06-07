@@ -149,6 +149,15 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                     "unlimited": bool(tenant.cached_balance_unlimited),
                     "monthly_used": tenant.cached_balance_monthly_used or 0,
                     "at": tenant.cached_balance_at,
+                    # Token T1 — last usage-report outcome. When the most
+                    # recent report FAILED, the cached numbers are stale
+                    # and the chip shows a warning instead of pretending
+                    # the balance is fresh. None = never reported yet.
+                    "report_ok": (
+                        None if tenant.last_usage_report_ok is None
+                        else bool(tenant.last_usage_report_ok)
+                    ),
+                    "report_error": tenant.last_usage_report_error,
                 }
             else:
                 request.state.token_balance = None

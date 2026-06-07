@@ -18,6 +18,12 @@
 {%- set _unlimited = (_bal.get('unlimited') if _has_bal else False) -%}
 {%- set _remaining = (_bal.get('remaining') if _has_bal else None) or 0 -%}
 {%- set _monthly_used = (_bal.get('monthly_used') if _has_bal else 0) or 0 -%}
+{# Token T1 — when the last usage report FAILED, the cached numbers are
+   stale (Nexo AI never deducted). Surface it so the operator knows the
+   chip is lying rather than trusting a frozen number. report_ok is
+   tri-state: True (fresh), False (sync failing), None (never reported). #}
+{%- set _report_failing = _has_bal and (_bal.get('report_ok') == false) -%}
+{%- set _sync_err = (_bal.get('report_error') if _has_bal else None) or 'Balance sync to Nexo AI is failing — this number may be stale. Click to retry.' -%}
 
 {%- if not _has_bal -%}
 <a href="/dashboard/_balance/refresh"
@@ -42,6 +48,21 @@
    style="text-decoration: none;">
   <i class="ti ti-infinity" aria-hidden="true"></i>
   <span>∞ tokens</span>
+</a>
+{%- elif _report_failing -%}
+  {# Sync is failing → the number can't be trusted. Danger chip + a
+     warning icon + the actual error in the tooltip; click refreshes. #}
+  {%- set _short = _remaining // 1000 -%}
+<a href="/dashboard/_balance/refresh"
+   id="nc-balance-chip"
+   class="nc-chip nc-chip--danger"
+   title="⚠ {{ _sync_err }}"
+   hx-get="/dashboard/_balance/chip"
+   hx-trigger="every 30s, balance-poll from:body"
+   hx-swap="outerHTML"
+   style="text-decoration: none;">
+  <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+  <span>{{ _short }}k · sync ⚠</span>
 </a>
 {%- else -%}
   {%- set _low = _remaining < 50000 -%}

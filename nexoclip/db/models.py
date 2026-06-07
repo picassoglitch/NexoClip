@@ -67,6 +67,12 @@ class Tenant(BaseModel):
     cached_balance_unlimited: int = 0   # 0/1 in SQLite; cast to bool when reading
     cached_balance_monthly_used: int | None = None
     cached_balance_at: str | None = None
+    # Token T1 — outcome of the most recent outbound usage report, so the
+    # chip / diag can show "balance sync failing" instead of a quietly
+    # stale number. None until the first report attempt.
+    last_usage_report_at: str | None = None
+    last_usage_report_ok: int | None = None   # 1 ok / 0 fail / None never tried
+    last_usage_report_error: str | None = None
     # upload-post integration (migration 022). Each tenant maps to ONE
     # upload-post "user profile" created lazily on first connect/publish
     # click. Persisted here so subsequent API calls reuse the same

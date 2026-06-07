@@ -35,7 +35,15 @@ def test_well_formed_balance_passes_values() -> None:
         "at": "2026-06-03T12:00:00Z",
     }
     out = _coerce_balance_to_scalars(bal)
-    assert out == bal
+    # Token T1 — the coercer now also carries the usage-report status
+    # (report_ok / report_error). Absent in the input → None (tri-state
+    # "never reported"), not a false failure.
+    assert out["remaining"] == 12_000
+    assert out["unlimited"] is False
+    assert out["monthly_used"] == 5_000
+    assert out["at"] == "2026-06-03T12:00:00Z"
+    assert out["report_ok"] is None
+    assert out["report_error"] is None
 
 
 def test_nested_dict_in_monthly_used_collapses_to_zero() -> None:
@@ -98,6 +106,10 @@ def test_missing_keys_default_to_safe_values() -> None:
         "unlimited": False,
         "monthly_used": 0,
         "at": None,
+        # Token T1 — report status absent → tri-state None (never
+        # reported), never a false "failing" signal.
+        "report_ok": None,
+        "report_error": None,
     }
 
 

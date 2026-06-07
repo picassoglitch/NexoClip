@@ -194,11 +194,20 @@ def _coerce_balance_to_scalars(bal: object) -> dict | None:
         # → None so the template doesn't try to render it.
         return None
 
+    # Token T1 — report_ok is tri-state (True/False/None); preserve it
+    # as-is rather than coercing through _to_bool (which would turn None
+    # into False and make a never-reported tenant look like a failure).
+    _report_ok = bal.get("report_ok")
+    if _report_ok is not None and not isinstance(_report_ok, bool):
+        _report_ok = bool(_report_ok)
+
     return {
         "remaining": _to_int(bal.get("remaining")),
         "unlimited": _to_bool(bal.get("unlimited")),
         "monthly_used": _to_int(bal.get("monthly_used")),
         "at": _to_str_or_none(bal.get("at")),
+        "report_ok": _report_ok,
+        "report_error": _to_str_or_none(bal.get("report_error")),
     }
 
 

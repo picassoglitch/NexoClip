@@ -168,6 +168,7 @@ class TenantsRepo:
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
+            "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
             "upload_post_profile_username "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
@@ -192,6 +193,7 @@ class TenantsRepo:
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
+            "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
             "upload_post_profile_username "
             "FROM tenants WHERE external_user_id = ?",
             (external_user_id,),
@@ -227,6 +229,7 @@ class TenantsRepo:
             "t.tier, t.status, t.external_user_id, "
             "t.cached_balance_remaining, t.cached_balance_unlimited, "
             "t.cached_balance_monthly_used, t.cached_balance_at, "
+            "t.last_usage_report_at, t.last_usage_report_ok, t.last_usage_report_error, "
             "t.upload_post_profile_username "
             "FROM tenants t "
             "INNER JOIN users u ON u.tenant_id = t.id "
@@ -271,6 +274,32 @@ class TenantsRepo:
             "cached_balance_at = ? "
             "WHERE id = ?",
             (remaining, 1 if unlimited else 0, monthly_used, at_iso, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_usage_report_status(
+        self,
+        tenant_id: str,
+        *,
+        ok: bool,
+        at_iso: str,
+        error: str | None = None,
+    ) -> None:
+        """Token T1 — record the outcome of the most recent outbound
+        usage report. Called by the reporter on every terminal path
+        (success or real failure) so the chip / diag can surface a
+        failing balance-sync instead of a silently stale number.
+
+        `error` is a short reason on failure; None on success.
+        """
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET "
+            "last_usage_report_at = ?, "
+            "last_usage_report_ok = ?, "
+            "last_usage_report_error = ? "
+            "WHERE id = ?",
+            (at_iso, 1 if ok else 0, (error if not ok else None), tenant_id),
         )
         await conn.commit()
 
@@ -321,6 +350,7 @@ class TenantsRepo:
             "tier, status, external_user_id, "
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
+            "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
             "upload_post_profile_username "
             "FROM tenants ORDER BY created_at"
         )

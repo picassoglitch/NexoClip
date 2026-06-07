@@ -165,7 +165,7 @@ async def test_generate_connect_jwt_returns_access_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_video_from_url_sends_platform_array_and_async_flag() -> None:
+async def test_upload_video_from_url_sends_form_encoded_platform_array() -> None:
     body = {
         "success": True,
         "request_id": "req_abc",
@@ -186,15 +186,23 @@ async def test_upload_video_from_url_sends_platform_array_and_async_flag() -> No
             )
     assert result.request_id == "req_abc"
     assert result.is_async is True
-    # Verify the JSON body contained the platform list (upload-post
-    # expects `platform[]` style in the keys).
-    sent = route.calls.last.request.content.decode()
-    assert "ten_alice" in sent
-    assert "tiktok" in sent
-    assert "instagram" in sent
-    assert "youtube" in sent
-    assert "My clip" in sent
-    assert "async_upload" in sent
+
+    sent = route.calls.last.request
+    # Must be application/x-www-form-urlencoded — upload-post's JSON
+    # parser doesn't grok `platform[]` array repeats, so we send the
+    # canonical form-encoded shape that matches their cURL examples.
+    ct = sent.headers.get("Content-Type", "")
+    assert "application/x-www-form-urlencoded" in ct, ct
+
+    body_str = sent.content.decode()
+    assert "user=ten_alice" in body_str
+    assert "My+clip" in body_str  # title urlencoded
+    assert "async_upload=true" in body_str
+    # platform[] repeated once per platform (URL-encoded → `platform%5B%5D=tiktok`)
+    assert body_str.count("platform%5B%5D=") == 3
+    assert "platform%5B%5D=tiktok" in body_str
+    assert "platform%5B%5D=instagram" in body_str
+    assert "platform%5B%5D=youtube" in body_str
 
 
 @pytest.mark.asyncio

@@ -498,9 +498,20 @@ async def upload_post_post_clip(
             "upload_post.post.upload_failed tenant=%s clip=%s err=%s body=%s",
             tenant_id, clip_id, e, e.body,
         )
+        # Surface upload-post's response body in the operator-facing
+        # error so a 400 says exactly which field they're rejecting
+        # instead of an opaque "POST /api/upload returned HTTP 400".
+        detail = f"upload-post upload failed: {e}"
+        if e.body is not None:
+            import json as _json
+            body_str = (
+                _json.dumps(e.body)
+                if isinstance(e.body, dict | list) else str(e.body)
+            )
+            detail += f" — body: {body_str[:500]}"
         raise HTTPException(
             status_code=502,
-            detail=f"upload-post upload failed: {e}",
+            detail=detail,
         ) from e
     except Exception as e:  # noqa: BLE001 — defensive catch-all so 500s
         # surface a real error message instead of FastAPI's opaque

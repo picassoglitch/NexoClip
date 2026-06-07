@@ -131,22 +131,43 @@ class UploadPostClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        data: list[tuple[str, str]] | dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         timeout_s: float | None = None,
     ) -> Any:
         """Single round-trip. Returns parsed JSON body on 2xx; raises
         UploadPostError on anything else. Reuses the injected
-        AsyncClient when present, else spawns a one-shot."""
+        AsyncClient when present, else spawns a one-shot.
+
+        Use `json=` for application/json bodies (profile management,
+        JWT mint). Use `data=` (list of (key, value) tuples) for the
+        upload endpoints, which expect application/x-www-form-urlencoded
+        with PHP-style `platform[]` repeat keys per upload-post's
+        canonical cURL examples. We URL-encode manually + pass via
+        `content=` because httpx's async `data=` path doesn't accept
+        the list-of-tuples shape we need for duplicate keys.
+        """
+        from urllib.parse import urlencode
+
         url = f"{self._base_url}{path}"
         headers = dict(self._headers)
+        request_kwargs: dict[str, Any] = {"params": params}
         if json is not None:
             headers["Content-Type"] = "application/json"
+            request_kwargs["json"] = json
+        elif data is not None:
+            # Manual urlencode so list-of-tuples (with repeated keys
+            # like `platform[]`) survives intact. doseq=True flattens
+            # any list values within a dict shape too.
+            pairs = list(data.items()) if isinstance(data, dict) else list(data)
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            request_kwargs["content"] = urlencode(pairs, doseq=True)
         client = self._http or httpx.AsyncClient(
             timeout=timeout_s or self._timeout_s,
         )
         try:
             resp = await client.request(
-                method, url, headers=headers, json=json, params=params,
+                method, url, headers=headers, **request_kwargs,
             )
         finally:
             if self._http is None:
@@ -302,26 +323,38 @@ class UploadPostClient:
         catalog is in upload-post's docs; we don't enumerate them
         here, just pass through.
         """
-        payload: dict[str, Any] = {
-            "user": username,
-            "platform[]": platforms,  # upload-post expects array form
-            "video": video_url,
-        }
+        # upload-post's canonical example is multipart with
+        # `platform[]=<value>` repeated per platform — PHP-style array
+        # form encoding. Sending the same shape as JSON returned 400
+        # in production ("upload-post POST /api/upload returned HTTP
+        # 400"), so we send form-urlencoded with the bracket key
+        # repeated for each platform.
+        form: list[tuple[str, str]] = [
+            ("user", username),
+            ("video", video_url),
+        ]
+        for p in platforms:
+            form.append(("platform[]", p))
         if title:
-            payload["title"] = title
+            form.append(("title", title))
         if description:
-            payload["description"] = description
+            form.append(("description", description))
         if request_id:
-            payload["request_id"] = request_id
+            form.append(("request_id", request_id))
         if async_upload:
-            payload["async_upload"] = True
+            form.append(("async_upload", "true"))
         if scheduled_date:
-            payload["scheduled_date"] = scheduled_date
+            form.append(("scheduled_date", scheduled_date))
+        # Platform-specific overrides (tiktok_disable_duet,
+        # youtube_visibility, etc.) flow through verbatim. Values
+        # get stringified — upload-post parses "true"/"false" on
+        # bool fields and numeric strings on int fields.
         if extra:
-            payload.update(extra)
+            for k, v in extra.items():
+                form.append((k, "true" if v is True else "false" if v is False else str(v)))
 
         body = await self._request(
-            "POST", "/api/upload", json=payload,
+            "POST", "/api/upload", data=form,
             # Async path returns fast; sync can take minutes for
             # multi-platform publish so allow a much longer ceiling.
             timeout_s=300.0,

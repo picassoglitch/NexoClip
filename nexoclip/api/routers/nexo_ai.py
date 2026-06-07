@@ -26,7 +26,7 @@ import hmac
 import re
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from nexoclip.db import Database
@@ -530,3 +530,138 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
         path="/",
     )
     return response
+
+
+# ── GET /api/admin/sso-diag ──────────────────────────────────────────────
+
+
+def _secret_fingerprint(s: str | None) -> dict:
+    """Non-reversible fingerprint of a shared secret so the operator can
+    compare both sides WITHOUT either side revealing the raw value.
+
+    SHA256 is one-way; the first 12 hex chars confirm equality with
+    negligible collision risk and zero recoverability for a high-entropy
+    secret. We also fingerprint the whitespace-stripped form: if the two
+    fingerprints differ, the configured value has leading/trailing
+    whitespace (almost always a trailing newline pasted from a shell) —
+    and THAT ALONE produces 'bad signature' even when the visible
+    characters match the other side, because the HMAC is over the raw
+    bytes including the newline.
+    """
+    if not s:
+        return {"configured": False}
+    raw_fp = __import__("hashlib").sha256(s.encode("utf-8")).hexdigest()[:12]
+    stripped = s.strip()
+    stripped_fp = (
+        __import__("hashlib").sha256(stripped.encode("utf-8")).hexdigest()[:12]
+    )
+    return {
+        "configured": True,
+        "length": len(s),
+        "fingerprint": raw_fp,
+        "stripped_fingerprint": stripped_fp,
+        "has_surrounding_whitespace": s != stripped,
+    }
+
+
+@router.get("/api/admin/sso-diag")
+async def sso_diag(
+    request: Request,
+    token: str | None = None,
+    key: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    """Operator diagnostic for 'Strict SSO verify failed: bad signature'
+    and the provisioning-mismatch symptom.
+
+    Returns non-reversible fingerprints of the loaded NEXO_AI_SSO_SECRET
+    and NEXO_AI_ADMIN_TOKEN. Compare each `fingerprint` against
+    SHA256(value)[:12] of the corresponding secret configured on the
+    Nexo AI side. Equal fingerprint → the bytes match; unequal → the
+    values differ (or one side has stray whitespace — see
+    `has_surrounding_whitespace`).
+
+    Auth: the NexoClip admin token, accepted via either the
+    `Authorization: Bearer <token>` header OR a `?key=<token>` query
+    param (browser convenience — operators hit this from a tab). Gating
+    it keeps the optional token-decode path from leaking SSO payloads
+    (user_id / email / tenant_id) publicly. Note: the value you must
+    present here is the admin token as configured ON THIS NexoClip
+    instance — if your own value is rejected, that's itself a signal the
+    admin token isn't what you think it is.
+
+    Optional `?token=<the failing SSO link's token>` (the value after
+    `?token=` in the SSO URL): decodes the payload WITHOUT verifying
+    (showing tenant_id + how old the link is) AND runs the real strict
+    verify against the loaded secret, reporting the exact failure. This
+    collapses 'why does THIS link fail' to one answer:
+
+        strict_verify FAIL: bad signature
+            → secret mismatch, OR the link was signed by an OLD secret
+              (regenerate the link after aligning both sides)
+        strict_verify FAIL: token expired
+            → the secrets are FINE; it's a stale link / clock skew
+        strict_verify PASS
+            → this token is valid against the loaded secret; the failure
+              you saw was a different (older) link
+
+    Reminder: get_settings() is lru_cached — if you changed the env var
+    on Railway but the fingerprint here still shows the old value, the
+    process hasn't restarted. Redeploy / restart to pick it up.
+    """
+    # Accept the admin token via header OR ?key= (browser-friendly).
+    if key and not authorization:
+        authorization = f"Bearer {key}"
+    _check_admin_bearer(authorization)
+
+    settings = get_settings()
+    secret = settings.nexo_ai_sso_secret
+
+    out: dict = {
+        "sso_secret": _secret_fingerprint(secret),
+        "admin_token": _secret_fingerprint(settings.nexo_ai_admin_token),
+        "hint": (
+            "Compare each `fingerprint` with SHA256(value)[:12] of the "
+            "matching secret on the Nexo AI side. If "
+            "has_surrounding_whitespace is true, strip the trailing "
+            "newline. If fingerprints match but a token still fails, the "
+            "link was minted before the secret change — regenerate it from "
+            "a hard-refreshed Nexo AI tab."
+        ),
+    }
+
+    if token:
+        import time as _time
+
+        token_report: dict = {}
+        # 1. Decode the payload WITHOUT verifying — reveals tenant_id +
+        #    the link's age so we can tell a stale link from a wrong key.
+        try:
+            unsigned = _decode_sso_payload_unsigned(token)
+            now = int(_time.time())
+            token_report["payload"] = {
+                "tenant_id": unsigned.tenant_id,
+                "user_id": unsigned.user_id,
+                "tier": unsigned.tier,
+                "exp": unsigned.exp,
+                "expires_in_s": unsigned.exp - now,
+                "is_expired": unsigned.exp < now,
+            }
+        except SsoTokenError as e:
+            token_report["payload_error"] = str(e)
+
+        # 2. Run the REAL strict verify against the loaded secret — same
+        #    code path the live SSO route uses.
+        if secret:
+            try:
+                verify_sso_token(token, secret=secret)
+                token_report["strict_verify"] = "PASS"
+            except SsoTokenError as e:
+                token_report["strict_verify"] = f"FAIL: {e}"
+        else:
+            token_report["strict_verify"] = (
+                "skipped — no NEXO_AI_SSO_SECRET loaded (lax mode active)"
+            )
+        out["token"] = token_report
+
+    return JSONResponse(out)

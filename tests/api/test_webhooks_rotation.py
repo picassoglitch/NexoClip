@@ -12,7 +12,7 @@ async def test_rotate_secret_returns_new_value_once(
 ) -> None:
     create = await client.post(
         "/webhooks",
-        json={"url": "https://hook.example/x", "types": []},
+        json={"url": "https://example.com/x", "types": []},
         headers=auth(tenants["alice"]["token"]),
     )
     sub_id = create.json()["id"]
@@ -38,7 +38,7 @@ async def test_list_active_secrets_after_rotation(
 ) -> None:
     create = await client.post(
         "/webhooks",
-        json={"url": "https://hook.example/y", "types": []},
+        json={"url": "https://example.com/y", "types": []},
         headers=auth(tenants["alice"]["token"]),
     )
     sub_id = create.json()["id"]
@@ -79,7 +79,7 @@ async def test_list_secrets_for_other_tenants_subscription_returns_404(
 ) -> None:
     create = await client.post(
         "/webhooks",
-        json={"url": "https://hook.example/a", "types": []},
+        json={"url": "https://example.com/a", "types": []},
         headers=auth(tenants["alice"]["token"]),
     )
     sub_id = create.json()["id"]
@@ -98,7 +98,7 @@ async def test_rotate_requires_full_scope(
 
     create = await client.post(
         "/webhooks",
-        json={"url": "https://hook.example/c", "types": []},
+        json={"url": "https://example.com/c", "types": []},
         headers=auth(tenants["alice"]["token"]),
     )
     sub_id = create.json()["id"]

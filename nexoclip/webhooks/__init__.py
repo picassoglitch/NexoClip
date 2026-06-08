@@ -17,11 +17,14 @@ from .service import (
     run_webhook_dispatch,
     sign_payload,
 )
+from .url_safety import UnsafeWebhookUrlError, assert_webhook_url_safe
 
 __all__ = [
     "HMAC_HEADER",
     "SIGNED_TS_HEADER",
     "DispatchOutcome",
+    "UnsafeWebhookUrlError",
+    "assert_webhook_url_safe",
     "run_webhook_dispatch",
     "sign_payload",
 ]

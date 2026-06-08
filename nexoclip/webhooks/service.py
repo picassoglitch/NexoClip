@@ -35,6 +35,10 @@ from nexoclip.db import (
 )
 from nexoclip.db.models import Event, WebhookSubscription
 from nexoclip.tenancy import bound_tenant
+from nexoclip.webhooks.url_safety import (
+    UnsafeWebhookUrlError,
+    assert_webhook_url_safe,
+)
 
 _log = structlog.get_logger(__name__)
 
@@ -170,6 +174,26 @@ async def _deliver_one_sub(
     delivered = 0
     failed = 0
     last_success_ts: str | None = None
+
+    # SSRF re-check at send time: DNS rebinding could swap a previously
+    # public-resolving hostname for a private one between registration
+    # and now. If it does, disable this subscription rather than letting
+    # it fan out to internal services. Done once per drain pass, not per
+    # event, since the URL is fixed for the subscription. `allow_unresolvable`
+    # so a transiently-down DNS doesn't trip the safety net — the existing
+    # httpx failure handling covers connectivity issues; we only care about
+    # the "resolved to private" case here.
+    try:
+        assert_webhook_url_safe(sub.url, allow_unresolvable=True)
+    except UnsafeWebhookUrlError as e:
+        _log.warning(
+            "webhook_url_unsafe_at_dispatch",
+            sub_id=sub.id,
+            url=sub.url,
+            error=str(e),
+        )
+        await _disable_subscription(db, sub.id)
+        return delivered, failed, 1
 
     for event in events:
         body = _serialize(event)

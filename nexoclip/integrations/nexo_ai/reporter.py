@@ -176,11 +176,25 @@ async def report_usage(
             "report rejected by Nexo AI: %d · tenant=%s body=%s",
             response.status_code, tenant_id, response.text[:300],
         )
+        # Include Nexo AI's response body in the recorded error so the
+        # diag panel / chip tooltip shows WHY it rejected — a bare
+        # "HTTP 400" sends the operator log-digging. On 400/422 the body
+        # usually names the offending field / kind (e.g. an unknown
+        # `cost_usd_micros` / `provider` or the `transcription.seconds`
+        # kind the /usage endpoint doesn't accept yet).
+        _body = (response.text or "").strip().replace("\n", " ")[:200]
+        if response.status_code in (401, 403):
+            _hint = " (check NEXO_AI_ADMIN_TOKEN)"
+        elif response.status_code in (400, 422):
+            _hint = " (Nexo AI /usage rejected the payload — it must accept cost_usd_micros / provider / the kind)"
+        else:
+            _hint = ""
         await _record_status(
             db, tenant_id, ok=False, at_iso=occurred_at_iso,
             error=(
                 f"Nexo AI rejected the report: HTTP {response.status_code}"
-                + (" (check NEXO_AI_ADMIN_TOKEN)" if response.status_code in (401, 403) else "")
+                + _hint
+                + (f" · body: {_body}" if _body else "")
             ),
         )
         return

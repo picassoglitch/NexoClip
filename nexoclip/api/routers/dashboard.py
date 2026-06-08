@@ -322,6 +322,92 @@ async def estimate_run_cost(
         )
 
 
+@router.get("/_diag/usage-probe", include_in_schema=False)
+async def usage_probe(
+    request: Request,
+    kind: str = "transcription.seconds",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """One-shot diagnostic: POST a tiny TEST usage event to Nexo AI's
+    /usage endpoint and return its VERBATIM status + response body.
+
+    This is the fastest way to read WHY a usage report 400s without
+    digging Railway logs or waiting for a pipeline run: open
+    /dashboard/_diag/usage-probe?kind=transcription.seconds (or
+    ?kind=llm.tokens) in the browser and read `nexo_ai_response_body`.
+
+    The event is intentionally tiny (amount=1, cost_usd_micros=1) and
+    uses a FIXED source_id, so Nexo AI's UNIQUE(engine, source_id)
+    idempotency makes repeated probes a no-op after the first success.
+    It does NOT touch the report-status cache (the red chip), so probing
+    is side-effect-free for the operator-facing state.
+    """
+    import datetime as _dt
+
+    import httpx as _httpx
+
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    base = (settings.nexo_ai_base_url or "").rstrip("/")
+    token = settings.nexo_ai_admin_token or ""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    ext = tenant.external_user_id if tenant else None
+
+    if not base or not token:
+        return JSONResponse(
+            {"error": "NEXO_AI_BASE_URL or NEXO_AI_ADMIN_TOKEN not set"},
+            status_code=503,
+        )
+    if not ext:
+        return JSONResponse(
+            {"error": "this tenant has no external_user_id (not linked to Nexo AI)"},
+            status_code=409,
+        )
+
+    event = {
+        "provider": "assemblyai" if kind == "transcription.seconds" else "anthropic",
+        "kind": kind,
+        "amount": 1,
+        "cost_usd_micros": 1,
+        "source_id": f"probe_{kind}",
+        "occurred_at": _dt.datetime.now(_dt.UTC).isoformat(),
+        "operation": "diag_probe",
+    }
+    payload = {"external_user_id": ext, "events": [event]}
+    url = f"{base}/api/engines/nexoclip/usage"
+
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url, json=payload,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            {"sent_to": url, "sent_payload": payload,
+             "error": f"{type(e).__name__}: {e}"},
+            status_code=502,
+        )
+
+    return JSONResponse({
+        "sent_to": url,
+        "sent_payload": payload,
+        "http_status": resp.status_code,
+        "nexo_ai_response_body": (resp.text or "")[:2000],
+        "verdict": (
+            "OK — Nexo AI accepts this payload"
+            if resp.status_code < 400
+            else "REJECTED — see nexo_ai_response_body for the exact reason; "
+                 "fix the /usage validation on the Nexo AI side"
+        ),
+    })
+
+
 @router.get("/_diag/nexo_ai", response_class=HTMLResponse, include_in_schema=False)
 async def diag_nexo_ai(
     request: Request,

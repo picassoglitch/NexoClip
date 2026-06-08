@@ -121,6 +121,17 @@ class Settings(BaseSettings):
     # "live ingest not configured" panel instead.
     live_rtmp_base_url: str | None = None
 
+    # Phase L.2 — auto-clip after a live stream ends. When True (default),
+    # the MediaMTX `live/ended` webhook kicks the full clip pipeline on the
+    # recording automatically (transcribe → detect → cut → score), so a
+    # streamer who pushed through our RTMP relay gets clips ready to publish
+    # with zero dashboard interaction. Set False to keep live ingest as
+    # recording-only (operator triggers "Run pipeline" manually).
+    live_auto_clip_enabled: bool = Field(
+        default=True,
+        validation_alias="NEXOCLIP_LIVE_AUTO_CLIP",
+    )
+
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline
     # work via FastAPI BackgroundTasks on this host (current behavior).
     # "modal" hands the job off to a Modal app (planned in F.10+ once
@@ -242,7 +253,7 @@ class Settings(BaseSettings):
     #   marginal (Railway compute+storage+bw)      ~$0.025/run
     #   shared platform allocation (Vercel+Supabase+
     #     Resend+domain, split across engines/runs) ~$0.020/run
-    #   = fully-loaded cost ~$0.045 × ~1.3 margin   ≈ $0.06/run
+    #   = fully-loaded cost ~$0.045 x ~1.3 margin   = ~$0.06/run
     # Default $0.06; at Nexo AI's ~$4/1M-token rate that's ~15,000
     # token-equivalents/run. Set to 0 to disable. Drops toward $0.05 at
     # higher run volume (platform amortizes); raise pre-scale for cushion.

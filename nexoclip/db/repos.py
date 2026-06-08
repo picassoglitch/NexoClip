@@ -884,6 +884,32 @@ async def _streams_repo_mark_live_ended(
     return StreamRow.model_validate(dict(row)) if row else None
 
 
+async def _streams_repo_try_claim_for_processing(
+    db: "Database", *, stream_id: str, from_status: str = "live_ended"
+) -> bool:
+    """Phase L.2 — atomically claim a just-ended live stream for the
+    auto-clip pipeline.
+
+    Flips status `from_status` -> 'processing' ONLY if the row is still in
+    `from_status`. Returns True iff THIS call won the claim. This is the
+    idempotency guard for the auto-clip kickoff: MediaMTX may deliver the
+    'ended' webhook more than once (retries / flaky TCP), and we must not
+    launch the (paid) pipeline twice. The first webhook claims and
+    schedules; every later one gets False and skips.
+
+    Tenant-free invocation contract, same as the mark_live_* helpers — the
+    webhook runs without a bound tenant and updates by id.
+    """
+    conn = await db.connect()
+    cur = await conn.execute(
+        "UPDATE streams SET status = 'processing' "
+        "WHERE id = ? AND status = ?",
+        (stream_id, from_status),
+    )
+    await conn.commit()
+    return (cur.rowcount or 0) == 1
+
+
 class LiveStreamKeysRepo:
     """Phase L.1 — per-tenant RTMP stream keys.
 

@@ -26,7 +26,16 @@ import datetime as _dt
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -273,12 +282,14 @@ async def live_started(
 async def live_ended(
     request: Request,
     payload: dict,
+    background_tasks: BackgroundTasks,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
     """MediaMTX calls this when the RTMP push ends (streamer hits
     Stop in OBS, or the TCP connection drops). We flip status to
-    'live_ended' so the existing retention sweeper (24h) can pick
-    up the recording when it's stale.
+    'live_ended' and — Phase L.2 — auto-launch the clip pipeline on
+    the recording so the streamer gets publish-ready clips with zero
+    dashboard interaction (gated by NEXOCLIP_LIVE_AUTO_CLIP, default on).
 
     Expected payload:
         {
@@ -296,10 +307,35 @@ async def live_ended(
     final_duration = None
     if isinstance(duration_s, int | float):
         final_duration = float(duration_s)
-    await _streams_repo_mark_live_ended(
+    ended_row = await _streams_repo_mark_live_ended(
         db, stream_id=stream_id, duration_s=final_duration
     )
-    return JSONResponse({"ok": True, "stream_id": stream_id})
+
+    # Phase L.2 — auto-clip. Claim the stream (idempotent against
+    # duplicate webhooks) and schedule the pipeline on the recording.
+    # Best-effort: a failure here must never 500 the webhook (MediaMTX
+    # would keep retrying); the manual "Run pipeline" button is the
+    # fallback.
+    autoclip_scheduled = False
+    try:
+        from nexoclip.api._pipeline import (
+            live_pipeline_runner,
+            maybe_autoclip_after_live_end,
+        )
+
+        def _schedule(**kwargs: object) -> None:
+            background_tasks.add_task(live_pipeline_runner, **kwargs)
+
+        autoclip_scheduled = await maybe_autoclip_after_live_end(
+            db, row=ended_row, schedule=_schedule
+        )
+    except Exception:  # noqa: BLE001 — observability only
+        # Don't let an autoclip hiccup fail the webhook.
+        pass
+
+    return JSONResponse(
+        {"ok": True, "stream_id": stream_id, "autoclip": autoclip_scheduled}
+    )
 
 
 __all__ = ["router"]

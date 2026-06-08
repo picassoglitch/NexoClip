@@ -113,15 +113,6 @@ class Settings(BaseSettings):
     # bearer (internal-trust-only; not user-facing).
     internal_signing_secret: str | None = None
 
-    # Multistream M1 — key material for encrypting at-rest secrets (stream
-    # keys for restream destinations). Derived to a Fernet key via SHA-256,
-    # so any string works. Falls back to internal_signing_secret when unset
-    # (single-secret deploys). Rotating this makes existing ciphertext
-    # undecryptable — re-enter the affected secrets after a rotation.
-    secret_key: str | None = Field(
-        default=None, validation_alias="NEXOCLIP_SECRET_KEY"
-    )
-
     # Phase L.1 — RTMP base URL the operator pastes into OBS. This is
     # the MediaMTX endpoint, NOT the NexoClip API host. Example:
     # `rtmp://live.nexoclip.nexo-ai.world/live`

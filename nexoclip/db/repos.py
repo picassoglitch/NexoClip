@@ -46,7 +46,6 @@ from .models import (
     PublishJob,
     PublishMetric,
     SpeakerRow,
-    StreamDestinationRow,
     StreamRow,
     Tenant,
     TranscriptRow,
@@ -1813,115 +1812,6 @@ def _connected_account_from_row(row: aiosqlite.Row) -> ConnectedAccount:
     # (pre-migration) have NULL for these and the model's defaults
     # kick in.
     return ConnectedAccount.model_validate(d)
-
-
-_DEST_COLS = (
-    "id, tenant_id, platform, label, ingest_url, stream_key_enc, "
-    "enabled, last_status, last_status_at, created_at"
-)
-
-
-def _stream_destination_from_row(row: object) -> StreamDestinationRow:
-    d = dict(row)  # type: ignore[arg-type]
-    d["enabled"] = bool(d.get("enabled"))
-    return StreamDestinationRow.model_validate(d)
-
-
-class StreamDestinationsRepo:
-    """Multistream M1 — per-tenant restream destinations.
-
-    Stores the (already Fernet-encrypted) stream key — this repo never
-    encrypts/decrypts; that's the destinations service's job. Tenant-scoped
-    like every other domain repo.
-    """
-
-    def __init__(self, db: Database):
-        self._db = db
-
-    async def create(
-        self,
-        *,
-        platform: str,
-        ingest_url: str,
-        stream_key_enc: str,
-        label: str | None = None,
-        enabled: bool = True,
-    ) -> StreamDestinationRow:
-        tenant_id = current_tenant_id()
-        dest_id = new_id("dst")
-        conn = await self._db.connect()
-        await conn.execute(
-            "INSERT INTO stream_destinations "
-            "(id, tenant_id, platform, label, ingest_url, stream_key_enc, "
-            "enabled, last_status, last_status_at, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
-            (
-                dest_id,
-                tenant_id,
-                platform,
-                label,
-                ingest_url,
-                stream_key_enc,
-                1 if enabled else 0,
-                _now(),
-            ),
-        )
-        await conn.commit()
-        out = await self.get(dest_id)
-        assert out is not None
-        return out
-
-    async def get(self, dest_id: str) -> StreamDestinationRow | None:
-        tenant_id = current_tenant_id()
-        conn = await self._db.connect()
-        cur = await conn.execute(
-            f"SELECT {_DEST_COLS} FROM stream_destinations "
-            "WHERE id = ? AND tenant_id = ?",
-            (dest_id, tenant_id),
-        )
-        row = await cur.fetchone()
-        return _stream_destination_from_row(row) if row else None
-
-    async def list_for_tenant(self) -> list[StreamDestinationRow]:
-        tenant_id = current_tenant_id()
-        conn = await self._db.connect()
-        cur = await conn.execute(
-            f"SELECT {_DEST_COLS} FROM stream_destinations "
-            "WHERE tenant_id = ? ORDER BY created_at",
-            (tenant_id,),
-        )
-        return [_stream_destination_from_row(r) for r in await cur.fetchall()]
-
-    async def set_enabled(self, dest_id: str, enabled: bool) -> None:
-        tenant_id = current_tenant_id()
-        conn = await self._db.connect()
-        await conn.execute(
-            "UPDATE stream_destinations SET enabled = ? "
-            "WHERE id = ? AND tenant_id = ?",
-            (1 if enabled else 0, dest_id, tenant_id),
-        )
-        await conn.commit()
-
-    async def delete(self, dest_id: str) -> None:
-        tenant_id = current_tenant_id()
-        conn = await self._db.connect()
-        await conn.execute(
-            "DELETE FROM stream_destinations WHERE id = ? AND tenant_id = ?",
-            (dest_id, tenant_id),
-        )
-        await conn.commit()
-
-    async def set_status(self, dest_id: str, status: str) -> None:
-        """Update a destination's last relay status. Tenant-free (the relay
-        webhook updates by id without a bound tenant) — mirrors the live
-        stream helpers."""
-        conn = await self._db.connect()
-        await conn.execute(
-            "UPDATE stream_destinations "
-            "SET last_status = ?, last_status_at = ? WHERE id = ?",
-            (status, _now(), dest_id),
-        )
-        await conn.commit()
 
 
 class PublishJobsRepo:

@@ -146,24 +146,6 @@ class ConnectedAccount(BaseModel):
     daily_publish_window_start: str | None = None
 
 
-class StreamDestinationRow(BaseModel):
-    """Multistream M1 — one restream target the relay fans the live ingest
-    out to. `stream_key_enc` is the Fernet-encrypted stream key (never the
-    plaintext); the full push URL is `ingest_url + <decrypted key>`."""
-
-    model_config = ConfigDict(extra="forbid")
-    id: str
-    tenant_id: str
-    platform: str  # twitch | youtube | kick | custom
-    label: str | None = None
-    ingest_url: str
-    stream_key_enc: str
-    enabled: bool = True
-    last_status: str | None = None  # connecting | live | failed | stopped
-    last_status_at: str | None = None
-    created_at: str
-
-
 # ---------- Pipeline ----------
 
 

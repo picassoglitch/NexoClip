@@ -73,7 +73,7 @@ async def test_generic_event_carries_kind_amount_and_cost(
     await report_usage(
         db, tenant_id=tid, kind="transcription.seconds", amount=125,
         cost_usd_micros=43_000, source_id="llmc_x", occurred_at_iso=_now(),
-        operation="transcribe",
+        provider="assemblyai", operation="transcribe",
     )
     assert route.called
     body = _json.loads(route.calls.last.request.content)
@@ -82,6 +82,7 @@ async def test_generic_event_carries_kind_amount_and_cost(
     assert ev["amount"] == 125
     assert ev["cost_usd_micros"] == 43_000
     assert ev["source_id"] == "llmc_x"
+    assert ev["provider"] == "assemblyai"
     assert ev["operation"] == "transcribe"
     assert body["external_user_id"] == "auth0|u"
 
@@ -104,6 +105,8 @@ async def test_llm_wrapper_sends_llm_tokens_kind_plus_cost(
     assert ev["amount"] == 37_000
     assert ev["cost_usd_micros"] == 111_000
     assert ev["source_id"] == "llm_a"
+    # Provider defaults to "anthropic" for the LLM wrapper.
+    assert ev["provider"] == "anthropic"
 
 
 @respx.mock

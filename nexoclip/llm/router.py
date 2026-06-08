@@ -452,6 +452,9 @@ class LLMRouter:
                     # Token T4 — send the real USD cost too, not just the
                     # token count, so Nexo AI prices off true spend.
                     cost_usd_micros=cost_usd_micros,
+                    # Explicit provider name ("anthropic") for per-provider
+                    # cost rollups on the Nexo AI side.
+                    provider=provider,
                     occurred_at_iso=ts,
                     operation=purpose,
                 )

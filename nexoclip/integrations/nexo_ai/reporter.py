@@ -53,6 +53,7 @@ async def report_usage(
     cost_usd_micros: int,
     source_id: str,
     occurred_at_iso: str,
+    provider: str | None = None,
     operation: str | None = None,
 ) -> None:
     """Push ONE usage event from ANY provider to Nexo AI + persist the
@@ -131,6 +132,10 @@ async def report_usage(
         "source_id": source_id,
         "occurred_at": occurred_at_iso,
     }
+    # Explicit provider name ("anthropic" / "assemblyai" / …) so Nexo AI
+    # can roll cost up per-provider without parsing the `kind` prefix.
+    if provider:
+        event["provider"] = provider
     if operation:
         event["operation"] = operation
     body: dict[str, Any] = {
@@ -225,6 +230,7 @@ async def report_llm_usage(
     input_tokens: int,
     output_tokens: int,
     cost_usd_micros: int = 0,
+    provider: str = "anthropic",
     occurred_at_iso: str,
     operation: str | None = None,
 ) -> None:
@@ -240,6 +246,7 @@ async def report_llm_usage(
         cost_usd_micros=cost_usd_micros,
         source_id=llm_call_id,
         occurred_at_iso=occurred_at_iso,
+        provider=provider,
         operation=operation,
     )
 
@@ -274,6 +281,7 @@ def schedule_usage(
     cost_usd_micros: int,
     source_id: str,
     occurred_at_iso: str,
+    provider: str | None = None,
     operation: str | None = None,
 ) -> None:
     """Fire-and-forget wrapper over report_usage. Spawns a background
@@ -302,6 +310,7 @@ def schedule_usage(
             cost_usd_micros=cost_usd_micros,
             source_id=source_id,
             occurred_at_iso=occurred_at_iso,
+            provider=provider,
             operation=operation,
         )
     )
@@ -317,6 +326,7 @@ def schedule_report(
     input_tokens: int,
     output_tokens: int,
     cost_usd_micros: int = 0,
+    provider: str = "anthropic",
     occurred_at_iso: str,
     operation: str | None = None,
 ) -> None:
@@ -330,6 +340,7 @@ def schedule_report(
         cost_usd_micros=cost_usd_micros,
         source_id=llm_call_id,
         occurred_at_iso=occurred_at_iso,
+        provider=provider,
         operation=operation,
     )
 

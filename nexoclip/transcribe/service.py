@@ -211,6 +211,9 @@ async def _record_transcribe_cost(
             cost_usd_micros=cost_micros,
             source_id=row.id,
             occurred_at_iso=row.ts,
+            # Explicit provider name ("assemblyai") for per-provider cost
+            # rollups on the Nexo AI side.
+            provider=provider.name,
             operation="transcribe",
         )
     except Exception as e:  # noqa: BLE001 — never breaks the pipeline

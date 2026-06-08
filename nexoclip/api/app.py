@@ -74,6 +74,23 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Loud startup warning when SSO is misconfigured. /auth/sso 503s
+        # in this state (see nexoclip/api/routers/nexo_ai.py) — surfacing
+        # it here so operators see it in boot logs, not just when a user
+        # tries to log in.
+        from nexoclip.settings import get_settings as _get_settings
+        import structlog as _structlog
+        _boot_log = _structlog.get_logger("nexoclip.api.boot")
+        if not _get_settings().nexo_ai_sso_secret:
+            _boot_log.warning(
+                "sso_secret_missing",
+                msg=(
+                    "NEXO_AI_SSO_SECRET is not configured. /auth/sso will "
+                    "return 503 until it is. NEVER deploy to production "
+                    "without this — without HMAC verification SSO would "
+                    "let any caller take over any tenant."
+                ),
+            )
         if enable_background_drains:
             async with background_drains_lifespan(
                 _app,

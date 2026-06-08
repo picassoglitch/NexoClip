@@ -172,6 +172,24 @@ async def test_technical_details_collapsed_but_present(
     assert "/dashboard/streams/str_sd/source" in html
 
 
+async def test_finished_run_with_stale_upload_status_shows_complete(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """A stream whose status column is still 'upload' but which HAS
+    clips is DONE — the hero must show the outcome, not 'Analyzing your
+    video…'. (The status update is best-effort; clips are the truth.)"""
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id, stream_status="upload", with_clips=True)
+    r = await client.get(
+        "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+    )
+    html = r.text
+    assert "Processing complete" in html
+    assert "Analyzing your video" not in html
+
+
 async def test_running_stream_shows_progress_not_outcome(
     client: httpx.AsyncClient,
     db: Database,

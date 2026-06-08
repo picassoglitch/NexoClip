@@ -1396,13 +1396,20 @@ def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
     """Creator-facing view model: outcome-first summary, per-clip viral
     scores + humanized AI signals, a visual timeline, and a 'best pick'.
     Keeps all the derivation in one place so the template stays dumb."""
+    # Derive the outcome state. Trust the CLIPS over the stream.status
+    # column: a stream can finish the pipeline (clips on disk) while its
+    # status row is still "upload"/"pending" (the status update is best-
+    # effort and not always written). If clips exist and we're not
+    # actively running or failed, the run is DONE — show the outcome, not
+    # a misleading "Analyzing your video…".
     status = (getattr(stream, "status", "") or "").lower()
-    if status in ("done", "ingested", "ready"):
-        status_kind = "complete"
-    elif status in ("running", "processing", "ingesting"):
+    has_clips = len(clips) > 0
+    if status in ("running", "processing", "ingesting"):
         status_kind = "running"
-    elif status == "failed":
+    elif status == "failed" and not has_clips:
         status_kind = "failed"
+    elif has_clips or status in ("done", "ingested", "ready"):
+        status_kind = "complete"
     else:
         status_kind = "pending"
 

@@ -1,4 +1,38 @@
-# Deploying MediaMTX for NexoClip live ingest (phase L.1)
+# Deploying MediaMTX for NexoClip live ingest
+
+> **Canonical deploy is now Path B — the `nexoclip-live` repo + Cloudflare R2.**
+> The MediaMTX service lives in its own repo (`picassoglitch/nexoclip-live`),
+> records each stream, and uploads it to R2; NexoClip pulls it from R2 to
+> auto-clip (Phase L.2). Deploy by following that repo's `README.md` and
+> setting the matching `NEXOCLIP_LIVE_R2_*` vars on the NexoClip service.
+>
+> The shared-`/data`-volume approach below is **Path A (legacy)** — kept for
+> reference / single-box setups. It works, but doesn't scale (RTMP ingest and
+> the clip workers are pinned to one volume). Prefer Path B.
+
+---
+
+## Path B — separate repo + R2 (recommended)
+
+```
+OBS ──rtmp──▶ nexoclip-live (MediaMTX svc) ──upload──▶ R2 bucket/live/<stream_id>/
+                     │ webhooks (authorize/started/ended)        ▲
+                     ▼                                            │ pull
+                  NexoClip  ──auto-clip──────────────────────────┘
+```
+
+- **Service repo + full deploy steps:** `nexoclip-live/README.md`.
+- **NexoClip side:** set `NEXOCLIP_LIVE_R2_BUCKET`, `NEXOCLIP_LIVE_R2_ENDPOINT`,
+  `NEXOCLIP_LIVE_R2_ACCESS_KEY_ID`, `NEXOCLIP_LIVE_R2_SECRET_ACCESS_KEY`
+  (+ optional `NEXOCLIP_LIVE_R2_PREFIX`, `NEXOCLIP_LIVE_R2_REGION`) and
+  `NEXOCLIP_LIVE_RTMP_BASE_URL`. When the bucket is set, the live runner
+  pulls recordings from R2 instead of disk — no shared volume.
+
+The rest of this doc is **Path A (legacy, shared volume).**
+
+---
+
+# Path A (legacy) — shared `/data` volume
 
 This is the operator-side deploy guide for the MediaMTX service that
 sits in front of NexoClip and accepts RTMP push from OBS.

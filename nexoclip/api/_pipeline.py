@@ -365,26 +365,52 @@ def _resolve_recording_file(recording_path: str) -> "Path | None":
     return None
 
 
-# How long the live runner waits for MediaMTX to flush the final MP4 after
-# the 'ended' webhook before giving up. Background work — a generous window
-# is fine; the manual "Run pipeline" button is the fallback if it expires.
-_LIVE_RECORDING_WAIT_ATTEMPTS = 15
-_LIVE_RECORDING_WAIT_DELAY_S = 2.0
+# How long the live runner waits for the recording to become available
+# after the 'ended' webhook. Generous on purpose: in the Path-B (R2) flow
+# the upload of a multi-hour recording can lag the 'ended' call by minutes,
+# and this runs in the background. The manual "Run pipeline" button is the
+# fallback if the window expires. 60 x 5s = 5 min.
+_LIVE_RECORDING_WAIT_ATTEMPTS = 60
+_LIVE_RECORDING_WAIT_DELAY_S = 5.0
 
 
-async def _await_recording_file(recording_path: str) -> "Path | None":
-    """Poll for the recording to appear/flush for a short window.
+async def _acquire_live_recording(
+    *, stream_id: str, recording_path: str, work_dir: "Path"
+) -> "Path | None":
+    """Get the finished live recording onto local disk, polling until it
+    shows up (or the wait budget runs out).
 
-    MediaMTX may still be finalizing the MP4 moctree when 'ended' fires,
-    so a single stat can miss it. Returns the resolved file or None after
-    the wait budget is exhausted."""
+    Two source modes, chosen by config:
+      - Path B (object storage configured): poll R2 under
+        `<prefix>/<stream_id>/` until the live-ingest service's upload
+        appears, download it, return the local path. This is what lets the
+        MediaMTX service run as a separate Railway service — no shared disk.
+      - Path A (no R2): poll the shared `/data` volume for the file MediaMTX
+        wrote in-place.
+
+    Polling (not a single stat) matters either way: MediaMTX may still be
+    flushing, or the R2 upload may still be in flight, when 'ended' fires.
+    Returns None if nothing usable arrives within the budget.
+    """
     import asyncio
 
+    from nexoclip.integrations.storage import build_recording_store
+    from nexoclip.settings import get_settings
+
+    store = build_recording_store(get_settings())
     for _ in range(_LIVE_RECORDING_WAIT_ATTEMPTS):
-        found = _resolve_recording_file(recording_path)
-        if found is not None:
-            return found
+        if store is not None:
+            got = await store.fetch_latest(stream_id=stream_id, dest_dir=work_dir)
+            if got is not None:
+                return got
+        else:
+            local = _resolve_recording_file(recording_path)
+            if local is not None:
+                return local
         await asyncio.sleep(_LIVE_RECORDING_WAIT_DELAY_S)
+    # One last attempt after the final sleep.
+    if store is not None:
+        return await store.fetch_latest(stream_id=stream_id, dest_dir=work_dir)
     return _resolve_recording_file(recording_path)
 
 
@@ -422,13 +448,19 @@ async def live_pipeline_runner(
     db_path = get_settings().db_path
 
     try:
-        # 1. Wait for MediaMTX to flush the final MP4, then locate it.
-        source_file = await _await_recording_file(recording_path)
+        # 1. Acquire the recording locally — pull from R2 (Path B) or read
+        #    the shared volume (Path A), polling until it shows up.
+        work_dir = output_dir / stream_id / "_incoming"
+        source_file = await _acquire_live_recording(
+            stream_id=stream_id,
+            recording_path=recording_path,
+            work_dir=work_dir,
+        )
         if source_file is None:
             raise RuntimeError(
-                f"live recording for {stream_id} not found on disk "
-                f"(looked at {recording_path}); MediaMTX may not have "
-                "flushed it, or recordPath differs from the authorize hint"
+                f"live recording for {stream_id} did not become available "
+                f"(R2 prefix live/{stream_id}/ or disk {recording_path}); "
+                "the upload may have failed or recordPath differs"
             )
 
         # 2. Ingest the recording like an upload (audio + duration +

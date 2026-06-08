@@ -231,6 +231,58 @@ async def test_autoclip_skips_when_no_persona(
     assert after is not None and after.status == "live_ended"  # not claimed
 
 
+# ---- _acquire_live_recording (R2 vs shared disk) --------------------------
+
+
+class _FakeStore:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self.calls = 0
+
+    async def fetch_latest(self, *, stream_id: str, dest_dir: Path) -> Path | None:
+        self.calls += 1
+        return self._path
+
+
+async def test_acquire_uses_r2_store_when_configured(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With object storage configured, the recording is pulled via the
+    store (Path B) — no shared disk needed."""
+    rec = tmp_path / "rec.mp4"
+    rec.write_bytes(b"\x00" * 4096)
+    store = _FakeStore(rec)
+    monkeypatch.setattr(
+        "nexoclip.integrations.storage.build_recording_store", lambda _s: store
+    )
+    monkeypatch.setattr("nexoclip.settings.get_settings", lambda: SimpleNamespace())
+
+    got = await _pipeline._acquire_live_recording(
+        stream_id="str_1", recording_path="/data/unused", work_dir=tmp_path / "in"
+    )
+    assert got == rec
+    assert store.calls == 1
+
+
+async def test_acquire_falls_back_to_disk_without_r2(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No store configured → read the shared volume (Path A)."""
+    d = tmp_path / "live" / "str_1"
+    d.mkdir(parents=True)
+    f = d / "source.mp4"
+    f.write_bytes(b"\x00" * 4096)
+    monkeypatch.setattr(
+        "nexoclip.integrations.storage.build_recording_store", lambda _s: None
+    )
+    monkeypatch.setattr("nexoclip.settings.get_settings", lambda: SimpleNamespace())
+
+    got = await _pipeline._acquire_live_recording(
+        stream_id="str_1", recording_path=str(d / "source"), work_dir=tmp_path / "in"
+    )
+    assert got == f
+
+
 # ---- live_pipeline_runner -------------------------------------------------
 
 
@@ -242,11 +294,13 @@ async def test_live_runner_ingests_then_processes(
     tenant = await TenantsRepo(db).create(name="Aldo")
     seq: list[str] = []
 
-    async def fake_await_rec(_rec: str) -> Path:
+    async def fake_acquire(
+        *, stream_id: str, recording_path: str, work_dir: Path
+    ) -> Path:
         seq.append("resolve")
         return tmp_path / "rec.mp4"
 
-    monkeypatch.setattr(_pipeline, "_await_recording_file", fake_await_rec)
+    monkeypatch.setattr(_pipeline, "_acquire_live_recording", fake_acquire)
 
     fake_stream = SimpleNamespace(id="str_r", vod_url="live://rtmp/str_r")
 

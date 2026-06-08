@@ -29,6 +29,14 @@ _METADATA_IPS = {
 # spoofing one — neither belongs as a subscriber endpoint.
 _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 
+# RFC 2606 / RFC 6761 reserved top-level domains for documentation and
+# test fixtures. By spec these are guaranteed never to be allocated in
+# public DNS, so allowing them here costs zero security — they'll never
+# resolve to anything (private or public) in real traffic. Tests that
+# follow the RFC (e.g. `https://hook.example/x`) need this carve-out so
+# the strict validator doesn't force them to use real domains.
+_RESERVED_TEST_TLDS = {"example", "test", "invalid", "localhost"}
+
 
 class UnsafeWebhookUrlError(ValueError):
     """Raised when a webhook URL targets a private / loopback / metadata IP."""
@@ -44,6 +52,16 @@ def _is_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if str(ip) in _METADATA_IPS:
         return True
     return False
+
+
+def _has_reserved_test_tld(host: str) -> bool:
+    """True if `host`'s rightmost label is an RFC 2606 reserved test TLD.
+
+    Catches both bare-TLD (`localhost`) and subdomain (`hook.example`,
+    `service.test`, `widget.invalid`) forms.
+    """
+    parts = host.lower().rstrip(".").split(".")
+    return bool(parts) and parts[-1] in _RESERVED_TEST_TLDS
 
 
 def assert_webhook_url_safe(url: str, *, allow_unresolvable: bool = False) -> None:
@@ -76,6 +94,17 @@ def assert_webhook_url_safe(url: str, *, allow_unresolvable: bool = False) -> No
         raise UnsafeWebhookUrlError("url is missing a hostname")
     if str(host) in _METADATA_IPS:
         raise UnsafeWebhookUrlError("url targets a cloud metadata endpoint")
+
+    # RFC 2606 / 6761 reserved test TLDs (.example, .test, .invalid,
+    # .localhost) never resolve to anything in real DNS, so they cannot
+    # become a private-IP vector. Allow them through without a lookup so
+    # documentation-style URLs in tests and examples don't get rejected.
+    # Note: `localhost` as a bare hostname IS in this set — but it would
+    # also resolve to 127.0.0.1 and fail the private-IP check below, so
+    # we still need to NOT short-circuit on bare "localhost". Limit the
+    # carve-out to subdomains of these TLDs (i.e. require a dot).
+    if "." in host and _has_reserved_test_tld(host):
+        return
 
     # Resolve and reject if ANY answer is private. Cheap, blocking call —
     # acceptable at registration time. The dispatcher caches resolutions

@@ -196,6 +196,30 @@ async def _record_transcribe_cost(
             tenant_id=tenant_id, error=str(e),
         )
 
+    # Token T4 — also report this provider's usage to Nexo AI so the
+    # balance reflects ALL spend, not just Claude. Native amount =
+    # transcript seconds (kind="transcription.seconds"); cost = the real
+    # USD micros computed above. Fire-and-forget, same as the LLM path.
+    try:
+        from nexoclip.integrations.nexo_ai.reporter import schedule_usage
+
+        schedule_usage(
+            db,
+            tenant_id=tenant_id,
+            kind="transcription.seconds",
+            amount=max(0, int(round(transcript.duration_s))),
+            cost_usd_micros=cost_micros,
+            source_id=row.id,
+            occurred_at_iso=row.ts,
+            operation="transcribe",
+        )
+    except Exception as e:  # noqa: BLE001 — never breaks the pipeline
+        import structlog
+        structlog.get_logger(__name__).warning(
+            "transcribe.usage_report.failed",
+            tenant_id=tenant_id, error=str(e),
+        )
+
 
 def load_transcript(stream_dir: Path) -> Transcript:
     """Load a previously-saved Transcript from `<stream_dir>/source/transcript.json`."""

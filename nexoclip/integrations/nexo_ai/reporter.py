@@ -44,33 +44,53 @@ _log = logging.getLogger("nexoclip.nexo_ai.reporter")
 _REPORT_TIMEOUT_S = 3.0
 
 
-async def report_llm_usage(
+async def report_usage(
     db: Database,
     *,
     tenant_id: str,
-    llm_call_id: str,
-    input_tokens: int,
-    output_tokens: int,
+    kind: str,
+    amount: int,
+    cost_usd_micros: int,
+    source_id: str,
     occurred_at_iso: str,
     operation: str | None = None,
 ) -> None:
-    """Push one LLM call's token consumption to Nexo AI + persist the
-    returned balance on the tenant row. Never raises — all errors are
-    logged and swallowed."""
+    """Push ONE usage event from ANY provider to Nexo AI + persist the
+    returned balance. Never raises — all errors are logged and swallowed.
+
+    Token T4 — this is the unified, provider-agnostic reporter. Every
+    event carries BOTH the native `amount` + `kind` (e.g. llm.tokens /
+    transcription.seconds) AND the real `cost_usd_micros`, so Nexo AI
+    can price off real cost while still seeing what was consumed. The
+    economics platform pulls true provider cost from this stream — not
+    just Claude tokens.
+
+      kind    — "llm.tokens", "transcription.seconds", ... (provider's
+                native unit, namespaced)
+      amount  — the count in that native unit (tokens, seconds, …)
+      cost_usd_micros — the real USD cost of this usage, the universal
+                unit Nexo AI deducts/prices against
+      source_id — the originating row id (llm_calls.id) for idempotency
+                (Nexo AI's usage_events has UNIQUE(engine, source_id))
+    """
     settings = get_settings()
     base = settings.nexo_ai_base_url
     token = settings.nexo_ai_admin_token
 
+    amount = max(0, int(amount))
+    cost_usd_micros = max(0, int(cost_usd_micros))
+
     if not base:
         _log.info(
-            "report skipped: NEXO_AI_BASE_URL unset · tenant=%s call=%s (%d+%d tokens)",
-            tenant_id, llm_call_id, input_tokens, output_tokens,
+            "report skipped: NEXO_AI_BASE_URL unset · tenant=%s call=%s "
+            "kind=%s amount=%d cost_um=%d",
+            tenant_id, source_id, kind, amount, cost_usd_micros,
         )
         return
     if not token:
         _log.warning(
             "report skipped: NEXO_AI_ADMIN_TOKEN unset · tenant=%s call=%s",
-            tenant_id, llm_call_id,
+            tenant_id, source_id,
         )
         await _record_status(
             db, tenant_id, ok=False, at_iso=occurred_at_iso,
@@ -94,8 +114,8 @@ async def report_llm_usage(
         )
         return
 
-    amount = max(0, int(input_tokens) + int(output_tokens))
-    if amount == 0:
+    # Nothing consumed (zero count AND zero cost) → no event to send.
+    if amount <= 0 and cost_usd_micros <= 0:
         return
 
     url = f"{base.rstrip('/')}/api/engines/nexoclip/usage"
@@ -105,9 +125,10 @@ async def report_llm_usage(
     # omitted when the caller didn't pass a purpose, in which case
     # Nexo AI renders each event individually as before.
     event: dict[str, Any] = {
-        "kind": "llm.tokens",
+        "kind": kind,
         "amount": amount,
-        "source_id": llm_call_id,
+        "cost_usd_micros": cost_usd_micros,
+        "source_id": source_id,
         "occurred_at": occurred_at_iso,
     }
     if operation:
@@ -185,12 +206,41 @@ async def report_llm_usage(
     await _record_status(db, tenant_id, ok=True, at_iso=occurred_at_iso)
 
     _log.info(
-        "reported %d tokens · tenant=%s call=%s · remaining=%s (unlimited=%s)",
+        "reported %s=%d (cost_um=%d) · tenant=%s call=%s · remaining=%s (unlimited=%s)",
+        kind,
         amount,
+        cost_usd_micros,
         tenant_id,
-        llm_call_id,
+        source_id,
         balance.get("remaining") if isinstance(balance, dict) else "?",
         balance.get("unlimited") if isinstance(balance, dict) else "?",
+    )
+
+
+async def report_llm_usage(
+    db: Database,
+    *,
+    tenant_id: str,
+    llm_call_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd_micros: int = 0,
+    occurred_at_iso: str,
+    operation: str | None = None,
+) -> None:
+    """LLM (Claude) wrapper over report_usage — kind=llm.tokens, amount =
+    input + output tokens. Kept as a named entry point for the router
+    and its tests. cost_usd_micros is the router's computed cost so
+    Nexo AI sees real USD, not just token count."""
+    await report_usage(
+        db,
+        tenant_id=tenant_id,
+        kind="llm.tokens",
+        amount=max(0, int(input_tokens) + int(output_tokens)),
+        cost_usd_micros=cost_usd_micros,
+        source_id=llm_call_id,
+        occurred_at_iso=occurred_at_iso,
+        operation=operation,
     )
 
 
@@ -215,6 +265,50 @@ async def _record_status(
         )
 
 
+def schedule_usage(
+    db: Database,
+    *,
+    tenant_id: str,
+    kind: str,
+    amount: int,
+    cost_usd_micros: int,
+    source_id: str,
+    occurred_at_iso: str,
+    operation: str | None = None,
+) -> None:
+    """Fire-and-forget wrapper over report_usage. Spawns a background
+    task so the caller (the LLM router's hot path, the transcribe
+    service) doesn't pay the network round-trip. The task runs to
+    completion even after the calling coroutine returns.
+
+    Token T4 — the generic entry point for ANY provider. Tracks the
+    task on a module-level set so the asyncio GC doesn't cancel it
+    prematurely (https://docs.python.org/3/library/asyncio-task.html)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _log.warning(
+            "schedule_usage: no running event loop — skipping. tenant=%s call=%s",
+            tenant_id, source_id,
+        )
+        return
+
+    task = loop.create_task(
+        report_usage(
+            db,
+            tenant_id=tenant_id,
+            kind=kind,
+            amount=amount,
+            cost_usd_micros=cost_usd_micros,
+            source_id=source_id,
+            occurred_at_iso=occurred_at_iso,
+            operation=operation,
+        )
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
 def schedule_report(
     db: Database,
     *,
@@ -222,38 +316,22 @@ def schedule_report(
     llm_call_id: str,
     input_tokens: int,
     output_tokens: int,
+    cost_usd_micros: int = 0,
     occurred_at_iso: str,
     operation: str | None = None,
 ) -> None:
-    """Fire-and-forget wrapper. Spawns a task so the caller (LLMRouter._log)
-    doesn't pay the network round-trip on the hot path. The task runs to
-    completion in the background even after the calling coroutine returns.
-
-    We track the task on a module-level set to keep the asyncio garbage
-    collector from cancelling it prematurely — see
-    https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        _log.warning(
-            "schedule_report: no running event loop — skipping. tenant=%s call=%s",
-            tenant_id, llm_call_id,
-        )
-        return
-
-    task = loop.create_task(
-        report_llm_usage(
-            db,
-            tenant_id=tenant_id,
-            llm_call_id=llm_call_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            occurred_at_iso=occurred_at_iso,
-            operation=operation,
-        )
+    """LLM (Claude) fire-and-forget wrapper — kept as the router's entry
+    point. Delegates to schedule_usage with kind=llm.tokens."""
+    schedule_usage(
+        db,
+        tenant_id=tenant_id,
+        kind="llm.tokens",
+        amount=max(0, int(input_tokens) + int(output_tokens)),
+        cost_usd_micros=cost_usd_micros,
+        source_id=llm_call_id,
+        occurred_at_iso=occurred_at_iso,
+        operation=operation,
     )
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 # Strong references to in-flight tasks so they don't get GC'd before

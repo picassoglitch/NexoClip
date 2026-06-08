@@ -449,6 +449,9 @@ class LLMRouter:
                     llm_call_id=llm_call_id,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    # Token T4 — send the real USD cost too, not just the
+                    # token count, so Nexo AI prices off true spend.
+                    cost_usd_micros=cost_usd_micros,
                     occurred_at_iso=ts,
                     operation=purpose,
                 )

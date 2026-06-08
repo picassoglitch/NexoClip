@@ -23,6 +23,7 @@ What L.1 does NOT do:
 from __future__ import annotations
 
 import datetime as _dt
+import time as _time
 from pathlib import Path
 from typing import Annotated
 
@@ -132,6 +133,54 @@ def _verify_internal_bearer(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="bad bearer")
 
 
+# ── authorize → started cross-check registry ────────────────────────────────
+# When /authorize accepts an RTMP push it mints a fresh stream_id bound to
+# the stream key's tenant. /started then arrives with both stream_id AND a
+# tenant_id from MediaMTX's payload — if we trust the body verbatim, an
+# attacker holding NEXOCLIP_INTERNAL_SIGNING_SECRET can inject stream rows
+# into ANY tenant by sending a (fresh stream_id, victim tenant_id) pair.
+#
+# This in-process registry binds the stream_id → tenant_id mapping issued
+# by /authorize so /started can require an exact match. Entries auto-expire
+# after _AUTHORIZE_TTL_S; expired entries are GC'd opportunistically on
+# each write.
+#
+# Single-process only. NexoClip currently runs as a single Railway replica;
+# when this horizontally scales, swap for Redis (same Redis story as the
+# rate-limit infra needed for engine-usage and contact-form endpoints).
+_AUTHORIZE_REGISTRY: dict[str, tuple[str, float]] = {}
+_AUTHORIZE_TTL_S = 60.0
+
+
+def _gc_authorize_registry(now: float) -> None:
+    """Drop expired entries. O(N) sweep; N stays tiny because the registry
+    only holds in-flight authorize→started pairs (seconds-long lifespan)."""
+    expired = [sid for sid, (_t, exp) in _AUTHORIZE_REGISTRY.items() if exp < now]
+    for sid in expired:
+        _AUTHORIZE_REGISTRY.pop(sid, None)
+
+
+def _register_authorize(stream_id: str, tenant_id: str) -> None:
+    now = _time.time()
+    _gc_authorize_registry(now)
+    _AUTHORIZE_REGISTRY[stream_id] = (tenant_id, now + _AUTHORIZE_TTL_S)
+
+
+def _consume_authorize(stream_id: str) -> str | None:
+    """Pop the registered tenant_id for stream_id, or None if no entry
+    exists / it expired. Single-use: a subsequent /started call for the
+    same stream_id without a fresh /authorize is rejected."""
+    now = _time.time()
+    _gc_authorize_registry(now)
+    entry = _AUTHORIZE_REGISTRY.pop(stream_id, None)
+    if entry is None:
+        return None
+    tenant_id, exp = entry
+    if exp < now:
+        return None
+    return tenant_id
+
+
 @router.post("/api/internal/live/authorize")
 async def live_authorize(
     request: Request,
@@ -185,6 +234,11 @@ async def live_authorize(
     # push actually goes through.
     stream_id = new_id_with_prefix("str")
 
+    # Bind stream_id to the tenant_id determined by the (authenticated)
+    # stream key so /started can verify its body's tenant_id against
+    # ours. See _register_authorize above for the threat model.
+    _register_authorize(stream_id, key_row.tenant_id)
+
     # Update last_used_at so the dashboard can show "this key was
     # used 12s ago". Best-effort.
     try:
@@ -229,6 +283,23 @@ async def live_started(
         raise HTTPException(
             status_code=400,
             detail="stream_id, tenant_id, recording_path required",
+        )
+
+    # Verify the body's tenant_id matches what /authorize issued for
+    # this stream_id. The bearer alone is not enough — anyone holding
+    # it could otherwise pair a fresh stream_id with any tenant_id and
+    # inject a bogus streams row into a victim tenant. See
+    # _register_authorize for the threat model.
+    expected_tenant = _consume_authorize(stream_id)
+    if expected_tenant is None:
+        raise HTTPException(
+            status_code=401,
+            detail="no authorize record for stream_id (or expired)",
+        )
+    if expected_tenant != tenant_id:
+        raise HTTPException(
+            status_code=401,
+            detail="tenant_id does not match authorize record",
         )
 
     db: Database = request.app.state.db

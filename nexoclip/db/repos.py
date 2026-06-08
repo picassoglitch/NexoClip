@@ -681,12 +681,19 @@ class StreamsRepo:
         )
         return _model(StreamRow, await cur.fetchone())
 
-    async def list_for_tenant(self) -> list[StreamRow]:
+    async def list_for_tenant(self, *, limit: int = 10_000) -> list[StreamRow]:
+        """List a tenant's streams, hard-capped to `limit` rows (default 10k).
+
+        Bound for the same reason as CandidatesRepo / ClipsRepo .list_for_stream:
+        a tenant with many years of streams would otherwise pull the whole
+        history into memory on every dashboard render.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM streams WHERE tenant_id = ? ORDER BY created_at DESC",
-            (tenant_id,),
+            "SELECT * FROM streams WHERE tenant_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (tenant_id, int(limit)),
         )
         return [StreamRow.model_validate(dict(r)) for r in await cur.fetchall()]
 
@@ -1211,12 +1218,22 @@ class CandidatesRepo:
         await conn.commit()
         return len(rows)
 
-    async def list_for_stream(self, stream_id: str) -> list[CandidateRow]:
+    async def list_for_stream(
+        self, stream_id: str, *, limit: int = 10_000
+    ) -> list[CandidateRow]:
+        """List candidates for a stream, hard-capped to `limit` rows.
+
+        Default of 10 000 protects against OOM when a long stream
+        produces a runaway candidate set (~5 000 is already a busy
+        90-minute show). Callers that need higher can opt in
+        explicitly; nothing in the dashboard currently does.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM candidates WHERE tenant_id = ? AND stream_id = ? ORDER BY ts",
-            (tenant_id, stream_id),
+            "SELECT * FROM candidates WHERE tenant_id = ? AND stream_id = ? "
+            "ORDER BY ts LIMIT ?",
+            (tenant_id, stream_id, int(limit)),
         )
         return [_candidate_from_row(r) for r in await cur.fetchall()]
 
@@ -1308,12 +1325,20 @@ class ClipsRepo:
         row = await cur.fetchone()
         return _clip_from_row(row) if row else None
 
-    async def list_for_stream(self, stream_id: str) -> list[ClipRow]:
+    async def list_for_stream(
+        self, stream_id: str, *, limit: int = 10_000
+    ) -> list[ClipRow]:
+        """List clips for a stream, hard-capped to `limit` rows.
+
+        Default 10 000 mirrors CandidatesRepo.list_for_stream; protects
+        against the dashboard rendering with an unbounded result set.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM clips WHERE tenant_id = ? AND stream_id = ? ORDER BY created_at",
-            (tenant_id, stream_id),
+            "SELECT * FROM clips WHERE tenant_id = ? AND stream_id = ? "
+            "ORDER BY created_at LIMIT ?",
+            (tenant_id, stream_id, int(limit)),
         )
         return [_clip_from_row(r) for r in await cur.fetchall()]
 

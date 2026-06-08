@@ -40,6 +40,8 @@ from .models import (
     Event,
     LiveStreamKeyRow,
     LLMCallRow,
+    ProviderSpend,
+    StreamSpend,
     PersonaRow,
     PublishJob,
     PublishMetric,
@@ -726,8 +728,9 @@ class LLMCallsRepo:
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO llm_calls (id, tenant_id, purpose, provider, model, quality, "
-            "input_tokens, output_tokens, cost_usd_micros, status, error, attempts, ts) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "input_tokens, output_tokens, cost_usd_micros, status, error, attempts, ts, "
+            "stream_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.tenant_id,
@@ -742,9 +745,51 @@ class LLMCallsRepo:
                 row.error,
                 row.attempts,
                 row.ts,
+                row.stream_id,
             ),
         )
         await conn.commit()
+
+    async def cost_for_stream(self, stream_id: str) -> "StreamSpend":
+        """Token T3 — actual spend for ONE stream's run: total tokens +
+        total USD cost, plus a per-provider breakdown. Drives the
+        'what did this video actually cost' panel (vs the estimate)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT provider, "
+            "COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, "
+            "COALESCE(SUM(cost_usd_micros), 0) AS cost_um, "
+            "COUNT(*) AS calls "
+            "FROM llm_calls "
+            "WHERE tenant_id = ? AND stream_id = ? AND status = 'ok' "
+            "GROUP BY provider",
+            (tenant_id, stream_id),
+        )
+        by_provider: list[ProviderSpend] = []
+        total_tokens = 0
+        total_cost = 0
+        total_calls = 0
+        for r in await cur.fetchall():
+            d = dict(r)
+            by_provider.append(
+                ProviderSpend(
+                    provider=d["provider"],
+                    tokens=int(d["tokens"]),
+                    cost_usd_micros=int(d["cost_um"]),
+                    calls=int(d["calls"]),
+                )
+            )
+            total_tokens += int(d["tokens"])
+            total_cost += int(d["cost_um"])
+            total_calls += int(d["calls"])
+        return StreamSpend(
+            stream_id=stream_id,
+            total_tokens=total_tokens,
+            total_cost_usd_micros=total_cost,
+            total_calls=total_calls,
+            by_provider=by_provider,
+        )
 
     async def list_for_tenant(self, *, limit: int = 100) -> list[LLMCallRow]:
         tenant_id = current_tenant_id()

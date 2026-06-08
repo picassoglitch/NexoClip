@@ -408,6 +408,12 @@ class LLMRouter:
             from nexoclip.tenancy import bound_tenant
 
             llm_call_id = new_id("llm")
+            # Token T3 — attribute this cost to the current pipeline run's
+            # stream, read from the structlog contextvar the pipeline binds
+            # for the whole run (same source the step-event emitter uses).
+            # None for non-pipeline calls.
+            import structlog as _structlog
+            _stream_id = _structlog.contextvars.get_contextvars().get("stream_id")
             db_row = LLMCallRow(
                 id=llm_call_id,
                 tenant_id=tenant_id,
@@ -422,6 +428,7 @@ class LLMRouter:
                 error=error,
                 attempts=attempts,
                 ts=ts,
+                stream_id=_stream_id,
             )
             try:
                 with bound_tenant(tenant_id):

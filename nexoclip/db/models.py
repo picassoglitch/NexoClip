@@ -290,6 +290,39 @@ class LLMCallRow(BaseModel):
     error: str | None = None
     attempts: int = 1
     ts: str
+    # Token T3 — the stream this cost belongs to (None for non-pipeline
+    # calls). Stamped from the run's structlog stream_id contextvar.
+    stream_id: str | None = None
+
+
+class ProviderSpend(BaseModel):
+    """Token T3 — one provider's roll-up within a stream's run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    tokens: int = 0
+    cost_usd_micros: int = 0
+    calls: int = 0
+
+
+class StreamSpend(BaseModel):
+    """Token T3 — actual spend for one stream's run (vs the estimate).
+    Sums llm_calls (Claude + transcription + any provider) tagged with
+    this stream_id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream_id: str
+    total_tokens: int = 0
+    total_cost_usd_micros: int = 0
+    total_calls: int = 0
+    by_provider: list[ProviderSpend] = Field(default_factory=list)
+
+    @property
+    def cost_usd(self) -> float:
+        """USD (not micros) for display."""
+        return self.total_cost_usd_micros / 1_000_000.0
 
 
 class PublishJob(BaseModel):

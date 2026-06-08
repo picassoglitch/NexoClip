@@ -169,11 +169,16 @@ async def _record_transcribe_cost(
     from nexoclip.tenancy import bound_tenant
 
     cost_micros = provider.cost_for_duration_micros(transcript.duration_s)
+    # Token T3 — attribute transcription cost to the run's stream, read
+    # from the structlog contextvar the pipeline binds for the run.
+    import structlog as _structlog
+    _stream_id = _structlog.contextvars.get_contextvars().get("stream_id")
     row = LLMCallRow(
         id=new_id("llmc"),
         tenant_id=tenant_id,
         purpose="transcribe",
         provider=provider.name,
+        stream_id=_stream_id,
         # No "model" in the LLM sense for STT; reuse the provider's
         # own model token (e.g. "best" / "nano" / "medium").
         model=getattr(provider, "_speech_model", None) or provider.name,

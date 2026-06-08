@@ -135,15 +135,16 @@ class Settings(BaseSettings):
     # Phase L.2 / Path B — object storage the live-ingest service (the
     # separate `nexoclip-live` MediaMTX deployment) uploads recordings to,
     # and that NexoClip pulls them from. Vendor-neutral: ANY S3-compatible
-    # store works via `endpoint` — Supabase Storage (reuses the Supabase you
-    # already run), Cloudflare R2, MinIO, Backblaze B2, AWS S3, … When the
-    # bucket is UNSET, live ingest falls back to reading a shared `/data`
-    # volume (Path A). Recordings land at `<prefix>/<stream_id>/<file>.mp4`.
+    # store works via `endpoint` — Cloudflare R2 (recommended: $0 egress, so
+    # the once-per-stream download is free; cheapest for video), Supabase
+    # Storage, MinIO, Backblaze B2, AWS S3, … When the bucket is UNSET, live
+    # ingest falls back to reading a shared `/data` volume (Path A).
+    # Recordings land at `<prefix>/<stream_id>/<file>.mp4`.
     #
-    # Supabase Storage example:
-    #   NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ref>.supabase.co/storage/v1/s3
-    #   NEXOCLIP_LIVE_STORAGE_REGION=<project region, e.g. us-east-2>
-    #   (+ S3 access keys from Supabase → Project Settings → Storage)
+    # Cloudflare R2 example:
+    #   NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+    #   NEXOCLIP_LIVE_STORAGE_REGION=auto
+    #   (+ R2 API token access key id / secret)
     live_recording_storage_bucket: str | None = Field(
         default=None, validation_alias="NEXOCLIP_LIVE_STORAGE_BUCKET"
     )

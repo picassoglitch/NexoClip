@@ -4,9 +4,11 @@
 > object storage.** The MediaMTX service lives in its own repo
 > (`picassoglitch/nexoclip-live`), records each stream, and uploads it to an
 > object store; NexoClip pulls it to auto-clip (Phase L.2). **Default store is
-> Supabase Storage** (S3-compatible — reuses the Supabase you already run, so
-> no new vendor); R2/MinIO/S3 also work — it's all the same `NEXOCLIP_LIVE_
-> STORAGE_*` config, only the endpoint + keys change.
+> Cloudflare R2** — $0 egress, so the once-per-stream download is free
+> (~$0.005/stream vs ~$0.40 on metered-egress stores); cheapest for video and
+> it isolates bulky recordings from the shared Supabase egress budget.
+> Supabase/MinIO/S3 also work — it's all the same `NEXOCLIP_LIVE_STORAGE_*`
+> config, only the endpoint + keys change.
 >
 > The shared-`/data`-volume approach below is **Path A (legacy)** — kept for
 > reference / single-box setups. It works, but doesn't scale (RTMP ingest and
@@ -31,11 +33,17 @@ OBS ──rtmp──▶ nexoclip-live (MediaMTX svc) ──upload──▶ store
   `NEXOCLIP_LIVE_RTMP_BASE_URL`. When the bucket is set, the live runner
   pulls recordings from the store instead of disk — no shared volume.
 
-  **Supabase Storage:** create a private bucket, grab S3 access keys from
-  *Project Settings → Storage*, and set
+  **Cloudflare R2 (default):** create a bucket, create an R2 API token, and set
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
+  with `NEXOCLIP_LIVE_STORAGE_REGION=auto`. $0 egress + a 10 GB / 1M-op free
+  tier, so low volume is genuinely free and there's no monthly minimum.
+
+  **Supabase Storage (alternative):** create a private bucket, grab S3 keys
+  from *Project Settings → Storage*, set
   `NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ref>.supabase.co/storage/v1/s3`
-  with `NEXOCLIP_LIVE_STORAGE_REGION=<project region>`. Raise the bucket's
-  file-size limit (default 50 MB) to cover multi-hour recordings.
+  + `NEXOCLIP_LIVE_STORAGE_REGION=<project region>`, and raise the bucket's
+  file-size limit (default 50 MB). Note: ~$0.09/GB egress on every pull, and
+  it draws from the project-wide egress budget.
 
 The rest of this doc is **Path A (legacy, shared volume).**
 

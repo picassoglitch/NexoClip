@@ -343,6 +343,11 @@ async def usage_probe(
     It does NOT touch the report-status cache (the red chip), so probing
     is side-effect-free for the operator-facing state.
     """
+    # Operator/admin diagnostic — never expose to creators (it surfaces
+    # raw cost + upstream internals). 404 to keep it invisible.
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
     import datetime as _dt
 
     import httpx as _httpx
@@ -444,7 +449,13 @@ async def diag_nexo_ai(
     is safe to display) so you can spot typos or whitespace in the Railway
     env var without copying the deploy logs. Token values stay
     presence-only (booleans) — never echo a secret back to the browser."""
+    # Operator/admin diagnostic — never expose to creators. 404 (not 403)
+    # so the page's existence stays invisible to non-admins.
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
     import traceback
+
     from nexoclip.integrations.nexo_ai.balance import (
         fetch_balance_now_verbose,
     )
@@ -1648,6 +1659,58 @@ async def stream_detail(
         persona_count=1,
     )
 
+    # Token T5 — express this run's cost to the CLIENT in TOKENS, never USD.
+    # Creators see only what their balance lost; raw USD is internal economics
+    # (admin-only). We mirror Nexo AI's deduction exactly (MICROS_PER_TOKEN=4,
+    # floor 1 per provider) and fold in the per-run base charge so the number
+    # here matches the balance chip's drop.
+    from math import ceil as _ceil
+
+    from nexoclip.settings import get_settings as _get_settings
+
+    micros_per_token = 4  # MUST match Nexo AI getTokenBalance's MICROS_PER_TOKEN
+    _base_micros = int(
+        getattr(_get_settings(), "pipeline_base_charge_usd_micros", 0) or 0
+    )
+    base_charge_tokens = _ceil(_base_micros / micros_per_token) if _base_micros > 0 else 0
+
+    # Actual token draw (what the balance actually lost): per provider, LLM
+    # deducts its native token count, metered providers deduct cost→tokens;
+    # floor 1 each; plus the base charge.
+    run_tokens_used: int | None = None
+    run_tokens_by_source: list[dict[str, object]] = []
+    if actual_spend is not None and actual_spend.total_calls:
+        _sum = 0
+        for p in actual_spend.by_provider:
+            t = p.tokens if p.tokens > 0 else _ceil(p.cost_usd_micros / micros_per_token)
+            t = max(1, int(t))
+            run_tokens_by_source.append(
+                {"label": p.provider, "tokens": t, "tokens_fmt": f"{t:,}"}
+            )
+            _sum += t
+        if base_charge_tokens > 0:
+            run_tokens_by_source.append(
+                {
+                    "label": "procesamiento base",
+                    "tokens": base_charge_tokens,
+                    "tokens_fmt": f"{base_charge_tokens:,}",
+                }
+            )
+            _sum += base_charge_tokens
+        run_tokens_used = _sum
+
+    # Estimated token draw (upper bound, same units): LLM token estimate +
+    # transcription cost→tokens + base charge.
+    est_tokens_total = (
+        int(estimate_single.total_tokens)
+        + (
+            _ceil(estimate_single.transcription_cost_usd_micros / micros_per_token)
+            if estimate_single.transcription_cost_usd_micros > 0
+            else 0
+        )
+        + base_charge_tokens
+    )
+
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
@@ -1662,6 +1725,17 @@ async def stream_detail(
             "estimate_total_fmt": format_tokens(estimate_single.total_tokens),
             "estimate_per_extra_persona_fmt": format_tokens(variant_tokens_one_persona),
             "runs_available": runs_available,
+            # Token T5 — client-facing run cost in TOKENS (USD is admin-only).
+            "run_tokens_used": run_tokens_used,
+            "run_tokens_used_fmt": (
+                format_tokens(run_tokens_used) if run_tokens_used else None
+            ),
+            "run_tokens_by_source": run_tokens_by_source,
+            "est_tokens_total": est_tokens_total,
+            "est_tokens_total_fmt": format_tokens(est_tokens_total),
+            "base_charge_tokens": base_charge_tokens,
+            # Only admins see raw USD economics; creators never do.
+            "show_usd_cost": bool(getattr(request.state, "is_admin", False)),
             "is_unlimited": (
                 token_balance is not None
                 and getattr(token_balance, "unlimited", False)
@@ -5477,6 +5551,11 @@ async def llm_calls_view(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    # LLM-calls ledger shows raw USD per call — admin/economics only, never
+    # a creator surface. 404 to non-admins.
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
     from nexoclip.cost import compute_cost_projection
 
     calls = await LLMCallsRepo(db).list_for_tenant(limit=200)

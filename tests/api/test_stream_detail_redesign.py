@@ -135,19 +135,12 @@ async def test_complete_stream_shows_humanized_ai_signals(
     assert "Speaker: Aldo" in html
 
 
-async def test_run_cost_shows_actual_vs_estimate(
-    client: httpx.AsyncClient,
-    db: Database,
-    tenants: dict[str, dict[str, str]],
-) -> None:
-    """Token T3 — once a run's LLM/transcription costs are recorded for
-    the stream, the page shows ACTUAL cost (all providers) next to the
-    estimate, with a per-provider breakdown."""
+async def _seed_run_spend(db: Database, tenant_id: str) -> None:
+    """Record an anthropic LLM call (37k tokens) + an assemblyai
+    transcription ($0.043) against str_sd."""
     from nexoclip.db import LLMCallsRepo
     from nexoclip.db.models import LLMCallRow
 
-    tenant_id = tenants["alice"]["id"]
-    await _seed_stream(db, tenant_id)
     with bound_tenant(tenant_id):
         repo = LLMCallsRepo(db)
         await repo.record(LLMCallRow(
@@ -163,17 +156,80 @@ async def test_run_cost_shows_actual_vs_estimate(
             status="ok", attempts=1, ts=_now(), stream_id="str_sd",
         ))
 
-    r = await client.get(
-        "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
-    )
+
+async def test_run_cost_shows_tokens_not_usd_to_creator(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token T5 — creators see this run's cost in TOKENS only, never USD.
+    Per-source breakdown: LLM native token count, transcription cost→tokens,
+    plus the per-run base charge."""
+    from nexoclip.settings import get_settings
+
+    # Pin the base charge so the totals are deterministic; non-admin tenant.
+    monkeypatch.setenv("NEXOCLIP_PIPELINE_BASE_CHARGE_USD_MICROS", "60000")
+    monkeypatch.delenv("NEXOCLIP_ADMIN_TENANT_IDS", raising=False)
+    get_settings.cache_clear()
+
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id)
+    await _seed_run_spend(db, tenant_id)
+
+    try:
+        r = await client.get(
+            "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+        )
+    finally:
+        get_settings.cache_clear()
     html = r.text
-    assert "Run cost" in html
-    assert "Actual cost" in html
-    # $0.154 = (111000 + 43000) micros.
-    assert "0.1540" in html
-    # Per-provider breakdown.
+    # Token panel, not a dollar panel.
+    assert "Uso de este video" in html
+    assert "Tokens usados" in html
+    # Per-source token breakdown.
     assert "anthropic" in html
+    assert "37,000" in html                  # 20k + 17k native LLM tokens
     assert "assemblyai" in html
+    assert "10,750" in html                  # ceil(43_000 / 4)
+    assert "procesamiento base" in html
+    assert "15,000" in html                  # ceil(60_000 / 4)
+    assert "62,750" in html                  # 37,000 + 10,750 + 15,000
+    # USD is NEVER shown to a creator.
+    assert "0.1540" not in html
+    assert "Actual cost" not in html
+    assert "costo real" not in html
+
+
+async def test_run_cost_shows_usd_to_admin_only(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The admin-only USD economics block renders for an admin tenant —
+    on TOP of the token view creators see."""
+    from nexoclip.settings import get_settings
+
+    tenant_id = tenants["alice"]["id"]
+    monkeypatch.setenv("NEXOCLIP_ADMIN_TENANT_IDS", tenant_id)
+    get_settings.cache_clear()
+
+    await _seed_stream(db, tenant_id)
+    await _seed_run_spend(db, tenant_id)
+
+    try:
+        r = await client.get(
+            "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+        )
+    finally:
+        get_settings.cache_clear()
+    html = r.text
+    # Token view still present for everyone.
+    assert "Tokens usados" in html
+    # Admin-only USD block.
+    assert "costo real" in html
+    assert "0.1540" in html                  # (111000 + 43000) micros = $0.1540
 
 
 async def test_run_cost_shows_estimate_only_before_run(
@@ -181,16 +237,17 @@ async def test_run_cost_shows_estimate_only_before_run(
     db: Database,
     tenants: dict[str, dict[str, str]],
 ) -> None:
-    """With no recorded spend, the panel shows the (cost-expressed)
-    estimate, not actual."""
+    """With no recorded spend, the panel shows the (token-expressed)
+    estimate, not actual — and no USD."""
     tenant_id = tenants["alice"]["id"]
     await _seed_stream(db, tenant_id)
     r = await client.get(
         "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
     )
     html = r.text
-    assert "Run cost" in html
-    assert "Estimated cost" in html
+    assert "Uso de este video" in html
+    assert "Estimado" in html
+    assert "Tokens usados" not in html
     assert "Actual cost" not in html
 
 

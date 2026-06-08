@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Multistream destinations - NexoClip{% endblock %}
+{% block content %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Multistream destinations</h2>
+    <small>Go live once — we relay to every platform you connect, and clip it. Stream keys are encrypted and never shown again.</small>
+  </div>
+  <div class="nc-page-summary">
+    <span class="nc-mono">{{ destinations|length }}</span> connected
+  </div>
+</div>
+
+{% if request.query_params.get('added') %}
+<div class="nc-alert nc-alert--success"><i class="ti ti-check"></i> Destination added.</div>
+{% elif request.query_params.get('deleted') %}
+<div class="nc-alert"><i class="ti ti-trash"></i> Destination removed.</div>
+{% elif request.query_params.get('error') %}
+<div class="nc-alert nc-alert--danger"><i class="ti ti-alert-triangle"></i> {{ request.query_params.get('error') }}</div>
+{% endif %}
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-broadcast" aria-hidden="true" style="color: var(--nc-lime, #c8ff5c);"></i>
+    <span class="nc-panel__title">Connect a platform</span>
+  </div>
+  <div class="nc-panel__body">
+    <form action="/dashboard/destinations" method="post">
+      <div class="nc-grid-2">
+        <label class="nc-label">Platform
+          <select class="nc-input" name="platform" id="dst-platform" required>
+            {% for p in platforms %}
+            <option value="{{ p }}">{{ p|capitalize }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="nc-label">Label (optional)
+          <input class="nc-input" name="label" placeholder="Main Twitch">
+        </label>
+      </div>
+      <label class="nc-label" id="dst-url-wrap">RTMP ingest URL
+        <input class="nc-input nc-input--mono" name="ingest_url" id="dst-url"
+               placeholder="rtmp://live.twitch.tv/app/">
+        <small id="dst-url-hint" class="nc-help"></small>
+      </label>
+      <label class="nc-label">Stream key
+        <input class="nc-input nc-input--mono" type="password" name="stream_key" required
+               placeholder="••••••••  (from the platform's stream settings)">
+      </label>
+      <button type="submit" class="nc-btn nc-btn--primary">
+        <i class="ti ti-link" aria-hidden="true"></i>
+        <span>Connect</span>
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if destinations %}
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-list" aria-hidden="true"></i>
+    <span class="nc-panel__title">Your destinations</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Platform</th><th>Label</th><th>Ingest URL</th>
+          <th>Status</th><th>Enabled</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in destinations %}
+        <tr>
+          <td><span class="nc-chip nc-chip--code">{{ d.platform }}</span></td>
+          <td>{{ d.label or "—" }}</td>
+          <td><span class="nc-mono nc-mono--muted">{{ d.ingest_url }}</span></td>
+          <td>
+            {% set st = d.last_status or 'idle' %}
+            <span class="nc-chip {% if st == 'live' %}nc-chip--success{% elif st == 'failed' %}nc-chip--danger{% else %}nc-chip--muted{% endif %}">{{ st }}</span>
+          </td>
+          <td>
+            <form action="/dashboard/destinations/{{ d.id }}/toggle" method="post" style="display:inline;">
+              <input type="hidden" name="enabled" value="{{ '0' if d.enabled else '1' }}">
+              <button type="submit" class="nc-btn nc-btn--ghost nc-btn--sm">
+                {{ 'On' if d.enabled else 'Off' }}
+              </button>
+            </form>
+          </td>
+          <td>
+            <form action="/dashboard/destinations/{{ d.id }}/delete" method="post" style="display:inline;"
+                  onsubmit="return confirm('Remove this destination?');">
+              <button type="submit" class="nc-btn nc-btn--ghost nc-btn--sm" title="Remove">
+                <i class="ti ti-trash" aria-hidden="true"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="nc-panel">
+  <div class="nc-empty">
+    <div class="nc-empty__icon"><i class="ti ti-broadcast-off" aria-hidden="true"></i></div>
+    <div class="nc-empty__title">No destinations yet</div>
+    <p class="nc-empty__body">
+      Add Twitch, YouTube, Kick, or any RTMP destination above. When you go
+      live, we relay your stream to all of them — and make clips.
+    </p>
+  </div>
+</div>
+{% endif %}
+
+<script>
+  // Templated platforms pre-fill the ingest URL (key-only); kick/custom
+  // require the user to paste their per-account RTMP URL.
+  (function () {
+    var TPL = {{ templates_map | tojson }};
+    var sel = document.getElementById('dst-platform');
+    var url = document.getElementById('dst-url');
+    var hint = document.getElementById('dst-url-hint');
+    function sync() {
+      var t = TPL[sel.value] || '';
+      if (t) {
+        url.value = t; url.required = false;
+        hint.textContent = 'Auto-filled — just paste your stream key below.';
+      } else {
+        if (TPL[sel.value] === '') url.value = '';
+        url.required = true;
+        hint.textContent = 'Copy the RTMP URL + key from ' + sel.value + "'s stream settings.";
+      }
+    }
+    sel.addEventListener('change', sync); sync();
+  })();
+</script>
+{% endblock %}

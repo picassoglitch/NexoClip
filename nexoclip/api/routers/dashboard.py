@@ -5388,6 +5388,98 @@ async def persona_edit_submit(
     return RedirectResponse(url="/dashboard/personas", status_code=303)
 
 
+# ---------- Multistream destinations (M1) ----------
+
+
+@router.get("/destinations", response_class=HTMLResponse)
+async def destinations_list(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Connect-platforms page: list restream destinations + add form. The
+    stream key is write-only — never rendered back."""
+    from nexoclip.destinations import (
+        PLATFORM_TEMPLATES,
+        list_destinations,
+        supported_platforms,
+    )
+
+    destinations = await list_destinations(db)
+    return templates.TemplateResponse(
+        request,
+        "destinations.html",
+        {
+            "destinations": destinations,
+            "platforms": supported_platforms(),
+            "templates_map": PLATFORM_TEMPLATES,
+        },
+    )
+
+
+@router.post("/destinations", dependencies=[Depends(require_full_scope)])
+async def destinations_create(
+    request: Request,
+    platform: str = Form(...),
+    stream_key: str = Form(...),
+    ingest_url: str = Form(""),
+    label: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    from nexoclip.destinations import DestinationError, add_destination
+
+    try:
+        await add_destination(
+            db,
+            platform=platform,
+            stream_key=stream_key,
+            ingest_url=ingest_url or None,
+            label=label or None,
+        )
+    except DestinationError as e:
+        # Surface the validation message; never echo the key back.
+        from urllib.parse import quote
+
+        return RedirectResponse(
+            url=f"/dashboard/destinations?error={quote(str(e))}", status_code=303
+        )
+    return RedirectResponse(url="/dashboard/destinations?added=1", status_code=303)
+
+
+@router.post(
+    "/destinations/{dest_id}/toggle",
+    dependencies=[Depends(require_full_scope)],
+)
+async def destinations_toggle(
+    request: Request,
+    dest_id: str,
+    enabled: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    from nexoclip.db import StreamDestinationsRepo
+
+    await StreamDestinationsRepo(db).set_enabled(dest_id, enabled == "1")
+    return RedirectResponse(url="/dashboard/destinations", status_code=303)
+
+
+@router.post(
+    "/destinations/{dest_id}/delete",
+    dependencies=[Depends(require_full_scope)],
+)
+async def destinations_delete(
+    request: Request,
+    dest_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    from nexoclip.db import StreamDestinationsRepo
+
+    await StreamDestinationsRepo(db).delete(dest_id)
+    return RedirectResponse(url="/dashboard/destinations?deleted=1", status_code=303)
+
+
 # ---------- Connected accounts ----------
 
 

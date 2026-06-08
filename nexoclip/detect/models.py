@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CandidateReason = Literal["voice", "chat", "audio", "visual", "viral"]
+CandidateReason = Literal["voice", "chat", "audio", "visual", "viral", "interval"]
 
 
 class Candidate(BaseModel):

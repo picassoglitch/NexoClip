@@ -19,6 +19,7 @@ from .models import Candidate, CandidateBatch, CandidateReason
 from .service import (
     detect_candidates,
     detect_voice_triggers,
+    fallback_interval_candidates,
     load_candidates,
     save_candidates,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "detect_chat_heat",
     "detect_viral_moments",
     "detect_visual_candidates",
+    "fallback_interval_candidates",
     "detect_voice_triggers",
     "fuse_candidates",
     "load_candidates",

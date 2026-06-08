@@ -63,6 +63,17 @@ _STATUS_PROCESSING = "processing"
 _STATUS_COMPLETED = "completed"
 _STATUS_ERROR = "error"
 
+# AAI `error` substrings that mean "the audio had no speech" rather than a
+# real failure. A silent / music / gameplay stream isn't an error — we
+# treat it as an empty transcription so the pipeline keeps running and
+# still makes clips from audio-energy + visual signals (or the interval
+# fallback). Matched case-insensitively.
+_NO_SPEECH_MARKERS = (
+    "no spoken audio",
+    "no speech",
+    "language_detection cannot be performed",
+)
+
 # Upload chunk size. 5 MB is the sweet spot — large enough that
 # Python's HTTPS overhead isn't dominant, small enough that a 4-hour
 # 4 GB VOD doesn't pin all of it in memory.
@@ -371,7 +382,25 @@ class AssemblyAIProvider:
                 )
                 return body
             if status == _STATUS_ERROR:
-                err = body.get("error") or "unknown"
+                err = str(body.get("error") or "unknown")
+                if any(m in err.lower() for m in _NO_SPEECH_MARKERS):
+                    # No speech in the file (silent / music / gameplay).
+                    # Not a failure — return an empty transcript so the run
+                    # continues and clips still come from non-speech signals.
+                    _log.info(
+                        "assemblyai.no_speech",
+                        stream_id=stream_id,
+                        transcript_id=transcript_id,
+                        error=err,
+                    )
+                    return {
+                        "status": _STATUS_COMPLETED,
+                        "words": [],
+                        "utterances": [],
+                        "text": "",
+                        "audio_duration": body.get("audio_duration") or 0.0,
+                        "language_code": None,
+                    }
                 raise TranscriptionError(
                     f"AssemblyAI returned status=error for transcript "
                     f"{transcript_id}: {err}"

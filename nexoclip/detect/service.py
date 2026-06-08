@@ -476,6 +476,40 @@ def detect_candidates(
     )
 
 
+def fallback_interval_candidates(
+    tenant_id: str,
+    stream: Stream,
+    *,
+    max_clips: int = 5,
+    target_clip_s: float = 30.0,
+) -> list[Candidate]:
+    """Last-resort candidates when NO detector fired.
+
+    A silent, static clip (no speech, no audio peaks, no visual motion)
+    produces zero candidates from every signal — but the product promise is
+    "give me clips". So we place evenly-spaced anchors across the video and
+    let `cut` window around them, guaranteeing the user always has clips to
+    review. Score is intentionally low (0.1) so any real signal-based
+    candidate outranks these.
+
+    One anchor per ~`target_clip_s` of video, capped at `max_clips`, each
+    centered in its slice. Returns [] only for a zero-duration stream.
+    """
+    duration = float(getattr(stream, "duration_s", 0.0) or 0.0)
+    if duration <= 0.0:
+        return []
+    n = max(1, min(max_clips, int(duration // target_clip_s) or 1))
+    return [
+        Candidate(
+            timestamp=round(duration * (i + 0.5) / n, 3),
+            score=0.1,
+            reason="interval",
+            evidence={"fallback": "interval", "note": "no detector fired"},
+        )
+        for i in range(n)
+    ]
+
+
 def save_candidates(stream_dir: Path, batch: CandidateBatch) -> Path:
     """Persist candidates to `<stream_dir>/candidates.json`."""
     out = Path(stream_dir) / "candidates.json"

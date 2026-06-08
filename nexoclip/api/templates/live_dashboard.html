@@ -17,133 +17,33 @@
 <div class="nc-page-header">
   <div>
     <h2>Live</h2>
-    <small>Push from OBS, NexoClip records, the existing pipeline does the rest. <em>Soft-live clipping (L.2+) lands in follow-up slices.</em></small>
+    <small>Transmite con NexoOBS — multistream + preview. NexoClip recibe la grabación y genera los clips automáticamente.</small>
   </div>
 </div>
 
-{%- if request.query_params.get('rotated') -%}
-<div class="nc-panel" style="border-color: var(--nc-success); background: rgba(0,217,122,0.06); margin-bottom: 14px;">
-  <div class="nc-panel__body" style="font-size: 13px;">
-    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-success);"></i>
-    Stream key rotated. Update OBS with the new URL below before streaming again.
-  </div>
-</div>
-{%- endif -%}
-
-{# Section 1 — Push URL + stream key. -#}
+{# Section 1 — Connect via NexoOBS. The raw RTMP push lives in NexoOBS now;
+   here we just hand the operator off to it. NexoOBS forwards the stream's
+   lifecycle back to this pipeline so clips appear in the list below. -#}
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-broadcast" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Push URL for OBS</span>
+    <span class="nc-panel__title">Transmitir en vivo</span>
   </div>
   <div class="nc-panel__body">
-    {%- if not configured -%}
-    <div class="nc-empty">
-      <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
-      <div class="nc-empty__title">Live ingest not configured</div>
-      <p class="nc-empty__body">
-        Admin: deploy MediaMTX as a sibling Railway service + set
-        <code>NEXOCLIP_LIVE_RTMP_BASE_URL</code> in env. See
-        <code>docs/mediamtx_deploy.md</code> for the step-by-step.
-      </p>
-    </div>
-    {%- elif not active_key -%}
-    <p style="margin-top: 0;">
-      You don't have an active stream key. Click <strong>Generate stream key</strong>
-      to create one — OBS uses this to authenticate the push.
+    <p style="margin-top: 0; font-size: 13px; line-height: 1.6; color: var(--nc-text);">
+      El streaming vive en <strong>NexoOBS</strong>: conectas tu encoder (OBS,
+      Osmo, teléfono), eliges a qué plataformas multistream y ves el preview en
+      vivo. Cuando activas <strong>Get Clips</strong> allí, NexoClip recibe la
+      grabación y la convierte en clips — aparecen abajo.
     </p>
-    <form action="/dashboard/live/rotate-key" method="post" style="margin: 12px 0 0;">
-      <button type="submit" class="nc-btn nc-btn--primary">
-        <i class="ti ti-key" aria-hidden="true"></i>
-        <span>Generate stream key</span>
-      </button>
-    </form>
-    {%- else -%}
-    <div style="display: grid; gap: 14px;">
-      {# Server URL row #}
-      <div>
-        <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--nc-text-muted); margin-bottom: 4px;">
-          Server URL
-        </label>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <input type="text"
-                 readonly
-                 value="{{ rtmp_url_base }}"
-                 onclick="this.select()"
-                 style="flex: 1; padding: 8px 10px; font-family: var(--nc-font-mono); font-size: 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--nc-border); border-radius: 6px; color: var(--nc-text);">
-          <button type="button"
-                  class="nc-btn nc-btn--sm"
-                  onclick="navigator.clipboard.writeText('{{ rtmp_url_base }}')"
-                  title="Copy">
-            <i class="ti ti-copy" aria-hidden="true"></i>
-          </button>
-        </div>
-      </div>
-      {# Stream key row — masked by default for shoulder-surfing safety #}
-      <div>
-        <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--nc-text-muted); margin-bottom: 4px;">
-          Stream key — keep this secret
-        </label>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <input type="password"
-                 id="nc-live-key"
-                 readonly
-                 value="{{ active_key.key_value }}"
-                 onclick="this.select()"
-                 style="flex: 1; padding: 8px 10px; font-family: var(--nc-font-mono); font-size: 12px; background: rgba(255,255,255,0.04); border: 1px solid var(--nc-border); border-radius: 6px; color: var(--nc-text);">
-          <button type="button"
-                  class="nc-btn nc-btn--sm"
-                  onclick="(function(){var i=document.getElementById('nc-live-key'); i.type = i.type==='password' ? 'text' : 'password';})()"
-                  title="Show / hide">
-            <i class="ti ti-eye" aria-hidden="true"></i>
-          </button>
-          <button type="button"
-                  class="nc-btn nc-btn--sm"
-                  onclick="navigator.clipboard.writeText('{{ active_key.key_value }}')"
-                  title="Copy">
-            <i class="ti ti-copy" aria-hidden="true"></i>
-          </button>
-        </div>
-        {%- if active_key.last_used_at -%}
-        <small style="display: block; margin-top: 6px; color: var(--nc-text-muted);">
-          Last used: {{ active_key.last_used_at }}
-        </small>
-        {%- endif -%}
-      </div>
-      <div style="display: flex; gap: 10px; align-items: center; padding-top: 4px;">
-        <form action="/dashboard/live/rotate-key" method="post"
-              onsubmit="return confirm('Rotating revokes the current key. Any OBS instance still using the old one will be rejected. Continue?');"
-              style="margin: 0;">
-          <button type="submit" class="nc-btn nc-btn--sm">
-            <i class="ti ti-refresh" aria-hidden="true"></i>
-            <span>Rotate key</span>
-          </button>
-        </form>
-        <small style="color: var(--nc-text-muted);">
-          Created {{ active_key.created_at }}
-        </small>
-      </div>
-    </div>
-    <details style="margin-top: 16px;">
-      <summary style="cursor: pointer; font-size: 12px; color: var(--nc-text-muted);">
-        OBS setup — show me how
-      </summary>
-      <div style="margin-top: 10px; padding: 12px 14px; border: 1px solid var(--nc-border); border-radius: 6px; background: rgba(255,255,255,0.02); font-size: 13px; line-height: 1.6;">
-        <ol style="padding-left: 20px; margin: 0;">
-          <li>OBS → File → Settings → <strong>Stream</strong></li>
-          <li>Service: <strong>Custom...</strong></li>
-          <li>Server: paste the Server URL above</li>
-          <li>Stream Key: paste the Stream Key above</li>
-          <li>Click OK → click <strong>Start Streaming</strong> in OBS</li>
-        </ol>
-        <small style="display: block; margin-top: 10px; color: var(--nc-text-muted);">
-          When you click Stop Streaming in OBS, the recording lands on disk +
-          shows up below as "live_ended". For now you click "Run pipeline"
-          on it manually — soft-live clipping arrives in slice L.2.
-        </small>
-      </div>
-    </details>
-    {%- endif -%}
+    <a href="{{ nexoobs_url }}" target="_blank" rel="noopener noreferrer"
+       class="nc-btn nc-btn--primary" style="margin-top: 14px;">
+      <i class="ti ti-broadcast" aria-hidden="true"></i>
+      <span>Transmitir con NexoOBS →</span>
+    </a>
+    <small style="display: block; margin-top: 10px; color: var(--nc-text-muted);">
+      Usas la misma cuenta de Nexo-AI World — la sesión se mantiene entre apps.
+    </small>
   </div>
 </div>
 

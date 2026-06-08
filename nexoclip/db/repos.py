@@ -819,6 +819,24 @@ class LLMCallsRepo:
         return int(row[0]) if row else 0
 
 
+async def _resolve_tenant_for_stream(
+    db: "Database", *, stream_id: str
+) -> str | None:
+    """Read the tenant_id of a stream row by id, or None if no such row.
+
+    Used by the MediaMTX-webhook helpers below so each UPDATE can be
+    tenant-scoped (CLAUDE.md rule #1) even though the webhook has no
+    bound tenant of its own. If the lookup returns None the helper
+    refuses the mutation rather than running an unbounded UPDATE.
+    """
+    conn = await db.connect()
+    cur = await conn.execute(
+        "SELECT tenant_id FROM streams WHERE id = ?", (stream_id,)
+    )
+    row = await cur.fetchone()
+    return str(row["tenant_id"]) if row else None
+
+
 async def _streams_repo_mark_live_started(
     db: "Database", *, stream_id: str
 ) -> StreamRow | None:
@@ -830,8 +848,18 @@ async def _streams_repo_mark_live_started(
     the webhook handler can call it directly without going through
     the full tenant-binding ceremony.
 
+    Tenant scope is derived from the row itself (lookup-then-update);
+    the UPDATE includes WHERE tenant_id = ? so an attacker with the
+    NEXOCLIP_INTERNAL_SIGNING_SECRET cannot mutate a stream they
+    cannot also enumerate (defense in depth — the row lookup is the
+    real ownership gate, the WHERE clause is the safety net).
+
     Idempotent: calling twice for the same stream_id is a no-op past
-    the first call (since the row already has is_live=1)."""
+    the first call (since the row already has is_live=1).
+    """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return None
     now = _now()
     conn = await db.connect()
     await conn.execute(
@@ -839,11 +867,14 @@ async def _streams_repo_mark_live_started(
         "SET is_live = 1, "
         "    live_started_at = COALESCE(live_started_at, ?), "
         "    status = 'live' "
-        "WHERE id = ?",
-        (now, stream_id),
+        "WHERE id = ? AND tenant_id = ?",
+        (now, stream_id, tenant_id),
     )
     await conn.commit()
-    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    cur = await conn.execute(
+        "SELECT * FROM streams WHERE id = ? AND tenant_id = ?",
+        (stream_id, tenant_id),
+    )
     row = await cur.fetchone()
     return StreamRow.model_validate(dict(row)) if row else None
 
@@ -853,10 +884,13 @@ async def _streams_repo_mark_live_ended(
 ) -> StreamRow | None:
     """Phase L.1 — flip a stream from 'live' to 'live_ended'.
 
-    Same tenant-free invocation contract as `_streams_repo_mark_live_started`.
+    Same tenant-derived-from-row contract as `_streams_repo_mark_live_started`.
     Optionally accepts the final duration from MediaMTX's
     runOnNotReady webhook payload so the streams row stops showing 0.
     """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return None
     now = _now()
     conn = await db.connect()
     if duration_s is not None:
@@ -866,8 +900,8 @@ async def _streams_repo_mark_live_ended(
             "    live_ended_at = ?, "
             "    status = 'live_ended', "
             "    duration_s = ? "
-            "WHERE id = ?",
-            (now, float(duration_s), stream_id),
+            "WHERE id = ? AND tenant_id = ?",
+            (now, float(duration_s), stream_id, tenant_id),
         )
     else:
         await conn.execute(
@@ -875,13 +909,45 @@ async def _streams_repo_mark_live_ended(
             "SET is_live = 0, "
             "    live_ended_at = ?, "
             "    status = 'live_ended' "
-            "WHERE id = ?",
-            (now, stream_id),
+            "WHERE id = ? AND tenant_id = ?",
+            (now, stream_id, tenant_id),
         )
     await conn.commit()
-    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    cur = await conn.execute(
+        "SELECT * FROM streams WHERE id = ? AND tenant_id = ?",
+        (stream_id, tenant_id),
+    )
     row = await cur.fetchone()
     return StreamRow.model_validate(dict(row)) if row else None
+
+
+async def _streams_repo_try_claim_for_processing(
+    db: "Database", *, stream_id: str, from_status: str = "live_ended"
+) -> bool:
+    """Phase L.2 — atomically claim a just-ended live stream for the
+    auto-clip pipeline.
+
+    Flips status `from_status` → 'processing' ONLY if the row is still in
+    `from_status`. Returns True iff THIS call won the claim. This is the
+    idempotency guard for the auto-clip kickoff: MediaMTX may deliver the
+    'ended' webhook more than once (retries / flaky TCP), and we must not
+    launch the (paid) pipeline twice. The first webhook claims and
+    schedules; every later one gets False and skips.
+
+    Tenant scope derived from the row itself (lookup-then-update),
+    matching the contract of the mark_live_* helpers above.
+    """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return False
+    conn = await db.connect()
+    cur = await conn.execute(
+        "UPDATE streams SET status = 'processing' "
+        "WHERE id = ? AND tenant_id = ? AND status = ?",
+        (stream_id, tenant_id, from_status),
+    )
+    await conn.commit()
+    return (cur.rowcount or 0) == 1
 
 
 class LiveStreamKeysRepo:

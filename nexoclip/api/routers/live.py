@@ -88,12 +88,14 @@ async def live_dashboard(
     # NexoOBS is the streaming front-door now: the operator connects their
     # encoder there (multistream + preview), and NexoOBS forwards the
     # recording to this pipeline for clipping. The live page links out to it
-    # instead of duplicating the raw RTMP push fields.
+    # via Nexo-AI's cross-app SSO launcher so the session carries over (no
+    # landing/login bounce). The launcher gates to ALL_ACCESS server-side.
     import os as _os
 
-    nexoobs_url = _os.environ.get(
-        "NEXOOBS_PUBLIC_URL", "https://nexoobs.nexo-ai.world"
+    nexo_ai_base = _os.environ.get(
+        "NEXO_AI_BASE_URL", "https://nexo-ai.world"
     ).rstrip("/")
+    nexoobs_url = f"{nexo_ai_base}/auth/launch/nexoobs"
     return templates.TemplateResponse(
         request,
         "live_dashboard.html",

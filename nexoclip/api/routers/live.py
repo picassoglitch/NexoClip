@@ -389,4 +389,126 @@ async def live_ended(
     )
 
 
+# ---- NexoOBS handoff (NexoOBS -> NexoClip) --------------------------------
+#
+# When the bidirectional connection switch is ON, NexoOBS forwards each
+# stream's lifecycle here. Unlike the relay-native /api/internal/live/*
+# endpoints (which carry NexoClip's own ten_ id), NexoOBS only knows the
+# Nexo AI user id — so these endpoints MAP external_user_id -> NexoClip
+# tenant, then reuse the exact same live pipeline (create stream row →
+# autoclip on end). The recording is fetched from object storage by
+# stream_id (the id NexoOBS minted + the relay uploaded under).
+
+
+@router.post("/api/internal/nexoobs/started")
+async def nexoobs_started(
+    request: Request,
+    payload: dict,
+    authorization: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    """NexoOBS stream went live → create the streams row so it shows in the
+    Live list. Maps external_user_id (Nexo AI user id) to the NexoClip
+    tenant. Full-access only."""
+    _verify_internal_bearer(authorization)
+    body = payload or {}
+    external_user_id = str(
+        body.get("external_user_id") or body.get("tenant_id") or ""
+    ).strip()
+    stream_id = str(body.get("stream_id") or "").strip()
+    recording_path = (
+        str(body.get("recording_path") or "").strip()
+        or f"/data/live/{stream_id}/source"
+    )
+    if not (external_user_id and stream_id):
+        raise HTTPException(status_code=400, detail="external_user_id, stream_id required")
+
+    db: Database = request.app.state.db
+    tenant = await TenantsRepo(db).find_by_external_user_id(external_user_id)
+    if tenant is None:
+        return JSONResponse({"ok": False, "reason": "no_tenant"})
+    if (tenant.tier or "").lower() != "all_access":
+        return JSONResponse({"ok": False, "reason": "not_full_access"})
+
+    from nexoclip.db.adapters import _now as _adapters_now
+    from nexoclip.db.models import StreamRow
+
+    now = _adapters_now()
+    audio_path = recording_path.rsplit(".", 1)[0] + ".audio.wav"
+    with bound_tenant(tenant.id):
+        streams_repo = StreamsRepo(db)
+        row = StreamRow(
+            id=stream_id,
+            tenant_id=tenant.id,
+            vod_url=f"live://nexoobs/{stream_id}",
+            platform="live",
+            title=f"NexoOBS live {stream_id[:12]}",
+            channel=None,
+            duration_s=0.0,
+            source_video_path=recording_path,
+            source_audio_path=audio_path,
+            status="live",
+            created_at=now,
+            is_live=True,
+            live_started_at=now,
+        )
+        await streams_repo.upsert(row)
+        await _streams_repo_mark_live_started(db, stream_id=stream_id)
+
+    return JSONResponse({"ok": True, "tenant_id": tenant.id})
+
+
+@router.post("/api/internal/nexoobs/ended")
+async def nexoobs_ended(
+    request: Request,
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    authorization: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    """NexoOBS stream ended → mark ended + auto-clip the recording (pulled
+    from storage by stream_id). Full-access only."""
+    _verify_internal_bearer(authorization)
+    body = payload or {}
+    external_user_id = str(
+        body.get("external_user_id") or body.get("tenant_id") or ""
+    ).strip()
+    stream_id = str(body.get("stream_id") or "").strip()
+    duration_s = body.get("duration_s")
+    if not stream_id:
+        raise HTTPException(status_code=400, detail="stream_id required")
+
+    db: Database = request.app.state.db
+    tenant = (
+        await TenantsRepo(db).find_by_external_user_id(external_user_id)
+        if external_user_id
+        else None
+    )
+    final_duration = (
+        float(duration_s) if isinstance(duration_s, int | float) else None
+    )
+    ended_row = await _streams_repo_mark_live_ended(
+        db, stream_id=stream_id, duration_s=final_duration
+    )
+
+    autoclip_scheduled = False
+    if tenant is not None and (tenant.tier or "").lower() == "all_access":
+        try:
+            from nexoclip.api._pipeline import (
+                live_pipeline_runner,
+                maybe_autoclip_after_live_end,
+            )
+
+            def _schedule(**kwargs: object) -> None:
+                background_tasks.add_task(live_pipeline_runner, **kwargs)
+
+            autoclip_scheduled = await maybe_autoclip_after_live_end(
+                db, row=ended_row, schedule=_schedule
+            )
+        except Exception:  # noqa: BLE001 — never fail the webhook
+            pass
+
+    return JSONResponse(
+        {"ok": True, "stream_id": stream_id, "autoclip": autoclip_scheduled}
+    )
+
+
 __all__ = ["router"]

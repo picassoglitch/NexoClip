@@ -67,9 +67,12 @@
 {%- else -%}
   {%- set _low = _remaining < 50000 -%}
   {%- set _short = _remaining // 1000 -%}
+  {# Healthy balance reads GREEN (success), low balance amber. Red is
+     reserved for an actual sync failure (handled above) — the default
+     state should look fine, not alarming. #}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
-   class="nc-chip nc-chip--{% if _low %}warn{% else %}muted{% endif %}"
+   class="nc-chip nc-chip--{% if _low %}warn{% else %}success{% endif %}"
    title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="every 30s, balance-poll from:body"

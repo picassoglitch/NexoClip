@@ -394,13 +394,29 @@ async def usage_probe(
             status_code=502,
         )
 
+    # A genuine 2xx is a real successful POST to /usage — so it's an
+    # honest health confirmation. Clear any stale failure status (the red
+    # chip) on success, so a fixed integration doesn't keep nagging until
+    # the next pipeline run. We ONLY record SUCCESS here, never failure: a
+    # probe-specific hiccup must not falsely red the chip.
+    if resp.status_code < 400:
+        try:
+            from nexoclip.tenancy import bound_tenant as _bt
+            with _bt(tenant_id):
+                await TenantsRepo(db).set_usage_report_status(
+                    tenant_id, ok=True,
+                    at_iso=_dt.datetime.now(_dt.UTC).isoformat(),
+                )
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
     return JSONResponse({
         "sent_to": url,
         "sent_payload": payload,
         "http_status": resp.status_code,
         "nexo_ai_response_body": (resp.text or "")[:2000],
         "verdict": (
-            "OK — Nexo AI accepts this payload"
+            "OK — Nexo AI accepts this payload (cleared the sync warning)"
             if resp.status_code < 400
             else "REJECTED — see nexo_ai_response_body for the exact reason; "
                  "fix the /usage validation on the Nexo AI side"

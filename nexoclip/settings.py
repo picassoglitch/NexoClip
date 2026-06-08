@@ -134,27 +134,33 @@ class Settings(BaseSettings):
 
     # Phase L.2 / Path B — object storage the live-ingest service (the
     # separate `nexoclip-live` MediaMTX deployment) uploads recordings to,
-    # and that NexoClip pulls them from. S3-compatible (Cloudflare R2).
-    # When the bucket is UNSET, live ingest falls back to reading a shared
-    # `/data` volume (Path A). Recordings land at
-    # `<prefix>/<stream_id>/<file>.mp4`.
-    live_recording_r2_bucket: str | None = Field(
-        default=None, validation_alias="NEXOCLIP_LIVE_R2_BUCKET"
+    # and that NexoClip pulls them from. Vendor-neutral: ANY S3-compatible
+    # store works via `endpoint` — Supabase Storage (reuses the Supabase you
+    # already run), Cloudflare R2, MinIO, Backblaze B2, AWS S3, … When the
+    # bucket is UNSET, live ingest falls back to reading a shared `/data`
+    # volume (Path A). Recordings land at `<prefix>/<stream_id>/<file>.mp4`.
+    #
+    # Supabase Storage example:
+    #   NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ref>.supabase.co/storage/v1/s3
+    #   NEXOCLIP_LIVE_STORAGE_REGION=<project region, e.g. us-east-2>
+    #   (+ S3 access keys from Supabase → Project Settings → Storage)
+    live_recording_storage_bucket: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_LIVE_STORAGE_BUCKET"
     )
-    live_recording_r2_endpoint: str | None = Field(
-        default=None, validation_alias="NEXOCLIP_LIVE_R2_ENDPOINT"
+    live_recording_storage_endpoint: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_LIVE_STORAGE_ENDPOINT"
     )
-    live_recording_r2_access_key_id: str | None = Field(
-        default=None, validation_alias="NEXOCLIP_LIVE_R2_ACCESS_KEY_ID"
+    live_recording_storage_access_key_id: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_LIVE_STORAGE_ACCESS_KEY_ID"
     )
-    live_recording_r2_secret_access_key: str | None = Field(
-        default=None, validation_alias="NEXOCLIP_LIVE_R2_SECRET_ACCESS_KEY"
+    live_recording_storage_secret_access_key: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_LIVE_STORAGE_SECRET_ACCESS_KEY"
     )
-    live_recording_r2_prefix: str = Field(
-        default="live", validation_alias="NEXOCLIP_LIVE_R2_PREFIX"
+    live_recording_storage_prefix: str = Field(
+        default="live", validation_alias="NEXOCLIP_LIVE_STORAGE_PREFIX"
     )
-    live_recording_r2_region: str = Field(
-        default="auto", validation_alias="NEXOCLIP_LIVE_R2_REGION"
+    live_recording_storage_region: str = Field(
+        default="auto", validation_alias="NEXOCLIP_LIVE_STORAGE_REGION"
     )
 
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline

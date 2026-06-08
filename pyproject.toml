@@ -47,10 +47,11 @@ dependencies = [
     "aiosqlite>=0.20",
 
     # Object storage for live-ingest recordings (Phase L.2 / Path B). The
-    # `nexoclip-live` MediaMTX service uploads recordings to Cloudflare R2
-    # (S3-compatible) and NexoClip pulls them with boto3. Only used when
-    # NEXOCLIP_LIVE_R2_BUCKET is set; imported lazily so it's not loaded
-    # on the shared-disk (Path A) path.
+    # `nexoclip-live` MediaMTX service uploads recordings to an S3-compatible
+    # bucket (Supabase Storage by default — reuses the Supabase we already
+    # run; R2/MinIO/S3 also work) and NexoClip pulls them with boto3. Only
+    # used when NEXOCLIP_LIVE_STORAGE_BUCKET is set; imported lazily so it's
+    # not loaded on the shared-disk (Path A) path.
     "boto3>=1.34",
 
     # Logging

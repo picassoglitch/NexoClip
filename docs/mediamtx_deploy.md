@@ -1,10 +1,12 @@
 # Deploying MediaMTX for NexoClip live ingest
 
-> **Canonical deploy is now Path B — the `nexoclip-live` repo + Cloudflare R2.**
-> The MediaMTX service lives in its own repo (`picassoglitch/nexoclip-live`),
-> records each stream, and uploads it to R2; NexoClip pulls it from R2 to
-> auto-clip (Phase L.2). Deploy by following that repo's `README.md` and
-> setting the matching `NEXOCLIP_LIVE_R2_*` vars on the NexoClip service.
+> **Canonical deploy is now Path B — the `nexoclip-live` repo + S3-compatible
+> object storage.** The MediaMTX service lives in its own repo
+> (`picassoglitch/nexoclip-live`), records each stream, and uploads it to an
+> object store; NexoClip pulls it to auto-clip (Phase L.2). **Default store is
+> Supabase Storage** (S3-compatible — reuses the Supabase you already run, so
+> no new vendor); R2/MinIO/S3 also work — it's all the same `NEXOCLIP_LIVE_
+> STORAGE_*` config, only the endpoint + keys change.
 >
 > The shared-`/data`-volume approach below is **Path A (legacy)** — kept for
 > reference / single-box setups. It works, but doesn't scale (RTMP ingest and
@@ -12,21 +14,28 @@
 
 ---
 
-## Path B — separate repo + R2 (recommended)
+## Path B — separate repo + object storage (recommended)
 
 ```
-OBS ──rtmp──▶ nexoclip-live (MediaMTX svc) ──upload──▶ R2 bucket/live/<stream_id>/
+OBS ──rtmp──▶ nexoclip-live (MediaMTX svc) ──upload──▶ store/live/<stream_id>/
                      │ webhooks (authorize/started/ended)        ▲
                      ▼                                            │ pull
                   NexoClip  ──auto-clip──────────────────────────┘
 ```
 
 - **Service repo + full deploy steps:** `nexoclip-live/README.md`.
-- **NexoClip side:** set `NEXOCLIP_LIVE_R2_BUCKET`, `NEXOCLIP_LIVE_R2_ENDPOINT`,
-  `NEXOCLIP_LIVE_R2_ACCESS_KEY_ID`, `NEXOCLIP_LIVE_R2_SECRET_ACCESS_KEY`
-  (+ optional `NEXOCLIP_LIVE_R2_PREFIX`, `NEXOCLIP_LIVE_R2_REGION`) and
+- **NexoClip side:** set `NEXOCLIP_LIVE_STORAGE_BUCKET`,
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT`, `NEXOCLIP_LIVE_STORAGE_ACCESS_KEY_ID`,
+  `NEXOCLIP_LIVE_STORAGE_SECRET_ACCESS_KEY` (+ optional
+  `NEXOCLIP_LIVE_STORAGE_PREFIX`, `NEXOCLIP_LIVE_STORAGE_REGION`) and
   `NEXOCLIP_LIVE_RTMP_BASE_URL`. When the bucket is set, the live runner
-  pulls recordings from R2 instead of disk — no shared volume.
+  pulls recordings from the store instead of disk — no shared volume.
+
+  **Supabase Storage:** create a private bucket, grab S3 access keys from
+  *Project Settings → Storage*, and set
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ref>.supabase.co/storage/v1/s3`
+  with `NEXOCLIP_LIVE_STORAGE_REGION=<project region>`. Raise the bucket's
+  file-size limit (default 50 MB) to cover multi-hour recordings.
 
 The rest of this doc is **Path A (legacy, shared volume).**
 

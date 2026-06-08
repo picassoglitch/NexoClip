@@ -1,10 +1,10 @@
-"""Phase L.2 / Path B — R2 recording store.
+"""Phase L.2 / Path B — S3-compatible recording store.
 
-`R2RecordingStore` lists `<prefix>/<stream_id>/` in an S3-compatible
-bucket and downloads the newest non-trivial object. `build_recording_store`
-returns None unless a bucket is configured (so live ingest falls back to
-the shared-disk path). Both are exercised here against a fake S3 client —
-no network, no boto3.
+`S3RecordingStore` lists `<prefix>/<stream_id>/` in an S3-compatible
+bucket (Supabase Storage, R2, MinIO, …) and downloads the newest
+non-trivial object. `build_recording_store` returns None unless a bucket
+is configured (so live ingest falls back to the shared-disk path). Both
+are exercised here against a fake S3 client — no network, no boto3.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from nexoclip.integrations.storage import (
-    R2RecordingStore,
+    S3RecordingStore,
     build_recording_store,
 )
 
@@ -45,7 +45,7 @@ async def test_fetch_latest_downloads_newest(tmp_path: Path) -> None:
         {"Key": "live/str_1/2026-01-01_01-00-00.mp4", "Size": 9_000_000, "LastModified": 200},
         {"Key": "live/str_OTHER/x.mp4", "Size": 9_000_000, "LastModified": 999},
     ])
-    store = R2RecordingStore(client=s3, bucket="rec", prefix="live")
+    store = S3RecordingStore(client=s3, bucket="rec", prefix="live")
 
     got = await store.fetch_latest(stream_id="str_1", dest_dir=tmp_path / "in")
 
@@ -61,7 +61,7 @@ async def test_fetch_latest_none_when_empty(tmp_path: Path) -> None:
     """No objects yet (upload still in flight) → None, so the runner keeps
     polling."""
     s3 = _FakeS3([])
-    store = R2RecordingStore(client=s3, bucket="rec", prefix="live")
+    store = S3RecordingStore(client=s3, bucket="rec", prefix="live")
     assert await store.fetch_latest(stream_id="str_1", dest_dir=tmp_path) is None
 
 
@@ -70,17 +70,17 @@ async def test_fetch_latest_skips_tiny_objects(tmp_path: Path) -> None:
     s3 = _FakeS3([
         {"Key": "live/str_1/partial.mp4", "Size": 12, "LastModified": 100},
     ])
-    store = R2RecordingStore(client=s3, bucket="rec", prefix="live")
+    store = S3RecordingStore(client=s3, bucket="rec", prefix="live")
     assert await store.fetch_latest(stream_id="str_1", dest_dir=tmp_path) is None
     assert s3.downloaded == []
 
 
 def test_build_store_none_without_bucket() -> None:
     """No bucket configured → None (live ingest uses the shared-disk path)."""
-    settings = SimpleNamespace(live_recording_r2_bucket=None)
+    settings = SimpleNamespace(live_recording_storage_bucket=None)
     assert build_recording_store(settings) is None  # type: ignore[arg-type]
 
-    settings = SimpleNamespace(live_recording_r2_bucket="   ")  # blank/whitespace
+    settings = SimpleNamespace(live_recording_storage_bucket="   ")  # blank/whitespace
     assert build_recording_store(settings) is None  # type: ignore[arg-type]
 
 
@@ -89,12 +89,12 @@ def test_build_store_requires_boto3_only_when_configured() -> None:
     boto3 isn't installed it raises ImportError — but only then, never on
     the unconfigured path."""
     settings = SimpleNamespace(
-        live_recording_r2_bucket="rec",
-        live_recording_r2_endpoint="https://acct.r2.cloudflarestorage.com",
-        live_recording_r2_access_key_id="k",
-        live_recording_r2_secret_access_key="s",
-        live_recording_r2_region="auto",
-        live_recording_r2_prefix="live",
+        live_recording_storage_bucket="rec",
+        live_recording_storage_endpoint="https://acct.r2.cloudflarestorage.com",
+        live_recording_storage_access_key_id="k",
+        live_recording_storage_secret_access_key="s",
+        live_recording_storage_region="auto",
+        live_recording_storage_prefix="live",
     )
     try:
         store = build_recording_store(settings)  # type: ignore[arg-type]
@@ -102,4 +102,4 @@ def test_build_store_requires_boto3_only_when_configured() -> None:
         pytest.skip("boto3 not installed in this env")
     else:
         assert store is not None
-        assert isinstance(store, R2RecordingStore)
+        assert isinstance(store, S3RecordingStore)

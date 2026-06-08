@@ -1,12 +1,16 @@
 """Recording object-storage handoff for live ingest (Phase L.2, Path B).
 
 The live-ingest service (the separate `nexoclip-live` MediaMTX deployment)
-uploads each finished recording to an S3-compatible bucket (Cloudflare R2)
-under `<prefix>/<stream_id>/<file>.mp4`. NexoClip pulls it from there to
-run the clip pipeline — so the two services share object storage instead
-of a Railway volume, and scale independently.
+uploads each finished recording to an S3-compatible bucket under
+`<prefix>/<stream_id>/<file>.mp4`. NexoClip pulls it from there to run the
+clip pipeline — so the two services share object storage instead of a
+Railway volume, and scale independently.
 
-`build_recording_store(settings)` returns a store only when R2 is
+Vendor-neutral: anything S3-compatible works via the `endpoint` setting —
+Supabase Storage (reuse the Supabase you already run), Cloudflare R2,
+MinIO, Backblaze B2, AWS S3, …
+
+`build_recording_store(settings)` returns a store only when a bucket is
 configured; otherwise None, and live ingest falls back to reading a shared
 `/data` volume (Path A).
 """
@@ -36,8 +40,9 @@ class RecordingStore(Protocol):
         ...
 
 
-class R2RecordingStore:
-    """Pulls live recordings from an S3-compatible bucket (Cloudflare R2).
+class S3RecordingStore:
+    """Pulls live recordings from any S3-compatible bucket (Supabase
+    Storage, Cloudflare R2, MinIO, S3, …).
 
     Lists `<prefix>/<stream_id>/` and downloads the newest non-trivial
     object. `client` is an S3 client (boto3 or a stub in tests); all calls
@@ -72,33 +77,39 @@ class R2RecordingStore:
 
 
 def build_recording_store(settings: Settings) -> RecordingStore | None:
-    """Construct the R2 store from settings, or None when not configured.
+    """Construct the object store from settings, or None when not configured.
 
     None means "no object storage" → live ingest reads the shared volume
     (Path A). boto3 is imported lazily so it's only a hard dependency when
-    R2 is actually wired up.
+    object storage is actually wired up.
     """
-    bucket = (getattr(settings, "live_recording_r2_bucket", None) or "").strip()
+    bucket = (getattr(settings, "live_recording_storage_bucket", None) or "").strip()
     if not bucket:
         return None
 
-    import boto3  # lazy: only needed when R2 is configured
+    import boto3  # lazy: only needed when object storage is configured
 
-    endpoint = (getattr(settings, "live_recording_r2_endpoint", None) or "").strip()
+    endpoint = (
+        getattr(settings, "live_recording_storage_endpoint", None) or ""
+    ).strip()
     client = boto3.client(
         "s3",
         endpoint_url=endpoint or None,
-        aws_access_key_id=getattr(settings, "live_recording_r2_access_key_id", None),
-        aws_secret_access_key=getattr(
-            settings, "live_recording_r2_secret_access_key", None
+        aws_access_key_id=getattr(
+            settings, "live_recording_storage_access_key_id", None
         ),
-        region_name=(getattr(settings, "live_recording_r2_region", None) or "auto"),
+        aws_secret_access_key=getattr(
+            settings, "live_recording_storage_secret_access_key", None
+        ),
+        region_name=(
+            getattr(settings, "live_recording_storage_region", None) or "auto"
+        ),
     )
-    return R2RecordingStore(
+    return S3RecordingStore(
         client=client,
         bucket=bucket,
-        prefix=(getattr(settings, "live_recording_r2_prefix", None) or "live"),
+        prefix=(getattr(settings, "live_recording_storage_prefix", None) or "live"),
     )
 
 
-__all__ = ["R2RecordingStore", "RecordingStore", "build_recording_store"]
+__all__ = ["RecordingStore", "S3RecordingStore", "build_recording_store"]

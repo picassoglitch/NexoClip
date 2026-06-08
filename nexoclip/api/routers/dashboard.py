@@ -372,6 +372,14 @@ async def diag_nexo_ai(
     except Exception as e:  # noqa: BLE001
         diag_error = f"settings load failed: {e!r}"
 
+    # Token T1 — the OUTBOUND usage-report status. Distinct from the live
+    # ping below (which tests the balance GET): this is whether the last
+    # /usage POST succeeded. The red "sync ⚠" chip is driven by exactly
+    # these fields, so surfacing them here answers "why is the chip red".
+    report_ok: int | None = None
+    report_error: str | None = None
+    report_at: str | None = None
+
     try:
         tenant = await TenantsRepo(db).get(tenant_id)
         if tenant is not None:
@@ -381,6 +389,9 @@ async def diag_nexo_ai(
             cached_remaining = tenant.cached_balance_remaining
             cached_unlimited = tenant.cached_balance_unlimited
             cached_at = tenant.cached_balance_at
+            report_ok = tenant.last_usage_report_ok
+            report_error = tenant.last_usage_report_error
+            report_at = tenant.last_usage_report_at
     except Exception as e:  # noqa: BLE001
         diag_error = (diag_error or "") + f" · tenant lookup failed: {e!r}"
 
@@ -430,6 +441,9 @@ async def diag_nexo_ai(
                 "cached_remaining": cached_remaining,
                 "cached_unlimited": cached_unlimited,
                 "cached_at": cached_at,
+                "report_ok": report_ok,
+                "report_error": report_error,
+                "report_at": report_at,
                 "live_ok": live_ok,
                 "ping": ping,
                 "interpret": interpret,

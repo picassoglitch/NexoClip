@@ -245,6 +245,59 @@
 {% endif %}
 
 {# ── Cache state ────────────────────────────────────────────────────── #}
+{# Token T1 — the OUTBOUND usage-report status. This is what drives the
+   red "sync ⚠" chip: it's the /usage POST result, NOT the balance GET
+   the live ping tests above. When red, the `report_error` here is the
+   exact reason. #}
+<div class="nc-panel" style="margin-bottom: 14px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-upload" aria-hidden="true"></i>
+    <span class="nc-panel__title">Reporte de uso saliente (POST /usage)</span>
+    <small>— lo que mueve el chip rojo de tokens</small>
+  </div>
+  <div class="nc-panel__body">
+    <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+      <tbody>
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Último reporte</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if report_ok == 1 %}
+              <span style="color: var(--nc-success);">✓ OK</span>
+            {% elif report_ok == 0 %}
+              <span style="color: var(--nc-danger);">✗ FALLÓ</span>
+            {% else %}
+              <span style="color: var(--nc-text-muted);">— nunca se intentó</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% if report_ok == 0 and report_error %}
+        <tr style="border-bottom: 1px solid var(--nc-line-soft);">
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Razón exacta</td>
+          <td style="padding: 8px 0; text-align: right;">
+            <code style="color: var(--nc-danger);">{{ report_error }}</code>
+          </td>
+        </tr>
+        {% endif %}
+        <tr>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Cuándo</td>
+          <td style="padding: 8px 0; text-align: right;">
+            {% if report_at %}<code>{{ report_at }}</code>
+            {% else %}<span style="color: var(--nc-text-muted);">—</span>{% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    {% if report_ok == 0 %}
+    <small style="display: block; margin-top: 10px; color: var(--nc-text-muted); line-height: 1.5;">
+      ▸ HTTP 401/403 → el <code>NEXO_AI_ADMIN_TOKEN</code> de NexoClip no coincide con el
+      <code>NEXOCLIP_ADMIN_TOKEN</code> de Nexo AI. HTTP 400/422 → Nexo AI rechazó el payload
+      nuevo (campos <code>cost_usd_micros</code> / <code>provider</code> o el kind
+      <code>transcription.seconds</code>): hay que aceptarlos en el endpoint /usage.
+    </small>
+    {% endif %}
+  </div>
+</div>
+
 <div class="nc-panel" style="margin-bottom: 14px;">
   <div class="nc-panel__header">
     <i class="ti ti-database" aria-hidden="true"></i>

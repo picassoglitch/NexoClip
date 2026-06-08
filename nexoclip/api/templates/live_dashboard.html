@@ -21,29 +21,63 @@
   </div>
 </div>
 
-{# Section 1 — Connect via NexoOBS. The raw RTMP push lives in NexoOBS now;
-   here we just hand the operator off to it. NexoOBS forwards the stream's
-   lifecycle back to this pipeline so clips appear in the list below. -#}
+{# Section 1 — NexoOBS connection. The raw RTMP push lives in NexoOBS now.
+   The switch below is the SAME connection toggle that lives in NexoOBS's
+   header — flipping it on either side updates the one shared connection.
+   When ON, NexoOBS forwards each stream's lifecycle here so the live stream
+   shows below and clips generate when it ends. Full-access only. -#}
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-broadcast" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Transmitir en vivo</span>
+    <span class="nc-panel__title">Conexión con NexoOBS</span>
   </div>
   <div class="nc-panel__body">
     <p style="margin-top: 0; font-size: 13px; line-height: 1.6; color: var(--nc-text);">
       El streaming vive en <strong>NexoOBS</strong>: conectas tu encoder (OBS,
       Osmo, teléfono), eliges a qué plataformas multistream y ves el preview en
-      vivo. Cuando activas <strong>Get Clips</strong> allí, NexoClip recibe la
-      grabación y la convierte en clips — aparecen abajo.
+      vivo. Con esta conexión <strong>activada</strong>, cada stream aparece
+      aquí en vivo y se convierte en clips al terminar.
     </p>
+
+    {%- if not is_full_access -%}
+    <div class="nc-empty" style="margin-top: 12px;">
+      <div class="nc-empty__icon"><i class="ti ti-lock" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">Requiere Full Access</div>
+      <p class="nc-empty__body">
+        La conexión NexoOBS ↔ NexoClip es una función de All-Access. Sube tu
+        plan para activarla.
+      </p>
+    </div>
+    {%- else -%}
+    <div style="display: flex; align-items: center; gap: 14px; margin: 16px 0; padding: 14px 16px; border: 1px solid var(--nc-border); border-radius: 8px; background: rgba(255,255,255,0.02);">
+      <form action="/dashboard/live/connection" method="post" style="margin: 0;">
+        <input type="hidden" name="enabled" value="{{ '0' if connection_on else '1' }}">
+        <button type="submit"
+                aria-pressed="{{ 'true' if connection_on else 'false' }}"
+                title="{{ 'Desconectar de NexoClip' if connection_on else 'Conectar con NexoClip' }}"
+                style="position: relative; display: inline-flex; align-items: center; width: 46px; height: 26px; border: none; border-radius: 999px; cursor: pointer; transition: background .15s; background: {{ 'var(--nc-blue-bright, #4ea1ff)' if connection_on else 'rgba(255,255,255,0.15)' }};">
+          <span style="position: absolute; left: {{ '22px' if connection_on else '3px' }}; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left .15s;"></span>
+        </button>
+      </form>
+      <div>
+        <div style="font-size: 13px; font-weight: 600; color: var(--nc-text);">
+          {{ 'Conectado — los streams generan clips' if connection_on else 'Desconectado' }}
+        </div>
+        <div style="font-size: 11px; color: var(--nc-text-muted);">
+          {{ 'NexoOBS envía cada transmisión a NexoClip.' if connection_on else 'Actívalo para recibir streams de NexoOBS aquí.' }}
+        </div>
+      </div>
+    </div>
+
     <a href="{{ nexoobs_url }}" target="_blank" rel="noopener noreferrer"
-       class="nc-btn nc-btn--primary" style="margin-top: 14px;">
+       class="nc-btn nc-btn--primary">
       <i class="ti ti-broadcast" aria-hidden="true"></i>
-      <span>Transmitir con NexoOBS →</span>
+      <span>Abrir NexoOBS →</span>
     </a>
     <small style="display: block; margin-top: 10px; color: var(--nc-text-muted);">
-      Usas la misma cuenta de Nexo-AI World — la sesión se mantiene entre apps.
+      Misma cuenta de Nexo-AI World — la sesión se mantiene entre apps.
     </small>
+    {%- endif -%}
   </div>
 </div>
 

@@ -41,6 +41,7 @@ from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import Database, LiveStreamKeysRepo, StreamsRepo
 from nexoclip.db.repos import (
+    TenantsRepo,
     _streams_repo_mark_live_ended,
     _streams_repo_mark_live_started,
     new_id_with_prefix,
@@ -92,10 +93,20 @@ async def live_dashboard(
     # landing/login bounce). The launcher gates to ALL_ACCESS server-side.
     import os as _os
 
+    from nexoclip.integrations.nexoobs import get_connection
+
     nexo_ai_base = _os.environ.get(
         "NEXO_AI_BASE_URL", "https://nexo-ai.world"
     ).rstrip("/")
     nexoobs_url = f"{nexo_ai_base}/auth/launch/nexoobs"
+
+    # Bidirectional connection switch state + full-access gate.
+    tenant = await TenantsRepo(db).get(tenant_id)
+    is_full_access = bool(tenant and (tenant.tier or "").lower() == "all_access")
+    external_user_id = tenant.external_user_id if tenant else None
+    connection_on = (
+        await get_connection(external_user_id) if external_user_id else False
+    )
     return templates.TemplateResponse(
         request,
         "live_dashboard.html",
@@ -105,8 +116,36 @@ async def live_dashboard(
             "live_streams": live_streams,
             "configured": bool(rtmp_url_base),
             "nexoobs_url": nexoobs_url,
+            "is_full_access": is_full_access,
+            "connection_on": connection_on,
+            "has_external": bool(external_user_id),
         },
     )
+
+
+@router.post(
+    "/dashboard/live/connection",
+    dependencies=[Depends(require_full_scope)],
+)
+async def live_set_connection(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Flip the bidirectional NexoOBS↔NexoClip connection switch from the
+    NexoClip side. Full-access only — mirror of the gate NexoOBS enforces.
+    The new state is read from the posted `enabled` field."""
+    from nexoclip.integrations.nexoobs import set_connection
+
+    tenant = await TenantsRepo(db).get(tenant_id)
+    is_full_access = bool(tenant and (tenant.tier or "").lower() == "all_access")
+    if not (is_full_access and tenant and tenant.external_user_id):
+        return RedirectResponse(url="/dashboard/live", status_code=303)
+
+    form = await request.form()
+    enabled = str(form.get("enabled", "")).lower() in ("1", "true", "on", "yes")
+    await set_connection(tenant.external_user_id, enabled)
+    return RedirectResponse(url="/dashboard/live", status_code=303)
 
 
 @router.post(

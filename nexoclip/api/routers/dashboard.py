@@ -5164,6 +5164,16 @@ async def clip_publish(
     accounts = await ConnectedAccountsRepo(db).list_for_tenant()
     if not accounts:
         raise HTTPException(status_code=409, detail="no connected accounts")
+    # Mirror the bearer-API publish path: enforce daily publish quota at
+    # enqueue, not just at worker dispatch. Sister fix to clips.py:97;
+    # both call sites previously skipped the governor pre-check so the
+    # daily_publish_limit was bypassable by enqueueing thousands of jobs.
+    from nexoclip.errors import QuotaExceeded as _QuotaExceeded
+    from nexoclip.governance import BudgetGovernor as _BudgetGovernor
+    try:
+        await _BudgetGovernor(db).check_publish_quota(tenant_id)
+    except _QuotaExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
     jobs_repo = PublishJobsRepo(db)
     for account in accounts:
         await jobs_repo.enqueue(

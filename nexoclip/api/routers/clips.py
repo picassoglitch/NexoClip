@@ -12,7 +12,8 @@ from nexoclip.db import (
     PublishJobsRepo,
     VariantsRepo,
 )
-from nexoclip.errors import TenancyError
+from nexoclip.errors import QuotaExceeded, TenancyError
+from nexoclip.governance import BudgetGovernor
 
 from ..deps import get_db, require_full_scope, tenant_binder
 from ..status_gate import require_active_tenant, require_top_tier
@@ -133,6 +134,20 @@ async def publish_clip(
             status_code=status.HTTP_409_CONFLICT,
             detail="no connected accounts to publish to",
         )
+
+    # Enforce daily publish quota at enqueue time, not just at worker
+    # dispatch (publish/service.py:251). Without this an attacker can
+    # enqueue thousands of jobs in a single POST; the worker rate-limits
+    # one job at a time and most never run, but the queue still bloats
+    # and the audit/event log surface is spammed. Per-platform cap is
+    # not currently used; pass platform=None for cross-platform total.
+    governor = BudgetGovernor(db)
+    try:
+        await governor.check_publish_quota(tenant_id)
+    except QuotaExceeded as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)
+        ) from e
 
     jobs_repo = PublishJobsRepo(db)
     created: list[PublishJobResponse] = []

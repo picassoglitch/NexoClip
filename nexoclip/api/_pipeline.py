@@ -84,6 +84,46 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
         # operator to debug from Railway logs.
         raise
 
+    # Token T2 — run succeeded (a failure re-raises above). Force a live
+    # Nexo AI balance refresh so the token chip reflects what this run
+    # just consumed without the operator clicking it.
+    await _refresh_balance_after_run(
+        db_path=db_path, tenant_id=kickoff.tenant_id,
+    )
+
+
+# Grace delay before the post-run balance pull. The pipeline's final LLM /
+# transcription usage reports are fire-and-forget (3s timeout each); this
+# lets the last ones land at Nexo AI so the fetched balance reflects the
+# full run, not a mid-deduction snapshot.
+_BALANCE_REFRESH_GRACE_S = 4.0
+
+
+async def _refresh_balance_after_run(*, db_path: str, tenant_id: str) -> None:
+    """Token T2 — pull the live Nexo AI balance into the cache after a
+    successful run so the chip is fresh without a manual click.
+
+    Best-effort: a short grace delay lets the run's final fire-and-forget
+    usage reports land, then ONE live fetch. Every error is swallowed —
+    the run already succeeded and the 30s chip poll is the fallback."""
+    import asyncio
+
+    from nexoclip.db import Database
+    from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+
+    try:
+        await asyncio.sleep(_BALANCE_REFRESH_GRACE_S)
+        db = Database(db_path)
+        await db.connect()
+        try:
+            await fetch_balance_now(db, tenant_id=tenant_id)
+        finally:
+            await db.close()
+    except Exception:  # noqa: BLE001 — observability, never affects the run
+        _log.warning(
+            "post-run balance refresh failed for tenant=%s", tenant_id,
+        )
+
 
 async def _emit_top_level_failure(
     *,
@@ -219,6 +259,9 @@ async def upload_pipeline_runner(
                 stream_id,
             )
         raise
+
+    # Token T2 — run succeeded; refresh the balance so the chip is fresh.
+    await _refresh_balance_after_run(db_path=db_path, tenant_id=tenant_id)
 
 
 __all__ = [

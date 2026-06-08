@@ -84,11 +84,14 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
         # operator to debug from Railway logs.
         raise
 
-    # Token T2 — run succeeded (a failure re-raises above). Force a live
-    # Nexo AI balance refresh so the token chip reflects what this run
-    # just consumed without the operator clicking it.
+    # Token T2 — run succeeded (a failure re-raises above). Charge the
+    # per-run base fee + force a live Nexo AI balance refresh so the token
+    # chip reflects what this run just consumed without the operator
+    # clicking it.
     await _refresh_balance_after_run(
-        db_path=db_path, tenant_id=kickoff.tenant_id,
+        db_path=db_path,
+        tenant_id=kickoff.tenant_id,
+        stream_id=kickoff.stream.id,
     )
 
 
@@ -99,12 +102,16 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
 _BALANCE_REFRESH_GRACE_S = 4.0
 
 
-async def _refresh_balance_after_run(*, db_path: str, tenant_id: str) -> None:
-    """Token T2 — pull the live Nexo AI balance into the cache after a
-    successful run so the chip is fresh without a manual click.
+async def _refresh_balance_after_run(
+    *, db_path: str, tenant_id: str, stream_id: str | None = None,
+) -> None:
+    """Token T2/T3 — after a successful run: (1) charge the per-run base
+    fee, (2) pull the live Nexo AI balance into the cache so the chip is
+    fresh without a manual click.
 
-    Best-effort: a short grace delay lets the run's final fire-and-forget
-    usage reports land, then ONE live fetch. Every error is swallowed —
+    Best-effort: the base charge is awaited (so it lands before we read
+    the balance), then a short grace delay lets the run's fire-and-forget
+    provider reports land, then ONE live fetch. Every error is swallowed —
     the run already succeeded and the 30s chip poll is the fallback."""
     import asyncio
 
@@ -112,16 +119,59 @@ async def _refresh_balance_after_run(*, db_path: str, tenant_id: str) -> None:
     from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
 
     try:
-        await asyncio.sleep(_BALANCE_REFRESH_GRACE_S)
         db = Database(db_path)
         await db.connect()
         try:
+            # (1) Per-run base charge — covers server/render/storage
+            #     overhead so a near-free-API run still draws down quota.
+            if stream_id:
+                await _charge_run_base_fee(db, tenant_id, stream_id)
+            # (2) Let the run's fire-and-forget provider reports land.
+            await asyncio.sleep(_BALANCE_REFRESH_GRACE_S)
+            # (3) Live balance fetch → cache → chip.
             await fetch_balance_now(db, tenant_id=tenant_id)
         finally:
             await db.close()
     except Exception:  # noqa: BLE001 — observability, never affects the run
         _log.warning(
             "post-run balance refresh failed for tenant=%s", tenant_id,
+        )
+
+
+async def _charge_run_base_fee(
+    db: "Database", tenant_id: str, stream_id: str
+) -> None:
+    """Token T3 — report the per-run base charge (engine.base) to Nexo AI.
+
+    A flat fee covering server time / render / storage that the raw API
+    cost doesn't capture. Idempotent: source_id is base_<stream_id>, so a
+    re-run of the same stream is a no-op upstream. Amount is configurable
+    via NEXOCLIP_PIPELINE_BASE_CHARGE_USD_MICROS (0 disables). Awaited (not
+    fire-and-forget) so the balance fetch right after reflects it."""
+    import datetime as _dt
+
+    from nexoclip.integrations.nexo_ai.reporter import report_usage
+    from nexoclip.settings import get_settings
+
+    base = int(getattr(get_settings(), "pipeline_base_charge_usd_micros", 0) or 0)
+    if base <= 0:
+        return
+    try:
+        await report_usage(
+            db,
+            tenant_id=tenant_id,
+            kind="engine.base",
+            amount=1,
+            cost_usd_micros=base,
+            source_id=f"base_{stream_id}",
+            occurred_at_iso=_dt.datetime.now(_dt.UTC).isoformat(),
+            provider="nexoclip",
+            operation="pipeline_run",
+        )
+    except Exception:  # noqa: BLE001 — never affects the run
+        _log.warning(
+            "base-charge report failed for tenant=%s stream=%s",
+            tenant_id, stream_id,
         )
 
 
@@ -260,8 +310,10 @@ async def upload_pipeline_runner(
             )
         raise
 
-    # Token T2 — run succeeded; refresh the balance so the chip is fresh.
-    await _refresh_balance_after_run(db_path=db_path, tenant_id=tenant_id)
+    # Token T2 — run succeeded; charge the base fee + refresh the balance.
+    await _refresh_balance_after_run(
+        db_path=db_path, tenant_id=tenant_id, stream_id=stream_id,
+    )
 
 
 __all__ = [

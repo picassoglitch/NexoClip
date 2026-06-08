@@ -229,6 +229,19 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXO_AI_BASE_URL",
     )
+    # Token T3 — per-run BASE CHARGE in USD micros. The raw API cost of a
+    # run (transcription + occasional Claude) can be near-zero, but each run
+    # still consumes server time (ffmpeg, transcription orchestration,
+    # rendering), storage, and bandwidth. This flat charge — reported as an
+    # `engine.base` usage event after every successful run — covers that
+    # overhead + margin so a near-free-API run still draws down the quota.
+    # Default $0.05; at Nexo AI's ~$4/1M-token rate that's ~12,500
+    # token-equivalents per run. Set to 0 to disable. Tune to your real
+    # infra cost per run.
+    pipeline_base_charge_usd_micros: int = Field(
+        default=50_000,
+        validation_alias="NEXOCLIP_PIPELINE_BASE_CHARGE_USD_MICROS",
+    )
     # Where NexoClip is reachable from the public internet. Used as the
     # post-SSO landing origin if we ever need to build absolute URLs.
     # Defaults to localhost for dev. Same override pattern.

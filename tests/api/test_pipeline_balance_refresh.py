@@ -121,6 +121,74 @@ async def test_refresh_helper_calls_fetch_balance(
     assert fetched == ["ten_z"]
 
 
+async def test_base_fee_reported_with_configured_cost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Token T3 — a completed run reports a per-run base charge
+    (engine.base) at the configured cost, idempotent per stream."""
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_PIPELINE_BASE_CHARGE_USD_MICROS", "50000")
+    get_settings.cache_clear()
+
+    db = Database(tmp_path / "b.db")
+    await apply_migrations(db)
+
+    calls: list[dict] = []
+
+    async def fake_report_usage(db_arg: object, **kwargs: object) -> None:
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "nexoclip.integrations.nexo_ai.reporter.report_usage",
+        fake_report_usage,
+    )
+    try:
+        await _pipeline._charge_run_base_fee(db, "ten_1", "str_xyz")
+    finally:
+        await db.close()
+        get_settings.cache_clear()
+
+    assert len(calls) == 1
+    c = calls[0]
+    assert c["kind"] == "engine.base"
+    assert c["cost_usd_micros"] == 50_000
+    assert c["amount"] == 1
+    assert c["provider"] == "nexoclip"
+    assert c["source_id"] == "base_str_xyz"   # idempotent per stream
+    assert c["operation"] == "pipeline_run"
+
+
+async def test_base_fee_skipped_when_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Setting the base charge to 0 disables it — no event reported."""
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_PIPELINE_BASE_CHARGE_USD_MICROS", "0")
+    get_settings.cache_clear()
+
+    db = Database(tmp_path / "b.db")
+    await apply_migrations(db)
+
+    calls: list[dict] = []
+
+    async def fake_report_usage(db_arg: object, **kwargs: object) -> None:
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "nexoclip.integrations.nexo_ai.reporter.report_usage",
+        fake_report_usage,
+    )
+    try:
+        await _pipeline._charge_run_base_fee(db, "ten_1", "str_xyz")
+    finally:
+        await db.close()
+        get_settings.cache_clear()
+
+    assert calls == []
+
+
 async def test_refresh_helper_swallows_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

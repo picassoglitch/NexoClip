@@ -262,6 +262,61 @@
 </div>
 {% endif %}
 
+{# ===================== RUN COST (estimate vs actual) ===================== #}
+{# Token T3 — what this run ACTUALLY cost (all providers), next to the
+   pre-run estimate. Shows real numbers once LLM/transcription calls have
+   been recorded for this stream; otherwise just the estimate. #}
+{% set _has_actual = actual_spend and actual_spend.total_calls and actual_spend.total_calls > 0 %}
+{% if _has_actual or estimate %}
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-coin" aria-hidden="true" style="color: var(--nc-lime, #c8ff5c);"></i>
+    <span class="nc-panel__title">Run cost</span>
+    <small>— all providers (Claude + transcripción)</small>
+  </div>
+  <div class="nc-panel__body">
+    <div class="nc-summary-grid">
+      {% if _has_actual %}
+      <div class="nc-summary-cell">
+        <small>Actual cost</small>
+        <b style="color: var(--nc-lime, #c8ff5c);">${{ '%.4f'|format(actual_spend.cost_usd) }}</b>
+      </div>
+      <div class="nc-summary-cell">
+        <small>LLM tokens used</small>
+        <b>{{ '{:,}'.format(actual_spend.total_tokens) }}</b>
+      </div>
+      <div class="nc-summary-cell">
+        <small>Provider calls</small>
+        <b>{{ actual_spend.total_calls }}</b>
+      </div>
+      {% endif %}
+      {% if estimate %}
+      <div class="nc-summary-cell">
+        <small>{% if _has_actual %}Was estimated{% else %}Estimated cost{% endif %}</small>
+        <b style="color: var(--nc-text-muted);">~${{ '%.4f'|format(estimate.total_cost_usd) }}</b>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if _has_actual and actual_spend.by_provider %}
+    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+      <small style="color: var(--nc-text-muted);">Por proveedor:</small>
+      {% for p in actual_spend.by_provider %}
+      <span class="nc-chip nc-chip--muted" style="font-size: 11px;"
+            title="{{ p.calls }} call{{ 's' if p.calls != 1 else '' }}{% if p.tokens %} · {{ '{:,}'.format(p.tokens) }} tokens{% endif %}">
+        {{ p.provider }} · ${{ '%.4f'|format(p.cost_usd_micros / 1000000) }}
+      </span>
+      {% endfor %}
+    </div>
+    {% elif not _has_actual %}
+    <small style="display: block; margin-top: 10px; color: var(--nc-text-muted);">
+      Estimación upper-bound (incluye transcripción). El costo real aparece aquí después de correr.
+    </small>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 {# =========================== CLIPS =========================== #}
 <div class="nc-panel" id="clips">
   <div class="nc-panel__header">

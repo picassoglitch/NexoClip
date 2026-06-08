@@ -53,6 +53,15 @@ DEFAULT_CLIPS_PER_HOUR = 8             # cut step normally produces 6-10/hour
 DEFAULT_VARIANTS_PER_CLIP = 5          # config default n_variants
 DEFAULT_HOOKS_PER_CLIP = 3             # hook writer default fanout
 
+# Token T3 — to express the estimate in the SAME unit Nexo AI actually
+# deducts (real USD cost across all providers), convert the LLM token
+# estimate to cost with a blended rate. Output tokens dominate the
+# pipeline's LLM spend (captions/hooks generation), so we lean toward
+# the standard model's output price (claude-haiku-4-5 @ $5/Mtok out,
+# $1/Mtok in) — ~$4/Mtok blended is a deliberately conservative
+# upper-bound, matching the estimator's "no más de ~X" framing.
+_LLM_BLENDED_USD_PER_MTOK = 4.0
+
 
 @dataclass(frozen=True)
 class EstimateLine:
@@ -65,15 +74,32 @@ class EstimateLine:
 
 @dataclass(frozen=True)
 class PipelineEstimate:
-    """Sum + breakdown for one prospective pipeline run."""
+    """Sum + breakdown for one prospective pipeline run.
+
+    `total_tokens` is the LLM token estimate (the breakdown lines).
+    Token T3 adds the COST view so the estimate is comparable to the
+    real per-stream spend (which is in USD across all providers):
+      - llm_cost_usd_micros           — token estimate × blended rate
+      - transcription_cost_usd_micros — real, near-deterministic in
+                                        duration (cost_micros_for)
+      - total_cost_usd_micros         — all-in estimate to compare
+                                        against StreamSpend after a run.
+    """
 
     total_tokens: int
     lines: tuple[EstimateLine, ...]
+    llm_cost_usd_micros: int = 0
+    transcription_cost_usd_micros: int = 0
+    total_cost_usd_micros: int = 0
 
     @property
     def lines_list(self) -> list[EstimateLine]:
         """Jinja2 doesn't love tuples in for-loops; convenience accessor."""
         return list(self.lines)
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self.total_cost_usd_micros / 1_000_000.0
 
 
 def estimate_pipeline_run(
@@ -166,7 +192,27 @@ def estimate_pipeline_run(
     lines = tuple(lines_list)
 
     total = sum(line.tokens for line in lines)
-    return PipelineEstimate(total_tokens=total, lines=lines)
+
+    # Token T3 — cost view. LLM cost from the token estimate at a blended
+    # rate; transcription cost is real (near-deterministic in duration).
+    # cost_micros = tokens × usd_per_mtok (the /1e6 and ×1e6 cancel).
+    llm_cost_um = int(round(total * _LLM_BLENDED_USD_PER_MTOK))
+    transcription_cost_um = 0
+    try:
+        from nexoclip.transcribe.providers.assemblyai import cost_micros_for
+        transcription_cost_um = cost_micros_for(
+            duration_s=(duration_seconds or 3600), speaker_labels=True,
+        )
+    except Exception:  # noqa: BLE001 — estimator must never 500
+        transcription_cost_um = 0
+
+    return PipelineEstimate(
+        total_tokens=total,
+        lines=lines,
+        llm_cost_usd_micros=llm_cost_um,
+        transcription_cost_usd_micros=transcription_cost_um,
+        total_cost_usd_micros=llm_cost_um + transcription_cost_um,
+    )
 
 
 def format_tokens(n: int) -> str:

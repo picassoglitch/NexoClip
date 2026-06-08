@@ -135,6 +135,65 @@ async def test_complete_stream_shows_humanized_ai_signals(
     assert "Speaker: Aldo" in html
 
 
+async def test_run_cost_shows_actual_vs_estimate(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Token T3 — once a run's LLM/transcription costs are recorded for
+    the stream, the page shows ACTUAL cost (all providers) next to the
+    estimate, with a per-provider breakdown."""
+    from nexoclip.db import LLMCallsRepo
+    from nexoclip.db.models import LLMCallRow
+
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id)
+    with bound_tenant(tenant_id):
+        repo = LLMCallsRepo(db)
+        await repo.record(LLMCallRow(
+            id="llm_a", tenant_id=tenant_id, purpose="variants",
+            provider="anthropic", model="haiku", quality="standard",
+            input_tokens=20_000, output_tokens=17_000, cost_usd_micros=111_000,
+            status="ok", attempts=1, ts=_now(), stream_id="str_sd",
+        ))
+        await repo.record(LLMCallRow(
+            id="llm_t", tenant_id=tenant_id, purpose="transcribe",
+            provider="assemblyai", model="best", quality="standard",
+            input_tokens=0, output_tokens=0, cost_usd_micros=43_000,
+            status="ok", attempts=1, ts=_now(), stream_id="str_sd",
+        ))
+
+    r = await client.get(
+        "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+    )
+    html = r.text
+    assert "Run cost" in html
+    assert "Actual cost" in html
+    # $0.154 = (111000 + 43000) micros.
+    assert "0.1540" in html
+    # Per-provider breakdown.
+    assert "anthropic" in html
+    assert "assemblyai" in html
+
+
+async def test_run_cost_shows_estimate_only_before_run(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """With no recorded spend, the panel shows the (cost-expressed)
+    estimate, not actual."""
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id)
+    r = await client.get(
+        "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+    )
+    html = r.text
+    assert "Run cost" in html
+    assert "Estimated cost" in html
+    assert "Actual cost" not in html
+
+
 async def test_complete_stream_shows_timeline(
     client: httpx.AsyncClient,
     db: Database,

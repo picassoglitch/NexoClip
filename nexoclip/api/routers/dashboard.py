@@ -1482,6 +1482,17 @@ async def stream_detail(
     personas = await _merged_personas(db)
     overview = _stream_overview(stream, clips, candidates)
 
+    # Token T3 — ACTUAL spend for this run (Claude + transcription + any
+    # provider, tagged with this stream_id). Drives the estimate-vs-actual
+    # panel. Best-effort: a query hiccup shouldn't 500 the page.
+    actual_spend = None
+    try:
+        from nexoclip.tenancy import bound_tenant as _bt
+        with _bt(tenant_id):
+            actual_spend = await LLMCallsRepo(db).cost_for_stream(stream_id)
+    except Exception:  # noqa: BLE001
+        actual_spend = None
+
     # Pre-run estimate. Uses stream duration + a heuristic for clip count
     # to produce an upper-bound token count, then divides by the user's
     # remaining balance to suggest how many more times they could run.
@@ -1529,6 +1540,7 @@ async def stream_detail(
             "candidates": candidates,
             "clips": clips,
             "overview": overview,
+            "actual_spend": actual_spend,
             "personas": personas,
             "estimate": estimate_single,
             "estimate_total_fmt": format_tokens(estimate_single.total_tokens),

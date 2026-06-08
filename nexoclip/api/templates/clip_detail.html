@@ -6151,6 +6151,11 @@
   }
 
   function syncCaptionFrame() {
+    // Defensive: this runs every animation frame AND from preset-apply
+    // during init — which can fire before `captionLines`/`pvCaptionEl` are
+    // assigned. A thrown TypeError here repeats every frame and tanks
+    // playback (the lag), so bail cleanly until both exist.
+    if (!pvCaptionEl) return;
     if (!captionsEnabled()) {
       if (pvCaptionEl.children.length) {
         pvCaptionEl.innerHTML = "";
@@ -6158,7 +6163,7 @@
       }
       return;
     }
-    if (!captionLines.length) {
+    if (!captionLines || !captionLines.length) {
       // Only paint the empty-state once we know the fetch resolved;
       // before that, leave the box blank so we don't flash a misleading
       // "no transcript" hint while the data is still loading.

@@ -1531,12 +1531,17 @@ def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
     # a misleading "Analyzing your video…".
     status = (getattr(stream, "status", "") or "").lower()
     has_clips = len(clips) > 0
-    if status in ("running", "processing", "ingesting"):
-        status_kind = "running"
-    elif status == "failed" and not has_clips:
-        status_kind = "failed"
-    elif has_clips or status in ("done", "ingested", "ready"):
+    # CLIPS win: a finished run has clips on disk even if the status column
+    # is stale. Live streams in particular are left at 'processing' by the
+    # auto-clip claim, so checking running-states first would show
+    # 'Analyzing…' forever. Order: complete (clips/terminal) → failed →
+    # running → pending.
+    if has_clips or status in ("done", "ingested", "ready"):
         status_kind = "complete"
+    elif status == "failed":
+        status_kind = "failed"
+    elif status in ("running", "processing", "ingesting"):
+        status_kind = "running"
     else:
         status_kind = "pending"
 

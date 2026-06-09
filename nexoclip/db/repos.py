@@ -910,6 +910,23 @@ async def _streams_repo_try_claim_for_processing(
     return (cur.rowcount or 0) == 1
 
 
+async def _streams_repo_set_status(
+    db: "Database", *, stream_id: str, status: str
+) -> None:
+    """Phase L.2 — tenant-free stream status update (same invocation
+    contract as the mark_live_* / claim helpers). The live runner calls
+    this to flip a stream to a terminal status ('done') once its clip
+    pipeline finishes — otherwise it stays at the 'processing' the autoclip
+    claim set, and the dashboard shows 'Analyzing…' forever with clips on
+    disk."""
+    conn = await db.connect()
+    await conn.execute(
+        "UPDATE streams SET status = ? WHERE id = ?",
+        (status, stream_id),
+    )
+    await conn.commit()
+
+
 class LiveStreamKeysRepo:
     """Phase L.1 — per-tenant RTMP stream keys.
 

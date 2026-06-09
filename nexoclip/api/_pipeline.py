@@ -515,6 +515,24 @@ async def live_pipeline_runner(
             )
         raise
 
+    # Run succeeded — flip the stream to a terminal status. The autoclip
+    # claim set it to 'processing'; nothing else resets a live stream, so
+    # without this the dashboard shows 'Analyzing…' forever even with clips
+    # on disk. Best-effort: the clips already exist, so a failed status
+    # write isn't worth failing the run.
+    try:
+        from nexoclip.db import Database
+        from nexoclip.db.repos import _streams_repo_set_status
+
+        sdb = Database(db_path)
+        await sdb.connect()
+        try:
+            await _streams_repo_set_status(sdb, stream_id=stream_id, status="done")
+        finally:
+            await sdb.close()
+    except Exception:  # noqa: BLE001 — cosmetic status only
+        _log.warning("live: could not mark stream done for %s", stream_id)
+
     # Token T2/T3 — run succeeded; charge the base fee + refresh balance.
     await _refresh_balance_after_run(
         db_path=db_path, tenant_id=tenant_id, stream_id=stream_id,

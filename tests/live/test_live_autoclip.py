@@ -359,3 +359,6 @@ async def test_live_runner_ingests_then_processes(
     assert after is not None
     assert after.platform == "live"
     assert after.vod_url == "live://rtmp/str_r"
+    # Flipped to a terminal status so the dashboard stops showing
+    # 'Analyzing…' (the autoclip claim left it 'processing').
+    assert after.status == "done"

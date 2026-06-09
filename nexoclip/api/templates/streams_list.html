@@ -13,7 +13,7 @@
 <div class="nc-page-header">
   <div>
     <h2>Streams</h2>
-    <small>Tus transmisiones de NexoOBS llegan aquí y la IA genera los clips. (También puedes procesar un VOD por URL abajo.)</small>
+    <small>Tus transmisiones de NexoOBS llegan aquí y la IA genera los clips automáticamente.</small>
   </div>
   <div class="nc-page-summary">
     <span class="nc-mono">{{ streams|length }}</span> stream{{ "s" if streams|length != 1 else "" }}
@@ -26,7 +26,7 @@
   <div class="nc-alert__body">
     <div class="nc-alert__title">ffmpeg is not installed</div>
     <div class="nc-alert__detail">
-      The pipeline needs ffmpeg to extract audio. Upload is disabled until you install it.
+      The pipeline needs ffmpeg to extract audio. Clip generation is disabled until you install it.
       Install via <code>winget install --id=Gyan.FFmpeg -e</code> (Windows) /
       <code>brew install ffmpeg</code> (macOS) / <code>sudo apt install ffmpeg</code> (Debian),
       then restart the dashboard.
@@ -35,37 +35,6 @@
 </div>
 {% endif %}
 
-
-<details class="nc-details">
-  <summary>Advanced: process from a VOD URL</summary>
-  <div>
-    <form action="/dashboard/streams" method="post">
-      <label class="nc-label">VOD URL
-        <input type="url"
-               class="nc-input nc-input--mono"
-               name="vod_url"
-               placeholder="https://kick.com/..." required>
-      </label>
-      <label class="nc-label">Persona
-        <select class="nc-select" name="persona_id" required>
-          {% if not personas %}<option value="" disabled selected>No personas yet</option>{% endif %}
-          {% for p in personas %}
-          <option value="{{ p.id }}">{{ p.name }} ({{ p.primary_language }})</option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="submit" class="nc-btn" {% if not personas %}disabled{% endif %}>
-        <i class="ti ti-player-play" aria-hidden="true"></i>
-        <span>Kick off pipeline</span>
-      </button>
-      <small style="display: block; margin-top: 12px;">
-        <strong>Kick / age-gated YouTube:</strong> requires
-        <code>NEXOCLIP_COOKIES_FROM_BROWSER=edge</code> (or firefox / brave) or
-        <code>NEXOCLIP_COOKIES_FILE=/path/to/cookies.txt</code> in <code>.env</code>.
-      </small>
-    </form>
-  </div>
-</details>
 
 {#- Slice O.11 — flash banner after a successful delete. The
     POST handler redirects to /dashboard/streams?deleted=1 so the

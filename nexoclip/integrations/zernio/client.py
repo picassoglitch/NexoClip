@@ -247,17 +247,25 @@ class ZernioClient:
         platform: str,
         *,
         profile_id: str,
+        redirect_url: str | None = None,
     ) -> ZernioConnectLink:
         """GET /connect/{platform}?profileId=... — mint the hosted
         OAuth URL the tenant visits to authorize one platform.
 
         `profileId` namespaces the connection to this tenant so the
         resulting account shows up scoped to them on GET /accounts.
+        `redirect_url` is where Zernio sends the browser AFTER the
+        OAuth callback completes — point it at our own /connected page
+        so the operator lands back on NexoClip instead of Zernio's
+        dashboard (their white-label flow).
         """
+        params: dict[str, Any] = {"profileId": profile_id}
+        if redirect_url:
+            params["redirect_url"] = redirect_url
         body = await self._request(
             "GET",
             f"/connect/{platform}",
-            params={"profileId": profile_id},
+            params=params,
         )
         auth_url = body.get("authUrl") if isinstance(body, dict) else None
         if not isinstance(auth_url, str) or not auth_url:

@@ -74,13 +74,22 @@ async def test_connect_url_returns_authurl_with_profile_id() -> None:
             route = mock.get(f"{_BASE}/connect/tiktok").mock(
                 return_value=httpx.Response(200, json=body)
             )
-            link = await _client(http).connect_url("tiktok", profile_id="ten_alice")
+            link = await _client(http).connect_url(
+                "tiktok",
+                profile_id="ten_alice",
+                redirect_url="https://nexoclip.test/dashboard/publish/zernio/connected",
+            )
     assert link.auth_url.startswith("https://zernio.com/oauth/tiktok")
     sent = route.calls.last.request
     # Bearer auth (NOT Apikey).
     assert sent.headers["Authorization"] == "Bearer sk_test_abc"
     # profileId scopes the connection to the tenant.
     assert sent.url.params.get("profileId") == "ten_alice"
+    # redirect_url sends the post-OAuth popup back to OUR page instead
+    # of Zernio's dashboard (white-label flow).
+    assert sent.url.params.get("redirect_url") == (
+        "https://nexoclip.test/dashboard/publish/zernio/connected"
+    )
 
 
 @pytest.mark.asyncio

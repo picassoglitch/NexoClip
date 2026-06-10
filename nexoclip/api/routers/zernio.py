@@ -534,8 +534,14 @@ async def zernio_connect(
 
     profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
+    # After the OAuth callback, Zernio redirects the popup HERE instead
+    # of its own dashboard — our /connected page closes the popup and
+    # notifies the main tab. The operator never sees Zernio's UI.
+    redirect_back = f"{_public_base_url(request)}/dashboard/publish/zernio/connected"
     try:
-        link = await client.connect_url(platform, profile_id=profile_id)
+        link = await client.connect_url(
+            platform, profile_id=profile_id, redirect_url=redirect_back,
+        )
     except ZernioError as e:
         _log.warning(
             "zernio.connect.failed tenant=%s platform=%s err=%s status=%s body=%s",
@@ -559,6 +565,39 @@ async def zernio_connect(
         tenant_id, platform, profile_id,
     )
     return JSONResponse({"ok": True, "auth_url": link.auth_url})
+
+
+@router.get("/connected", response_class=HTMLResponse)
+async def zernio_connected_landing(request: Request) -> Response:
+    """Post-OAuth landing page — where Zernio's `redirect_url` sends the
+    popup after the account connects.
+
+    Same-origin, so `window.close()` works on the script-opened popup:
+    notify the opener (main NexoClip tab) via postMessage, then close.
+    If the page was somehow opened as a full navigation (no opener),
+    fall back to the dashboard. The operator never sees Zernio's UI.
+    """
+    return HTMLResponse(
+        """<!doctype html>
+<html><head><meta charset="utf-8"><title>Account connected</title></head>
+<body style="font-family:system-ui,sans-serif;padding:24px;color:#333">
+<p>Account connected ✓ — returning to NexoClip…</p>
+<script>
+  if (window.opener && !window.opener.closed) {
+    try {
+      window.opener.postMessage({ type: "zernio:connected" }, window.location.origin);
+    } catch (e) { /* ignore */ }
+    window.close();
+    // If the browser refused to close us, give the operator a way home.
+    setTimeout(function () {
+      window.location.href = "/dashboard/publish/zernio";
+    }, 1500);
+  } else {
+    window.location.href = "/dashboard/publish/zernio";
+  }
+</script>
+</body></html>"""
+    )
 
 
 @router.get("/accounts.json")

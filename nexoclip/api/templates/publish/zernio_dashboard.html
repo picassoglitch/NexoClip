@@ -717,11 +717,20 @@
   }
 
   // ---- Connect a platform (Zernio OAuth in a popup, auto-closed) ----
-  // Zernio's connect flow has no redirect-back param — after OAuth it
-  // lands on Zernio's own dashboard. So we open it in a popup and, once
-  // our backend reports the account connected, CLOSE the popup and
-  // refresh NexoClip — the operator never has to deal with Zernio's UI.
+  // We pass redirect_url to Zernio so the OAuth callback lands the popup
+  // on our own /connected page (same-origin), which postMessages this
+  // tab and closes itself — the operator never sees Zernio's dashboard.
+  // The accounts.json poll below stays as a fallback in case the
+  // postMessage is missed (e.g. popup blocked into a full tab).
   var znConnectOpened = false;
+  var znPopup = null;
+  window.addEventListener("message", function (e) {
+    if (e.origin !== window.location.origin) return;
+    if (!e.data || e.data.type !== "zernio:connected") return;
+    if (znPopup) { try { znPopup.close(); } catch (err) { /* ignore */ } }
+    znConnectOpened = false;
+    window.location.reload();
+  });
   function znPollUntilConnected(popup, platform, triesLeft) {
     if (triesLeft <= 0) { return; }  // give up quietly; focus-reload is the fallback
     fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
@@ -749,6 +758,7 @@
       // Open the popup synchronously inside the click gesture so popup
       // blockers don't kill it; we redirect it once the URL arrives.
       var w = window.open("", "_blank");
+      znPopup = w;
       if (w) {
         try {
           w.document.write(

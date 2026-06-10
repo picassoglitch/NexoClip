@@ -163,6 +163,19 @@ def _tiktok_settings() -> dict[str, Any]:
     }
 
 
+async def _read_json(request: Request) -> Any:
+    """Return the parsed JSON body, or None on an empty/invalid body.
+
+    FastAPI's `await request.json()` raises (→ 500) on an empty or
+    non-JSON body; this swallows that so handlers can return a clean
+    4xx instead."""
+    try:
+        return await request.json()
+    except Exception:
+        # Any malformed/empty body → treat as absent; caller returns 4xx.
+        return None
+
+
 async def _require_profile(db: Database, tenant_id: str) -> str:
     """Return the tenant's Zernio profile_id, or raise 409 telling the
     operator to create a profile first.
@@ -440,9 +453,11 @@ async def zernio_create_profile(
     in place without a navigation. Connecting social accounts to the new
     profile is the next step (the per-platform Connect buttons).
     """
-    body = await request.json()
+    body = await _read_json(request)
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+        return JSONResponse(
+            {"ok": False, "error": "Body must be a JSON object."}, status_code=400,
+        )
     name = (body.get("name") or "").strip()
     description = (body.get("description") or "").strip() or None
     if not name:
@@ -502,8 +517,13 @@ async def zernio_connect(
     profile to already exist (created via POST /profile); accounts
     attach to that profile.
     """
-    body = await request.json()
-    platform = (body.get("platform") if isinstance(body, dict) else "") or ""
+    data = await _read_json(request)
+    if isinstance(data, dict):
+        platform = str(data.get("platform") or "")
+    else:
+        # Tolerate a form-encoded POST from a cached/old dashboard page.
+        form = await request.form()
+        platform = str(form.get("platform") or "")
     platform = platform.strip().lower()
     if platform not in _SUPPORTED_PLATFORM_IDS:
         return JSONResponse(
@@ -724,7 +744,7 @@ async def zernio_bulk(
     Returns a per-clip result list so the UI can surface "3 of 4 queued"
     feedback. Failures don't short-circuit — each clip is independent.
     """
-    body = await request.json()
+    body = await _read_json(request)
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be a JSON object.")
 

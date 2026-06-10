@@ -1143,6 +1143,10 @@ async def start_page(
             "default_persona": default_persona,
             "ffmpeg_ok": is_ffmpeg_available(),
             "live_configured": live_configured,
+            # Real RTMP server URL for the live ingest panel's "Server" row.
+            # The per-tenant stream key is still TODO(ingest) — the template
+            # shows a masked placeholder until that endpoint is wired.
+            "live_rtmp_base_url": (getattr(s, "live_rtmp_base_url", "") or "").strip(),
         },
     )
 

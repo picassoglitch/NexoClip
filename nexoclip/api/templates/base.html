@@ -1,20 +1,25 @@
 {# Base layout — every page extends this.
 
-   Cyberpunk navy + electric blue. The single source of truth for
-   styles is /static/nexoclip-theme.css. No page-level color/layout
-   inline anywhere — all visual rules live in the .nc-* component
-   classes defined in that file.
+   Cyberpunk navy + electric-lime. The single source of truth for
+   styles is /static/nexoclip-theme.css (tokens + components) plus
+   /static/nexoclip-shell.css (the left sidebar + ingest hub).
+   No page-level color/layout inline anywhere.
 
-   Active nav highlighting: we compare {{ request.url.path }} against
-   each link's prefix. FastAPI's Jinja2Templates auto-injects `request`,
-   so this works without per-endpoint plumbing.
+   Site shell: a persistent 236px left sidebar (collapses to a 64px
+   icon rail < 860px). Active nav highlighting compares
+   {{ request.url.path }} against each link's prefix — FastAPI's
+   Jinja2Templates auto-injects `request`, so this works without
+   per-endpoint plumbing.
 #}
 {% set _path = (request.url.path if request else '') %}
-{% macro nav_link(href, label, prefix=None) -%}
+{% macro side_link(href, label, icon, prefix=None) -%}
   {%- set match = prefix or href -%}
+  {%- set active = _path.startswith(match) -%}
   <li>
-    <a class="nc-nav__link {% if _path.startswith(match) %}is-active{% endif %}"
-       href="{{ href }}">{{ label }}</a>
+    <a class="nc-side__link {% if active %}is-active{% endif %}"
+       href="{{ href }}"{% if active %} aria-current="page"{% endif %}>
+      <i class="ti ti-{{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
+    </a>
   </li>
 {%- endmacro %}
 <!doctype html>
@@ -29,111 +34,81 @@
      so crawlers don't waste budget on auth-walled content. The public
      landing at / is the discoverable surface (see /llms.txt, /robots.txt). #}
   <meta name="robots" content="noindex, nofollow">
-  {#- Slice O.10 — favicon. SVG is the modern primary; the .ico
-      fallback line is omitted because every browser we target since
-      2020 supports SVG favicons. Apple-touch-icon is the same file so
-      iOS home-screen pinning gets the brand mark. -#}
+  {#- Slice O.10 — favicon. SVG primary; apple-touch-icon same file. -#}
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="apple-touch-icon" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/nexoclip-theme.css">
+  <link rel="stylesheet" href="/static/nexoclip-shell.css">
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
-  <nav class="nc-nav">
-    <div class="nc-nav__inner">
-      <a href="/dashboard/streams" class="nc-nav__logo">
-        <span class="nc-nav__logo-prefix">NEXO</span><span class="nc-nav__logo-accent">CLIP</span>
-      </a>
-      <ul class="nc-nav__links">
-        {#- Slice O.9 — "Streams" relabeled to "Clips" so the surface
-            language matches what creators actually think they're
-            managing: clips, not raw streams. The underlying route
-            still lives at /dashboard/streams (a rename of the route
-            would break bookmarks + every internal link).
-            Slice O.24 — labels go through t() so es/en switch. -#}
-        {#- UX unification — one "Start" page surfaces every ingest
-            method (paste URL, upload, Drive watch, live RTMP) so
-            operators don't have to hunt through the nav to find the
-            method they want. Lives first so it's the obvious entry
-            for new operators. -#}
-        {{ nav_link("/dashboard/start", "+ New clip", prefix="/dashboard/start") }}
-        {{ nav_link("/dashboard/streams", t("nav.clips")) }}
-        {{ nav_link("/dashboard/inbox", t("nav.inbox")) }}
-        {{ nav_link("/dashboard/live", "Live", prefix="/dashboard/live") }}
-        {{ nav_link("/dashboard/personas", t("nav.personas")) }}
-        {{ nav_link("/dashboard/brand-kits", t("nav.brand_kits")) }}
-        {{ nav_link("/dashboard/publish", t("nav.publish")) }}
-        {#- Slice O.9 — LLM spend + LLM settings are operator-only.
-            Driven by NEXOCLIP_ADMIN_TENANT_IDS env var (see auth
-            middleware). Regular creators never see them. -#}
+  <aside class="nc-side">
+    <a href="/dashboard/streams" class="nc-side__brand">
+      <span class="nc-side__brand-prefix">NEXO</span><span class="nc-side__brand-accent">CLIP</span>
+      <span class="nc-side__brand-mini" aria-hidden="true">N</span>
+    </a>
+    <nav aria-label="Main">
+      <ul class="nc-side__nav">
+        {#- "New clip" is the obvious entry for new operators — one Start
+            page surfaces every ingest method (URL · upload · live · Drive). -#}
+        {{ side_link("/dashboard/start", t("nav.new_clip"), "plus", prefix="/dashboard/start") }}
+        {#- Slice O.9/O.24 — labels go through t() so es/en switch. The
+            /dashboard/streams route keeps its path (bookmarks) but is
+            surfaced as "Streams"; /dashboard/inbox is surfaced as "Clips". -#}
+        {{ side_link("/dashboard/streams", t("nav.clips"), "movie") }}
+        {{ side_link("/dashboard/inbox", t("nav.inbox"), "layout-grid") }}
+        {{ side_link("/dashboard/live", "Live", "broadcast", prefix="/dashboard/live") }}
+        {{ side_link("/dashboard/personas", t("nav.personas"), "user") }}
+        {{ side_link("/dashboard/brand-kits", t("nav.brand_kits"), "palette") }}
+        {{ side_link("/dashboard/publish", t("nav.publish"), "send") }}
+        {#- Slice O.9 — operator-only surfaces, gated by NEXOCLIP_ADMIN_TENANT_IDS. -#}
         {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
         {% if _is_admin %}
-        {#- /agents lives at the root (public) but we surface it in the
-            admin nav so operators can hop to the technical second-door
-            page directly without going through the marketing landing.
-            Same prefix is used for the active-link match — the page
-            stands alone so a hard match on "/agents" is enough. -#}
-        {{ nav_link("/agents", t("nav.docs_agents"), prefix="/agents") }}
-        {{ nav_link("/dashboard/llm-calls", t("nav.llm_spend")) }}
-        {{ nav_link("/dashboard/settings/llm", t("nav.llm_settings"), prefix="/dashboard/settings/llm") }}
-        {#- Slice O.57 — operator-only site settings (landing price, etc).
-            Lives under /dashboard/settings/site; the public landing reads
-            the values it persists. -#}
-        {{ nav_link("/dashboard/settings/site", t("nav.site_settings"), prefix="/dashboard/settings/site") }}
-        {{ nav_link("/dashboard/_health/diarize", "Diarize", prefix="/dashboard/_health/diarize") }}
-        {{ nav_link("/dashboard/_health/queue", "Queue", prefix="/dashboard/_health/queue") }}
+        <li><div class="nc-side__sep" role="separator"></div></li>
+        {{ side_link("/agents", t("nav.docs_agents"), "robot", prefix="/agents") }}
+        {{ side_link("/dashboard/llm-calls", t("nav.llm_spend"), "coin") }}
+        {{ side_link("/dashboard/settings/llm", t("nav.llm_settings"), "adjustments", prefix="/dashboard/settings/llm") }}
+        {{ side_link("/dashboard/settings/site", t("nav.site_settings"), "world", prefix="/dashboard/settings/site") }}
+        {{ side_link("/dashboard/_health/diarize", "Diarize", "wave-sine", prefix="/dashboard/_health/diarize") }}
+        {{ side_link("/dashboard/_health/queue", "Queue", "list-check", prefix="/dashboard/_health/queue") }}
         {% endif %}
       </ul>
-      <div class="nc-nav__right">
-        {# Slice NX.4 — token balance chip. Reads from
-           `request.state.token_balance` which the auth middleware populates
-           from the cached values on the tenant row. The cache is updated by
-           the outbound usage reporter after each LLM call, so this chip
-           reflects the cross-engine Nexo AI balance without any per-render
-           network call. `unlimited` = admins, render as ∞. NULL = no LLM
-           calls yet, render a faded "—" placeholder. #}
-        {# Slice O.47 — chip is now an HTMX-polled fragment. Re-fetches
-           every 30s automatically AND on the `balance-poll` custom
-           event we dispatch after token-spending actions. The chip
-           markup lives in _balance_chip.html so both this server-side
-           include AND the HTMX swap target see identical HTML. #}
-        {%- set _bal = (request.state.token_balance if request and request.state else None) -%}
-        {% include "_balance_chip.html" %}
+    </nav>
+    <div class="nc-side__foot">
+      {# Slice NX.4 / O.47 — token balance chip (HTMX-polled fragment).
+         Reads request.state.token_balance; ∞ for admins, faded "—" before
+         any LLM calls. Markup lives in _balance_chip.html. #}
+      {%- set _bal = (request.state.token_balance if request and request.state else None) -%}
+      {% include "_balance_chip.html" %}
 
-        {# Slice O.1 — tier chip. Reads from `request.state.tenant_tier`
-           injected by BearerAuthMiddleware so the chip renders on EVERY
-           authenticated dashboard page without each handler having to
-           pass the value explicitly. Free tier renders amber with the
-           "watermark on" tooltip; pro+ tiers render lime with "clean
-           export". Future J.2 will turn this into a link to the
-           billing page. #}
-        {%- set _tier = (request.state.tenant_tier if request and request.state else None) -%}
-        {% if _tier %}
-        <span class="nc-chip nc-chip--{% if _tier == 'free' %}warn{% else %}success{% endif %}"
-              title="{% if _tier == 'free' %}Free plan · nexoclip.com watermark burned on exports. Upgrade for clean exports.{% else %}{{ _tier|capitalize }} plan · clean exports{% endif %}">
-          <i class="ti ti-{% if _tier == 'free' %}flame{% else %}crown{% endif %}" aria-hidden="true"></i>
-          <span>{{ _tier|capitalize }}</span>
-        </span>
-        {% endif %}
-        {% if tenant_id %}
-        <span class="nc-chip nc-chip--muted" title="Current tenant">
-          <i class="ti ti-user" aria-hidden="true"></i>
-          <span>{{ tenant_id }}</span>
-        </span>
-        {% endif %}
-        <form action="/dashboard/logout" method="post" style="margin: 0;">
-          <button type="submit" class="nc-btn nc-btn--sm">
-            <i class="ti ti-logout" aria-hidden="true"></i>
-            <span>{{ t('nav.logout') }}</span>
-          </button>
-        </form>
-      </div>
+      {# Slice O.1 — tier chip. request.state.tenant_tier from BearerAuthMiddleware.
+         Free → amber "watermark" tooltip; pro+ → lime "clean export". #}
+      {%- set _tier = (request.state.tenant_tier if request and request.state else None) -%}
+      {% if _tier %}
+      <span class="nc-chip nc-chip--{% if _tier == 'free' %}warn{% else %}success{% endif %}"
+            title="{% if _tier == 'free' %}Free plan · nexoclip.com watermark burned on exports. Upgrade for clean exports.{% else %}{{ _tier|capitalize }} plan · clean export{% endif %}">
+        <i class="ti ti-{% if _tier == 'free' %}flame{% else %}crown{% endif %}" aria-hidden="true"></i>
+        <span>{{ _tier|capitalize }}</span>
+      </span>
+      {% endif %}
+      {% if tenant_id %}
+      <span class="nc-chip nc-chip--muted" title="Current tenant">
+        <i class="ti ti-user" aria-hidden="true"></i>
+        <span>{{ tenant_id }}</span>
+      </span>
+      {% endif %}
+      <form action="/dashboard/logout" method="post">
+        <button type="submit" class="nc-btn nc-btn--sm">
+          <i class="ti ti-logout" aria-hidden="true"></i>
+          <span>{{ t('nav.logout') }}</span>
+        </button>
+      </form>
     </div>
-  </nav>
-  <main class="nc-page">
+  </aside>
+  <main class="nc-page {% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
 </body>

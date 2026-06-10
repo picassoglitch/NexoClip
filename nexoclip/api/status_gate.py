@@ -107,13 +107,14 @@ def require_paid_tier(request: Request) -> None:
 
 
 def require_top_tier(request: Request) -> None:
-    """Block everything below the TOP tier (all_access) from publishing.
+    """Block everything below the TOP tier (all_access).
 
-    Publishing to TikTok / YouTube / Instagram via Zernio is a
-    top-tier-only feature. `pro` (mid tier) gets Drive export instead
-    (task #31); `free` downloads locally with a watermark. The top tier
-    includes Nexo AI's `partner` alias, normalized to all_access at the
-    auth read choke point.
+    Gates the legacy native publish-jobs paths (clips.py /publish +
+    dashboard.py Buffer matrix). The Zernio publish surface is gated by
+    require_paid_tier instead — `pro` CAN publish there, capped at one
+    connected account (tiers.zernio_account_limit); all_access (VIP) is
+    unlimited. The top tier includes Nexo AI's `partner` alias,
+    normalized to all_access at the auth read choke point.
 
     Returns 402 Payment Required with a paywall hint.
     """

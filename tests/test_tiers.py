@@ -23,6 +23,7 @@ from nexoclip.tiers import (
     TOP_TIERS,
     normalize_tier,
     resolve_tier_alias,
+    zernio_account_limit,
 )
 
 
@@ -81,3 +82,25 @@ def test_paid_tiers_excludes_free_includes_pro_and_all_access() -> None:
     assert FREE not in PAID_TIERS
     assert PRO in PAID_TIERS
     assert ALL_ACCESS in PAID_TIERS
+
+
+# ---- per-tier connected-account cap (Zernio publish surface) ----
+
+
+def test_account_limit_pro_is_one() -> None:
+    """pro CAN publish, capped at one connected social account."""
+    assert zernio_account_limit(PRO) == 1
+
+
+def test_account_limit_all_access_unlimited_incl_partner_alias() -> None:
+    """all_access (VIP) is unlimited (None) — and the partner alias
+    resolves to the same."""
+    assert zernio_account_limit(ALL_ACCESS) is None
+    assert zernio_account_limit("partner") is None
+
+
+def test_account_limit_free_and_unknown_are_zero() -> None:
+    """free connects nothing; unrecognized labels normalize to free."""
+    assert zernio_account_limit(FREE) == 0
+    assert zernio_account_limit("wizard") == 0
+    assert zernio_account_limit(None) == 0

@@ -45,7 +45,7 @@ from nexoclip.integrations.zernio import (
 from nexoclip.settings import get_settings
 
 from ..deps import get_db, require_full_scope, tenant_binder
-from ..status_gate import require_top_tier
+from ..status_gate import require_paid_tier
 from .clips import _VALID_STATUS_TRANSITIONS
 from .internal import mint_signed_clip_url
 
@@ -163,6 +163,27 @@ def _tiktok_settings() -> dict[str, Any]:
     }
 
 
+def _account_limit(request: Request) -> int | None:
+    """Connected-account cap for the requesting tenant's tier.
+
+    pro = 1, all_access (VIP) = None (unlimited). The tier was
+    normalized by the auth middleware; tiers.zernio_account_limit holds
+    the per-tier numbers (single source of truth)."""
+    from nexoclip.tiers import zernio_account_limit
+
+    tier = getattr(request.state, "tenant_tier", None)
+    return zernio_account_limit(tier)
+
+
+def _account_limit_message(limit: int) -> str:
+    """Operator-facing copy for hitting the per-tier account cap."""
+    return (
+        f"Your plan allows {limit} connected social account"
+        f"{'' if limit == 1 else 's'}. Disconnect one first, or upgrade "
+        f"to All-Access for unlimited accounts."
+    )
+
+
 async def _read_json(request: Request) -> Any:
     """Return the parsed JSON body, or None on an empty/invalid body.
 
@@ -253,6 +274,19 @@ async def _publish_clip(
             detail=(
                 f"Not connected on Zernio: {', '.join(missing)}. "
                 f"Connect these accounts first, then publish."
+            ),
+        )
+
+    # Per-tier cap also applies at publish time — covers a tenant who
+    # connected several accounts on a higher tier and then downgraded.
+    limit = _account_limit(request)
+    if limit is not None and len(targets) > limit:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"Your plan publishes with {limit} connected account"
+                f"{'' if limit == 1 else 's'} — deselect the extra "
+                f"platform(s) or upgrade to All-Access."
             ),
         )
 
@@ -426,6 +460,8 @@ async def zernio_dashboard(
             "accounts": accounts,
             "connected_set": connected_set,
             "account_by_platform": _account_map(accounts),
+            "account_limit": _account_limit(request),
+            "account_count": len(accounts),
             "connect_fetch_failed": connect_fetch_failed,
             "posts": posts,
             "publishable_clips": publishable,
@@ -443,7 +479,7 @@ async def zernio_create_profile(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Create the tenant's Zernio profile (inline, AJAX from the
@@ -501,7 +537,7 @@ async def zernio_connect(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Mint a hosted-OAuth authUrl for ONE platform and return it as
@@ -534,6 +570,34 @@ async def zernio_connect(
 
     profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
+
+    # Per-tier connected-account cap: pro = 1, all_access = unlimited.
+    # Counted against Zernio (the source of truth for connections), and
+    # checked BEFORE minting the OAuth URL so the operator gets a clear
+    # paywall message instead of a dead OAuth round-trip.
+    limit = _account_limit(request)
+    if limit is not None:
+        try:
+            current = await client.list_accounts(profile_id=profile_id)
+        except ZernioError as e:
+            _log.warning(
+                "zernio.connect.limit_check_failed tenant=%s err=%s",
+                tenant_id, e,
+            )
+            return JSONResponse(
+                {"ok": False, "error": f"Couldn't verify connected accounts: {e}"},
+                status_code=502,
+            )
+        if len(current) >= limit:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "account_limit",
+                    "error": _account_limit_message(limit),
+                },
+                status_code=402,
+            )
+
     # After the OAuth callback, Zernio redirects the popup HERE instead
     # of its own dashboard — our /connected page closes the popup and
     # notifies the main tab. The operator never sees Zernio's UI.
@@ -640,7 +704,7 @@ async def zernio_disconnect_account(
     account_id: str,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Disconnect ONE connected account on Zernio (DELETE /accounts/{id}),
@@ -667,7 +731,7 @@ async def zernio_claim_existing(
     profile_id: str = Form(..., alias="profile_id"),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Bind an EXISTING Zernio profileId to this tenant.
@@ -699,6 +763,18 @@ async def zernio_claim_existing(
             detail=(
                 f"No connected accounts found for profileId '{profile_id}'. "
                 f"Check the value or click Connect to start fresh."
+            ),
+        )
+
+    # A capped tier can't sidestep the connect-time limit by claiming a
+    # profile that already has more accounts than their plan allows.
+    limit = _account_limit(request)
+    if limit is not None and len(accounts) > limit:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"That profile has {len(accounts)} connected accounts. "
+                + _account_limit_message(limit)
             ),
         )
 
@@ -748,7 +824,7 @@ async def zernio_post_clip(
     description: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Publish a rendered clip to one or more platforms via Zernio.
@@ -834,7 +910,7 @@ async def zernio_bulk(
     request: Request,
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
-    _t: None = Depends(require_top_tier),
+    _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
     """Bulk-publish entry point for the Bulk tab on the dashboard.

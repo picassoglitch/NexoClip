@@ -257,6 +257,13 @@
 {% if profile_id %}
 <div class="nc-panel" style="margin-bottom: 16px;">
   <div class="nc-pc-acct-row">
+    {% set at_limit = account_limit is not none and account_count >= account_limit %}
+    {% if account_limit is not none %}
+    <span class="nc-pc-acct-chip" title="Your plan's connected-account limit. Upgrade to All-Access for unlimited.">
+      <i class="ti ti-lock" aria-hidden="true"></i>
+      <span>{{ account_count }}/{{ account_limit }} account{{ '' if account_limit == 1 else 's' }} (Pro)</span>
+    </span>
+    {% endif %}
     {% for key, label, icon in supported_platforms %}
       {% set is_conn = key in connected_set %}
       {% if is_conn %}
@@ -275,6 +282,13 @@
         <i class="ti ti-check" aria-hidden="true"></i>
         {% endif %}
       </span>
+      {% elif at_limit %}
+      <button type="button" class="nc-pc-connect-btn" disabled
+              style="opacity: 0.4; cursor: not-allowed;"
+              title="Your plan's connected-account limit is reached. Disconnect an account or upgrade to All-Access.">
+        <i class="ti {{ icon }}" aria-hidden="true"></i>
+        <span>Connect {{ label }}</span>
+      </button>
       {% else %}
       <button type="button" class="nc-pc-connect-btn js-zn-connect"
               data-platform="{{ key }}" title="Connect {{ label }} via Zernio (opens in a new tab)">

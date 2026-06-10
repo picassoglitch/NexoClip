@@ -44,6 +44,25 @@ TOP_TIERS: Final[frozenset[str]] = frozenset({ALL_ACCESS})
 # Tiers above free — any paid perk that isn't specifically top-tier.
 PAID_TIERS: Final[frozenset[str]] = frozenset({PRO, ALL_ACCESS})
 
+# Connected-social-account cap per tier for the Zernio publish surface.
+# `pro` CAN publish, but with exactly ONE connected account; `all_access`
+# (VIP) is unlimited (None). `free` connects nothing — publishing stays
+# behind the paid gate.
+ZERNIO_ACCOUNT_LIMITS: Final[dict[str, int | None]] = {
+    FREE: 0,
+    PRO: 1,
+    ALL_ACCESS: None,
+}
+
+
+def zernio_account_limit(raw: str | None) -> int | None:
+    """Connected-account cap for a (possibly raw/aliased) tier label.
+
+    None = unlimited. Unknown labels normalize to `free` → 0, the
+    least-privilege default.
+    """
+    return ZERNIO_ACCOUNT_LIMITS.get(normalize_tier(raw), 0)
+
 # Aliases Nexo AI (or future billing sources) may use for a canonical
 # tier. Keyed lowercase. Extend this — NOT the comparison sites — when
 # a new label shows up. `partner` == our top tier `all_access`.
@@ -92,6 +111,8 @@ __all__ = [
     "CANONICAL_TIERS",
     "TOP_TIERS",
     "PAID_TIERS",
+    "ZERNIO_ACCOUNT_LIMITS",
     "resolve_tier_alias",
     "normalize_tier",
+    "zernio_account_limit",
 ]

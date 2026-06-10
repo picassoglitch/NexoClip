@@ -273,10 +273,14 @@ class ZernioClient:
     ) -> list[ZernioAccount]:
         """GET /accounts — list connected social accounts.
 
-        Passes `profileId` when given so Zernio scopes the result to
-        this tenant; we also defensively client-side filter by
-        profileId on the returned rows when the field is present, in
-        case the server ignores the query param.
+        We pass `profileId` so Zernio scopes the result server-side
+        (the primary isolation). As defense-in-depth against the server
+        ignoring the param, we ALSO drop rows whose profileId clearly
+        mismatches — but only on a clear mismatch: the profileId field
+        may come back as a plain string OR an object ({_id: ...}), and
+        when we can't compare it we KEEP the row (dropping a connected
+        account is worse than a rare cross-profile show in the single-
+        profile-per-tenant model).
         """
         params = {"profileId": profile_id} if profile_id else None
         body = await self._request("GET", "/accounts", params=params)
@@ -287,18 +291,20 @@ class ZernioClient:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            if (
-                profile_id
-                and "profileId" in row
-                and row.get("profileId") not in (None, profile_id)
-            ):
-                continue
             platform = row.get("platform")
-            account_id = row.get("_id") or row.get("accountId")
-            if isinstance(platform, str) and isinstance(account_id, str):
-                out.append(
-                    ZernioAccount(platform=platform, account_id=account_id),
-                )
+            account_id = row.get("_id") or row.get("accountId") or row.get("id")
+            if not (isinstance(platform, str) and isinstance(account_id, str)):
+                continue
+            if profile_id:
+                row_pid = row.get("profileId")
+                # Tolerate profileId being a nested object.
+                if isinstance(row_pid, dict):
+                    row_pid = row_pid.get("_id") or row_pid.get("id")
+                # Drop ONLY on a clear string mismatch; keep when absent
+                # or unrecognizable.
+                if isinstance(row_pid, str) and row_pid and row_pid != profile_id:
+                    continue
+            out.append(ZernioAccount(platform=platform, account_id=account_id))
         return out
 
     async def disconnect_account(self, account_id: str) -> None:

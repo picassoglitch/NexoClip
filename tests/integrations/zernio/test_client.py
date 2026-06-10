@@ -136,6 +136,28 @@ async def test_list_accounts_filters_by_profile_id_when_present() -> None:
     assert [a.account_id for a in accts] == ["a1"]
 
 
+@pytest.mark.asyncio
+async def test_list_accounts_keeps_row_when_profileid_is_object() -> None:
+    """Regression: a profileId returned as a nested object (or absent)
+    must NOT be dropped — that bug made connected accounts vanish."""
+    body = {
+        "accounts": [
+            {"platform": "tiktok", "_id": "a1", "profileId": {"_id": "ten_alice"}},
+            {"platform": "instagram", "_id": "a2"},  # no profileId field at all
+        ]
+    }
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.get(f"{_BASE}/accounts").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            accts = await _client(http).list_accounts(profile_id="ten_alice")
+    assert {(a.platform, a.account_id) for a in accts} == {
+        ("tiktok", "a1"),
+        ("instagram", "a2"),
+    }
+
+
 # ---- disconnect_account ----
 
 

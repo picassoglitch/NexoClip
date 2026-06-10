@@ -618,36 +618,35 @@ async def sso_diag(
     settings = get_settings()
     secret = settings.nexo_ai_sso_secret
 
-    # upload-post key has the same wrong-variable-name trap: the app
-    # reads NEXOCLIP_UPLOAD_POST_API_KEY (class env_prefix), while
-    # upload-post's own docs use the bare UPLOAD_POST_API_KEY name —
-    # which NexoClip silently ignores. A 403 from upload-post is
-    # usually "the NEXOCLIP_-prefixed var holds the wrong/stale key
-    # while the real key sits in the unprefixed one". Fingerprint BOTH
-    # raw env vars + what the app actually loaded so the operator can
-    # see the mismatch directly.
+    # Zernio key has the same wrong-variable-name trap: the app reads
+    # NEXOCLIP_ZERNIO_API_KEY (class env_prefix), while Zernio's own
+    # SDKs read the bare ZERNIO_API_KEY name — which NexoClip silently
+    # ignores. A 401 from Zernio is usually "the NEXOCLIP_-prefixed var
+    # holds the wrong/stale key while the real key sits in the
+    # unprefixed one". Fingerprint BOTH raw env vars + what the app
+    # actually loaded so the operator can see the mismatch directly.
     import os as _os
 
     out: dict = {
         "sso_secret": _secret_fingerprint(secret),
         "admin_token": _secret_fingerprint(settings.nexo_ai_admin_token),
-        "upload_post": {
-            "loaded_by_app": _secret_fingerprint(settings.upload_post_api_key),
-            "env_NEXOCLIP_UPLOAD_POST_API_KEY": _secret_fingerprint(
-                _os.environ.get("NEXOCLIP_UPLOAD_POST_API_KEY")
+        "zernio": {
+            "loaded_by_app": _secret_fingerprint(settings.zernio_api_key),
+            "env_NEXOCLIP_ZERNIO_API_KEY": _secret_fingerprint(
+                _os.environ.get("NEXOCLIP_ZERNIO_API_KEY")
             ),
-            "env_UPLOAD_POST_API_KEY": _secret_fingerprint(
-                _os.environ.get("UPLOAD_POST_API_KEY")
+            "env_ZERNIO_API_KEY": _secret_fingerprint(
+                _os.environ.get("ZERNIO_API_KEY")
             ),
             "note": (
-                "The app loads NEXOCLIP_UPLOAD_POST_API_KEY only; the "
-                "bare UPLOAD_POST_API_KEY is IGNORED. If "
-                "env_NEXOCLIP_UPLOAD_POST_API_KEY differs from "
-                "env_UPLOAD_POST_API_KEY, your real key is probably in "
-                "the wrong (unprefixed) one — copy it into the "
+                "The app loads NEXOCLIP_ZERNIO_API_KEY only; the bare "
+                "ZERNIO_API_KEY is IGNORED. If "
+                "env_NEXOCLIP_ZERNIO_API_KEY differs from "
+                "env_ZERNIO_API_KEY, your real key is probably in the "
+                "wrong (unprefixed) one — copy it into the "
                 "NEXOCLIP_-prefixed var and redeploy. If both match and "
-                "upload-post still 403s, the key itself is invalid / "
-                "revoked / lacks permission on upload-post.com."
+                "Zernio still 401s, the key itself is invalid / revoked "
+                "/ lacks permission on zernio.com."
             ),
         },
         "hint": (

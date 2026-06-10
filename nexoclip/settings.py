@@ -320,28 +320,31 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # upload-post.com integration (replaces the in-house OAuth Connect
-    # surface that lived in commits 774e2d9 + 9a89e1a + was scrapped
-    # in fe5da71). upload-post is the multi-platform publish layer:
-    # we hand them a video URL + target platforms, they do the actual
-    # OAuth + posting against TikTok / IG / YT / X / LinkedIn / etc.
-    # Multi-tenant via their "user profile" model — one upload-post
-    # profile per NexoClip tenant.
+    # Zernio integration — the multi-platform publish layer (replaces
+    # upload-post.com). We hand Zernio a video URL + target accounts,
+    # they do the actual OAuth + posting against TikTok / IG / YT / X /
+    # LinkedIn / etc. (15 platforms). Multi-tenant via their `profileId`
+    # model — one Zernio profileId per NexoClip tenant.
     # ------------------------------------------------------------------
     #
-    # upload_post_api_key — single company-wide API key from
-    # upload-post.com. Authenticates every call. Tenants never see it.
-    # Header shape: `Authorization: Apikey <key>`.
+    # zernio_api_key — single company-wide API key from Zernio (a
+    # 67-char `sk_...` secret). Authenticates every call. Tenants never
+    # see it. Header shape: `Authorization: Bearer <key>`.
     #
-    # Env var: NEXOCLIP_UPLOAD_POST_API_KEY (per the class-level
+    # Env var: NEXOCLIP_ZERNIO_API_KEY (per the class-level
     # env_prefix="NEXOCLIP_"). Be explicit about this in the deploy
-    # docs — the raw `UPLOAD_POST_API_KEY` (what upload-post's own
-    # docs use as a placeholder) is silently ignored.
-    upload_post_api_key: str | None = None
+    # docs — the raw `ZERNIO_API_KEY` (what Zernio's own SDKs read by
+    # default) is silently ignored.
+    zernio_api_key: str | None = None
 
     # Base URL. Override only for tests / staging environments.
-    # Env var: NEXOCLIP_UPLOAD_POST_BASE_URL.
-    upload_post_base_url: str = "https://api.upload-post.com"
+    # Env var: NEXOCLIP_ZERNIO_BASE_URL.
+    zernio_base_url: str = "https://zernio.com/api/v1"
+
+    # Shared secret used to verify inbound Zernio webhook signatures.
+    # Env var: NEXOCLIP_ZERNIO_WEBHOOK_SECRET. When unset, the webhook
+    # receiver returns 503 (refuses to trust unsigned-verifiable events).
+    zernio_webhook_secret: str | None = None
 
 
 @lru_cache(maxsize=1)

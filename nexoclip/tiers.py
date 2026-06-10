@@ -5,7 +5,7 @@ NexoClip recognizes exactly three internal tiers, lowest → highest:
     free        — ingest + clip + DOWNLOAD (watermarked). No publishing.
     pro         — "mid" tier. Adds the paid perks below the top tier
                   (e.g. Drive export — see task #31). NOT publishing.
-    all_access  — "top" tier. Adds external publishing (upload-post /
+    all_access  — "top" tier. Adds external publishing (Zernio /
                   TikTok / YouTube / IG auto-posting).
 
 Nexo AI (the IdP) sometimes labels the top tier differently on its

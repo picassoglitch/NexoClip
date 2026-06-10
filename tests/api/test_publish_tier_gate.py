@@ -1,7 +1,7 @@
 """Publish is a TOP-tier (all_access) feature.
 
 require_top_tier gates the publish entry points: the clip/stream
-publish routes and the upload-post action routes (connect, claim,
+publish routes and the Zernio action routes (connect, accounts/claim,
 post, bulk-post). free + pro (mid tier) get 402 Payment Required;
 all_access (and its `partner` alias, normalized upstream) passes.
 

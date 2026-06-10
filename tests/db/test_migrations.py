@@ -10,7 +10,7 @@ from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
 
-_CURRENT_HEAD = 27  # bumped each time we add a migration (027_stream_destinations)
+_CURRENT_HEAD = 28  # bumped each time we add a migration (028_zernio_profile)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

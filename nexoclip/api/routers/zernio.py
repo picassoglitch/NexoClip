@@ -1,0 +1,785 @@
+"""Zernio dashboard + publish actions.
+
+Hangs off /dashboard/publish/zernio. The operator clicks through to
+this surface to:
+
+  - Connect their socials (one hosted-OAuth button per platform; we
+    303 the browser to Zernio's authUrl for that platform)
+  - Publish a clip to one or more connected platforms
+  - See history of past + scheduled posts
+
+Endpoints
+  GET  /dashboard/publish/zernio                  — the dashboard page
+  POST /dashboard/publish/zernio/connect          — mint authUrl, 303 away
+  POST /dashboard/publish/zernio/accounts/claim   — bind an existing profileId
+  POST /dashboard/publish/zernio/unlink           — forget the binding
+  POST /dashboard/publish/zernio/post/{clip_id}   — publish one clip
+  POST /dashboard/publish/zernio/bulk-post        — publish many clips
+  GET  /dashboard/publish/zernio/feed.json        — HTMX-polled feed
+  GET  /dashboard/publish/zernio/job/{post_id}    — per-post detail page
+  GET  /dashboard/publish/zernio/status/{post_id}.json — single-post poll
+
+Replaces the upload-post.com surface (routers/upload_post.py). The
+signed-clip-URL mechanism (mint_signed_clip_url) is reused verbatim:
+Zernio downloads the clip MP4 from `mediaItems[].url` exactly as
+upload-post downloaded `video`.
+"""
+from __future__ import annotations
+
+import contextlib
+import logging
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from nexoclip.db import ClipsRepo, Database, TenantsRepo
+from nexoclip.integrations.zernio import (
+    ZernioAccount,
+    ZernioClient,
+    ZernioError,
+    ensure_profile_for_tenant,
+)
+from nexoclip.settings import get_settings
+
+from ..deps import get_db, require_full_scope, tenant_binder
+from ..status_gate import require_top_tier
+from .internal import mint_signed_clip_url
+
+_log = logging.getLogger("nexoclip.api.zernio")
+
+router = APIRouter(prefix="/dashboard/publish/zernio", tags=["zernio"])
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+from ..i18n import install_globals as _install_i18n  # noqa: E402
+
+_install_i18n(templates)
+
+
+def _build_client() -> ZernioClient:
+    """Build a ZernioClient from settings. Raises 503 on the request
+    path when the API key isn't configured so the operator sees a
+    clear error instead of an opaque 500."""
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ZERNIO_API_KEY is not configured on this NexoClip "
+                "instance. Add NEXOCLIP_ZERNIO_API_KEY to Railway env "
+                "and redeploy."
+            ),
+        )
+    return ZernioClient(
+        api_key=settings.zernio_api_key,
+        base_url=settings.zernio_base_url,
+    )
+
+
+def _public_base_url(request: Request) -> str:
+    """Return the externally-reachable origin so signed clip URLs
+    point at the right hostname. Prefers the public_url setting when
+    set (production custom domain), falls back to the request's own
+    scheme+host (works for localhost dev)."""
+    settings = get_settings()
+    if settings.public_url and not settings.public_url.startswith(
+        ("http://localhost", "http://127.0.0.1"),
+    ):
+        return settings.public_url.rstrip("/")
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    host = request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}"
+
+
+# ---------- Dashboard page ----------
+
+
+_SUPPORTED_PLATFORMS = [
+    # (id used by the Zernio API,  human label,        tabler icon class)
+    # NOTE: Zernio uses `twitter`, NOT upload-post's `x`.
+    ("tiktok",    "TikTok",    "ti-brand-tiktok"),
+    ("instagram", "Instagram", "ti-brand-instagram"),
+    ("youtube",   "YouTube",   "ti-brand-youtube"),
+    ("twitter",   "X",         "ti-brand-x"),
+    ("linkedin",  "LinkedIn",  "ti-brand-linkedin"),
+    ("facebook",  "Facebook",  "ti-brand-facebook"),
+    ("threads",   "Threads",   "ti-brand-threads"),
+    ("pinterest", "Pinterest", "ti-brand-pinterest"),
+    ("bluesky",   "Bluesky",   "ti-brand-bluesky"),
+]
+
+# Platforms whose api id Zernio publishes to. Used to validate the
+# checkbox group on the publish path.
+_SUPPORTED_PLATFORM_IDS = frozenset(p[0] for p in _SUPPORTED_PLATFORMS)
+
+
+def _clip_display_title(clip: Any) -> str:
+    """Operator-readable title for a clip card.
+
+    Prefers the overlay_config.title_text the operator typed in the
+    editor; falls back to duration + a truncated id so cards never
+    render as just hash IDs."""
+    ov = getattr(clip, "overlay_config", None) or {}
+    title = ov.get("title_text") if isinstance(ov, dict) else None
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    duration_s = float(getattr(clip, "duration_s", 0) or 0)
+    return f"Clip {duration_s:.0f}s · {getattr(clip, 'id', '')[:14]}…"
+
+
+def _account_map(accounts: list[ZernioAccount]) -> dict[str, str]:
+    """platform → account_id, lowercased keys. Zernio requires the
+    per-platform `accountId` on every post, so we resolve it from the
+    connected-accounts list. Last write wins if a tenant connected the
+    same platform twice (rare); the most recent connection is fine."""
+    return {a.platform.lower(): a.account_id for a in accounts}
+
+
+def _connected_platforms(accounts: list[ZernioAccount]) -> set[str]:
+    """Platform keys ready to ship to — every connected account's
+    platform, lowercased."""
+    return {a.platform.lower() for a in accounts}
+
+
+def _tiktok_settings() -> dict[str, Any]:
+    """Default TikTok publishing settings.
+
+    `content_preview_confirmed` + `express_consent_given` are MANDATORY
+    (a TikTok legal requirement Zernio enforces) — Zernio rejects the
+    post without them. The rest are sensible public-video defaults;
+    a future UI can let the operator override privacy/duet/stitch.
+    """
+    return {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": True,
+        "allow_duet": True,
+        "allow_stitch": True,
+        "content_preview_confirmed": True,
+        "express_consent_given": True,
+    }
+
+
+async def _publish_clip(
+    *,
+    client: ZernioClient,
+    db: Database,
+    request: Request,
+    tenant_id: str,
+    profile_id: str,
+    account_map: dict[str, str],
+    clip_id: str,
+    platforms: list[str],
+    content: str,
+) -> str:
+    """Shared publish core for the single + bulk paths.
+
+    Resolves each selected platform to its connected accountId, mints a
+    signed clip URL, and fires one POST /posts. Returns the Zernio
+    post_id. Raises HTTPException with an operator-readable message on
+    every failure mode (unknown clip, unconnected platform, missing
+    signing secret, Zernio error).
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    # Map selected platforms → (platform, accountId). A platform the
+    # operator checked but hasn't connected on Zernio is a clear 409,
+    # not a raw Zernio 400 later.
+    targets: list[tuple[str, str]] = []
+    missing: list[str] = []
+    for p in platforms:
+        account_id = account_map.get(p.lower())
+        if account_id:
+            targets.append((p, account_id))
+        else:
+            missing.append(p)
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Not connected on Zernio: {', '.join(missing)}. "
+                f"Connect these accounts first, then publish."
+            ),
+        )
+
+    base = _public_base_url(request)
+    try:
+        media_url = mint_signed_clip_url(
+            clip_id=clip_id,
+            tenant_id=tenant_id,
+            base_url=base,
+            ttl_seconds=3600,
+        )
+    except RuntimeError as e:
+        _log.error(
+            "zernio.publish.signing_secret_missing tenant=%s clip=%s err=%s",
+            tenant_id, clip_id, e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured on "
+                "this NexoClip instance. Add it to Railway env (same "
+                "secret used for the Modal Whisper audio fetch) and "
+                "redeploy. Zernio needs a signed URL to download your "
+                "clip MP4."
+            ),
+        ) from e
+
+    tiktok = _tiktok_settings() if any(p.lower() == "tiktok" for p, _ in targets) else None
+    result = await client.create_post(
+        profile_id=profile_id,
+        content=content,
+        media_url=media_url,
+        platforms=targets,
+        publish_now=True,
+        tiktok_settings=tiktok,
+    )
+    return result.post_id
+
+
+@router.get("", response_class=HTMLResponse)
+async def zernio_dashboard(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Publish Center — single-page surface with two tabs:
+      - Single Publish: thumbnail grid + selected-clip publish panel
+      - Bulk Publish: per-clip rows with inline platform chip toggles
+
+    Sections (top to bottom):
+      1. Compact "Connected accounts" row (one Connect button per platform)
+      2. Tab switcher
+      3. Active tab content
+      4. History feed at the bottom
+    """
+    settings = get_settings()
+    configured = bool(settings.zernio_api_key)
+
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+
+    accounts: list[ZernioAccount] = []
+    posts: list[dict[str, Any]] = []
+    connect_fetch_failed = False
+
+    if configured and profile_id:
+        client = _build_client()
+        try:
+            accounts = await client.list_accounts(profile_id=profile_id)
+        except ZernioError as e:
+            _log.warning(
+                "zernio.dashboard.accounts_fetch_failed tenant=%s err=%s",
+                tenant_id, e,
+            )
+            connect_fetch_failed = True
+        # Feed failures are silent — a brand-new tenant with no posts
+        # legitimately gets an empty list.
+        try:
+            feed = await client.list_posts(page=1, limit=25)
+            raw = feed.get("posts")
+            if isinstance(raw, list):
+                posts = raw
+        except ZernioError as e:
+            _log.warning(
+                "zernio.dashboard.feed_fetch_failed tenant=%s err=%s",
+                tenant_id, e,
+            )
+
+    connected_set = _connected_platforms(accounts)
+
+    # Publishable clips for both tabs. Decorate each with display_title
+    # + thumbnail URL so the template stays dumb.
+    raw_clips: list[Any] = []
+    with contextlib.suppress(Exception):  # display is best-effort
+        raw_clips = await ClipsRepo(db).list_for_tenant_with_status(
+            ["approved", "published"], limit=60,
+        )
+    publishable = [
+        {
+            "id": c.id,
+            "stream_id": c.stream_id,
+            "duration_s": c.duration_s,
+            "start_s": c.start_s,
+            "end_s": c.end_s,
+            "title": _clip_display_title(c),
+            "thumbnail_url": f"/dashboard/clips/{c.id}/thumbnail",
+            "status": c.status,
+        }
+        for c in raw_clips
+    ]
+
+    # Stats strip — single pass over the (capped) feed.
+    def _is_published(p: dict[str, Any]) -> bool:
+        return str(p.get("status", "")).lower() in {"published", "finished", "success"}
+
+    def _is_failed(p: dict[str, Any]) -> bool:
+        return str(p.get("status", "")).lower() in {"failed", "error"}
+
+    def _is_scheduled(p: dict[str, Any]) -> bool:
+        return str(p.get("status", "")).lower() in {"scheduled", "pending", "queued"}
+
+    stats = {
+        "published": sum(1 for p in posts if _is_published(p)),
+        "failed": sum(1 for p in posts if _is_failed(p)),
+        "scheduled": sum(1 for p in posts if _is_scheduled(p)),
+        "total": len(posts),
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "publish/zernio_dashboard.html",
+        {
+            "configured": configured,
+            "profile_id": profile_id,
+            "accounts": accounts,
+            "connected_set": connected_set,
+            "connect_fetch_failed": connect_fetch_failed,
+            "posts": posts,
+            "publishable_clips": publishable,
+            "supported_platforms": _SUPPORTED_PLATFORMS,
+            "stats": stats,
+        },
+    )
+
+
+# ---------- Connect ----------
+
+
+@router.post("/connect")
+async def zernio_connect(
+    request: Request,
+    platform: str = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Mint a hosted-OAuth authUrl for ONE platform and 303 the
+    operator there to authorize it.
+
+    Unlike upload-post's single JWT magic link, Zernio connects one
+    platform at a time — the dashboard renders a Connect button per
+    platform. First call for a tenant also derives + persists their
+    Zernio profileId (no network call).
+    """
+    platform = (platform or "").strip().lower()
+    if platform not in _SUPPORTED_PLATFORM_IDS:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported platform: {platform!r}",
+        )
+
+    client = _build_client()
+    try:
+        profile_id = await ensure_profile_for_tenant(
+            db=db, tenant_id=tenant_id, client=client,
+        )
+        link = await client.connect_url(platform, profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.connect.failed tenant=%s platform=%s err=%s status=%s body=%s",
+            tenant_id, platform, e, e.status_code, e.body,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Zernio connect failed: {e} | Zernio response: {e.body}",
+        ) from e
+
+    _log.info(
+        "zernio.connect.authurl_minted tenant=%s platform=%s profile_id=%s",
+        tenant_id, platform, profile_id,
+    )
+    return RedirectResponse(url=link.auth_url, status_code=303)
+
+
+@router.post("/accounts/claim")
+async def zernio_claim_existing(
+    request: Request,
+    profile_id: str = Form(..., alias="profile_id"),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Bind an EXISTING Zernio profileId to this tenant.
+
+    Use case: an operator who already created connections under a
+    specific profileId on Zernio wants NexoClip to reuse it instead of
+    deriving a fresh `ten_<ulid>` one. We validate the profileId has at
+    least one connected account (so a typo surfaces immediately), then
+    persist it on the tenant row.
+    """
+    profile_id = (profile_id or "").strip()
+    if not profile_id:
+        raise HTTPException(status_code=400, detail="profileId is required.")
+
+    client = _build_client()
+    try:
+        accounts = await client.list_accounts(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.claim.lookup_failed tenant=%s profile_id=%s err=%s",
+            tenant_id, profile_id, e,
+        )
+        raise HTTPException(
+            status_code=502, detail=f"Zernio account lookup failed: {e}",
+        ) from e
+    if not accounts:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No connected accounts found for profileId '{profile_id}'. "
+                f"Check the value or click Connect to start fresh."
+            ),
+        )
+
+    await TenantsRepo(db).set_zernio_profile_id(tenant_id, profile_id)
+    _log.info(
+        "zernio.claim.linked tenant=%s profile_id=%s accounts=%d",
+        tenant_id, profile_id, len(accounts),
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish/zernio?claimed={profile_id}",
+        status_code=303,
+    )
+
+
+@router.post("/unlink")
+async def zernio_unlink(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Clear the tenant's Zernio profileId binding.
+
+    Does NOT disconnect accounts on Zernio's side — it just forgets the
+    local mapping so the next Connect/claim can use a different
+    profileId without touching existing connections.
+    """
+    await TenantsRepo(db).set_zernio_profile_id(tenant_id, "")
+    _log.info("zernio.unlink tenant=%s", tenant_id)
+    return RedirectResponse(
+        url="/dashboard/publish/zernio?unlinked=1",
+        status_code=303,
+    )
+
+
+# ---------- Publish ----------
+
+
+@router.post("/post/{clip_id}")
+async def zernio_post_clip(
+    request: Request,
+    clip_id: str,
+    platforms_csv: str = Form(..., alias="platforms"),
+    title: str = Form(""),
+    description: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Publish a rendered clip to one or more platforms via Zernio.
+
+    Inputs come from the dashboard form: clip_id (URL), platforms
+    (comma-separated checkbox group), and optional title/description.
+    The caption (`content`) is the description, falling back to the
+    title. We mint a signed URL pointing at /api/internal/clip/{clip_id}
+    (1h TTL); Zernio downloads from there, re-hosts, and publishes to
+    each requested account. The page's feed polls
+    /status/{post_id}.json for completion.
+    """
+    platforms = [p.strip() for p in platforms_csv.split(",") if p.strip()]
+    if not platforms:
+        raise HTTPException(status_code=400, detail="No platforms selected.")
+
+    client = _build_client()
+    try:
+        profile_id = await ensure_profile_for_tenant(
+            db=db, tenant_id=tenant_id, client=client,
+        )
+        account_map = _account_map(
+            await client.list_accounts(profile_id=profile_id),
+        )
+    except ZernioError as e:
+        _log.warning(
+            "zernio.post.profile_failed tenant=%s err=%s body=%s",
+            tenant_id, e, e.body,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Zernio setup failed: {e} | Zernio response: {e.body}",
+        ) from e
+
+    content = (description or "").strip() or (title or "").strip()
+    try:
+        post_id = await _publish_clip(
+            client=client,
+            db=db,
+            request=request,
+            tenant_id=tenant_id,
+            profile_id=profile_id,
+            account_map=account_map,
+            clip_id=clip_id,
+            platforms=platforms,
+            content=content,
+        )
+    except HTTPException:
+        raise
+    except ZernioError as e:
+        _log.warning(
+            "zernio.post.publish_failed tenant=%s clip=%s err=%s body=%s",
+            tenant_id, clip_id, e, e.body,
+        )
+        detail = f"Zernio publish failed: {e}"
+        if e.body is not None:
+            import json as _json
+            body_str = (
+                _json.dumps(e.body)
+                if isinstance(e.body, dict | list) else str(e.body)
+            )
+            detail += f" — body: {body_str[:500]}"
+        raise HTTPException(status_code=502, detail=detail) from e
+    except Exception as e:
+        _log.exception(
+            "zernio.post.unexpected tenant=%s clip=%s", tenant_id, clip_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Zernio call crashed: {type(e).__name__}: {e}",
+        ) from e
+
+    _log.info(
+        "zernio.post.queued tenant=%s clip=%s post_id=%s platforms=%s",
+        tenant_id, clip_id, post_id, platforms,
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish/zernio?queued={post_id}",
+        status_code=303,
+    )
+
+
+@router.post("/bulk-post")
+async def zernio_bulk(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Bulk-publish entry point for the Bulk tab on the dashboard.
+
+    JSON body shape (HTMX wire format from the bulk submit JS):
+
+      {
+        "clips": [
+          {"clip_id": "clp_...", "platforms": ["tiktok", "instagram"]},
+          {"clip_id": "clp_...", "platforms": ["youtube"]}
+        ],
+        "title": "optional",
+        "description": "optional"
+      }
+
+    Returns a per-clip result list so the UI can surface "3 of 4 queued"
+    feedback. Failures don't short-circuit — each clip is independent.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+
+    items = body.get("clips") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(
+            status_code=400,
+            detail="`clips` must be a non-empty list of {clip_id, platforms}.",
+        )
+    shared_title = (body.get("title") or "").strip()
+    shared_desc = (body.get("description") or "").strip()
+    content = shared_desc or shared_title
+
+    client = _build_client()
+    try:
+        profile_id = await ensure_profile_for_tenant(
+            db=db, tenant_id=tenant_id, client=client,
+        )
+        account_map = _account_map(
+            await client.list_accounts(profile_id=profile_id),
+        )
+    except ZernioError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Zernio setup failed: {e} | Zernio response: {e.body}",
+        ) from e
+
+    results: list[dict[str, Any]] = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        clip_id = (raw.get("clip_id") or "").strip()
+        platforms = [
+            p.strip() for p in (raw.get("platforms") or []) if isinstance(p, str)
+        ]
+        if not clip_id or not platforms:
+            results.append(
+                {"clip_id": clip_id, "ok": False, "error": "missing clip_id or platforms"}
+            )
+            continue
+        try:
+            post_id = await _publish_clip(
+                client=client,
+                db=db,
+                request=request,
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                account_map=account_map,
+                clip_id=clip_id,
+                platforms=platforms,
+                content=content,
+            )
+            results.append(
+                {
+                    "clip_id": clip_id,
+                    "ok": True,
+                    "post_id": post_id,
+                    "platforms": platforms,
+                }
+            )
+        except HTTPException as e:
+            results.append(
+                {
+                    "clip_id": clip_id,
+                    "ok": False,
+                    "error": str(e.detail),
+                    "platforms": platforms,
+                }
+            )
+        except ZernioError as e:
+            _log.warning(
+                "zernio.bulk.publish_failed tenant=%s clip=%s err=%s",
+                tenant_id, clip_id, e,
+            )
+            results.append(
+                {
+                    "clip_id": clip_id,
+                    "ok": False,
+                    "error": str(e),
+                    "platforms": platforms,
+                }
+            )
+
+    _log.info(
+        "zernio.bulk.done tenant=%s items=%d ok=%d",
+        tenant_id, len(results), sum(1 for r in results if r.get("ok")),
+    )
+    return JSONResponse({"results": results})
+
+
+# ---------- HTMX feed + status polling ----------
+
+
+@router.get("/feed.json")
+async def zernio_feed(
+    request: Request,
+    page: int = 1,
+    limit: int = 25,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Lightweight JSON feed for the dashboard's HTMX-polled history
+    panel. Returns the raw Zernio posts list so the client can render
+    whatever they give us back."""
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        return JSONResponse({"posts": [], "configured": False})
+
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id:
+        return JSONResponse({"posts": [], "configured": True, "connected": False})
+
+    client = _build_client()
+    posts: list[dict[str, Any]] = []
+    try:
+        feed = await client.list_posts(page=page, limit=limit)
+        if isinstance(feed.get("posts"), list):
+            posts = feed["posts"]
+    except ZernioError as e:
+        _log.warning("zernio.feed.failed tenant=%s err=%s", tenant_id, e)
+
+    return JSONResponse({"posts": posts, "configured": True, "connected": True})
+
+
+@router.get("/job/{post_id}", response_class=HTMLResponse)
+async def zernio_job_detail(
+    request: Request,
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+) -> Response:
+    """Per-post detail page.
+
+    Reached from the queued banner ("View status →") and from feed rows.
+    Renders the per-platform result of one Zernio post. Auto-polls
+    /status/{post_id}.json while the post is still in a non-terminal
+    state, then halts once settled.
+    """
+    client = _build_client()
+    overall_status = "UNKNOWN"
+    per_platform: Any = None
+    fetch_error: str | None = None
+    try:
+        status = await client.get_post(post_id)
+        overall_status = (status.status or "UNKNOWN").upper()
+        per_platform = status.platforms
+    except ZernioError as e:
+        _log.warning(
+            "zernio.job.status_fetch_failed tenant=%s post_id=%s err=%s",
+            tenant_id, post_id, e,
+        )
+        fetch_error = f"Couldn't load status from Zernio: {e}"
+
+    return templates.TemplateResponse(
+        request,
+        "publish/zernio_job.html",
+        {
+            "post_id": post_id,
+            "overall_status": overall_status,
+            "per_platform": per_platform,
+            "fetch_error": fetch_error,
+        },
+    )
+
+
+@router.get("/status/{post_id}.json")
+async def zernio_status(
+    request: Request,
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+) -> Response:
+    """Poll a single post by post_id. Used by the toast that surfaces
+    right after a publish click — flips from PUBLISHING → PUBLISHED in
+    the UI without a full page reload."""
+    client = _build_client()
+    try:
+        status = await client.get_post(post_id)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.status.failed tenant=%s post_id=%s err=%s",
+            tenant_id, post_id, e,
+        )
+        return JSONResponse({"status": "ERROR", "error": str(e)}, status_code=502)
+    return JSONResponse(
+        {
+            "post_id": status.post_id,
+            "status": (status.status or "UNKNOWN").upper(),
+            "platforms": status.platforms,
+        }
+    )
+
+
+__all__ = ["router"]

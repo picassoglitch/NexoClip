@@ -73,11 +73,17 @@ class Tenant(BaseModel):
     last_usage_report_at: str | None = None
     last_usage_report_ok: int | None = None   # 1 ok / 0 fail / None never tried
     last_usage_report_error: str | None = None
-    # upload-post integration (migration 022). Each tenant maps to ONE
-    # upload-post "user profile" created lazily on first connect/publish
-    # click. Persisted here so subsequent API calls reuse the same
-    # profile name. NULL = tenant has never started a publish flow.
+    # DEPRECATED (dormant). upload-post integration (migration 022) —
+    # retired in favor of Zernio. Column kept (sqlite column-drop is a
+    # destructive table rebuild) but no longer written or read by app
+    # code. Safe to drop in a future schema-rebuild migration.
     upload_post_profile_username: str | None = None
+    # Zernio integration (migration 028). Each tenant maps to ONE Zernio
+    # `profileId` — a free-form namespacing string derived from the
+    # tenant id, persisted on first connect/publish. Zernio scopes
+    # connected accounts + posts by it. NULL = tenant has never started
+    # a publish flow.
+    zernio_profile_id: str | None = None
 
 
 class User(BaseModel):

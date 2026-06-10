@@ -1811,16 +1811,26 @@ async def stream_detail(
 @router.get("/publish", include_in_schema=False)
 async def publish_view(request: Request) -> Response:
     """Legacy Slice-O.8 Buffer matrix is gone — every publish flow
-    now lives on the upload-post dashboard. Send anyone hitting the
-    old URL straight to the new home so bookmarks / external links
-    keep working.
+    now lives on the Zernio dashboard. Send anyone hitting the old
+    URL straight to the new home so bookmarks / external links keep
+    working.
 
     `/publish/status.json` + `/streams/{id}/publish` + their status
     JSON sibling stay intact for the per-stream Buffer flow that
     still uses them (status polling on existing PublishJobs rows).
     """
     return RedirectResponse(
-        url="/dashboard/publish/upload-post", status_code=303,
+        url="/dashboard/publish/zernio", status_code=303,
+    )
+
+
+@router.get("/publish/upload-post", include_in_schema=False)
+async def publish_upload_post_legacy(request: Request) -> Response:
+    """Permanent redirect from the retired upload-post dashboard URL to
+    its Zernio replacement. 308 (vs 303) so the method is preserved and
+    caches/bookmarks treat it as a permanent move."""
+    return RedirectResponse(
+        url="/dashboard/publish/zernio", status_code=308,
     )
 
 
@@ -1963,7 +1973,7 @@ async def publish_submit(
 @router.get("/streams/{stream_id}/publish", include_in_schema=False)
 async def stream_publish_view(stream_id: str) -> Response:
     """Legacy Slice-O.2 per-stream Buffer matrix is gone — every
-    publish flow now lives on the unified upload-post dashboard.
+    publish flow now lives on the unified Zernio dashboard.
 
     Bookmarks + the "Go to publishing" CTA on the stream page used
     to point here; both keep working via this 303. The
@@ -1972,7 +1982,7 @@ async def stream_publish_view(stream_id: str) -> Response:
     cutover.
     """
     return RedirectResponse(
-        url="/dashboard/publish/upload-post", status_code=303,
+        url="/dashboard/publish/zernio", status_code=303,
     )
 
 

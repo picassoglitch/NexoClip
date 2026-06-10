@@ -19,6 +19,16 @@
     background: rgba(72, 187, 120, 0.08);
     color: var(--nc-green, #48bb78);
   }
+  .nc-pc-connect-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 500; cursor: pointer;
+    border: 1px dashed rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.02); color: var(--nc-text--muted, #aaa);
+  }
+  .nc-pc-connect-btn:hover {
+    border-color: var(--nc-green, #48bb78); color: var(--nc-green, #48bb78);
+  }
   .nc-pc-tabs {
     display: flex; gap: 4px; margin: 16px 0 12px 0;
     border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -37,20 +47,13 @@
   .nc-pc-tab-body { display: none; }
   .nc-pc-tab-body.is-active { display: block; }
 
-  /* Single tab: clip LIST (one row per clip, click to expand inline) */
-  .nc-pc-clip-list {
-    display: flex; flex-direction: column;
-    gap: 8px;
-  }
+  .nc-pc-clip-list { display: flex; flex-direction: column; gap: 8px; }
   .nc-pc-clip-row {
-    display: grid;
-    grid-template-columns: 100px 1fr auto;
-    gap: 12px; align-items: center;
-    padding: 8px 12px;
+    display: grid; grid-template-columns: 100px 1fr auto;
+    gap: 12px; align-items: center; padding: 8px 12px;
     background: rgba(255,255,255,0.02);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 8px;
-    cursor: pointer;
+    border-radius: 8px; cursor: pointer;
     transition: border-color 120ms, background 120ms;
   }
   .nc-pc-clip-row:hover { border-color: rgba(255,255,255,0.15); }
@@ -64,29 +67,20 @@
     background: #0a0a0a; position: relative;
     display: flex; align-items: center; justify-content: center;
   }
-  .nc-pc-clip-row__thumb img {
-    width: 100%; height: 100%; object-fit: cover; display: block;
-  }
-  .nc-pc-clip-row__thumb-fallback {
-    color: rgba(255,255,255,0.2); font-size: 24px;
-  }
+  .nc-pc-clip-row__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .nc-pc-clip-row__thumb-fallback { color: rgba(255,255,255,0.2); font-size: 24px; }
   .nc-pc-clip-row__dur {
     position: absolute; bottom: 4px; right: 4px;
     background: rgba(0,0,0,0.75); color: #fff;
-    padding: 1px 5px; border-radius: 3px; font-size: 10px;
-    font-family: monospace;
+    padding: 1px 5px; border-radius: 3px; font-size: 10px; font-family: monospace;
   }
-  .nc-pc-clip-row__meta {
-    display: flex; flex-direction: column; gap: 4px;
-    min-width: 0;
-  }
+  .nc-pc-clip-row__meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .nc-pc-clip-row__title {
     font-size: 14px; font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .nc-pc-clip-row__id {
-    font-size: 11px; color: var(--nc-text--muted, #888);
-    font-family: monospace;
+    font-size: 11px; color: var(--nc-text--muted, #888); font-family: monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .nc-pc-clip-row__status {
@@ -95,85 +89,52 @@
   }
   .nc-pc-clip-row__caret {
     color: var(--nc-text--muted, #aaa);
-    transition: transform 120ms, color 120ms;
-    font-size: 18px;
+    transition: transform 120ms, color 120ms; font-size: 18px;
   }
   .nc-pc-clip-row.is-expanded .nc-pc-clip-row__caret {
-    transform: rotate(180deg);
-    color: var(--nc-green, #48bb78);
+    transform: rotate(180deg); color: var(--nc-green, #48bb78);
   }
 
-  /* Publish panel (gets DOM-moved to sit right after the selected row) */
   .nc-pc-publish-panel {
-    margin: 0;
-    padding: 16px;
+    margin: 0; padding: 16px;
     background: rgba(72, 187, 120, 0.04);
     border: 1px solid rgba(72, 187, 120, 0.25);
-    border-radius: 8px;
-    display: none;
+    border-radius: 8px; display: none;
   }
   .nc-pc-publish-panel.is-active { display: block; }
-  .nc-pc-publish-panel__header {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
-  }
-  .nc-pc-publish-panel__title {
-    font-size: 15px; font-weight: 600;
-  }
-  .nc-pc-publish-panel__meta {
-    font-size: 11px; color: var(--nc-text--muted, #aaa);
-    font-family: monospace;
-  }
-  .nc-pc-platform-chips {
-    display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0;
-  }
+  .nc-pc-publish-panel__header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .nc-pc-publish-panel__title { font-size: 15px; font-weight: 600; }
+  .nc-pc-publish-panel__meta { font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace; }
+  .nc-pc-platform-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
   .nc-pc-platform-chip {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 6px 12px; border-radius: 999px;
     font-size: 12px; font-weight: 500;
     border: 1px solid rgba(255,255,255,0.10);
     background: rgba(255,255,255,0.02);
-    cursor: pointer; user-select: none;
-    transition: all 100ms;
+    cursor: pointer; user-select: none; transition: all 100ms;
   }
   .nc-pc-platform-chip:hover { border-color: rgba(255,255,255,0.25); }
   .nc-pc-platform-chip.is-disabled {
-    opacity: 0.35; cursor: not-allowed;
-    background: rgba(255,255,255,0.01);
+    opacity: 0.35; cursor: not-allowed; background: rgba(255,255,255,0.01);
   }
   .nc-pc-platform-chip.is-selected {
-    background: var(--nc-green, #48bb78);
-    color: #000; border-color: var(--nc-green, #48bb78);
+    background: var(--nc-green, #48bb78); color: #000; border-color: var(--nc-green, #48bb78);
   }
   .nc-pc-bulk-row {
     display: grid; grid-template-columns: 80px 1fr auto;
-    gap: 12px; align-items: center;
-    padding: 10px 0;
+    gap: 12px; align-items: center; padding: 10px 0;
     border-bottom: 1px solid rgba(255,255,255,0.05);
   }
-  .nc-pc-bulk-row__thumb {
-    width: 80px; aspect-ratio: 9/16; border-radius: 4px;
-    overflow: hidden; background: #0a0a0a;
-  }
+  .nc-pc-bulk-row__thumb { width: 80px; aspect-ratio: 9/16; border-radius: 4px; overflow: hidden; background: #0a0a0a; }
   .nc-pc-bulk-row__thumb img { width: 100%; height: 100%; object-fit: cover; }
-  .nc-pc-bulk-row__meta {
-    display: flex; flex-direction: column; gap: 2px;
-    min-width: 0;  /* allow truncation */
-  }
-  .nc-pc-bulk-row__title {
-    font-size: 13px; font-weight: 500;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .nc-pc-bulk-row__dur {
-    font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace;
-  }
-  .nc-pc-bulk-actions {
-    margin-top: 16px; display: flex; gap: 12px; align-items: center;
-  }
+  .nc-pc-bulk-row__meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .nc-pc-bulk-row__title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nc-pc-bulk-row__dur { font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace; }
+  .nc-pc-bulk-actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
 
-  /* Stats strip — at-a-glance counts above the connected-accounts row */
   .nc-pc-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px; margin-bottom: 16px;
   }
   .nc-pc-stat {
@@ -183,10 +144,7 @@
     display: flex; flex-direction: column; gap: 2px;
   }
   .nc-pc-stat__n { font-size: 22px; font-weight: 700; font-family: monospace; }
-  .nc-pc-stat__label {
-    font-size: 11px; color: var(--nc-text--muted, #888);
-    text-transform: uppercase; letter-spacing: 0.05em;
-  }
+  .nc-pc-stat__label { font-size: 11px; color: var(--nc-text--muted, #888); text-transform: uppercase; letter-spacing: 0.05em; }
   .nc-pc-stat--ok { border-left: 3px solid var(--nc-green, #48bb78); }
   .nc-pc-stat--ok .nc-pc-stat__n { color: var(--nc-green, #48bb78); }
   .nc-pc-stat--fail { border-left: 3px solid #ff7575; }
@@ -195,26 +153,19 @@
   .nc-pc-stat--sched .nc-pc-stat__n { color: #ffd84a; }
   .nc-pc-stat--total { border-left: 3px solid rgba(255,255,255,0.2); }
 
-  /* History row clickability */
-  .nc-pc-history-row {
-    cursor: pointer; transition: background 100ms;
-  }
+  .nc-pc-history-row { cursor: pointer; transition: background 100ms; }
   .nc-pc-history-row:hover { background: rgba(72, 187, 120, 0.05); }
   .nc-pc-history-row--inert { cursor: default; }
   .nc-pc-history-row--inert:hover { background: transparent; }
 
-  /* Queued banner becomes a link */
-  .nc-pc-queued-banner {
-    display: flex; align-items: center; gap: 8px;
-    text-decoration: none; color: inherit;
-  }
+  .nc-pc-queued-banner { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; }
   .nc-pc-queued-banner:hover { color: var(--nc-green, #48bb78); }
   .nc-pc-queued-banner__cta { margin-left: auto; font-weight: 500; }
 </style>
 
 {# ----- Flash banners ----- #}
 {% if request.query_params.get('queued') %}
-<a href="/dashboard/publish/upload-post/job/{{ request.query_params.get('queued') }}"
+<a href="/dashboard/publish/zernio/job/{{ request.query_params.get('queued') }}"
    class="nc-panel nc-pc-queued-banner"
    style="border-color: var(--nc-green); margin-bottom: 12px; display: block;">
   <div class="nc-panel__body" style="padding: 12px 16px; display:flex; align-items:center; gap:10px;">
@@ -231,7 +182,7 @@
 <div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    Linked profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
+    Linked Zernio profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
   </div>
 </div>
 {% endif %}
@@ -240,7 +191,7 @@
 <div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    Cleared. Link or create a profile to publish.
+    Cleared. Connect a platform to publish.
   </div>
 </div>
 {% endif %}
@@ -252,9 +203,9 @@
   <div class="nc-panel__body">
     <div class="nc-empty">
       <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
-      <div class="nc-empty__title">upload-post not configured</div>
+      <div class="nc-empty__title">Zernio not configured</div>
       <p class="nc-empty__body">
-        Set <code class="nc-mono">NEXOCLIP_UPLOAD_POST_API_KEY</code>
+        Set <code class="nc-mono">NEXOCLIP_ZERNIO_API_KEY</code>
         in the deployment environment and redeploy.
       </p>
     </div>
@@ -267,23 +218,16 @@
   <div>
     <h2>Publish Center</h2>
     <small>
-      {% if profile_username %}
+      {% if profile_id %}
       Ship clips from your library to every connected platform.
       {% else %}
-      Connect or link your upload-post profile to start publishing.
+      Connect a platform to start publishing through Zernio.
       {% endif %}
     </small>
   </div>
 </div>
 
-{# =========================================================
-   Stats strip — at-a-glance counts derived from the last
-   25 history rows + the live scheduled list. Clicking a tile
-   would deep-link into a filtered view in a future pass; for
-   now they're just numbers so the operator sees how the loop
-   is doing without scrolling.
-   ========================================================= #}
-{% if profile_username %}
+{% if profile_id %}
 <div class="nc-pc-stats">
   <div class="nc-pc-stat nc-pc-stat--ok">
     <div class="nc-pc-stat__n">{{ stats.published }}</div>
@@ -305,32 +249,37 @@
 {% endif %}
 
 {# =========================================================
-   SECTION 1 — Connected accounts (compact chip row)
+   SECTION 1 — Connected accounts. Zernio connects ONE platform
+   at a time (per-platform hosted OAuth), so each not-yet-connected
+   platform gets its own Connect button rather than one magic link.
    ========================================================= #}
-{% if profile_username %}
+{% if profile_id %}
 <div class="nc-panel" style="margin-bottom: 16px;">
   <div class="nc-pc-acct-row">
     {% for key, label, icon in supported_platforms %}
       {% set is_conn = key in connected_set %}
-      <span class="nc-pc-acct-chip {% if is_conn %}is-connected{% endif %}"
-            title="{{ social_accounts.get(key, {}).display_name if is_conn else '' }}">
+      {% if is_conn %}
+      <span class="nc-pc-acct-chip is-connected">
         <i class="ti {{ icon }}" aria-hidden="true"></i>
         <span>{{ label }}</span>
-        {% if is_conn %}<i class="ti ti-check" aria-hidden="true"></i>{% endif %}
+        <i class="ti ti-check" aria-hidden="true"></i>
       </span>
+      {% else %}
+      <form action="/dashboard/publish/zernio/connect" method="post" style="margin: 0;">
+        <input type="hidden" name="platform" value="{{ key }}">
+        <button type="submit" class="nc-pc-connect-btn" title="Connect {{ label }} via Zernio">
+          <i class="ti {{ icon }}" aria-hidden="true"></i>
+          <span>Connect {{ label }}</span>
+        </button>
+      </form>
+      {% endif %}
     {% endfor %}
 
     <span style="flex: 1;"></span>
 
-    <form action="/dashboard/publish/upload-post/connect" method="post" style="margin: 0;">
-      <button type="submit" class="nc-btn" style="padding: 4px 12px; font-size: 12px;">
-        <i class="ti ti-settings" aria-hidden="true"></i>
-        <span>Manage accounts</span>
-      </button>
-    </form>
-    <form action="/dashboard/publish/upload-post/unlink" method="post" style="margin: 0;"
-          onsubmit="return confirm('Unlink the upload-post profile from this NexoClip tenant? The profile + its connections stay on upload-post.');">
-      <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;" title="Unlink {{ profile_username }}">
+    <form action="/dashboard/publish/zernio/unlink" method="post" style="margin: 0;"
+          onsubmit="return confirm('Unlink the Zernio profile from this NexoClip tenant? Connections stay on Zernio.');">
+      <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;" title="Unlink {{ profile_id }}">
         <i class="ti ti-unlink" aria-hidden="true"></i>
       </button>
     </form>
@@ -341,57 +290,52 @@
 <div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    Could not list connected accounts from upload-post — chips below
-    may be stale. The publish form still works.
+    Could not list connected accounts from Zernio — chips below may be
+    stale. The publish form still works.
   </div>
 </div>
 {% endif %}
 
 {% else %}
-{# First-time setup — same two-card layout, kept compact #}
+{# First-time setup — connect a platform, or link an existing profileId #}
 <div class="nc-panel" style="margin-bottom: 16px;">
   <div class="nc-panel__body">
     <p class="nc-text--muted" style="margin: 0 0 12px 0;">
-      Two ways to set up your upload-post profile:
+      Connect your first platform to start — Zernio handles the OAuth.
     </p>
-    <div class="nc-grid-2" style="gap: 16px;">
-      <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
-        <strong>Create new profile</strong>
-        <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
-          NexoClip creates a fresh upload-post profile + bounces
-          you to upload-post's hosted UI to link your socials.
-        </p>
-        <form action="/dashboard/publish/upload-post/connect" method="post">
-          <button type="submit" class="nc-btn nc-btn--primary">
-            <i class="ti ti-plus" aria-hidden="true"></i>
-            <span>Create + connect</span>
-          </button>
-        </form>
-      </div>
-      <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;">
-        <strong>Link existing profile</strong>
-        <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
-          Already created a profile on
-          <a href="https://app.upload-post.com" target="_blank" rel="noopener">upload-post.com</a>?
-          Paste the exact username (<strong>case sensitive</strong>).
-        </p>
-        <form action="/dashboard/publish/upload-post/claim" method="post" style="display: flex; gap: 8px;">
-          <input class="nc-input nc-input--mono" name="username" required placeholder="aldov1llanueva" style="flex:1;">
-          <button type="submit" class="nc-btn">
-            <i class="ti ti-link" aria-hidden="true"></i>
-            <span>Link</span>
-          </button>
-        </form>
-      </div>
+    <div class="nc-pc-acct-row" style="padding: 0 0 12px 0;">
+      {% for key, label, icon in supported_platforms %}
+      <form action="/dashboard/publish/zernio/connect" method="post" style="margin: 0;">
+        <input type="hidden" name="platform" value="{{ key }}">
+        <button type="submit" class="nc-pc-connect-btn">
+          <i class="ti {{ icon }}" aria-hidden="true"></i>
+          <span>Connect {{ label }}</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+    <div style="padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+      <strong>Link existing profile</strong>
+      <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
+        Already have a Zernio <code class="nc-mono">profileId</code> with
+        connected accounts? Paste it to reuse it.
+      </p>
+      <form action="/dashboard/publish/zernio/accounts/claim" method="post" style="display: flex; gap: 8px;">
+        <input class="nc-input nc-input--mono" name="profile_id" required placeholder="ten_01abc…" style="flex:1;">
+        <button type="submit" class="nc-btn">
+          <i class="ti ti-link" aria-hidden="true"></i>
+          <span>Link</span>
+        </button>
+      </form>
     </div>
   </div>
 </div>
 {% endif %}
 
 {# =========================================================
-   SECTION 2 — Tab switcher
+   SECTION 2 — Tab switcher + publish surfaces
    ========================================================= #}
-{% if profile_username %}
+{% if profile_id %}
 <div class="nc-pc-tabs">
   <button type="button" class="nc-pc-tab is-active" data-tab="single">
     <i class="ti ti-square" aria-hidden="true"></i>
@@ -416,7 +360,7 @@
     </div>
   </div>
   {% else %}
-  <div class="nc-pc-clip-list" id="up-clip-list">
+  <div class="nc-pc-clip-list" id="zn-clip-list">
     {% for c in publishable_clips %}
     <div class="nc-pc-clip-row"
          data-clip-id="{{ c.id }}"
@@ -443,22 +387,21 @@
     {% endfor %}
   </div>
 
-  {# ----- Single publish panel (appears when a clip is selected) ----- #}
-  <div class="nc-pc-publish-panel" id="up-publish-panel">
+  <div class="nc-pc-publish-panel" id="zn-publish-panel">
     <div class="nc-pc-publish-panel__header">
       <i class="ti ti-send" aria-hidden="true" style="color: var(--nc-green);"></i>
       <div>
-        <div class="nc-pc-publish-panel__title" id="up-selected-title">—</div>
+        <div class="nc-pc-publish-panel__title" id="zn-selected-title">—</div>
         <div class="nc-pc-publish-panel__meta">
-          <span id="up-selected-id">—</span> · <span id="up-selected-dur">—</span>s · 9:16
+          <span id="zn-selected-id">—</span> · <span id="zn-selected-dur">—</span>s · 9:16
         </div>
       </div>
     </div>
 
-    <form id="up-single-form" method="post" action="" style="margin: 0;">
+    <form id="zn-single-form" method="post" action="" style="margin: 0;">
       <div>
         <small class="nc-text--muted">Platforms — click chips to toggle, grayed-out are not connected.</small>
-        <div class="nc-pc-platform-chips" id="up-platform-chips">
+        <div class="nc-pc-platform-chips" id="zn-platform-chips">
           {% for key, label, icon in supported_platforms %}
             {% set is_conn = key in connected_set %}
             <span class="nc-pc-platform-chip {% if not is_conn %}is-disabled{% endif %}"
@@ -474,19 +417,19 @@
       <label class="nc-label" style="margin-top: 12px;">
         Title
         <input class="nc-input" name="title" maxlength="140"
-               placeholder="Optional — required by TikTok / Reddit if posting there">
+               placeholder="Optional — used as the post title where the platform supports one">
       </label>
 
       <label class="nc-label">
         Caption
         <textarea class="nc-input" name="description" rows="3"
-                  placeholder="Optional — applies to all platforms unless overridden"></textarea>
+                  placeholder="Optional — the caption sent to every selected platform"></textarea>
       </label>
 
       <div style="display: flex; gap: 8px; margin-top: 12px;">
         <button type="submit" class="nc-btn nc-btn--primary">
           <i class="ti ti-send" aria-hidden="true"></i>
-          <span>Publish to <span id="up-platform-count">0</span> platform(s)</span>
+          <span>Publish to <span id="zn-platform-count">0</span> platform(s)</span>
         </button>
         <button type="button" class="nc-btn" disabled title="Coming soon">
           <i class="ti ti-calendar-event" aria-hidden="true"></i>
@@ -502,9 +445,7 @@
 <div class="nc-pc-tab-body" data-tab-body="bulk">
   {% if not publishable_clips %}
   <div class="nc-panel">
-    <div class="nc-empty">
-      <div class="nc-empty__title">No clips ready to publish</div>
-    </div>
+    <div class="nc-empty"><div class="nc-empty__title">No clips ready to publish</div></div>
   </div>
   {% else %}
   <div class="nc-panel">
@@ -513,7 +454,7 @@
         Pick platforms per clip below — chips toggle independently.
         Hit Publish Selected to fire them all in parallel.
       </p>
-      <div id="up-bulk-rows">
+      <div id="zn-bulk-rows">
         {% for c in publishable_clips %}
         <div class="nc-pc-bulk-row" data-clip-id="{{ c.id }}">
           <div class="nc-pc-bulk-row__thumb">
@@ -539,11 +480,11 @@
       </div>
 
       <div class="nc-pc-bulk-actions">
-        <button type="button" id="up-bulk-publish" class="nc-btn nc-btn--primary">
+        <button type="button" id="zn-bulk-publish" class="nc-btn nc-btn--primary">
           <i class="ti ti-send" aria-hidden="true"></i>
-          <span>Publish selected (<span id="up-bulk-count">0</span>)</span>
+          <span>Publish selected (<span id="zn-bulk-count">0</span>)</span>
         </button>
-        <span class="nc-text--muted" style="font-size: 12px;" id="up-bulk-hint">
+        <span class="nc-text--muted" style="font-size: 12px;" id="zn-bulk-hint">
           Pick at least one platform per clip to enable.
         </span>
       </div>
@@ -554,36 +495,7 @@
 {% endif %}
 
 {# =========================================================
-   SECTION 4 — Scheduled
-   ========================================================= #}
-{% if scheduled %}
-<div class="nc-panel" style="margin-top: 16px;">
-  <div class="nc-panel__header">
-    <i class="ti ti-calendar-event" aria-hidden="true"></i>
-    <span class="nc-panel__title">Scheduled — {{ scheduled|length }}</span>
-  </div>
-  <div class="nc-panel__body" style="padding: 0;">
-    <table class="nc-table">
-      <thead>
-        <tr><th>When</th><th>Type</th><th>Title</th><th>Job</th></tr>
-      </thead>
-      <tbody>
-        {% for s in scheduled %}
-        <tr>
-          <td><span class="nc-mono nc-mono--muted">{{ s.scheduled_date or "—" }}</span></td>
-          <td><span class="nc-chip nc-chip--code">{{ s.post_type or "?" }}</span></td>
-          <td>{{ s.title or "—" }}</td>
-          <td><span class="nc-mono nc-mono--muted">{{ (s.job_id or "—")[:18] }}</span></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
-
-{# =========================================================
-   SECTION 5 — History
+   SECTION 3 — History (recent posts)
    ========================================================= #}
 <div class="nc-panel" style="margin-top: 16px;">
   <div class="nc-panel__header">
@@ -592,41 +504,24 @@
     <span class="nc-chip nc-chip--muted" style="margin-left:auto;">last 25</span>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
-    {% if history %}
+    {% if posts %}
     <table class="nc-table">
       <thead>
-        <tr><th>When</th><th>Platform</th><th>Type</th><th>Status</th><th>Link</th><th>Caption</th></tr>
+        <tr><th>When</th><th>Status</th><th>Caption</th><th></th></tr>
       </thead>
       <tbody>
-        {% for h in history %}
-        {# Whole row clicks through to the per-job detail page when
-           a request_id is present. Rows from upload-post's older
-           jobs that don't carry a request_id stay inert. The Link
-           column's <a> still wins clicks because it stopPropagation()s
-           below in JS. #}
-        <tr class="nc-pc-history-row {% if not h.request_id %}nc-pc-history-row--inert{% endif %}"
-            {% if h.request_id %}data-href="/dashboard/publish/upload-post/job/{{ h.request_id }}"{% endif %}>
-          <td><span class="nc-mono nc-mono--muted">{{ (h.upload_timestamp or "")[:19] }}</span></td>
-          <td><span class="nc-chip nc-chip--code">{{ h.platform or "?" }}</span></td>
-          <td>{{ h.media_type or "—" }}</td>
-          <td>
-            {% if h.success %}<span class="nc-chip nc-chip--success">ok</span>
-            {% else %}<span class="nc-chip nc-chip--warn" title="{{ h.error_message or '' }}">{{ h.error_message[:40] if h.error_message else "failed" }}</span>{% endif %}
-          </td>
-          <td>
-            {% if h.post_url %}
-            <a href="{{ h.post_url }}" target="_blank" rel="noopener"
-               onclick="event.stopPropagation();">open ↗</a>
-            {% else %}—{% endif %}
-          </td>
-          <td style="max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.post_caption or h.post_title or "—" }}</td>
+        {% for p in posts %}
+        <tr class="nc-pc-history-row {% if not p['_id'] %}nc-pc-history-row--inert{% endif %}"
+            {% if p['_id'] %}data-href="/dashboard/publish/zernio/job/{{ p['_id'] }}"{% endif %}>
+          <td><span class="nc-mono nc-mono--muted">{{ (p['createdAt'] or p['scheduledFor'] or "")[:19] }}</span></td>
+          <td><span class="nc-chip nc-chip--code">{{ p['status'] or "?" }}</span></td>
+          <td style="max-width:360px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p['content'] or "—" }}</td>
+          <td><span class="nc-mono nc-mono--muted">{{ (p['_id'] or "")[:18] }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
     <script>
-    // Delegated click handler so rows with data-href navigate to the
-    // job detail page. Cheaper than putting an onclick on every row.
     (function () {
       document.querySelectorAll(".nc-pc-history-row[data-href]").forEach(function (tr) {
         tr.addEventListener("click", function () {
@@ -663,57 +558,42 @@
   });
 
   // ---- Single Publish: row selection (inline panel) ----
-  // Layout intent: each clip is a list row. Clicking a row expands
-  // it in place and inserts the publish panel as its next sibling,
-  // so the form sits *adjacent* to the clip the operator picked
-  // instead of dropping at the bottom of the whole list.
-  var panel = document.getElementById("up-publish-panel");
-  var titleEl = document.getElementById("up-selected-title");
-  var idEl    = document.getElementById("up-selected-id");
-  var durEl   = document.getElementById("up-selected-dur");
-  var form    = document.getElementById("up-single-form");
-  var countEl = document.getElementById("up-platform-count");
-  var list    = document.getElementById("up-clip-list");
+  var panel = document.getElementById("zn-publish-panel");
+  var titleEl = document.getElementById("zn-selected-title");
+  var idEl    = document.getElementById("zn-selected-id");
+  var durEl   = document.getElementById("zn-selected-dur");
+  var form    = document.getElementById("zn-single-form");
+  var countEl = document.getElementById("zn-platform-count");
+  var list    = document.getElementById("zn-clip-list");
 
   if (list && panel) {
     list.addEventListener("click", function (e) {
       var row = e.target.closest(".nc-pc-clip-row");
       if (!row) return;
-
-      // Re-click the already-expanded row → collapse + park the
-      // panel back at the bottom of the list (hidden).
       if (row.classList.contains("is-expanded")) {
         row.classList.remove("is-expanded");
         panel.classList.remove("is-active");
-        list.appendChild(panel);   // detach inline; keeps DOM clean
+        list.appendChild(panel);
         return;
       }
-
-      // Collapse any other expanded row.
       list.querySelectorAll(".nc-pc-clip-row.is-expanded").forEach(function (r) {
         r.classList.remove("is-expanded");
       });
       row.classList.add("is-expanded");
-
-      // Fill the panel header with the clicked row's identity.
       var clipId = row.getAttribute("data-clip-id");
       var title  = row.getAttribute("data-clip-title");
       var dur    = row.getAttribute("data-clip-duration");
       if (titleEl) titleEl.textContent = title;
       if (idEl) idEl.textContent = clipId;
       if (durEl) durEl.textContent = dur;
-      if (form) form.action = "/dashboard/publish/upload-post/post/" + encodeURIComponent(clipId);
-
-      // Wipe stale chip selections + reset the live count.
-      var chipsHost = document.getElementById("up-platform-chips");
+      if (form) form.action = "/dashboard/publish/zernio/post/" + encodeURIComponent(clipId);
+      var chipsHost = document.getElementById("zn-platform-chips");
       if (chipsHost) {
         chipsHost.querySelectorAll(".is-selected").forEach(function (c) {
           c.classList.remove("is-selected");
         });
       }
       if (countEl) countEl.textContent = "0";
-
-      // DOM-move the panel to sit right after this row, then show it.
       row.parentNode.insertBefore(panel, row.nextSibling);
       panel.classList.add("is-active");
       panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -721,7 +601,7 @@
   }
 
   // ---- Chip toggles (single form) ----
-  var singleChips = document.getElementById("up-platform-chips");
+  var singleChips = document.getElementById("zn-platform-chips");
   if (singleChips) {
     singleChips.addEventListener("click", function (e) {
       var chip = e.target.closest(".nc-pc-platform-chip");
@@ -748,10 +628,10 @@
   }
 
   // ---- Bulk publish ----
-  var bulkRows = document.getElementById("up-bulk-rows");
-  var bulkBtn = document.getElementById("up-bulk-publish");
-  var bulkCount = document.getElementById("up-bulk-count");
-  var bulkHint = document.getElementById("up-bulk-hint");
+  var bulkRows = document.getElementById("zn-bulk-rows");
+  var bulkBtn = document.getElementById("zn-bulk-publish");
+  var bulkCount = document.getElementById("zn-bulk-count");
+  var bulkHint = document.getElementById("zn-bulk-hint");
 
   function recomputeBulk() {
     if (!bulkRows) return [];
@@ -789,7 +669,7 @@
       bulkBtn.disabled = true;
       bulkBtn.querySelector("span").textContent = "Sending…";
       try {
-        var resp = await fetch("/dashboard/publish/upload-post/bulk-post", {
+        var resp = await fetch("/dashboard/publish/zernio/bulk-post", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",

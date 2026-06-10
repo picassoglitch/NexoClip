@@ -109,7 +109,7 @@ def require_paid_tier(request: Request) -> None:
 def require_top_tier(request: Request) -> None:
     """Block everything below the TOP tier (all_access) from publishing.
 
-    Publishing to TikTok / YouTube / Instagram via upload-post is a
+    Publishing to TikTok / YouTube / Instagram via Zernio is a
     top-tier-only feature. `pro` (mid tier) gets Drive export instead
     (task #31); `free` downloads locally with a watermark. The top tier
     includes Nexo AI's `partner` alias, normalized to all_access at the

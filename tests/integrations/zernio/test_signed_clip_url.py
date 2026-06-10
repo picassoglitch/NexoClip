@@ -1,13 +1,14 @@
 """mint_signed_clip_url tests.
 
-The URL we hand to upload-post must:
+The URL we hand to Zernio (as `mediaItems[].url`) must:
   - bind clip_id + tenant_id + exp in the signature
   - reject expired URLs at the verify side
   - reject tampered signatures
   - reject far-future expiries (defense in depth)
 
-Verification is exercised via the actual /api/internal/clip endpoint
-behavior because that's the contract upload-post will hit.
+The signing mechanism is shared + unchanged from the upload-post era —
+only the consumer (Zernio) changed. Verification is exercised via the
+actual /api/internal/clip endpoint contract Zernio will hit.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import time
 
 import pytest
 
-from nexoclip.api.routers.internal import mint_signed_clip_url, _verify_signed_params
+from nexoclip.api.routers.internal import _verify_signed_params, mint_signed_clip_url
 from nexoclip.settings import get_settings
 
 
@@ -43,8 +44,6 @@ def test_mint_then_parse_url_roundtrip() -> None:
 
 
 def test_verify_accepts_signed_url() -> None:
-    """Mint a URL, then call the shared verifier with its params.
-    Should not raise."""
     import re
     url = mint_signed_clip_url(
         clip_id="clp_xyz",
@@ -64,8 +63,9 @@ def test_verify_accepts_signed_url() -> None:
 
 
 def test_verify_rejects_tampered_sig() -> None:
-    from fastapi import HTTPException
     import re
+
+    from fastapi import HTTPException
     url = mint_signed_clip_url(
         clip_id="clp_xyz",
         tenant_id="ten_alice",
@@ -87,9 +87,10 @@ def test_verify_rejects_tampered_sig() -> None:
 
 
 def test_verify_rejects_expired() -> None:
+    import hashlib
+    import hmac
+
     from fastapi import HTTPException
-    # Mint with exp in the past.
-    import hmac, hashlib
     secret = get_settings().internal_signing_secret
     past = int(time.time()) - 60
     msg = f"clp_xyz|ten_alice|{past}".encode()
@@ -107,10 +108,10 @@ def test_verify_rejects_expired() -> None:
 
 
 def test_verify_rejects_implausibly_far_expiry() -> None:
-    """Defense in depth: an attacker who somehow learned the secret
-    cannot mint a URL valid for years."""
+    import hashlib
+    import hmac
+
     from fastapi import HTTPException
-    import hmac, hashlib
     secret = get_settings().internal_signing_secret
     far_future = int(time.time()) + (30 * 24 * 3600)  # 30 days
     msg = f"clp_xyz|ten_alice|{far_future}".encode()

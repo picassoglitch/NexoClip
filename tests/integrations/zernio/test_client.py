@@ -167,6 +167,23 @@ async def test_list_accounts_keeps_row_when_profileid_is_object() -> None:
     }
 
 
+# ---- transport errors wrap into ZernioError ----
+
+
+@pytest.mark.asyncio
+async def test_transport_error_wraps_into_zernio_error() -> None:
+    """Timeouts / connect failures must surface as ZernioError so
+    callers' `except ZernioError` degrades gracefully (a raw httpx
+    exception 500ed the dashboard when Zernio was slow)."""
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.get(f"{_BASE}/accounts").mock(
+                side_effect=httpx.ReadTimeout("read timed out")
+            )
+            with pytest.raises(ZernioError, match="request failed"):
+                await _client(http).list_accounts(profile_id="ten_alice")
+
+
 # ---- disconnect_account ----
 
 

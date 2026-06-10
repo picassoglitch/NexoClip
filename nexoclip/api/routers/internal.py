@@ -134,7 +134,10 @@ async def fetch_audio_for_transcribe(
     )
 
 
-@router.get("/clip/{clip_id}")
+# GET + HEAD: Zernio probes the media URL with HEAD before downloading
+# it — a GET-only route 405s the probe. FileResponse handles HEAD
+# natively (headers only, no body).
+@router.api_route("/clip/{clip_id}", methods=["GET", "HEAD"])
 async def fetch_clip_for_publisher(
     clip_id: str,
     request: Request,

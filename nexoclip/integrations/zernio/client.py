@@ -182,6 +182,14 @@ class ZernioClient:
             resp = await client.request(
                 method, url, headers=headers, **request_kwargs,
             )
+        except httpx.HTTPError as e:
+            # Timeouts / connect errors surface as ZernioError so every
+            # caller's `except ZernioError` degrades gracefully instead
+            # of a raw httpx exception 500ing the page.
+            raise ZernioError(
+                f"zernio {method} {path} request failed: "
+                f"{type(e).__name__}: {e}",
+            ) from e
         finally:
             if self._http is None:
                 await client.aclose()

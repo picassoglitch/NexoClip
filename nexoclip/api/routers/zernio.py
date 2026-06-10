@@ -184,6 +184,23 @@ def _account_limit_message(limit: int) -> str:
     )
 
 
+def _existing_post_id_from_conflict(e: ZernioError) -> str | None:
+    """Pull `details.existingPostId` out of a Zernio 409 duplicate-content
+    error, or None when the conflict is something else.
+
+    Zernio's shape: {"error": "This exact content is already scheduled,
+    publishing, or was posted ...", "details": {"accountId": ...,
+    "platform": ..., "existingPostId": ...}}.
+    """
+    if e.status_code != 409 or not isinstance(e.body, dict):
+        return None
+    details = e.body.get("details")
+    if not isinstance(details, dict):
+        return None
+    existing = details.get("existingPostId")
+    return existing if isinstance(existing, str) and existing else None
+
+
 async def _read_json(request: Request) -> Any:
     """Return the parsed JSON body, or None on an empty/invalid body.
 
@@ -349,14 +366,29 @@ async def _publish_clip(
         ) from e
 
     tiktok = _tiktok_settings() if any(p.lower() == "tiktok" for p, _ in targets) else None
-    result = await client.create_post(
-        profile_id=profile_id,
-        content=content,
-        media_url=media_url,
-        platforms=targets,
-        publish_now=True,
-        tiktok_settings=tiktok,
-    )
+    try:
+        result = await client.create_post(
+            profile_id=profile_id,
+            content=content,
+            media_url=media_url,
+            platforms=targets,
+            publish_now=True,
+            tiktok_settings=tiktok,
+        )
+    except ZernioError as e:
+        # Zernio 409s when the EXACT same content already posted (or is
+        # scheduled) to this account within 24h, and tells us the
+        # existing post id. Treat a duplicate publish as idempotent:
+        # resolve to the existing post instead of surfacing an error —
+        # double-clicks and retries land on the same post.
+        existing = _existing_post_id_from_conflict(e)
+        if existing:
+            _log.info(
+                "zernio.publish.duplicate_resolved tenant=%s clip=%s post_id=%s",
+                tenant_id, clip_id, existing,
+            )
+            return existing
+        raise
     return result.post_id
 
 

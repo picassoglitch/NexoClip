@@ -136,6 +136,10 @@ class ZernioClient:
         http: httpx.AsyncClient | None = None,
         timeout_s: float = 30.0,
     ) -> None:
+        # Strip surrounding whitespace — a trailing newline pasted into
+        # the env var would otherwise ride along in the `Bearer <key>`
+        # header and Zernio rejects it with 401 Unauthorized.
+        api_key = (api_key or "").strip()
         if not api_key:
             raise ZernioError("ZERNIO_API_KEY is not configured")
         self._api_key = api_key

@@ -33,7 +33,10 @@ from nexoclip.tiers import (
 @pytest.mark.parametrize(
     "raw",
     ["partner", "Partner", "  PARTNER ", "partners", "enterprise",
-     "allaccess", "all-access"],
+     "allaccess", "all-access",
+     # Nexo AI renamed its top tier ALL_ACCESS → VIP; SSO tokens and
+     # provisioning calls carry 'vip' now.
+     "vip", "VIP"],
 )
 def test_partner_and_friends_map_to_all_access(raw: str) -> None:
     assert resolve_tier_alias(raw) == ALL_ACCESS

@@ -1006,9 +1006,14 @@
         <a href="/agents">{{ t('landing.nav.link_agents') }}</a>
         <a href="/docs">{{ t('landing.nav.link_api') }}</a>
       </div>
+      {# Every auth link carries next=/auth/launch/nexoclip so nexo-ai
+         bounces the user straight back into NexoClip after sign-in /
+         registration (trial + provisioning happen server-side on the
+         nexo-ai launch route) — the visitor never sees the platform
+         dashboard. CTAs add mode=signup; the sign-in link stays signin. #}
       <div class="nc-topnav__cta">
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in" class="nc-topnav__signin">{{ t('landing.nav.signin') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in" class="nc-btn nc-btn--primary">{{ t('landing.nav.cta') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?next=/auth/launch/nexoclip" class="nc-topnav__signin">{{ t('landing.nav.signin') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">{{ t('landing.nav.cta') }}</a>
       </div>
     </div>
   </nav>
@@ -1033,7 +1038,7 @@
 
     <div class="nc-hero__ctas">
       <span class="nc-hero__cta-primary-wrap">
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in" class="nc-btn nc-btn--primary">
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">
           <i class="ti ti-upload" aria-hidden="true"></i>
           <span>{{ t('landing.hero.cta_primary') }}</span>
         </a>
@@ -1052,6 +1057,10 @@
         <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/>
         <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>
       </svg>
+      {# GET forms drop the action's query string, so the signup funnel
+         params ride as hidden fields instead. #}
+      <input type="hidden" name="mode" value="signup">
+      <input type="hidden" name="next" value="/auth/launch/nexoclip">
       <label class="nc-trunc" for="nc-paste-input" style="display:none">VOD link</label>
       <input id="nc-paste-input" class="nc-paste__input" type="text" name="vod" autocomplete="off"
              placeholder="{{ t('landing.hero.paste_placeholder') }}">
@@ -1060,7 +1069,7 @@
         <span>{{ t('landing.hero.paste_cta') }}</span>
       </button>
     </form>
-    <p class="nc-hero__alt">{{ t('landing.hero.alt_or') }} <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.hero.alt_upload') }}</a> · {{ t('landing.hero.alt_micro') }}</p>
+    <p class="nc-hero__alt">{{ t('landing.hero.alt_or') }} <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.hero.alt_upload') }}</a> · {{ t('landing.hero.alt_micro') }}</p>
     <div class="nc-hero__demo">
       <span>{{ t('landing.hero.demo_label') }}</span>
       <a href="#solucion">{{ t('landing.hero.demo_gaming') }}</a>
@@ -1363,7 +1372,7 @@
       <h2>{{ t('landing.final.heading') }}</h2>
       <p>{{ t('landing.final.body') }}</p>
       <span class="nc-final__cta-wrap">
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in" class="nc-btn nc-btn--primary">
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">
           <i class="ti ti-upload" aria-hidden="true"></i>
           <span>{{ t('landing.final.cta') }}</span>
         </a>
@@ -1426,8 +1435,8 @@
         <h5 class="nc-foot__col-head">{{ t('landing.foot.col_product') }}</h5>
         <a href="#features">{{ t('landing.foot.link_features') }}</a>
         <a href="#precio">{{ t('landing.foot.link_pricing') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.link_signin') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.link_get_started') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?next=/auth/launch/nexoclip">{{ t('landing.foot.link_signin') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.link_get_started') }}</a>
       </div>
       <div class="nc-foot__col">
         <h5 class="nc-foot__col-head">{{ t('landing.foot.col_developers') }}</h5>
@@ -1438,10 +1447,10 @@
       </div>
       <div class="nc-foot__col">
         <h5 class="nc-foot__col-head">{{ t('landing.foot.col_platforms') }}</h5>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.platform_tiktok') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.platform_reels') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.platform_shorts') }}</a>
-        <a href="https://nexo-ai.world/{{ locale() }}/sign-in">{{ t('landing.foot.platform_kick') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_tiktok') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_reels') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_shorts') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_kick') }}</a>
       </div>
     </div>
     <div class="nc-foot__bot">

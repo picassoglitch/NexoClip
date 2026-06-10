@@ -65,13 +65,18 @@ def zernio_account_limit(raw: str | None) -> int | None:
 
 # Aliases Nexo AI (or future billing sources) may use for a canonical
 # tier. Keyed lowercase. Extend this — NOT the comparison sites — when
-# a new label shows up. `partner` == our top tier `all_access`.
+# a new label shows up. `partner` == our top tier `all_access`, and so is
+# `vip` — Nexo AI renamed its top tier ALL_ACCESS → VIP, so every SSO
+# token and provisioning call for top-tier users now carries 'vip'.
+# Without this entry those users land as `free` (the normalize fallback)
+# and lose every paid perk on login.
 _ALIASES: Final[dict[str, str]] = {
     "partner": ALL_ACCESS,
     "partners": ALL_ACCESS,
     "enterprise": ALL_ACCESS,
     "allaccess": ALL_ACCESS,
     "all-access": ALL_ACCESS,
+    "vip": ALL_ACCESS,
 }
 
 

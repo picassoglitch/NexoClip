@@ -76,10 +76,10 @@ _COOKIE_NAME = "nexoclip_token"
 async def dashboard_root() -> Response:
     """Slice I.3 follow-up — operators kept hitting /dashboard/ in the
     address bar and getting a bare 404. There's no actual dashboard
-    HOME page (the streams index is the canonical landing); just
-    redirect there. The bearer-auth middleware will bounce them on to
-    /dashboard/login if they're not authenticated."""
-    return RedirectResponse(url="/dashboard/streams", status_code=303)
+    HOME page; the /dashboard/start hero ("New clip") is the canonical
+    landing — same place SSO logins arrive — so redirect there. The
+    bearer-auth middleware bounces unauthenticated hits to nexo-ai."""
+    return RedirectResponse(url="/dashboard/start", status_code=303)
 
 
 @router.get("/_balance/chip", response_class=HTMLResponse, include_in_schema=False)
@@ -218,6 +218,61 @@ def _coerce_balance_to_scalars(bal: object) -> dict | None:
     }
 
 
+# How old the cached Nexo AI balance may be before an SSE connect kicks a
+# background re-fetch. Admin grants, pack purchases and monthly resets all
+# happen on the nexo-ai side without telling us, so a cookie re-entry that
+# never passes through /auth/sso would otherwise show last session's number.
+_BALANCE_CACHE_TTL_S = 300.0
+# Per-tenant monotonic timestamp of the last refresh attempt — throttles the
+# fetch to once per TTL window even when several tabs open streams at once.
+_balance_refresh_last_attempt: dict[str, float] = {}
+# Strong refs so fire-and-forget tasks aren't GC'd mid-flight.
+_balance_refresh_tasks: set[asyncio.Task] = set()
+
+
+def _maybe_refresh_stale_balance(
+    db: Database, *, tenant_id: str, balance: object
+) -> None:
+    """Kick a background Nexo AI balance fetch when the cache is stale.
+
+    Called once per balance-stream connect (≈ once per full page load).
+    The fresh number lands via TenantsRepo.set_balance_cache → balance_bus,
+    i.e. through the very SSE stream whose connect triggered the fetch.
+    Best-effort: never raises, never blocks the stream.
+    """
+    import datetime as _dt
+    import time as _time
+
+    now = _time.monotonic()
+    last = _balance_refresh_last_attempt.get(tenant_id)
+    if last is not None and (now - last) < _BALANCE_CACHE_TTL_S:
+        return
+
+    stale = True
+    at = balance.get("at") if isinstance(balance, dict) else None
+    if isinstance(at, str) and at:
+        try:
+            cached_at = _dt.datetime.fromisoformat(at)
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=_dt.UTC)
+            age_s = (_dt.datetime.now(_dt.UTC) - cached_at).total_seconds()
+            stale = age_s >= _BALANCE_CACHE_TTL_S
+        except ValueError:
+            stale = True
+    if not stale:
+        return
+
+    _balance_refresh_last_attempt[tenant_id] = now
+    try:
+        from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+
+        task = asyncio.create_task(fetch_balance_now(db, tenant_id=tenant_id))
+        _balance_refresh_tasks.add(task)
+        task.add_done_callback(_balance_refresh_tasks.discard)
+    except Exception:  # refresh is best-effort
+        pass
+
+
 @router.get("/_balance/stream", include_in_schema=False)
 async def balance_stream(request: Request) -> Response:
     """SSE push for the token-balance chip — replaces the old 30s HTMX poll.
@@ -234,6 +289,16 @@ async def balance_stream(request: Request) -> Response:
     from nexoclip.events.balance_bus import balance_bus
 
     tenant_id = getattr(request.state, "tenant_id", None)
+
+    # Stale-cache repair: the chip renders from the cached columns, but the
+    # ledger lives on nexo-ai. One throttled background fetch per page load
+    # keeps the two in agreement; the result is pushed down this stream.
+    if tenant_id:
+        _maybe_refresh_stale_balance(
+            request.app.state.db,
+            tenant_id=tenant_id,
+            balance=getattr(request.state, "token_balance", None),
+        )
 
     async def gen():
         # Unauthenticated: send one comment and close — EventSource will retry,
@@ -737,7 +802,7 @@ async def _merged_personas(db: Database) -> list[object]:
 # Slice O.23 — Login removed entirely. nexo-ai is the only gatekeeper.
 # No GET /login (the page is gone), no POST /login (no token form).
 # Access in: GET /auth/sso?token=<jwt-from-nexo-ai> sets a session
-# cookie + redirects to /dashboard/streams. Anyone hitting any
+# cookie + redirects to /dashboard/start. Anyone hitting any
 # /dashboard/* page without that cookie gets bounced to nexo-ai's
 # login URL by the auth middleware. Roles/tiers come straight from
 # the SSO token's `tier` claim, synced into the tenant row on each

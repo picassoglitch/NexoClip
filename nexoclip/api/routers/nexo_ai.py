@@ -8,9 +8,10 @@ Two endpoints, both used by the operator dashboard at nexo-ai.world:
       api_token — this endpoint creates them. Idempotent: returns 409 with
       the same {tenant_id, api_token} shape on duplicate.
 
-  GET /auth/sso?token=<hmac-signed>
+  GET /auth/sso?token=<hmac-signed>&next=<relative-path>
       Exchange a Nexo AI-signed SSO token for a NexoClip session cookie,
-      then redirect to /dashboard/streams. The HMAC secret
+      then redirect to `next` (validated same-origin relative path,
+      default /dashboard/start). The HMAC secret
       (NEXOCLIP_NEXO_AI_SSO_SECRET) is shared with Nexo AI.
 
 Both paths are EXEMPT from BearerAuthMiddleware — see auth.py's
@@ -21,11 +22,11 @@ nexoclip.integrations.nexo_ai.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
-
 import re
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -48,6 +49,49 @@ _COOKIE_NAME = "nexoclip_token"
 # user is in NexoClip, they're authenticated by api_token in the cookie,
 # not by the (already-expired) SSO token they arrived with.
 _COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+
+# Where a fresh SSO login lands when nexo-ai doesn't say otherwise. The
+# nexo-ai launcher sends `next=/dashboard/start` on every launch URL
+# (NEXOCLIP_POST_SSO_PATH on its side); this is the fallback for tokens
+# minted without one.
+_DEFAULT_POST_SSO_PATH = "/dashboard/start"
+
+
+def _safe_next_path(raw: str | None) -> str:
+    """Validate the `next` query param as a same-origin relative path.
+
+    Absolute URLs, protocol-relative (`//evil.com`), backslash variants
+    (`/\\evil.com` — browsers normalize `\\` to `/`) and empty values fall
+    back to the start page — /auth/sso must not double as an open redirect.
+    """
+    if raw and raw.startswith("/") and not raw.startswith("//") and "\\" not in raw:
+        return raw
+    return _DEFAULT_POST_SSO_PATH
+
+
+# Strong refs to in-flight balance refreshes — asyncio.create_task only
+# keeps a weak reference, so a fire-and-forget task can be GC'd mid-flight.
+_balance_refresh_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_balance_refresh(db: Database, *, tenant_id: str) -> None:
+    """Fire-and-forget re-fetch of the Nexo AI token balance.
+
+    Runs on every SSO login so the chip reflects the platform ledger
+    (admin grants, pack purchases, monthly resets all happen on the
+    nexo-ai side) instead of replaying the previous session's cache.
+    Never blocks or fails the login — fetch_balance_now swallows its own
+    errors and the SSE bus pushes the fresh number to the chip when the
+    fetch lands after first paint.
+    """
+    try:
+        from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+
+        task = asyncio.create_task(fetch_balance_now(db, tenant_id=tenant_id))
+        _balance_refresh_tasks.add(task)
+        task.add_done_callback(_balance_refresh_tasks.discard)
+    except Exception:  # refresh is best-effort
+        pass
 
 
 def _decode_sso_payload_unsigned(token: str):
@@ -363,13 +407,17 @@ def _render_sso_failure(request: Request, reason: str | None = None) -> str:
     # return annotation — it can't union RedirectResponse with HTMLResponse.
     response_model=None,
     responses={
-        303: {"description": "Token valid; cookie set; redirected to dashboard"},
+        303: {"description": "Token valid; cookie set; redirected to `next` (default /dashboard/start)"},
         400: {"description": "Missing or malformed token"},
         401: {"description": "Token signature failed or expired"},
         503: {"description": "Nexo AI SSO not configured"},
     },
 )
-async def sso_finalize(request: Request, token: str | None = None) -> RedirectResponse | HTMLResponse:
+async def sso_finalize(
+    request: Request,
+    token: str | None = None,
+    next_path: str | None = Query(default=None, alias="next"),
+) -> RedirectResponse | HTMLResponse:
     """Verify a Nexo AI-signed token (or trust it unsigned), set the
     session cookie, redirect home.
 
@@ -501,24 +549,37 @@ async def sso_finalize(request: Request, token: str | None = None) -> RedirectRe
         except Exception:  # noqa: BLE001 — never break login on a tier sync
             pass
 
-    # Backfill external_user_id on every login (B2 reconciliation layer).
+    # Sync external_user_id on every login (B2 reconciliation layer).
     # CLI-era tenants land here with external_user_id = NULL, which silently
     # breaks the usage reporter (it skips tenants without an external id).
-    # The SSO payload always carries it, so the simplest fix is to opportu-
-    # nistically re-link any tenant that's missing the pointer. Idempotent:
-    # if the tenant already has a (possibly different) external_user_id we
-    # leave it alone rather than risk swapping ownership mid-session.
+    # A STALE link is worse than a missing one: balance fetches and usage
+    # reports run against the wrong Nexo AI profile, so the chip shows
+    # someone else's ledger (e.g. a test account's 2M grant) while nexo-ai
+    # shows the user's real balance. The SSO payload is signed by nexo-ai —
+    # the source of truth for which platform user owns this tenant — so we
+    # overwrite on mismatch, not just backfill on NULL.
     try:
         from nexoclip.db import TenantsRepo
         _tenant = await TenantsRepo(db).get(payload.tenant_id)
-        if _tenant is not None and not _tenant.external_user_id and payload.user_id:
+        if (
+            _tenant is not None
+            and payload.user_id
+            and _tenant.external_user_id != payload.user_id
+        ):
             await TenantsRepo(db).set_external_user_id(
                 payload.tenant_id, payload.user_id
             )
     except Exception:  # noqa: BLE001 — non-blocking; reporter just stays silent until next login
         pass
 
-    response = RedirectResponse(url="/dashboard/streams", status_code=status.HTTP_303_SEE_OTHER)
+    # Pull the live balance from Nexo AI in the background — nexo-ai's
+    # ledger is the single source of truth and SSO is the guaranteed
+    # re-entry point, so this is where stale chips get corrected.
+    _schedule_balance_refresh(db, tenant_id=payload.tenant_id)
+
+    response = RedirectResponse(
+        url=_safe_next_path(next_path), status_code=status.HTTP_303_SEE_OTHER
+    )
     response.set_cookie(
         key=_COOKIE_NAME,
         value=session_raw_token,

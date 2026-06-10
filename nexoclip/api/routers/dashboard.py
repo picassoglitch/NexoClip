@@ -8,6 +8,7 @@ in addition to the `Authorization` header. The bearer middleware in
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -23,7 +24,13 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import (
@@ -209,6 +216,54 @@ def _coerce_balance_to_scalars(bal: object) -> dict | None:
         "report_ok": _report_ok,
         "report_error": _to_str_or_none(bal.get("report_error")),
     }
+
+
+@router.get("/_balance/stream", include_in_schema=False)
+async def balance_stream(request: Request) -> Response:
+    """SSE push for the token-balance chip — replaces the old 30s HTMX poll.
+
+    The browser opens ONE EventSource here (see base.html). The server emits a
+    `balance` event only when TenantsRepo.set_balance_cache() actually changes
+    the cached numbers (published via balance_bus). The chip then re-fetches
+    /_balance/chip once — so a request fires on change, not on a timer.
+
+    No tenant_binder (same as /_balance/chip): the middleware already populated
+    request.state; the binder would 401-bounce and break the stream. Idle
+    connections cost a ~25s keepalive comment — no DB, no render.
+    """
+    from nexoclip.events.balance_bus import balance_bus
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+
+    async def gen():
+        # Unauthenticated: send one comment and close — EventSource will retry,
+        # and once the session cookie lands the reconnect binds a tenant.
+        if not tenant_id:
+            yield ": no-session\n\n"
+            return
+        q = balance_bus.subscribe(tenant_id)
+        try:
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"event: balance\ndata: {json.dumps(payload)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # keepalive through proxies (Railway)
+        finally:
+            balance_bus.unsubscribe(tenant_id, q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering so events flush
+        },
+    )
 
 
 @router.get("/_balance/refresh", include_in_schema=False)

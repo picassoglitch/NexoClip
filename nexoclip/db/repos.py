@@ -278,6 +278,23 @@ class TenantsRepo:
             (remaining, 1 if unlimited else 0, monthly_used, at_iso, tenant_id),
         )
         await conn.commit()
+        # Push the change to any open balance-chip SSE connections for this
+        # tenant so the chip updates instantly (no client polling). Best-effort
+        # and never raises — a failed notify must not fail the balance write.
+        try:
+            from nexoclip.events.balance_bus import balance_bus
+
+            balance_bus.publish(
+                tenant_id,
+                {
+                    "remaining": remaining,
+                    "unlimited": bool(unlimited),
+                    "monthly_used": monthly_used,
+                    "at": at_iso,
+                },
+            )
+        except Exception:  # pragma: no cover — notify is best-effort
+            pass
 
     async def set_usage_report_status(
         self,

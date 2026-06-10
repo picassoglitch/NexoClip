@@ -111,5 +111,21 @@
   <main class="nc-page {% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
+  {# Token-balance live updates. One SSE connection replaces the old 30s chip
+     poll: the server pushes a `balance` event only when the cached balance
+     actually changes (see /dashboard/_balance/stream), and we relay it as the
+     `balance-poll` event the chip already listens for via HTMX. EventSource
+     auto-reconnects on drop, so no manual retry loop. #}
+  <script>
+    (function () {
+      if (!window.EventSource) return;
+      try {
+        var es = new EventSource("/dashboard/_balance/stream");
+        es.addEventListener("balance", function () {
+          document.body.dispatchEvent(new Event("balance-poll"));
+        });
+      } catch (e) { /* SSE unavailable — chip still updates on user actions */ }
+    })();
+  </script>
 </body>
 </html>

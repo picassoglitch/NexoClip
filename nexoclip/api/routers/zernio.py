@@ -425,6 +425,7 @@ async def zernio_dashboard(
             "profile_name": profile_name,
             "accounts": accounts,
             "connected_set": connected_set,
+            "account_by_platform": _account_map(accounts),
             "connect_fetch_failed": connect_fetch_failed,
             "posts": posts,
             "publishable_clips": publishable,
@@ -540,8 +541,16 @@ async def zernio_connect(
             "zernio.connect.failed tenant=%s platform=%s err=%s status=%s body=%s",
             tenant_id, platform, e, e.status_code, e.body,
         )
+        if e.status_code == 402:
+            msg = (
+                "Zernio plan limit reached — your Zernio plan's connected-account "
+                "limit is full (the free plan allows 2). Disconnect an account "
+                "below, or upgrade your Zernio plan, then try again."
+            )
+        else:
+            msg = f"Zernio connect failed: {e}"
         return JSONResponse(
-            {"ok": False, "error": f"Zernio connect failed: {e}"},
+            {"ok": False, "error": msg, "status": e.status_code},
             status_code=502,
         )
 
@@ -550,6 +559,67 @@ async def zernio_connect(
         tenant_id, platform, profile_id,
     )
     return JSONResponse({"ok": True, "auth_url": link.auth_url})
+
+
+@router.get("/accounts.json")
+async def zernio_accounts_json(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Connected accounts for this tenant's profile, as JSON.
+
+    Used by the connect popup poller: after the operator authorizes on
+    Zernio (in a separate tab), the dashboard polls this until the new
+    platform appears, then closes the popup + refreshes — so the
+    operator never has to deal with Zernio's own dashboard."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if not profile_id or not settings.zernio_api_key:
+        return JSONResponse({"ok": True, "connected": [], "accounts": []})
+    client = _build_client()
+    try:
+        accounts = await client.list_accounts(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning("zernio.accounts_json.failed tenant=%s err=%s", tenant_id, e)
+        return JSONResponse({"ok": False, "connected": [], "accounts": []})
+    return JSONResponse(
+        {
+            "ok": True,
+            "connected": sorted({a.platform.lower() for a in accounts}),
+            "accounts": [
+                {"platform": a.platform, "account_id": a.account_id} for a in accounts
+            ],
+        }
+    )
+
+
+@router.post("/accounts/{account_id}/disconnect")
+async def zernio_disconnect_account(
+    request: Request,
+    account_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Disconnect ONE connected account on Zernio (DELETE /accounts/{id}),
+    so the operator manages connections without leaving NexoClip."""
+    client = _build_client()
+    try:
+        await client.disconnect_account(account_id)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.disconnect.failed tenant=%s account=%s err=%s status=%s",
+            tenant_id, account_id, e, e.status_code,
+        )
+        return JSONResponse(
+            {"ok": False, "error": f"Disconnect failed: {e}"},
+            status_code=502,
+        )
+    _log.info("zernio.disconnect.ok tenant=%s account=%s", tenant_id, account_id)
+    return JSONResponse({"ok": True})
 
 
 @router.post("/accounts/claim")

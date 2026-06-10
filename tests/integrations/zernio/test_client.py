@@ -136,6 +136,33 @@ async def test_list_accounts_filters_by_profile_id_when_present() -> None:
     assert [a.account_id for a in accts] == ["a1"]
 
 
+# ---- disconnect_account ----
+
+
+@pytest.mark.asyncio
+async def test_disconnect_account_tolerates_empty_204() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.delete(f"{_BASE}/accounts/acc_1").mock(
+                return_value=httpx.Response(204)
+            )
+            # Must NOT raise on an empty 204 body.
+            await _client(http).disconnect_account("acc_1")
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk_test_abc"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_account_raises_on_error() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.delete(f"{_BASE}/accounts/acc_x").mock(
+                return_value=httpx.Response(404, json={"error": "not found"})
+            )
+            with pytest.raises(ZernioError) as ei:
+                await _client(http).disconnect_account("acc_x")
+    assert ei.value.status_code == 404
+
+
 # ---- create_post ----
 
 

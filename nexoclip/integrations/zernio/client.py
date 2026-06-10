@@ -159,6 +159,7 @@ class ZernioClient:
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         timeout_s: float | None = None,
+        parse_json: bool = True,
     ) -> Any:
         """Single round-trip. Returns parsed JSON body on 2xx; raises
         ZernioError on anything else. Reuses the injected AsyncClient
@@ -196,6 +197,9 @@ class ZernioClient:
                 status_code=resp.status_code,
                 body=body,
             )
+        if not parse_json:
+            # Endpoints like DELETE may return 204 / empty body on success.
+            return None
         try:
             return resp.json()
         except ValueError as e:
@@ -296,6 +300,15 @@ class ZernioClient:
                     ZernioAccount(platform=platform, account_id=account_id),
                 )
         return out
+
+    async def disconnect_account(self, account_id: str) -> None:
+        """DELETE /accounts/{id} — disconnect a connected social account.
+
+        Tolerates an empty / 204 success body. Raises ZernioError on a
+        non-2xx so the caller can surface it."""
+        await self._request(
+            "DELETE", f"/accounts/{account_id}", parse_json=False,
+        )
 
     # ---- Publishing ----
 

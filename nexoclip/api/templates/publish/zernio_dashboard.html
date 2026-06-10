@@ -260,10 +260,20 @@
     {% for key, label, icon in supported_platforms %}
       {% set is_conn = key in connected_set %}
       {% if is_conn %}
+      {% set acct_id = account_by_platform.get(key) %}
       <span class="nc-pc-acct-chip is-connected">
         <i class="ti {{ icon }}" aria-hidden="true"></i>
         <span>{{ label }}</span>
+        {% if acct_id %}
+        <button type="button" class="js-zn-disconnect"
+                data-account-id="{{ acct_id }}" data-label="{{ label }}"
+                title="Disconnect {{ label }}"
+                style="background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;line-height:1;">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+        {% else %}
         <i class="ti ti-check" aria-hidden="true"></i>
+        {% endif %}
       </span>
       {% else %}
       <button type="button" class="nc-pc-connect-btn js-zn-connect"
@@ -706,23 +716,45 @@
     });
   }
 
-  // ---- Connect a platform (opens Zernio OAuth in a NEW TAB) ----
+  // ---- Connect a platform (Zernio OAuth in a popup, auto-closed) ----
   // Zernio's connect flow has no redirect-back param — after OAuth it
-  // lands on Zernio's own dashboard. So we open it in a separate tab
-  // and keep the NexoClip tab alive; when the operator returns here,
-  // we reload to pick up the freshly-connected account.
+  // lands on Zernio's own dashboard. So we open it in a popup and, once
+  // our backend reports the account connected, CLOSE the popup and
+  // refresh NexoClip — the operator never has to deal with Zernio's UI.
   var znConnectOpened = false;
+  function znPollUntilConnected(popup, platform, triesLeft) {
+    if (triesLeft <= 0) { return; }  // give up quietly; focus-reload is the fallback
+    fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var connected = (body && body.connected) || [];
+        if (connected.indexOf(platform) !== -1) {
+          if (popup) { try { popup.close(); } catch (e) { /* ignore */ } }
+          window.location.reload();
+          return;
+        }
+        setTimeout(function () {
+          znPollUntilConnected(popup, platform, triesLeft - 1);
+        }, 2500);
+      })
+      .catch(function () {
+        setTimeout(function () {
+          znPollUntilConnected(popup, platform, triesLeft - 1);
+        }, 2500);
+      });
+  }
   document.querySelectorAll(".js-zn-connect").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var platform = btn.getAttribute("data-platform");
-      // Open the tab synchronously inside the click gesture so popup
+      // Open the popup synchronously inside the click gesture so popup
       // blockers don't kill it; we redirect it once the URL arrives.
       var w = window.open("", "_blank");
       if (w) {
         try {
           w.document.write(
             "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
-            "Opening " + platform + " authorization…</p>"
+            "Opening " + platform + " authorization… you can close this tab " +
+            "when you're done — NexoClip will update automatically.</p>"
           );
         } catch (e) { /* ignore */ }
       }
@@ -741,6 +773,9 @@
           znConnectOpened = true;
           if (w) { w.location.href = body.auth_url; }
           else { window.open(body.auth_url, "_blank"); }
+          // Poll our backend (~75s); when the account appears, close the
+          // popup + refresh so the operator stays on NexoClip.
+          znPollUntilConnected(w, platform, 30);
         })
         .catch(function (err) {
           if (w) { try { w.close(); } catch (e) { /* ignore */ } }
@@ -749,10 +784,32 @@
         .finally(function () { btn.disabled = false; });
     });
   });
-  // When the operator comes back to this tab after authorizing on
-  // Zernio, refresh so the new connection (and its chip) shows up.
+  // Fallback: if the operator returns to this tab manually, refresh so
+  // a freshly-connected account shows up even if polling missed it.
   window.addEventListener("focus", function () {
     if (znConnectOpened) { znConnectOpened = false; window.location.reload(); }
+  });
+
+  // ---- Disconnect an account (no Zernio UI needed) ----
+  document.querySelectorAll(".js-zn-disconnect").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var accountId = btn.getAttribute("data-account-id");
+      var label = btn.getAttribute("data-label") || "this account";
+      if (!window.confirm("Disconnect " + label + " from Zernio?")) { return; }
+      btn.disabled = true;
+      fetch("/dashboard/publish/zernio/accounts/" + encodeURIComponent(accountId) + "/disconnect", {
+        method: "POST", credentials: "same-origin",
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (body) {
+          if (!body.ok) { throw new Error(body.error || "disconnect failed"); }
+          window.location.reload();
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          alert("Disconnect failed: " + err.message);
+        });
+    });
   });
 
   // ---- Create profile (inline AJAX, no page leave) ----

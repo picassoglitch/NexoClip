@@ -483,24 +483,32 @@ async def zernio_create_profile(
 @router.post("/connect")
 async def zernio_connect(
     request: Request,
-    platform: str = Form(...),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
     _t: None = Depends(require_top_tier),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Mint a hosted-OAuth authUrl for ONE platform and 303 the
-    operator there to authorize it.
+    """Mint a hosted-OAuth authUrl for ONE platform and return it as
+    JSON so the dashboard opens it in a NEW TAB.
 
-    Unlike upload-post's single JWT magic link, Zernio connects one
-    platform at a time — the dashboard renders a Connect button per
-    platform. Requires the tenant's Zernio profile to already exist
-    (created via POST /profile); the accounts attach to that profile.
+    Why a new tab instead of a 303: Zernio's connect flow has no
+    redirect-back parameter — after OAuth it lands the browser on
+    Zernio's own dashboard. Navigating our whole tab away would strand
+    the operator on Zernio. Opening Zernio in a separate tab keeps the
+    NexoClip tab alive; when the operator returns to it, the dashboard
+    refreshes and shows the newly connected account.
+
+    JSON body: {"platform": "tiktok"}. Requires the tenant's Zernio
+    profile to already exist (created via POST /profile); accounts
+    attach to that profile.
     """
-    platform = (platform or "").strip().lower()
+    body = await request.json()
+    platform = (body.get("platform") if isinstance(body, dict) else "") or ""
+    platform = platform.strip().lower()
     if platform not in _SUPPORTED_PLATFORM_IDS:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported platform: {platform!r}",
+        return JSONResponse(
+            {"ok": False, "error": f"Unsupported platform: {platform!r}"},
+            status_code=400,
         )
 
     profile_id = await _require_profile(db, tenant_id)
@@ -512,16 +520,16 @@ async def zernio_connect(
             "zernio.connect.failed tenant=%s platform=%s err=%s status=%s body=%s",
             tenant_id, platform, e, e.status_code, e.body,
         )
-        raise HTTPException(
+        return JSONResponse(
+            {"ok": False, "error": f"Zernio connect failed: {e}"},
             status_code=502,
-            detail=f"Zernio connect failed: {e} | Zernio response: {e.body}",
-        ) from e
+        )
 
     _log.info(
         "zernio.connect.authurl_minted tenant=%s platform=%s profile_id=%s",
         tenant_id, platform, profile_id,
     )
-    return RedirectResponse(url=link.auth_url, status_code=303)
+    return JSONResponse({"ok": True, "auth_url": link.auth_url})
 
 
 @router.post("/accounts/claim")

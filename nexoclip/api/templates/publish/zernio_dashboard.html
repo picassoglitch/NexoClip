@@ -266,13 +266,11 @@
         <i class="ti ti-check" aria-hidden="true"></i>
       </span>
       {% else %}
-      <form action="/dashboard/publish/zernio/connect" method="post" style="margin: 0;">
-        <input type="hidden" name="platform" value="{{ key }}">
-        <button type="submit" class="nc-pc-connect-btn" title="Connect {{ label }} via Zernio">
-          <i class="ti {{ icon }}" aria-hidden="true"></i>
-          <span>Connect {{ label }}</span>
-        </button>
-      </form>
+      <button type="button" class="nc-pc-connect-btn js-zn-connect"
+              data-platform="{{ key }}" title="Connect {{ label }} via Zernio (opens in a new tab)">
+        <i class="ti {{ icon }}" aria-hidden="true"></i>
+        <span>Connect {{ label }}</span>
+      </button>
       {% endif %}
     {% endfor %}
 
@@ -707,6 +705,55 @@
       }
     });
   }
+
+  // ---- Connect a platform (opens Zernio OAuth in a NEW TAB) ----
+  // Zernio's connect flow has no redirect-back param — after OAuth it
+  // lands on Zernio's own dashboard. So we open it in a separate tab
+  // and keep the NexoClip tab alive; when the operator returns here,
+  // we reload to pick up the freshly-connected account.
+  var znConnectOpened = false;
+  document.querySelectorAll(".js-zn-connect").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var platform = btn.getAttribute("data-platform");
+      // Open the tab synchronously inside the click gesture so popup
+      // blockers don't kill it; we redirect it once the URL arrives.
+      var w = window.open("", "_blank");
+      if (w) {
+        try {
+          w.document.write(
+            "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
+            "Opening " + platform + " authorization…</p>"
+          );
+        } catch (e) { /* ignore */ }
+      }
+      btn.disabled = true;
+      fetch("/dashboard/publish/zernio/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ platform: platform }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (body) {
+          if (!body.ok || !body.auth_url) {
+            throw new Error(body.error || body.detail || "connect failed");
+          }
+          znConnectOpened = true;
+          if (w) { w.location.href = body.auth_url; }
+          else { window.open(body.auth_url, "_blank"); }
+        })
+        .catch(function (err) {
+          if (w) { try { w.close(); } catch (e) { /* ignore */ } }
+          alert("Connect failed: " + err.message);
+        })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+  // When the operator comes back to this tab after authorizing on
+  // Zernio, refresh so the new connection (and its chip) shows up.
+  window.addEventListener("focus", function () {
+    if (znConnectOpened) { znConnectOpened = false; window.location.reload(); }
+  });
 
   // ---- Create profile (inline AJAX, no page leave) ----
   var cpForm = document.getElementById("zn-create-profile-form");

@@ -29,6 +29,40 @@ def test_constructor_refuses_empty_api_key() -> None:
         ZernioClient(api_key="")
 
 
+# ---- create_profile ----
+
+
+@pytest.mark.asyncio
+async def test_create_profile_sends_name_and_parses_id() -> None:
+    body = {"profile": {"_id": "prof_abc123", "name": "My Brand"}}
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/profiles").mock(
+                return_value=httpx.Response(201, json=body)
+            )
+            profile = await _client(http).create_profile(
+                name="My Brand", description="Testing the Zernio API",
+            )
+    assert profile.profile_id == "prof_abc123"
+    assert profile.name == "My Brand"
+    sent = route.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer sk_test_abc"
+    payload = json.loads(sent.content.decode())
+    assert payload["name"] == "My Brand"
+    assert payload["description"] == "Testing the Zernio API"
+
+
+@pytest.mark.asyncio
+async def test_create_profile_missing_id_raises() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.post(f"{_BASE}/profiles").mock(
+                return_value=httpx.Response(201, json={"profile": {"name": "X"}})
+            )
+            with pytest.raises(ZernioError, match="missing _id"):
+                await _client(http).create_profile(name="X")
+
+
 # ---- connect_url ----
 
 

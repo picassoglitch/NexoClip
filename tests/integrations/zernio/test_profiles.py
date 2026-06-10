@@ -1,9 +1,7 @@
-"""ensure_profile_for_tenant tests (Zernio).
+"""create_profile_for_tenant tests (Zernio).
 
-Pins the derive-or-reuse behavior: first call derives + persists the
-profileId WITHOUT any network call (Zernio has no create-profile
-endpoint — the profileId springs into existence on first use), and a
-second call is a cache hit off the persisted value.
+Pins the create-and-persist behavior: calls Zernio's POST /profiles,
+stores the returned server `_id` + name on the tenant row.
 """
 from __future__ import annotations
 
@@ -15,33 +13,10 @@ import respx
 
 from nexoclip.db import Database, TenantsRepo
 from nexoclip.db.migrations import apply_migrations
-from nexoclip.integrations.zernio import (
-    ZernioClient,
-    ZernioError,
-    ensure_profile_for_tenant,
-)
-from nexoclip.integrations.zernio.profiles import _derive_profile_id
+from nexoclip.integrations.zernio import ZernioClient, ZernioError, create_profile_for_tenant
 from nexoclip.tenancy import bound_tenant
 
-# ---- profileId derivation ----
-
-
-def test_derive_profile_id_passes_ulid_through_lowercased() -> None:
-    assert _derive_profile_id("ten_01KS0X2F34HBBJPMZBA45CQW77") == (
-        "ten_01ks0x2f34hbbjpmzba45cqw77"
-    )
-
-
-def test_derive_profile_id_strips_unsafe_chars() -> None:
-    assert _derive_profile_id("ten_alice@example.com") == "ten_alice-example-com"
-    assert _derive_profile_id("ten/with spaces!!") == "ten-with-spaces"
-
-
-def test_derive_profile_id_falls_back_when_empty() -> None:
-    assert _derive_profile_id("!!!") == "tenant"
-
-
-# ---- ensure_profile_for_tenant ----
+_BASE = "https://zernio.com/api/v1"
 
 
 @pytest.fixture
@@ -57,38 +32,57 @@ async def seeded_db(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_first_call_derives_and_persists_no_network(seeded_db) -> None:
-    """First call must derive + persist the profileId WITHOUT any HTTP
-    call — Zernio creates the profile implicitly. respx rejects any
-    network attempt, so a stray call would fail the test."""
+async def test_create_profile_persists_id_and_name(seeded_db) -> None:
     db, tenant_id = seeded_db
+    body = {"profile": {"_id": "prof_abc123", "name": "My Brand"}}
     async with httpx.AsyncClient() as http:
-        with respx.mock(assert_all_called=False):
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/profiles").mock(
+                return_value=httpx.Response(201, json=body)
+            )
             client = ZernioClient(api_key="sk_x", http=http)
             with bound_tenant(tenant_id):
-                profile_id = await ensure_profile_for_tenant(
-                    db=db, tenant_id=tenant_id, client=client,
+                profile = await create_profile_for_tenant(
+                    db=db,
+                    tenant_id=tenant_id,
+                    client=client,
+                    name="My Brand",
+                    description="Testing",
                 )
-    assert profile_id == "ten_01ks0test123"
+    assert profile.profile_id == "prof_abc123"
+    assert profile.name == "My Brand"
+    # Request carried name + description.
+    import json as _json
+    sent = _json.loads(route.calls.last.request.content.decode())
+    assert sent["name"] == "My Brand"
+    assert sent["description"] == "Testing"
+    # Persisted on the tenant row (id + name).
     with bound_tenant(tenant_id):
         tenant = await TenantsRepo(db).get(tenant_id)
     assert tenant is not None
-    assert tenant.zernio_profile_id == "ten_01ks0test123"
+    assert tenant.zernio_profile_id == "prof_abc123"
+    assert tenant.zernio_profile_name == "My Brand"
 
 
 @pytest.mark.asyncio
-async def test_second_call_is_cache_hit(seeded_db) -> None:
+async def test_create_profile_propagates_zernio_error(seeded_db) -> None:
     db, tenant_id = seeded_db
-    with bound_tenant(tenant_id):
-        await TenantsRepo(db).set_zernio_profile_id(tenant_id, "ten_custom")
     async with httpx.AsyncClient() as http:
-        with respx.mock(assert_all_called=False):
+        with respx.mock() as mock:
+            mock.post(f"{_BASE}/profiles").mock(
+                return_value=httpx.Response(402, json={"error": "plan limit"})
+            )
             client = ZernioClient(api_key="sk_x", http=http)
-            with bound_tenant(tenant_id):
-                profile_id = await ensure_profile_for_tenant(
-                    db=db, tenant_id=tenant_id, client=client,
+            with bound_tenant(tenant_id), pytest.raises(ZernioError) as ei:
+                await create_profile_for_tenant(
+                    db=db, tenant_id=tenant_id, client=client, name="X",
                 )
-    assert profile_id == "ten_custom"
+    assert ei.value.status_code == 402
+    # Tenant row stays unset.
+    with bound_tenant(tenant_id):
+        tenant = await TenantsRepo(db).get(tenant_id)
+    assert tenant.zernio_profile_id is None
+    assert tenant.zernio_profile_name is None
 
 
 @pytest.mark.asyncio
@@ -101,6 +95,21 @@ async def test_missing_tenant_raises(seeded_db) -> None:
                 pytest.raises(ZernioError, match="tenant not found"),
                 bound_tenant("ten_nope"),
             ):
-                await ensure_profile_for_tenant(
-                    db=db, tenant_id="ten_nope", client=client,
+                await create_profile_for_tenant(
+                    db=db, tenant_id="ten_nope", client=client, name="X",
                 )
+
+
+@pytest.mark.asyncio
+async def test_unlink_clears_id_and_name(seeded_db) -> None:
+    """set_zernio_profile(profile_id=None) clears BOTH columns."""
+    db, tenant_id = seeded_db
+    repo = TenantsRepo(db)
+    with bound_tenant(tenant_id):
+        await repo.set_zernio_profile(
+            tenant_id, profile_id="prof_x", profile_name="Name",
+        )
+        await repo.set_zernio_profile(tenant_id, profile_id=None)
+        tenant = await repo.get(tenant_id)
+    assert tenant.zernio_profile_id is None
+    assert tenant.zernio_profile_name is None

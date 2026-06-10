@@ -219,9 +219,10 @@
     <h2>Publish Center</h2>
     <small>
       {% if profile_id %}
-      Ship clips from your library to every connected platform.
+      Profile <strong>{{ profile_name or profile_id }}</strong> —
+      ship clips from your library to every connected platform.
       {% else %}
-      Connect a platform to start publishing through Zernio.
+      Create a profile to group your social accounts, then publish.
       {% endif %}
     </small>
   </div>
@@ -297,37 +298,56 @@
 {% endif %}
 
 {% else %}
-{# First-time setup — connect a platform, or link an existing profileId #}
+{# First-time setup — create a profile (groups your social accounts),
+   then connect platforms to it. Creation is inline (AJAX) so the
+   operator never leaves the page. #}
 <div class="nc-panel" style="margin-bottom: 16px;">
   <div class="nc-panel__body">
-    <p class="nc-text--muted" style="margin: 0 0 12px 0;">
-      Connect your first platform to start — Zernio handles the OAuth.
-    </p>
-    <div class="nc-pc-acct-row" style="padding: 0 0 12px 0;">
-      {% for key, label, icon in supported_platforms %}
-      <form action="/dashboard/publish/zernio/connect" method="post" style="margin: 0;">
-        <input type="hidden" name="platform" value="{{ key }}">
-        <button type="submit" class="nc-pc-connect-btn">
-          <i class="ti {{ icon }}" aria-hidden="true"></i>
-          <span>Connect {{ label }}</span>
-        </button>
-      </form>
-      {% endfor %}
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px;">
+      <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-green);"></i>
+      <strong>Create your publishing profile</strong>
     </div>
-    <div style="padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
-      <strong>Link existing profile</strong>
-      <p class="nc-text--muted" style="font-size: 12px; margin: 6px 0 12px 0;">
-        Already have a Zernio <code class="nc-mono">profileId</code> with
-        connected accounts? Paste it to reuse it.
+    <p class="nc-text--muted" style="margin: 0 0 12px 0; font-size: 13px;">
+      A profile groups the social accounts you publish from (e.g.
+      “Personal brand” or “My agency”). Create one to get started —
+      you’ll connect TikTok / Instagram / YouTube etc. to it next.
+    </p>
+    <form id="zn-create-profile-form" style="display:flex; flex-direction:column; gap:8px; max-width: 520px;">
+      <label class="nc-label" style="margin:0;">
+        Profile name
+        <input class="nc-input" id="zn-profile-name" name="name" required
+               maxlength="80" placeholder="My brand" autocomplete="off">
+      </label>
+      <label class="nc-label" style="margin:0;">
+        Description <span class="nc-text--muted">(optional)</span>
+        <input class="nc-input" id="zn-profile-desc" name="description"
+               maxlength="200" placeholder="What this profile is for">
+      </label>
+      <div style="display:flex; align-items:center; gap:10px; margin-top: 4px;">
+        <button type="submit" class="nc-btn nc-btn--primary" id="zn-create-profile-btn">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+          <span>Create profile</span>
+        </button>
+        <span id="zn-create-profile-msg" class="nc-text--muted" style="font-size:12px;"></span>
+      </div>
+    </form>
+
+    <details style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+      <summary class="nc-text--muted" style="cursor:pointer; font-size:12px;">
+        Already have a Zernio profile? Link it instead.
+      </summary>
+      <p class="nc-text--muted" style="font-size: 12px; margin: 8px 0;">
+        Paste an existing Zernio <code class="nc-mono">profileId</code>
+        (it must already have at least one connected account).
       </p>
-      <form action="/dashboard/publish/zernio/accounts/claim" method="post" style="display: flex; gap: 8px;">
-        <input class="nc-input nc-input--mono" name="profile_id" required placeholder="ten_01abc…" style="flex:1;">
+      <form action="/dashboard/publish/zernio/accounts/claim" method="post" style="display: flex; gap: 8px; max-width: 520px;">
+        <input class="nc-input nc-input--mono" name="profile_id" required placeholder="prof_abc123…" style="flex:1;">
         <button type="submit" class="nc-btn">
           <i class="ti ti-link" aria-hidden="true"></i>
           <span>Link</span>
         </button>
       </form>
-    </div>
+    </details>
   </div>
 </div>
 {% endif %}
@@ -684,6 +704,43 @@
         alert("Bulk publish failed: " + err.message);
         bulkBtn.disabled = false;
         bulkBtn.querySelector("span").textContent = "Publish selected (" + pending.length + ")";
+      }
+    });
+  }
+
+  // ---- Create profile (inline AJAX, no page leave) ----
+  var cpForm = document.getElementById("zn-create-profile-form");
+  if (cpForm) {
+    var cpBtn = document.getElementById("zn-create-profile-btn");
+    var cpMsg = document.getElementById("zn-create-profile-msg");
+    cpForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var name = (document.getElementById("zn-profile-name").value || "").trim();
+      var desc = (document.getElementById("zn-profile-desc").value || "").trim();
+      if (!name) { cpMsg.textContent = "Enter a profile name."; return; }
+      cpBtn.disabled = true;
+      cpMsg.style.color = "";
+      cpMsg.textContent = "Creating…";
+      try {
+        var resp = await fetch("/dashboard/publish/zernio/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ name: name, description: desc }),
+        });
+        var body = await resp.json();
+        if (!resp.ok || !body.ok) {
+          throw new Error(body.error || body.detail || ("HTTP " + resp.status));
+        }
+        cpMsg.style.color = "var(--nc-green, #48bb78)";
+        cpMsg.textContent = "Profile “" + (body.name || name) + "” created. Loading…";
+        // Reload in place so the per-platform Connect buttons appear
+        // under the new profile (same URL — no navigation away).
+        window.location.reload();
+      } catch (err) {
+        cpBtn.disabled = false;
+        cpMsg.style.color = "#ff7575";
+        cpMsg.textContent = "Couldn't create profile: " + err.message;
       }
     });
   }

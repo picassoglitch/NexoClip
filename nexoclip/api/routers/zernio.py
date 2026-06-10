@@ -40,12 +40,13 @@ from nexoclip.integrations.zernio import (
     ZernioAccount,
     ZernioClient,
     ZernioError,
-    ensure_profile_for_tenant,
+    create_profile_for_tenant,
 )
 from nexoclip.settings import get_settings
 
 from ..deps import get_db, require_full_scope, tenant_binder
 from ..status_gate import require_top_tier
+from .clips import _VALID_STATUS_TRANSITIONS
 from .internal import mint_signed_clip_url
 
 _log = logging.getLogger("nexoclip.api.zernio")
@@ -162,6 +163,26 @@ def _tiktok_settings() -> dict[str, Any]:
     }
 
 
+async def _require_profile(db: Database, tenant_id: str) -> str:
+    """Return the tenant's Zernio profile_id, or raise 409 telling the
+    operator to create a profile first.
+
+    Connecting accounts + publishing both require a profile to exist on
+    Zernio (created via POST /profiles from the dashboard). We no longer
+    fabricate one — Zernio needs a real `prof_...` id."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No Zernio profile yet. Create a profile on the Publish "
+                "Center first, then connect accounts and publish."
+            ),
+        )
+    return profile_id
+
+
 async def _publish_clip(
     *,
     client: ZernioClient,
@@ -182,9 +203,25 @@ async def _publish_clip(
     every failure mode (unknown clip, unconnected platform, missing
     signing secret, Zernio error).
     """
-    clip = await ClipsRepo(db).get(clip_id)
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
+
+    # Auto-approve on publish. Choosing to publish a clip implies
+    # approving it — and `approved` is the state whose saved overlay
+    # config the render burns in, so this also guarantees the rendered
+    # MP4 we ship below matches the editor preview. Walk the transition
+    # graph (cut -> ready_for_review -> approved) one or two steps.
+    if clip.status not in ("approved", "published"):
+        allowed = _VALID_STATUS_TRANSITIONS.get(clip.status, set())
+        if "approved" in allowed:
+            clip = await repo.update_status(clip_id, status="approved")
+        elif "ready_for_review" in allowed:
+            await repo.update_status(clip_id, status="ready_for_review")
+            clip = await repo.update_status(clip_id, status="approved")
+        # else: an unexpected status with no path to approved — leave it
+        # as-is; the render below still produces the edited MP4.
 
     # Map selected platforms → (platform, accountId). A platform the
     # operator checked but hasn't connected on Zernio is a clear 409,
@@ -207,6 +244,40 @@ async def _publish_clip(
         )
 
     base = _public_base_url(request)
+
+    # Make sure the edited MP4 (overlays + captions burned in) exists on
+    # disk BEFORE we hand Zernio the URL — this is what closes the
+    # "published clip missing hooks/subs" bug. It's the same file the
+    # download path serves, so publish == download. Usually a cache hit
+    # because approve pre-renders; renders inline here only when cold.
+    # The /render page is auth-gated, so pass the operator's session
+    # cookie through to the headless recorder.
+    settings = get_settings()
+    cookie_val = request.cookies.get("nexoclip_token", "") or None
+    try:
+        from nexoclip.api._clip_render import ensure_clip_rendered
+        await ensure_clip_rendered(
+            db=db,
+            clip=clip,
+            tenant_id=tenant_id,
+            base_url=base,
+            auth_cookie_value=cookie_val,
+            db_path=settings.db_path,
+        )
+    except RuntimeError as e:
+        _log.error(
+            "zernio.publish.render_failed tenant=%s clip=%s err=%s",
+            tenant_id, clip_id, e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Couldn't render the edited clip (hooks + captions) "
+                f"before publishing: {e}. Open the clip and click "
+                "Download to surface the render error, then re-publish."
+            ),
+        ) from e
+
     try:
         media_url = mint_signed_clip_url(
             clip_id=clip_id,
@@ -263,6 +334,7 @@ async def zernio_dashboard(
 
     tenant = await TenantsRepo(db).get(tenant_id)
     profile_id = tenant.zernio_profile_id if tenant else None
+    profile_name = tenant.zernio_profile_name if tenant else None
 
     accounts: list[ZernioAccount] = []
     posts: list[dict[str, Any]] = []
@@ -337,6 +409,7 @@ async def zernio_dashboard(
         {
             "configured": configured,
             "profile_id": profile_id,
+            "profile_name": profile_name,
             "accounts": accounts,
             "connected_set": connected_set,
             "connect_fetch_failed": connect_fetch_failed,
@@ -345,6 +418,62 @@ async def zernio_dashboard(
             "supported_platforms": _SUPPORTED_PLATFORMS,
             "stats": stats,
         },
+    )
+
+
+# ---------- Profile ----------
+
+
+@router.post("/profile")
+async def zernio_create_profile(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_top_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create the tenant's Zernio profile (inline, AJAX from the
+    dashboard). JSON body: {"name": "...", "description": "..."?}.
+
+    Calls Zernio's POST /profiles, persists the returned profile id +
+    name on the tenant row, and returns JSON so the dashboard can update
+    in place without a navigation. Connecting social accounts to the new
+    profile is the next step (the per-platform Connect buttons).
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+    name = (body.get("name") or "").strip()
+    description = (body.get("description") or "").strip() or None
+    if not name:
+        return JSONResponse(
+            {"ok": False, "error": "Profile name is required."}, status_code=400,
+        )
+
+    client = _build_client()
+    try:
+        profile = await create_profile_for_tenant(
+            db=db,
+            tenant_id=tenant_id,
+            client=client,
+            name=name,
+            description=description,
+        )
+    except ZernioError as e:
+        _log.warning(
+            "zernio.profile.create_failed tenant=%s err=%s status=%s body=%s",
+            tenant_id, e, e.status_code, e.body,
+        )
+        return JSONResponse(
+            {"ok": False, "error": f"Zernio profile create failed: {e}"},
+            status_code=502,
+        )
+    _log.info(
+        "zernio.profile.created tenant=%s profile_id=%s",
+        tenant_id, profile.profile_id,
+    )
+    return JSONResponse(
+        {"ok": True, "profile_id": profile.profile_id, "name": profile.name},
     )
 
 
@@ -365,8 +494,8 @@ async def zernio_connect(
 
     Unlike upload-post's single JWT magic link, Zernio connects one
     platform at a time — the dashboard renders a Connect button per
-    platform. First call for a tenant also derives + persists their
-    Zernio profileId (no network call).
+    platform. Requires the tenant's Zernio profile to already exist
+    (created via POST /profile); the accounts attach to that profile.
     """
     platform = (platform or "").strip().lower()
     if platform not in _SUPPORTED_PLATFORM_IDS:
@@ -374,11 +503,9 @@ async def zernio_connect(
             status_code=400, detail=f"Unsupported platform: {platform!r}",
         )
 
+    profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
     try:
-        profile_id = await ensure_profile_for_tenant(
-            db=db, tenant_id=tenant_id, client=client,
-        )
         link = await client.connect_url(platform, profile_id=profile_id)
     except ZernioError as e:
         _log.warning(
@@ -438,7 +565,9 @@ async def zernio_claim_existing(
             ),
         )
 
-    await TenantsRepo(db).set_zernio_profile_id(tenant_id, profile_id)
+    await TenantsRepo(db).set_zernio_profile(
+        tenant_id, profile_id=profile_id, profile_name=None,
+    )
     _log.info(
         "zernio.claim.linked tenant=%s profile_id=%s accounts=%d",
         tenant_id, profile_id, len(accounts),
@@ -459,10 +588,10 @@ async def zernio_unlink(
     """Clear the tenant's Zernio profileId binding.
 
     Does NOT disconnect accounts on Zernio's side — it just forgets the
-    local mapping so the next Connect/claim can use a different
-    profileId without touching existing connections.
+    local mapping so the next Create/claim can use a different profile
+    without touching existing connections.
     """
-    await TenantsRepo(db).set_zernio_profile_id(tenant_id, "")
+    await TenantsRepo(db).set_zernio_profile(tenant_id, profile_id=None)
     _log.info("zernio.unlink tenant=%s", tenant_id)
     return RedirectResponse(
         url="/dashboard/publish/zernio?unlinked=1",
@@ -499,11 +628,9 @@ async def zernio_post_clip(
     if not platforms:
         raise HTTPException(status_code=400, detail="No platforms selected.")
 
+    profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
     try:
-        profile_id = await ensure_profile_for_tenant(
-            db=db, tenant_id=tenant_id, client=client,
-        )
         account_map = _account_map(
             await client.list_accounts(profile_id=profile_id),
         )
@@ -603,11 +730,9 @@ async def zernio_bulk(
     shared_desc = (body.get("description") or "").strip()
     content = shared_desc or shared_title
 
+    profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
     try:
-        profile_id = await ensure_profile_for_tenant(
-            db=db, tenant_id=tenant_id, client=client,
-        )
         account_map = _account_map(
             await client.list_accounts(profile_id=profile_id),
         )

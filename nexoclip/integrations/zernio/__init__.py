@@ -9,8 +9,8 @@ refresh them. To publish, we POST a video URL + target accounts to
 Zernio's /posts endpoint, scoped by the tenant's `profileId`.
 
   client.py    — async httpx wrapper around the Zernio REST API
-  profiles.py  — ensure_profile_for_tenant() — derive + persist the
-                 tenant's profileId on the tenant row
+  profiles.py  — create_profile_for_tenant() — POST /profiles + persist
+                 the returned profileId + name on the tenant row
   webhooks.py  — inbound webhook signature verification + parsing
 
 Replaces the upload-post.com integration (commit history under
@@ -24,8 +24,9 @@ from .client import (
     ZernioError,
     ZernioPostResult,
     ZernioPostStatus,
+    ZernioProfile,
 )
-from .profiles import ensure_profile_for_tenant
+from .profiles import create_profile_for_tenant
 from .webhooks import parse_post_event, verify_zernio_signature
 
 __all__ = [
@@ -35,7 +36,8 @@ __all__ = [
     "ZernioError",
     "ZernioPostResult",
     "ZernioPostStatus",
-    "ensure_profile_for_tenant",
+    "ZernioProfile",
+    "create_profile_for_tenant",
     "parse_post_event",
     "verify_zernio_signature",
 ]

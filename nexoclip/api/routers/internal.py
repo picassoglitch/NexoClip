@@ -151,9 +151,15 @@ async def fetch_clip_for_publisher(
     than the audio path (1h ceiling + 24h cap) because the per-platform
     pipeline can take several minutes for a 4K clip across 5 platforms.
 
-    Serves the FINAL rendered MP4 (libass captions burned in) when
-    one exists at the 1080-cache path; falls back to the original
-    pre-render clip MP4 only when the rendered version is missing.
+    Serves ONLY the FINAL rendered MP4 (overlays + libass captions
+    burned in) from the 1080-cache path. It deliberately does NOT fall
+    back to the raw pre-render source: that fallback was the bug where
+    a published clip went out missing its hooks + captions while the
+    operator's download had them. The publish path
+    (`zernio._publish_clip` → `ensure_clip_rendered`) renders this file
+    before it hands us the URL, so by the time Zernio fetches it's on
+    disk; if it somehow isn't, we 409 so the post errors loudly rather
+    than shipping the unedited clip.
     """
     _verify_signed_params(
         resource_id=clip_id,
@@ -169,20 +175,24 @@ async def fetch_clip_for_publisher(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
 
-    original = Path(clip.path)
-    # Prefer the rendered version (overlays + captions burned in)
-    # if it exists. That's the file the operator was looking at on
-    # the editor preview, so it matches what they expect to publish.
-    rendered = original.parent / "clip_render_1080.mp4"
-    final_path = rendered if rendered.exists() else original
-    if not final_path.exists():
+    from nexoclip.api._render_validation import is_servable_cached_mp4
+
+    rendered = Path(clip.path).parent / "clip_render_1080.mp4"
+    # Gate on is_servable_cached_mp4 (size floor + ISO BMFF magic) so a
+    # partial/0-byte file from an aborted encode is treated as "not
+    # ready" rather than served as a corrupt download.
+    if not is_servable_cached_mp4(rendered):
         raise HTTPException(
-            status_code=410,
-            detail=f"clip file missing from disk: {final_path}",
+            status_code=409,
+            detail=(
+                "clip render not ready (hooks + captions not burned in "
+                "yet). Re-publish from the dashboard — the render runs "
+                "before the post is sent."
+            ),
         )
 
     return FileResponse(
-        path=final_path,
+        path=rendered,
         media_type="video/mp4",
         filename=f"nexoclip_{clip_id}.mp4",
     )

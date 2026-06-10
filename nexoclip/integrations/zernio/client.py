@@ -51,6 +51,19 @@ _DEFAULT_BASE_URL: Final = "https://zernio.com/api/v1"
 
 
 @dataclass(frozen=True, slots=True)
+class ZernioProfile:
+    """Result of POST /profiles.
+
+    A profile groups a tenant's connected social accounts. `profile_id`
+    is Zernio's server-generated `_id` (e.g. `prof_abc123`) — the value
+    we pass as `profileId` to connect + accounts calls.
+    """
+
+    profile_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class ZernioConnectLink:
     """Result of GET /connect/{platform}.
 
@@ -187,6 +200,37 @@ class ZernioClient:
                 status_code=resp.status_code,
                 body=resp.text[:500],
             ) from e
+
+    # ---- Profiles ----
+
+    async def create_profile(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+    ) -> ZernioProfile:
+        """POST /profiles — create a profile that groups social accounts.
+
+        Zernio returns a server-generated `_id` (e.g. `prof_abc123`)
+        which is what every later connect + accounts call references as
+        `profileId`. The tenant names the profile from the dashboard.
+        """
+        payload: dict[str, Any] = {"name": name}
+        if description:
+            payload["description"] = description
+        body = await self._request("POST", "/profiles", json=payload)
+        if not isinstance(body, dict):
+            raise ZernioError("create_profile response is not an object", body=body)
+        profile = body.get("profile")
+        if not isinstance(profile, dict):
+            profile = body
+        profile_id = profile.get("_id") or profile.get("id")
+        if not isinstance(profile_id, str) or not profile_id:
+            raise ZernioError("create_profile response missing _id", body=body)
+        return ZernioProfile(
+            profile_id=profile_id,
+            name=str(profile.get("name") or name),
+        )
 
     # ---- Account connection ----
 
@@ -387,4 +431,5 @@ __all__ = [
     "ZernioError",
     "ZernioPostResult",
     "ZernioPostStatus",
+    "ZernioProfile",
 ]

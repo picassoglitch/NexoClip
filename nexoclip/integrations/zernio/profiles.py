@@ -1,84 +1,64 @@
-"""Tenant ↔ Zernio profile mapping.
+"""Tenant ↔ Zernio profile creation + persistence.
 
-`ensure_profile_for_tenant(db, tenant_id, client)` is the only entry
-point. Idempotent: returns the existing profile id if one's already
-on the tenant row; otherwise derives a fresh one, persists it
-locally, and returns it. Subsequent calls fast-path off the
-persisted value.
+`create_profile_for_tenant(...)` is the entry point used by the
+dashboard's inline "Create profile" action. It calls Zernio's
+`POST /profiles` (a real server-side create that returns a generated
+`_id` like `prof_abc123`), then persists that id + the operator-chosen
+name on the tenant row.
 
-Unlike the upload-post integration this replaces, Zernio has no
-create-profile endpoint: `profileId` is a free-form namespacing
-string that springs into existence the first time we use it on a
-`/connect` or `/posts` call. So this helper makes NO network call —
-it derives + persists. The `client` argument is kept in the
-signature for interface parity (and future use, e.g. validating
-against `list_accounts`) but is currently unused.
+This replaces an earlier shortcut that fabricated the profileId from
+the tenant id without ever calling Zernio — Zernio requires the
+profile to exist before you can connect accounts or publish under it.
 
-The profileId we use is the tenant_id itself, sanitized so it's a
-safe URL/query value. Real tenant_ids in NexoClip are ULIDs like
-`ten_01KS0X2F34HBBJPMZBA45CQW77` which are already safe — we keep
-them verbatim (lowercased). Defense-in-depth strips anything weird
-if a future migration introduces non-ULID ids.
+Single-profile model: each tenant has at most one Zernio profile
+(`tenant.zernio_profile_id`). Creating again overwrites the binding
+(use after /unlink to start fresh); connecting accounts to the new
+profile is a separate step.
 """
 from __future__ import annotations
 
 import logging
-import re
-from typing import Final
 
 from nexoclip.db import Database, TenantsRepo
-from nexoclip.integrations.zernio.client import ZernioClient, ZernioError
+from nexoclip.integrations.zernio.client import (
+    ZernioClient,
+    ZernioError,
+    ZernioProfile,
+)
 
 _log = logging.getLogger("nexoclip.integrations.zernio.profiles")
 
-# Lowercase alphanumeric + a few separators. ULIDs already match
-# (after lowercase). Anything else gets the offending chars replaced
-# with `-` so the profileId stays a clean URL/query value.
-_SAFE_PROFILE_RE: Final = re.compile(r"[^a-z0-9_\-]")
 
-
-def _derive_profile_id(tenant_id: str) -> str:
-    """Stable Zernio profileId from a tenant_id.
-
-    Deterministic — same tenant_id always yields the same profileId,
-    so retries after a failed first-attempt land on the same value.
-    """
-    return _SAFE_PROFILE_RE.sub("-", tenant_id.lower()).strip("-") or "tenant"
-
-
-async def ensure_profile_for_tenant(
+async def create_profile_for_tenant(
     *,
     db: Database,
     tenant_id: str,
     client: ZernioClient,
-) -> str:
-    """Return the Zernio profileId for this tenant, deriving +
-    persisting one on first use.
+    name: str,
+    description: str | None = None,
+) -> ZernioProfile:
+    """Create a Zernio profile for this tenant and persist the binding.
 
-    Two branches:
-      1. tenant.zernio_profile_id already set → return it.
-      2. Not set → derive, persist, return. No network call — Zernio
-         creates the profile implicitly on the first connect/post.
-
-    Locking is intentionally not added: two concurrent first clicks
-    would each derive the SAME deterministic id and persist it; the
-    end state is identical.
+    Raises `ZernioError` if the tenant row is missing or Zernio rejects
+    the create. The returned profile's `profile_id` is what connect +
+    publish use as `profileId`.
     """
     repo = TenantsRepo(db)
     tenant = await repo.get(tenant_id)
     if tenant is None:
         raise ZernioError(f"tenant not found: {tenant_id}")
 
-    if tenant.zernio_profile_id:
-        return tenant.zernio_profile_id
-
-    profile_id = _derive_profile_id(tenant_id)
-    await repo.set_zernio_profile_id(tenant_id, profile_id)
-    _log.info(
-        "zernio.profile_persisted tenant=%s profile_id=%s",
-        tenant_id, profile_id,
+    profile = await client.create_profile(name=name, description=description)
+    await repo.set_zernio_profile(
+        tenant_id,
+        profile_id=profile.profile_id,
+        profile_name=profile.name,
     )
-    return profile_id
+    _log.info(
+        "zernio.profile_created tenant=%s profile_id=%s name=%s",
+        tenant_id, profile.profile_id, profile.name,
+    )
+    return profile
 
 
-__all__ = ["ensure_profile_for_tenant"]
+__all__ = ["create_profile_for_tenant"]

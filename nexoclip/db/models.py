@@ -78,12 +78,14 @@ class Tenant(BaseModel):
     # destructive table rebuild) but no longer written or read by app
     # code. Safe to drop in a future schema-rebuild migration.
     upload_post_profile_username: str | None = None
-    # Zernio integration (migration 028). Each tenant maps to ONE Zernio
-    # `profileId` — a free-form namespacing string derived from the
-    # tenant id, persisted on first connect/publish. Zernio scopes
-    # connected accounts + posts by it. NULL = tenant has never started
-    # a publish flow.
+    # Zernio integration (migration 028/029). Each tenant maps to ONE
+    # Zernio profile, CREATED via Zernio's POST /profiles (returns a
+    # server `_id` like `prof_abc123`) from the publish dashboard.
+    # Zernio scopes connected accounts + posts by `zernio_profile_id`.
+    # `zernio_profile_name` is the operator-chosen display name (mig 029).
+    # NULL = tenant has not created a profile yet.
     zernio_profile_id: str | None = None
+    zernio_profile_name: str | None = None
 
 
 class User(BaseModel):

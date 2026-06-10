@@ -3316,6 +3316,7 @@ async def clip_overlay_save(
 )
 async def clip_overlay_finalize(
     request: Request,
+    background_tasks: BackgroundTasks,
     clip_id: str,
     title_text: str = Form(""),
     banner_enabled: str = Form(""),
@@ -3433,6 +3434,58 @@ async def clip_overlay_finalize(
                 p.unlink()
     except Exception:  # noqa: BLE001 — invalidation is best-effort
         pass
+
+    # Pre-render the 1080 publish preset in the background now that the
+    # cache is clear. Two payoffs:
+    #   - the operator's next Download is a cache hit (no 30-90s wait);
+    #   - a subsequent Publish finds the edited MP4 already on disk, so
+    #     what ships to social == what they downloaded == the preview.
+    # Best-effort: a pre-render failure must never block approval — the
+    # download/publish paths still lazy-render on demand. Uses the
+    # operator's session cookie to drive the auth-gated /render page.
+    try:
+        from nexoclip.settings import get_settings
+        _settings = get_settings()
+        _original = Path(clip.path)
+        if _original.exists():
+            _rendered_1080 = _original.parent / "clip_render_1080.mp4"
+            _cookie_val = request.cookies.get("nexoclip_token", "") or None
+            _explicit_base = (_settings.public_url or "").strip()
+            if _explicit_base and _explicit_base != "http://localhost:8000":
+                _base_url = _explicit_base
+            else:
+                _scheme = (
+                    request.headers.get("x-forwarded-proto")
+                    or request.url.scheme
+                    or "https"
+                )
+                _host = request.headers.get("host") or request.url.netloc
+                _base_url = f"{_scheme}://{_host}"
+            # Atomic flip to 'rendering' so the download endpoint's poll
+            # shows progress instead of re-dispatching a duplicate task.
+            await repo.mark_render_started(clip_id)
+            from nexoclip.api._clip_render import render_clip_in_background
+            background_tasks.add_task(
+                render_clip_in_background,
+                clip_id=clip_id,
+                tenant_id=tenant_id,
+                duration_s=float(clip.duration_s),
+                audio_source_path=_original,
+                output_path=_rendered_1080,
+                base_url=_base_url,
+                auth_cookie_value=_cookie_val,
+                width=1080,
+                height=1920,
+                db_path=_settings.db_path,
+            )
+    except Exception as e:  # noqa: BLE001 — pre-render must never block approval
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "clip.finalize.prerender_failed",
+            clip_id=clip_id,
+            reason=str(e),
+        )
+
     await EventsRepo(db).emit(
         type="clip.finalized",
         payload={

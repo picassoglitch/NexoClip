@@ -171,7 +171,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username, zernio_profile_id "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
@@ -196,7 +196,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username, zernio_profile_id "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants WHERE external_user_id = ?",
             (external_user_id,),
         )
@@ -232,7 +232,7 @@ class TenantsRepo:
             "t.cached_balance_remaining, t.cached_balance_unlimited, "
             "t.cached_balance_monthly_used, t.cached_balance_at, "
             "t.last_usage_report_at, t.last_usage_report_ok, t.last_usage_report_error, "
-            "t.upload_post_profile_username, t.zernio_profile_id "
+            "t.upload_post_profile_username, t.zernio_profile_id, t.zernio_profile_name "
             "FROM tenants t "
             "INNER JOIN users u ON u.tenant_id = t.id "
             "WHERE LOWER(u.email) = ? "
@@ -354,24 +354,31 @@ class TenantsRepo:
         )
         await conn.commit()
 
-    async def set_zernio_profile_id(
-        self, tenant_id: str, profile_id: str | None,
+    async def set_zernio_profile(
+        self,
+        tenant_id: str,
+        *,
+        profile_id: str | None,
+        profile_name: str | None = None,
     ) -> None:
-        """Persist (or clear) the Zernio `profileId` for a tenant.
+        """Persist (or clear) the Zernio profile binding for a tenant.
 
-        Set once on first connect/publish via ensure_profile_for_tenant(),
-        explicitly via the /accounts/claim endpoint, or cleared via the
-        /unlink endpoint. Zernio scopes connect + accounts by this value.
-        Pass None or empty string to clear (forget the binding without
-        touching Zernio's side).
+        Set when the operator creates a profile (create_profile_for_tenant)
+        or binds an existing one (/accounts/claim); cleared via /unlink.
+        Zernio scopes connect + accounts by `profile_id`; `profile_name`
+        is the display name. Pass None/empty profile_id to clear BOTH
+        columns (forget the binding without touching Zernio's side).
         """
         # Normalize empty string to NULL — the model treats both as
-        # "unbound" but NULL is the canonical storage form.
-        value = profile_id if profile_id else None
+        # "unbound" but NULL is the canonical storage form. Clearing the
+        # id always clears the name too (they're one binding).
+        pid = profile_id or None
+        pname = (profile_name or None) if pid else None
         conn = await self._db.connect()
         await conn.execute(
-            "UPDATE tenants SET zernio_profile_id = ? WHERE id = ?",
-            (value, tenant_id),
+            "UPDATE tenants SET zernio_profile_id = ?, zernio_profile_name = ? "
+            "WHERE id = ?",
+            (pid, pname, tenant_id),
         )
         await conn.commit()
 
@@ -391,7 +398,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username, zernio_profile_id "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants ORDER BY created_at"
         )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]

@@ -1291,9 +1291,9 @@ async def zernio_mark_published(
         content=None,
     )
     _log.info("zernio.mark_published tenant=%s clip=%s", tenant_id, clip_id)
-    return RedirectResponse(
-        url="/dashboard/publish/zernio?tab=published", status_code=303,
-    )
+    # Stay on the publish list (no forced tab change) — the clip just
+    # leaves the grid; its row waits on the Published tab.
+    return RedirectResponse(url="/dashboard/publish/zernio", status_code=303)
 
 
 @router.post("/post/{clip_id}")

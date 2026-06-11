@@ -609,11 +609,11 @@
       activateTab(tab.getAttribute("data-tab"));
     });
   });
-  // After a publish, the 303 lands back here with ?queued=<post_id> —
-  // open the Published tab so the operator sees the new row (with its
-  // status + View button) without hunting for it.
+  // Deep link only — publishing/marking does NOT force a tab change;
+  // the operator stays on the list they were working in (the queued
+  // banner + the View published button cover "go see it" when wanted).
   var qs = new URLSearchParams(window.location.search);
-  if (qs.get("queued") || qs.get("tab") === "published") {
+  if (qs.get("tab") === "published") {
     activateTab("published");
   }
   // Header "View published" button + the Published stat tile both jump
@@ -748,9 +748,9 @@
         if (!resp.ok) { throw new Error(body.detail || ("HTTP " + resp.status)); }
         var ok = (body.results || []).filter(function (r) { return r.ok; }).length;
         alert(ok + " of " + pending.length + " published.");
-        // Land on the Published tab — the published clips left the
-        // ready-to-publish grid and their rows are waiting there.
-        window.location.href = "/dashboard/publish/zernio?tab=published";
+        // Reload in place — the published clips leave this list; their
+        // rows are on the Published tab when the operator wants them.
+        window.location.href = "/dashboard/publish/zernio";
       } catch (err) {
         alert("Bulk publish failed: " + err.message);
         bulkBtn.disabled = false;

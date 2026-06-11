@@ -341,6 +341,10 @@
     <i class="ti ti-layout-grid" aria-hidden="true"></i>
     Bulk Publish
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="published">
+    <i class="ti ti-circle-check" aria-hidden="true"></i>
+    Published{% if history %} ({{ history|length }}){% endif %}
+  </button>
 </div>
 
 {# ========== Tab: Single Publish ========== #}
@@ -378,7 +382,20 @@
           Ready to publish
         </span>
       </div>
-      <i class="ti ti-chevron-down nc-pc-clip-row__caret" aria-hidden="true"></i>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <form action="/dashboard/publish/zernio/clip/{{ c.id }}/mark-published"
+              method="post" style="margin:0;"
+              onclick="event.stopPropagation();"
+              onsubmit="return confirm('Mark this clip as already published? It moves out of this list (no post is sent).');">
+          <button type="submit" class="nc-btn"
+                  style="padding: 3px 10px; font-size: 11px; color: var(--nc-text--muted, #888);"
+                  title="Already posted this clip? Mark it published so it leaves this list — nothing is sent.">
+            <i class="ti ti-check" aria-hidden="true"></i>
+            <span>Mark published</span>
+          </button>
+        </form>
+        <i class="ti ti-chevron-down nc-pc-clip-row__caret" aria-hidden="true"></i>
+      </div>
     </div>
     {% endfor %}
   </div>
@@ -490,11 +507,10 @@
 </div>
 {% endif %}
 
-{# =========================================================
-   SECTION 3 — Published (this tenant's publish history; local
-   zernio_publishes rows + live status joined by post id)
-   ========================================================= #}
-<div class="nc-panel" style="margin-top: 16px;">
+{# ========== Tab: Published (this tenant's publish history; local
+   zernio_publishes rows + live status joined by post id) ========== #}
+<div class="nc-pc-tab-body" data-tab-body="published">
+<div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-history" aria-hidden="true"></i>
     <span class="nc-panel__title">Published</span>
@@ -548,10 +564,14 @@
     {% else %}
     <div class="nc-empty">
       <div class="nc-empty__title">No publishes yet</div>
-      <p class="nc-empty__body">Your first publish will land here.</p>
+      <p class="nc-empty__body">
+        Publish a clip from the Single or Bulk tab — every publish
+        lands here with its status and a View button.
+      </p>
     </div>
     {% endif %}
   </div>
+</div>
 </div>
 
 {% endif %}
@@ -560,17 +580,26 @@
 <script>
 (function () {
   // ---- Tab switcher ----
+  function activateTab(which) {
+    document.querySelectorAll(".nc-pc-tab").forEach(function (t) {
+      t.classList.toggle("is-active", t.getAttribute("data-tab") === which);
+    });
+    document.querySelectorAll(".nc-pc-tab-body").forEach(function (b) {
+      b.classList.toggle("is-active", b.getAttribute("data-tab-body") === which);
+    });
+  }
   document.querySelectorAll(".nc-pc-tab").forEach(function (tab) {
     tab.addEventListener("click", function () {
-      var which = tab.getAttribute("data-tab");
-      document.querySelectorAll(".nc-pc-tab").forEach(function (t) {
-        t.classList.toggle("is-active", t === tab);
-      });
-      document.querySelectorAll(".nc-pc-tab-body").forEach(function (b) {
-        b.classList.toggle("is-active", b.getAttribute("data-tab-body") === which);
-      });
+      activateTab(tab.getAttribute("data-tab"));
     });
   });
+  // After a publish, the 303 lands back here with ?queued=<post_id> —
+  // open the Published tab so the operator sees the new row (with its
+  // status + View button) without hunting for it.
+  var qs = new URLSearchParams(window.location.search);
+  if (qs.get("queued") || qs.get("tab") === "published") {
+    activateTab("published");
+  }
 
   // ---- Single Publish: row selection (inline panel) ----
   var panel = document.getElementById("zn-publish-panel");

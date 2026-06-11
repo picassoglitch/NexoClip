@@ -1211,6 +1211,37 @@ async def zernio_unlink(
 # ---------- Publish ----------
 
 
+@router.post("/clip/{clip_id}/mark-published")
+async def zernio_mark_published(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Manually flip an approved clip to 'published' so it leaves the
+    ready-to-publish grid.
+
+    For clips that already went out — either published before NexoClip
+    started recording publishes locally (pre-migration-030), or posted
+    manually outside NexoClip. Local state only; nothing is sent to
+    Zernio and no history row is created (we have no post id to record).
+    """
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if clip.status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail=f"clip is {clip.status!r}, not 'approved'",
+        )
+    await repo.update_status(clip_id, status="published")
+    _log.info("zernio.mark_published tenant=%s clip=%s", tenant_id, clip_id)
+    return RedirectResponse(url="/dashboard/publish/zernio", status_code=303)
+
+
 @router.post("/post/{clip_id}")
 async def zernio_post_clip(
     request: Request,

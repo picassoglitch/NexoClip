@@ -226,11 +226,21 @@
       {% endif %}
     </small>
   </div>
+  {% if profile_id %}
+  <a href="/dashboard/publish/zernio?tab=published"
+     class="nc-btn nc-btn--primary js-open-published"
+     style="text-decoration:none; white-space:nowrap;">
+    <i class="ti ti-circle-check" aria-hidden="true"></i>
+    <span>View published{% if history %} ({{ history|length }}){% endif %}</span>
+  </a>
+  {% endif %}
 </div>
 
 {% if profile_id %}
 <div class="nc-pc-stats">
-  <div class="nc-pc-stat nc-pc-stat--ok">
+  <div class="nc-pc-stat nc-pc-stat--ok js-open-published"
+       style="cursor:pointer;" title="View your published posts"
+       role="button" tabindex="0">
     <div class="nc-pc-stat__n">{{ stats.published }}</div>
     <div class="nc-pc-stat__label">Published</div>
   </div>
@@ -600,6 +610,15 @@
   if (qs.get("queued") || qs.get("tab") === "published") {
     activateTab("published");
   }
+  // Header "View published" button + the Published stat tile both jump
+  // to the tab in place. The button's ?tab=published href stays as a
+  // no-JS fallback.
+  document.querySelectorAll(".js-open-published").forEach(function (el) {
+    el.addEventListener("click", function (e) {
+      e.preventDefault();
+      activateTab("published");
+    });
+  });
 
   // ---- Single Publish: row selection (inline panel) ----
   var panel = document.getElementById("zn-publish-panel");

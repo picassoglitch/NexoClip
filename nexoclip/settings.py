@@ -346,6 +346,32 @@ class Settings(BaseSettings):
     # receiver returns 503 (refuses to trust unsigned-verifiable events).
     zernio_webhook_secret: str | None = None
 
+    # ---------- Publish & Engagement Hub (internal service API) ----------
+
+    # Service-to-service bearer tokens for /api/internal/v1/* — the
+    # entry point NexoOBS and Nexo AI engines publish through. Format:
+    # comma-separated `name:token` pairs ("nexoobs:tok_abc,nexoai:tok_x").
+    # Env var: NEXOCLIP_HUB_SERVICE_TOKENS. When unset, the internal
+    # publish API returns 503 (no anonymous service access, ever).
+    hub_service_tokens: str | None = None
+
+    # Anti-spam policy for batch publishes: at most this many hub posts
+    # per platform per tenant per UTC day; batch overflow rolls into the
+    # next day's window. Env: NEXOCLIP_HUB_MAX_POSTS_PER_PLATFORM_PER_DAY.
+    hub_max_posts_per_platform_per_day: int = 4
+
+    def hub_service_token_map(self) -> dict[str, str]:
+        """Parse hub_service_tokens into {token: consumer_name}.
+
+        Keyed by token (the lookup direction auth needs). Malformed
+        pairs are skipped — fail-closed, never fail-open."""
+        out: dict[str, str] = {}
+        for pair in (self.hub_service_tokens or "").split(","):
+            name, _, token = pair.strip().partition(":")
+            if name and token:
+                out[token.strip()] = name.strip()
+        return out
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

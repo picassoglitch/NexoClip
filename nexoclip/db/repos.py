@@ -38,6 +38,7 @@ from .models import (
     DriveExportSettingsRow,
     DriveWatchRow,
     Event,
+    HubPublishJobRow,
     LiveStreamKeyRow,
     LLMCallRow,
     ProviderSpend,
@@ -3556,3 +3557,143 @@ class ZernioEventsRepo:
             d["processed"] = bool(d.get("processed"))
             out.append(ZernioEventRow.model_validate(d))
         return out
+
+
+_HUB_JOB_COLS = (
+    "job_id, tenant_id, idempotency_key, source, mode, targets, video_url, "
+    "title, caption, scheduled_for, zernio_post_id, status, platforms_json, "
+    "error, created_at, updated_at"
+)
+
+
+class HubPublishJobsRepo:
+    """Internal-API publish jobs (migration 032).
+
+    The service API addresses tenants by id with a service token, so
+    tenant_id is an EXPLICIT first argument here (not the bound-tenant
+    context) — every query still filters on it. The two tenant-free
+    methods are the webhook-processor joins, keyed by Zernio post id.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def create(
+        self,
+        tenant_id: str,
+        *,
+        source: str,
+        mode: str,
+        targets: list[str],
+        video_url: str,
+        title: str | None = None,
+        caption: str | None = None,
+        scheduled_for: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> HubPublishJobRow:
+        job_id = new_id("hpj")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO hub_publish_jobs "
+            "(job_id, tenant_id, idempotency_key, source, mode, targets, "
+            "video_url, title, caption, scheduled_for, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (
+                job_id, tenant_id, idempotency_key, source, mode,
+                ",".join(targets), video_url, title, caption,
+                scheduled_for, _now(),
+            ),
+        )
+        await conn.commit()
+        job = await self.get(tenant_id, job_id)
+        assert job is not None
+        return job
+
+    async def get(self, tenant_id: str, job_id: str) -> HubPublishJobRow | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_HUB_JOB_COLS} FROM hub_publish_jobs "
+            "WHERE job_id = ? AND tenant_id = ?",
+            (job_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return HubPublishJobRow.model_validate(dict(row)) if row else None
+
+    async def find_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> HubPublishJobRow | None:
+        """The replay path: a repeated key returns the ORIGINAL job."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_HUB_JOB_COLS} FROM hub_publish_jobs "
+            "WHERE tenant_id = ? AND idempotency_key = ?",
+            (tenant_id, idempotency_key),
+        )
+        row = await cur.fetchone()
+        return HubPublishJobRow.model_validate(dict(row)) if row else None
+
+    async def set_zernio_post(
+        self, tenant_id: str, job_id: str, *, post_id: str, status: str
+    ) -> None:
+        """Link the accepted Zernio post and move past 'pending'."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET zernio_post_id = ?, status = ?, "
+            "updated_at = ? WHERE job_id = ? AND tenant_id = ?",
+            (post_id, status, _now(), job_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_error(
+        self, tenant_id: str, job_id: str, *, error: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET status = 'failed', error = ?, "
+            "updated_at = ? WHERE job_id = ? AND tenant_id = ?",
+            (error, _now(), job_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_status_by_post_id(
+        self, post_id: str, *, status: str, platforms_json: str | None = None
+    ) -> None:
+        """Tenant-FREE webhook join: post.* events update the hub job
+        the same way they update zernio_publishes. No-op for posts that
+        didn't come through the internal API."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET status = ?, "
+            "platforms_json = COALESCE(?, platforms_json), updated_at = ? "
+            "WHERE zernio_post_id = ?",
+            (status, platforms_json, _now(), post_id),
+        )
+        await conn.commit()
+
+    async def get_tenant_for_post(self, post_id: str) -> str | None:
+        """Tenant-FREE reverse lookup for the webhook processor."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id FROM hub_publish_jobs WHERE zernio_post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return str(row["tenant_id"]) if row else None
+
+    async def count_for_day(
+        self, tenant_id: str, *, platform: str, day: str
+    ) -> int:
+        """Hub posts targeting `platform` whose effective date (the
+        scheduled date, or creation date for immediate posts) falls on
+        `day` (YYYY-MM-DD, UTC). Drives the batch anti-spam cap."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM hub_publish_jobs "
+            "WHERE tenant_id = ? "
+            "AND date(COALESCE(scheduled_for, created_at)) = ? "
+            "AND (',' || targets || ',') LIKE ? "
+            "AND status != 'failed'",
+            (tenant_id, day, f"%,{platform},%"),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0

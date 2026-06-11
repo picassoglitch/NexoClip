@@ -29,6 +29,7 @@ from typing import Any
 from nexoclip.db import (
     Database,
     EventsRepo,
+    HubPublishJobsRepo,
     TenantsRepo,
     ZernioEventsRepo,
     ZernioPublishesRepo,
@@ -158,20 +159,29 @@ async def _process(db: Database, event_id: str) -> None:
     if post_id and (
         row.type in POST_EVENT_STATUS or row.type.startswith("post.platform.")
     ):
+        status = post.get("status") if post else None
+        if not isinstance(status, str) or not status:
+            status = POST_EVENT_STATUS.get(row.type)
+        platforms = post.get("platforms") if post else None
+        platforms_json = (
+            json.dumps(platforms) if isinstance(platforms, list) else None
+        )
+        # Dashboard publishes (zernio_publishes) and internal-API jobs
+        # (hub_publish_jobs) both key on the Zernio post id; a post
+        # only ever lives in one of them, the other update no-ops.
         pub = await ZernioPublishesRepo(db).get_by_post_id(post_id)
         if pub is not None:
             tenant_id = tenant_id or pub.tenant_id
-            status = post.get("status") if post else None
-            if not isinstance(status, str) or not status:
-                status = POST_EVENT_STATUS.get(row.type)
-            platforms = post.get("platforms") if post else None
-            platforms_json = (
-                json.dumps(platforms) if isinstance(platforms, list) else None
-            )
-            if status:
+        elif tenant_id is None:
+            tenant_id = await HubPublishJobsRepo(db).get_tenant_for_post(post_id)
+        if status:
+            if pub is not None:
                 await ZernioPublishesRepo(db).set_status(
                     post_id, status=status, platforms_json=platforms_json,
                 )
+            await HubPublishJobsRepo(db).set_status_by_post_id(
+                post_id, status=status, platforms_json=platforms_json,
+            )
 
     # --- fan-out: event row + drain the tenant's webhook subscriptions ---
     if tenant_id:

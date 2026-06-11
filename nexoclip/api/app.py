@@ -32,6 +32,7 @@ from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
 from .routers import internal as internal_router
+from .routers import internal_publish as internal_publish_router
 from .routers import live as live_router
 from .routers import llm_calls as llm_calls_router
 from .routers import nexo_ai as nexo_ai_router
@@ -236,6 +237,10 @@ def create_app(
     # HMAC on a signed URL; the bearer-cookie middleware skips
     # /api/internal/* (see auth.py allowlist).
     app.include_router(internal_router.router)
+    # Hub phase 3 — service-token publish API for NexoOBS / Nexo AI.
+    # Same /api/internal/ middleware exemption; each route enforces
+    # its own bearer check against NEXOCLIP_HUB_SERVICE_TOKENS.
+    app.include_router(internal_publish_router.router)
     # Phase L.1 — live RTMP ingest dashboard + MediaMTX webhooks.
     # Webhooks live under /api/internal/live/* and share the same
     # bearer-skip from the auth middleware. Dashboard pages live

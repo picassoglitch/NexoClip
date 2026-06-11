@@ -373,6 +373,33 @@ class ZernioPublishRow(BaseModel):
     updated_at: str | None = None
 
 
+class HubPublishJobRow(BaseModel):
+    """One internal-API publish job (migration 032).
+
+    Created by /api/internal/v1/publish (NexoOBS, Nexo AI). The
+    idempotency_key dedups caller retries per tenant; zernio_post_id
+    links to the Zernio post once accepted, and the phase-2 webhook
+    processor keeps status/platforms_json live from there."""
+
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    tenant_id: str
+    idempotency_key: str | None = None
+    source: str
+    mode: str  # now | queue | schedule | draft
+    targets: str  # csv of resolved platform ids
+    video_url: str
+    title: str | None = None
+    caption: str | None = None
+    scheduled_for: str | None = None
+    zernio_post_id: str | None = None
+    status: str = "pending"
+    platforms_json: str | None = None
+    error: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
 class ZernioEventRow(BaseModel):
     """One inbound Zernio webhook event (migration 031).
 

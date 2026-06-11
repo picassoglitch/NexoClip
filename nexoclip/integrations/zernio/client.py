@@ -516,6 +516,11 @@ class ZernioClient:
         tiktok_settings: dict[str, Any] | None = None,
         youtube_settings: dict[str, Any] | None = None,
         instagram_settings: dict[str, Any] | None = None,
+        title: str | None = None,
+        is_draft: bool = False,
+        queued_from_profile: str | None = None,
+        custom_content: dict[str, str] | None = None,
+        platform_specific_data: dict[str, dict[str, Any]] | None = None,
     ) -> ZernioPostResult:
         """POST /posts — publish (or schedule) a video to one or more
         platforms.
@@ -526,25 +531,47 @@ class ZernioClient:
         list of (platform, account_id) pairs; the account_id comes
         from `list_accounts` and is REQUIRED per platform.
 
-        When `scheduled_for` is set (ISO 8601), we send it plus
-        `timezone` and omit `publishNow`; otherwise `publishNow=True`
-        fires immediately.
+        Modes (mutually exclusive, in precedence order):
+          - `is_draft=True` → saved unpublished (no platforms required
+            by Zernio, but we still send the targets we have)
+          - `queued_from_profile=<profileId>` → Zernio assigns the next
+            available queue slot itself (do NOT pre-compute next-slot;
+            that bypasses Zernio's queue locking)
+          - `scheduled_for` (ISO 8601) → scheduled, with `timezone`
+          - otherwise `publishNow=True` fires immediately
 
-        Per-platform settings flow through verbatim under their
-        Zernio keys. For TikTok the caller MUST include
-        `content_preview_confirmed` and `express_consent_given`
-        (Zernio rejects the post otherwise — a TikTok legal
-        requirement).
+        Per-platform extras: `custom_content[platform]` overrides the
+        caption for that target; `platform_specific_data[platform]`
+        flows verbatim into that target's `platformSpecificData` (e.g.
+        `{"youtube": {"title": ..., "firstComment": ...}}`). Root-level
+        settings (tiktokSettings etc.) still apply to all targets of
+        that platform, with per-target data taking precedence (Zernio
+        merges them).
+
+        For TikTok the caller MUST include `content_preview_confirmed`
+        and `express_consent_given` (Zernio rejects the post otherwise —
+        a TikTok legal requirement).
         """
-        platform_entries = [
-            {"platform": p, "accountId": account_id} for p, account_id in platforms
-        ]
+        platform_entries: list[dict[str, Any]] = []
+        for p, account_id in platforms:
+            entry: dict[str, Any] = {"platform": p, "accountId": account_id}
+            if custom_content and p in custom_content:
+                entry["customContent"] = custom_content[p]
+            if platform_specific_data and p in platform_specific_data:
+                entry["platformSpecificData"] = platform_specific_data[p]
+            platform_entries.append(entry)
         payload: dict[str, Any] = {
             "content": content,
             "mediaItems": [{"type": "video", "url": media_url}],
             "platforms": platform_entries,
         }
-        if scheduled_for:
+        if title:
+            payload["title"] = title
+        if is_draft:
+            payload["isDraft"] = True
+        elif queued_from_profile:
+            payload["queuedFromProfile"] = queued_from_profile
+        elif scheduled_for:
             payload["scheduledFor"] = scheduled_for
             if timezone:
                 payload["timezone"] = timezone
@@ -576,6 +603,28 @@ class ZernioClient:
                 str(body["message"]) if isinstance(body.get("message"), str) else None
             ),
         )
+
+    # ---- Analytics ----
+
+    async def best_time_slots(
+        self,
+        *,
+        profile_id: str,
+        platform: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """GET /analytics/best-time — engagement-ranked posting slots.
+
+        Returns the raw slot list ({day_of_week 0=Mon, hour UTC,
+        avg_engagement, post_count}); empty for accounts without
+        enough history (callers fall back to a sane default). 403
+        (Analytics add-on required) is surfaced as ZernioError — the
+        caller treats it like "no data"."""
+        params: dict[str, Any] = {"profileId": profile_id}
+        if platform:
+            params["platform"] = platform
+        body = await self._request("GET", "/analytics/best-time", params=params)
+        slots = body.get("slots") if isinstance(body, dict) else None
+        return [s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []
 
     # ---- Status + history ----
 

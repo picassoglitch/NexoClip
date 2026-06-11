@@ -30,6 +30,7 @@ EntityKind = Literal[
     "brk",  # brand_kits (voice-markers spec slice C.1)
     "drv",  # drive_watches (voice-markers spec slice E.4)
     "zev",  # zernio_events — inbound webhook rows missing payload.id (Hub phase 2)
+    "hpj",  # hub_publish_jobs — internal service API publishes (Hub phase 3)
 ]
 
 

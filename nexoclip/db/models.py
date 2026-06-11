@@ -352,6 +352,23 @@ class PublishJob(BaseModel):
     platform_metadata: dict[str, object] | None = None
 
 
+class ZernioPublishRow(BaseModel):
+    """One Zernio publish we fired (migration 030).
+
+    Local, tenant-scoped record of every POST /posts — Zernio's own
+    GET /posts is company-key-wide, so per-tenant history MUST come
+    from here. `post_id` is Zernio's post _id (the job handle the
+    /job/{post_id} page polls)."""
+
+    model_config = ConfigDict(extra="forbid")
+    post_id: str
+    tenant_id: str
+    clip_id: str
+    platforms: str  # csv of platform ids, e.g. "tiktok,instagram"
+    content: str | None = None
+    created_at: str
+
+
 class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str

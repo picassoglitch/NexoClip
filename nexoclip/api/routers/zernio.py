@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from nexoclip.db import ClipsRepo, Database, TenantsRepo
+from nexoclip.db import ClipsRepo, Database, TenantsRepo, ZernioPublishesRepo
 from nexoclip.integrations.zernio import (
     ZernioAccount,
     ZernioClient,
@@ -115,6 +115,12 @@ _SUPPORTED_PLATFORMS = [
 # Platforms whose api id Zernio publishes to. Used to validate the
 # checkbox group on the publish path.
 _SUPPORTED_PLATFORM_IDS = frozenset(p[0] for p in _SUPPORTED_PLATFORMS)
+
+# Platforms whose OAuth needs a post-selection step (pick ONE page /
+# board) that we render ourselves via Zernio's headless connect mode.
+# Facebook is implemented; Pinterest boards follow the same pattern
+# when we add `/connect/pinterest/select-board` client methods.
+_HEADLESS_SELECTION_PLATFORMS = frozenset({"facebook"})
 
 
 def _clip_display_title(clip: Any) -> str:
@@ -387,9 +393,34 @@ async def _publish_clip(
                 "zernio.publish.duplicate_resolved tenant=%s clip=%s post_id=%s",
                 tenant_id, clip_id, existing,
             )
-            return existing
-        raise
-    return result.post_id
+            post_id = existing
+        else:
+            raise
+    else:
+        post_id = result.post_id
+
+    # Record the publish locally — this table IS the tenant's publish
+    # history (Zernio's GET /posts is company-key-wide; migration 030).
+    # Idempotent on post_id, so the duplicate-resolved path is safe.
+    await ZernioPublishesRepo(db).record(
+        post_id=post_id,
+        tenant_id=tenant_id,
+        clip_id=clip_id,
+        platforms=[p for p, _ in targets],
+        content=content,
+    )
+    # Flip the clip out of the "ready to publish" grid. Best-effort —
+    # the publish already happened; a status-write hiccup must not fail
+    # the request.
+    if clip.status == "approved":
+        try:
+            await repo.update_status(clip_id, status="published")
+        except Exception:
+            _log.warning(
+                "zernio.publish.status_flip_failed tenant=%s clip=%s",
+                tenant_id, clip_id,
+            )
+    return post_id
 
 
 @router.get("", response_class=HTMLResponse)
@@ -415,8 +446,13 @@ async def zernio_dashboard(
     profile_id = tenant.zernio_profile_id if tenant else None
     profile_name = tenant.zernio_profile_name if tenant else None
 
+    # Per-tenant publish history comes from OUR table (migration 030) —
+    # Zernio's GET /posts is company-key-wide and must never be rendered
+    # unfiltered (every tenant would see every other tenant's posts).
+    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=25)
+
     accounts: list[ZernioAccount] = []
-    posts: list[dict[str, Any]] = []
+    status_by_post: dict[str, dict[str, Any]] = {}
     connect_fetch_failed = False
 
     if configured and profile_id:
@@ -429,27 +465,50 @@ async def zernio_dashboard(
                 tenant_id, e,
             )
             connect_fetch_failed = True
-        # Feed failures are silent — a brand-new tenant with no posts
-        # legitimately gets an empty list.
-        try:
-            feed = await client.list_posts(page=1, limit=25)
-            raw = feed.get("posts")
-            if isinstance(raw, list):
-                posts = raw
-        except ZernioError as e:
-            _log.warning(
-                "zernio.dashboard.feed_fetch_failed tenant=%s err=%s",
-                tenant_id, e,
-            )
+        # Live status enrichment: ONE feed call, matched against the
+        # tenant's own post ids — failures are silent (history still
+        # renders from the local rows, statuses just read "queued").
+        if publishes:
+            try:
+                feed = await client.list_posts(page=1, limit=100)
+                raw = feed.get("posts")
+                if isinstance(raw, list):
+                    for p in raw:
+                        if isinstance(p, dict):
+                            pid = p.get("_id") or p.get("id")
+                            if isinstance(pid, str):
+                                status_by_post[pid] = p
+            except ZernioError as e:
+                _log.warning(
+                    "zernio.dashboard.feed_fetch_failed tenant=%s err=%s",
+                    tenant_id, e,
+                )
 
     connected_set = _connected_platforms(accounts)
 
-    # Publishable clips for both tabs. Decorate each with display_title
-    # + thumbnail URL so the template stays dumb.
+    # Join local rows with live status (only the tenant's own posts).
+    history: list[dict[str, Any]] = []
+    for row in publishes:
+        live = status_by_post.get(row.post_id, {})
+        history.append(
+            {
+                "post_id": row.post_id,
+                "clip_id": row.clip_id,
+                "platforms": [p for p in row.platforms.split(",") if p],
+                "content": row.content,
+                "created_at": row.created_at,
+                "status": str(live.get("status") or "queued"),
+            }
+        )
+
+    # Publishable clips for both tabs — APPROVED only: a clip flips to
+    # 'published' on its first successful publish and leaves this grid
+    # (it stays visible in History below). Decorate each with
+    # display_title + thumbnail URL so the template stays dumb.
     raw_clips: list[Any] = []
     with contextlib.suppress(Exception):  # display is best-effort
         raw_clips = await ClipsRepo(db).list_for_tenant_with_status(
-            ["approved", "published"], limit=60,
+            ["approved"], limit=60,
         )
     publishable = [
         {
@@ -465,21 +524,20 @@ async def zernio_dashboard(
         for c in raw_clips
     ]
 
-    # Stats strip — single pass over the (capped) feed.
-    def _is_published(p: dict[str, Any]) -> bool:
-        return str(p.get("status", "")).lower() in {"published", "finished", "success"}
-
-    def _is_failed(p: dict[str, Any]) -> bool:
-        return str(p.get("status", "")).lower() in {"failed", "error"}
-
-    def _is_scheduled(p: dict[str, Any]) -> bool:
-        return str(p.get("status", "")).lower() in {"scheduled", "pending", "queued"}
+    # Stats strip — single pass over the tenant's (capped) history.
+    def _s(h: dict[str, Any]) -> str:
+        return str(h.get("status", "")).lower()
 
     stats = {
-        "published": sum(1 for p in posts if _is_published(p)),
-        "failed": sum(1 for p in posts if _is_failed(p)),
-        "scheduled": sum(1 for p in posts if _is_scheduled(p)),
-        "total": len(posts),
+        "published": sum(
+            1 for h in history if _s(h) in {"published", "finished", "success"}
+        ),
+        "failed": sum(1 for h in history if _s(h) in {"failed", "error"}),
+        "scheduled": sum(
+            1 for h in history
+            if _s(h) in {"scheduled", "pending", "queued", "publishing", "processing"}
+        ),
+        "total": len(history),
     }
 
     return templates.TemplateResponse(
@@ -495,7 +553,7 @@ async def zernio_dashboard(
             "account_limit": _account_limit(request),
             "account_count": len(accounts),
             "connect_fetch_failed": connect_fetch_failed,
-            "posts": posts,
+            "history": history,
             "publishable_clips": publishable,
             "supported_platforms": _SUPPORTED_PLATFORMS,
             "stats": stats,
@@ -632,11 +690,24 @@ async def zernio_connect(
 
     # After the OAuth callback, Zernio redirects the popup HERE instead
     # of its own dashboard — our /connected page closes the popup and
-    # notifies the main tab. The operator never sees Zernio's UI.
-    redirect_back = f"{_public_base_url(request)}/dashboard/publish/zernio/connected"
+    # notifies the main tab. The operator never sees Zernio's UI. The
+    # platform rides on the query string so /connected can tell the
+    # opener WHICH chip just connected.
+    redirect_back = (
+        f"{_public_base_url(request)}/dashboard/publish/zernio/connected"
+        f"?platform={platform}"
+    )
+    # Facebook needs a post-OAuth page selection. headless=true makes
+    # Zernio's redirect carry the selection state (tempToken & co)
+    # instead of showing Zernio's own picker, and /connected renders
+    # OUR picker — the operator never leaves NexoClip's UI.
+    headless = platform in _HEADLESS_SELECTION_PLATFORMS
     try:
         link = await client.connect_url(
-            platform, profile_id=profile_id, redirect_url=redirect_back,
+            platform,
+            profile_id=profile_id,
+            redirect_url=redirect_back,
+            headless=headless,
         )
     except ZernioError as e:
         _log.warning(
@@ -663,25 +734,19 @@ async def zernio_connect(
     return JSONResponse({"ok": True, "auth_url": link.auth_url})
 
 
-@router.get("/connected", response_class=HTMLResponse)
-async def zernio_connected_landing(request: Request) -> Response:
-    """Post-OAuth landing page — where Zernio's `redirect_url` sends the
-    popup after the account connects.
-
-    Same-origin, so `window.close()` works on the script-opened popup:
-    notify the opener (main NexoClip tab) via postMessage, then close.
-    If the page was somehow opened as a full navigation (no opener),
-    fall back to the dashboard. The operator never sees Zernio's UI.
-    """
-    return HTMLResponse(
-        """<!doctype html>
-<html><head><meta charset="utf-8"><title>Account connected</title></head>
+_CONNECTED_CLOSE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Cuenta conectada</title></head>
 <body style="font-family:system-ui,sans-serif;padding:24px;color:#333">
-<p>Account connected ✓ — returning to NexoClip…</p>
+<p>Cuenta conectada ✓ — volviendo a NexoClip…</p>
 <script>
+  var znPlatform = new URLSearchParams(window.location.search).get("platform")
+    || new URLSearchParams(window.location.search).get("connected") || "";
   if (window.opener && !window.opener.closed) {
     try {
-      window.opener.postMessage({ type: "zernio:connected" }, window.location.origin);
+      window.opener.postMessage(
+        { type: "zernio:connected", platform: znPlatform },
+        window.location.origin
+      );
     } catch (e) { /* ignore */ }
     window.close();
     // If the browser refused to close us, give the operator a way home.
@@ -693,6 +758,305 @@ async def zernio_connected_landing(request: Request) -> Response:
   }
 </script>
 </body></html>"""
+
+
+# Facebook page picker, rendered inside the connect popup on the
+# headless redirect. NO server-side interpolation of query params —
+# the JS reads location.search itself, so tempToken/userProfile never
+# pass through templating (no escaping pitfalls, nothing logged).
+_FB_SELECT_PAGE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Elige tu página de Facebook</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 24px; color: #e8e8e8;
+         background: #101014; max-width: 460px; margin: 0 auto; }
+  h1 { font-size: 18px; }
+  .pg { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+        border: 1px solid #333; border-radius: 8px; margin: 8px 0;
+        cursor: pointer; }
+  .pg:hover { border-color: #c5f82a; }
+  .pg input { accent-color: #c5f82a; }
+  .pg small { color: #9a9aa2; }
+  button { margin-top: 14px; padding: 10px 18px; border-radius: 8px;
+           border: none; background: #c5f82a; color: #101014;
+           font-weight: 600; cursor: pointer; width: 100%; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .err { color: #ff2d95; margin-top: 10px; }
+</style></head>
+<body>
+<h1>Elige la página de Facebook a conectar</h1>
+<p style="color:#9a9aa2">Tu cuenta administra varias páginas; los clips se publicarán en la que elijas.</p>
+<form id="fb-form"><div id="fb-pages">Cargando páginas…</div>
+<button type="submit" id="fb-submit" disabled>Conectar página</button>
+<div class="err" id="fb-err"></div></form>
+<script>
+(function () {
+  var qs = new URLSearchParams(window.location.search);
+  var tempToken = qs.get("tempToken") || "";
+  var userProfileRaw = qs.get("userProfile") || "";
+  var listEl = document.getElementById("fb-pages");
+  var errEl = document.getElementById("fb-err");
+  var submitBtn = document.getElementById("fb-submit");
+  function fail(msg) { errEl.textContent = msg; }
+  fetch("/dashboard/publish/zernio/fb-pages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ temp_token: tempToken }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (!body.ok) { throw new Error(body.error || "No se pudieron listar las páginas"); }
+      if (!body.pages.length) {
+        listEl.textContent = "Tu cuenta de Facebook no administra ninguna página.";
+        return;
+      }
+      listEl.innerHTML = "";
+      body.pages.forEach(function (p, i) {
+        var label = document.createElement("label");
+        label.className = "pg";
+        var input = document.createElement("input");
+        input.type = "radio"; input.name = "page"; input.value = p.page_id;
+        if (i === 0) { input.checked = true; }
+        var span = document.createElement("span");
+        span.textContent = p.name + (p.category ? " " : "");
+        var small = document.createElement("small");
+        small.textContent = p.category || "";
+        label.appendChild(input); label.appendChild(span); label.appendChild(small);
+        listEl.appendChild(label);
+      });
+      submitBtn.disabled = false;
+    })
+    .catch(function (e) { listEl.textContent = ""; fail(String(e.message || e)); });
+  document.getElementById("fb-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var picked = document.querySelector('input[name="page"]:checked');
+    if (!picked) { return; }
+    submitBtn.disabled = true;
+    fetch("/dashboard/publish/zernio/fb-page/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page_id: picked.value,
+        temp_token: tempToken,
+        user_profile_raw: userProfileRaw,
+      }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body.ok) { throw new Error(body.error || "No se pudo conectar la página"); }
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(
+              { type: "zernio:connected", platform: "facebook" },
+              window.location.origin
+            );
+          } catch (e) { /* ignore */ }
+          window.close();
+          setTimeout(function () {
+            window.location.href = "/dashboard/publish/zernio";
+          }, 1500);
+        } else {
+          window.location.href = "/dashboard/publish/zernio";
+        }
+      })
+      .catch(function (e) { submitBtn.disabled = false; fail(String(e.message || e)); });
+  });
+})();
+</script>
+</body></html>"""
+
+
+@router.get("/connected", response_class=HTMLResponse)
+async def zernio_connected_landing(request: Request) -> Response:
+    """Post-OAuth landing page — where Zernio's `redirect_url` sends the
+    popup after the account connects.
+
+    Same-origin, so `window.close()` works on the script-opened popup:
+    notify the opener (main NexoClip tab) via postMessage (with the
+    platform, read client-side from the query string), then close. If
+    the page was somehow opened as a full navigation (no opener), fall
+    back to the dashboard. The operator never sees Zernio's UI.
+
+    Headless branch: when the redirect carries selection state
+    (`tempToken` without an `accountId`) for a platform we connect in
+    headless mode, the account is NOT created yet — render our own
+    picker (Facebook page selection) instead of closing.
+    """
+    qp = request.query_params
+    platform = (qp.get("platform") or qp.get("connected") or "").strip().lower()
+    needs_selection = bool(qp.get("tempToken")) and not qp.get("accountId")
+    if needs_selection and platform == "facebook":
+        return HTMLResponse(_FB_SELECT_PAGE_HTML)
+    return HTMLResponse(_CONNECTED_CLOSE_HTML)
+
+
+@router.post("/fb-pages")
+async def zernio_facebook_pages(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """List the Facebook Pages the just-OAuth'd user can manage.
+
+    POST (not GET) so the short-lived `temp_token` travels in the body,
+    never in a URL that access logs would capture. The popup shares the
+    dashboard's session cookie, so the normal tenant gates apply and
+    the profileId is resolved server-side — the client never picks it.
+    """
+    data = await _read_json(request)
+    temp_token = str(data.get("temp_token") or "") if isinstance(data, dict) else ""
+    if not temp_token:
+        return JSONResponse(
+            {"ok": False, "error": "Missing temp_token"}, status_code=400,
+        )
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        pages = await client.list_facebook_pages(
+            profile_id=profile_id, temp_token=temp_token,
+        )
+    except ZernioError as e:
+        _log.warning(
+            "zernio.fb_pages.failed tenant=%s status=%s", tenant_id, e.status_code,
+        )
+        return JSONResponse(
+            {"ok": False, "error": f"Couldn't list Facebook pages: {e}"},
+            status_code=502,
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "pages": [
+                {
+                    "page_id": p.page_id,
+                    "name": p.name,
+                    "username": p.username,
+                    "category": p.category,
+                }
+                for p in pages
+            ],
+        }
+    )
+
+
+def _decode_user_profile(raw: str) -> dict[str, Any]:
+    """Decode the `userProfile` query param Zernio appends on the
+    headless redirect. Documented as the 'decoded user profile object
+    from the OAuth callback'; observed encodings are JSON and
+    base64(JSON), so try both and fall back to {} (Zernio then rejects
+    the selection with a clear 400 rather than us 500ing)."""
+    import base64
+    import binascii
+    import json as _json
+
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        decoded = _json.loads(raw)
+        if isinstance(decoded, dict):
+            return decoded
+    except ValueError:
+        pass
+    try:
+        decoded = _json.loads(base64.b64decode(raw, validate=True))
+        if isinstance(decoded, dict):
+            return decoded
+    except (ValueError, binascii.Error):
+        pass
+    return {}
+
+
+@router.post("/fb-page/select")
+async def zernio_facebook_select_page(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Finish the headless Facebook connect: save the picked page.
+
+    Body: {page_id, temp_token, user_profile_raw}. Same body-not-URL
+    rule as /fb-pages — the temp token is an OAuth credential.
+    """
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Missing body"}, status_code=400)
+    page_id = str(data.get("page_id") or "")
+    temp_token = str(data.get("temp_token") or "")
+    if not page_id or not temp_token:
+        return JSONResponse(
+            {"ok": False, "error": "Missing page_id or temp_token"},
+            status_code=400,
+        )
+    user_profile = _decode_user_profile(str(data.get("user_profile_raw") or ""))
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        account = await client.select_facebook_page(
+            profile_id=profile_id,
+            page_id=page_id,
+            temp_token=temp_token,
+            user_profile=user_profile,
+        )
+    except ZernioError as e:
+        _log.warning(
+            "zernio.fb_select.failed tenant=%s page_id=%s status=%s",
+            tenant_id, page_id, e.status_code,
+        )
+        if e.status_code == 402:
+            msg = (
+                "Zernio plan limit reached — your Zernio plan's connected-account "
+                "limit is full (the free plan allows 2). Disconnect an account, "
+                "or upgrade your Zernio plan, then try again."
+            )
+        else:
+            msg = f"Couldn't connect the Facebook page: {e}"
+        return JSONResponse(
+            {"ok": False, "error": msg, "status": e.status_code}, status_code=502,
+        )
+    _log.info(
+        "zernio.fb_select.connected tenant=%s account_id=%s",
+        tenant_id, account.account_id,
+    )
+    return JSONResponse({"ok": True, "account_id": account.account_id})
+
+
+@router.get("/accounts-panel", response_class=HTMLResponse)
+async def zernio_accounts_panel(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Server-rendered connected-accounts row (the same partial the
+    dashboard includes). The connect popup's postMessage triggers a
+    fetch of this and swaps it in — chips update without a reload,
+    keeping the limit/disconnect logic in ONE Jinja template."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if not profile_id or not settings.zernio_api_key:
+        return HTMLResponse("")
+    client = _build_client()
+    try:
+        accounts = await client.list_accounts(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning("zernio.accounts_panel.failed tenant=%s err=%s", tenant_id, e)
+        # 502 → the popup JS falls back to a full reload.
+        return HTMLResponse("", status_code=502)
+    return templates.TemplateResponse(
+        request,
+        "publish/_zernio_accounts.html",
+        {
+            "profile_id": profile_id,
+            "connected_set": _connected_platforms(accounts),
+            "account_by_platform": _account_map(accounts),
+            "account_limit": _account_limit(request),
+            "account_count": len(accounts),
+            "supported_platforms": _SUPPORTED_PLATFORMS,
+        },
     )
 
 
@@ -1056,33 +1420,50 @@ async def zernio_bulk(
 @router.get("/feed.json")
 async def zernio_feed(
     request: Request,
-    page: int = 1,
     limit: int = 25,
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Lightweight JSON feed for the dashboard's HTMX-polled history
-    panel. Returns the raw Zernio posts list so the client can render
-    whatever they give us back."""
+    """Tenant-scoped publish history as JSON.
+
+    Reads the LOCAL zernio_publishes table (never the raw company-wide
+    Zernio feed — see migration 030) and joins live status from Zernio
+    by post id. Status falls back to "queued" when the join fails."""
     settings = get_settings()
     if not settings.zernio_api_key:
-        return JSONResponse({"posts": [], "configured": False})
+        return JSONResponse({"history": [], "configured": False})
 
-    tenant = await TenantsRepo(db).get(tenant_id)
-    profile_id = tenant.zernio_profile_id if tenant else None
-    if not profile_id:
-        return JSONResponse({"posts": [], "configured": True, "connected": False})
+    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=limit)
 
-    client = _build_client()
-    posts: list[dict[str, Any]] = []
-    try:
-        feed = await client.list_posts(page=page, limit=limit)
-        if isinstance(feed.get("posts"), list):
-            posts = feed["posts"]
-    except ZernioError as e:
-        _log.warning("zernio.feed.failed tenant=%s err=%s", tenant_id, e)
+    status_by_post: dict[str, dict[str, Any]] = {}
+    if publishes:
+        client = _build_client()
+        try:
+            feed = await client.list_posts(page=1, limit=100)
+            raw = feed.get("posts")
+            if isinstance(raw, list):
+                for p in raw:
+                    if isinstance(p, dict):
+                        pid = p.get("_id") or p.get("id")
+                        if isinstance(pid, str):
+                            status_by_post[pid] = p
+        except ZernioError as e:
+            _log.warning("zernio.feed.failed tenant=%s err=%s", tenant_id, e)
 
-    return JSONResponse({"posts": posts, "configured": True, "connected": True})
+    history = [
+        {
+            "post_id": row.post_id,
+            "clip_id": row.clip_id,
+            "platforms": [p for p in row.platforms.split(",") if p],
+            "content": row.content,
+            "created_at": row.created_at,
+            "status": str(
+                (status_by_post.get(row.post_id) or {}).get("status") or "queued"
+            ),
+        }
+        for row in publishes
+    ]
+    return JSONResponse({"history": history, "configured": True, "connected": True})
 
 
 @router.get("/job/{post_id}", response_class=HTMLResponse)

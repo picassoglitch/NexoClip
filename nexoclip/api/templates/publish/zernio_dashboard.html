@@ -255,58 +255,12 @@
    platform gets its own Connect button rather than one magic link.
    ========================================================= #}
 {% if profile_id %}
-<div class="nc-panel" style="margin-bottom: 16px;">
-  <div class="nc-pc-acct-row">
-    {% set at_limit = account_limit is not none and account_count >= account_limit %}
-    {% if account_limit is not none %}
-    <span class="nc-pc-acct-chip" title="Your plan's connected-account limit. Upgrade to All-Access for unlimited.">
-      <i class="ti ti-lock" aria-hidden="true"></i>
-      <span>{{ account_count }}/{{ account_limit }} account{{ '' if account_limit == 1 else 's' }} (Pro)</span>
-    </span>
-    {% endif %}
-    {% for key, label, icon in supported_platforms %}
-      {% set is_conn = key in connected_set %}
-      {% if is_conn %}
-      {% set acct_id = account_by_platform.get(key) %}
-      <span class="nc-pc-acct-chip is-connected">
-        <i class="ti {{ icon }}" aria-hidden="true"></i>
-        <span>{{ label }}</span>
-        {% if acct_id %}
-        <button type="button" class="js-zn-disconnect"
-                data-account-id="{{ acct_id }}" data-label="{{ label }}"
-                title="Disconnect {{ label }}"
-                style="background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;line-height:1;">
-          <i class="ti ti-x" aria-hidden="true"></i>
-        </button>
-        {% else %}
-        <i class="ti ti-check" aria-hidden="true"></i>
-        {% endif %}
-      </span>
-      {% elif at_limit %}
-      <button type="button" class="nc-pc-connect-btn" disabled
-              style="opacity: 0.4; cursor: not-allowed;"
-              title="Your plan's connected-account limit is reached. Disconnect an account or upgrade to All-Access.">
-        <i class="ti {{ icon }}" aria-hidden="true"></i>
-        <span>Connect {{ label }}</span>
-      </button>
-      {% else %}
-      <button type="button" class="nc-pc-connect-btn js-zn-connect"
-              data-platform="{{ key }}" title="Connect {{ label }} via Zernio (opens in a new tab)">
-        <i class="ti {{ icon }}" aria-hidden="true"></i>
-        <span>Connect {{ label }}</span>
-      </button>
-      {% endif %}
-    {% endfor %}
-
-    <span style="flex: 1;"></span>
-
-    <form action="/dashboard/publish/zernio/unlink" method="post" style="margin: 0;"
-          onsubmit="return confirm('Unlink the Zernio profile from this NexoClip tenant? Connections stay on Zernio.');">
-      <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;" title="Unlink {{ profile_id }}">
-        <i class="ti ti-unlink" aria-hidden="true"></i>
-      </button>
-    </form>
-  </div>
+{# Swappable wrapper: the connect popup's postMessage triggers a fetch
+   of /accounts-panel and replaces this innerHTML — no full reload.
+   Connect/disconnect clicks are DELEGATED (see JS) so swapped-in
+   buttons keep working. #}
+<div id="zn-accounts-panel">
+  {% include "publish/_zernio_accounts.html" %}
 </div>
 
 {% if connect_fetch_failed %}
@@ -537,28 +491,47 @@
 {% endif %}
 
 {# =========================================================
-   SECTION 3 — History (recent posts)
+   SECTION 3 — Published (this tenant's publish history; local
+   zernio_publishes rows + live status joined by post id)
    ========================================================= #}
 <div class="nc-panel" style="margin-top: 16px;">
   <div class="nc-panel__header">
     <i class="ti ti-history" aria-hidden="true"></i>
-    <span class="nc-panel__title">History</span>
+    <span class="nc-panel__title">Published</span>
     <span class="nc-chip nc-chip--muted" style="margin-left:auto;">last 25</span>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
-    {% if posts %}
+    {% if history %}
     <table class="nc-table">
       <thead>
-        <tr><th>When</th><th>Status</th><th>Caption</th><th></th></tr>
+        <tr><th>When</th><th>Platforms</th><th>Status</th><th>Caption</th><th>Clip</th><th></th></tr>
       </thead>
       <tbody>
-        {% for p in posts %}
-        <tr class="nc-pc-history-row {% if not p['_id'] %}nc-pc-history-row--inert{% endif %}"
-            {% if p['_id'] %}data-href="/dashboard/publish/zernio/job/{{ p['_id'] }}"{% endif %}>
-          <td><span class="nc-mono nc-mono--muted">{{ (p['createdAt'] or p['scheduledFor'] or "")[:19] }}</span></td>
-          <td><span class="nc-chip nc-chip--code">{{ p['status'] or "?" }}</span></td>
-          <td style="max-width:360px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p['content'] or "—" }}</td>
-          <td><span class="nc-mono nc-mono--muted">{{ (p['_id'] or "")[:18] }}</span></td>
+        {% for h in history %}
+        <tr class="nc-pc-history-row"
+            data-href="/dashboard/publish/zernio/job/{{ h.post_id }}">
+          <td><span class="nc-mono nc-mono--muted">{{ (h.created_at or "")[:19] }}</span></td>
+          <td>
+            {% for p in h.platforms %}
+            <span class="nc-chip nc-chip--code">{{ p }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% set st = (h.status or "")|lower %}
+            <span class="nc-chip {% if st in ('published','finished','success') %}nc-chip--success{% elif st in ('failed','error') %}nc-chip--warn{% else %}nc-chip--code{% endif %}">
+              {{ h.status }}
+            </span>
+          </td>
+          <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.content or "—" }}</td>
+          <td><span class="nc-mono nc-mono--muted">{{ (h.clip_id or "")[:14] }}…</span></td>
+          <td style="text-align:right;">
+            <a href="/dashboard/publish/zernio/job/{{ h.post_id }}"
+               class="nc-btn" style="padding: 3px 10px; font-size: 12px; text-decoration:none;"
+               onclick="event.stopPropagation();">
+              <i class="ti ti-eye" aria-hidden="true"></i>
+              <span>View</span>
+            </a>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -734,16 +707,46 @@
   // We pass redirect_url to Zernio so the OAuth callback lands the popup
   // on our own /connected page (same-origin), which postMessages this
   // tab and closes itself — the operator never sees Zernio's dashboard.
-  // The accounts.json poll below stays as a fallback in case the
-  // postMessage is missed (e.g. popup blocked into a full tab).
+  // On the message we refresh the accounts row + publish chips IN PLACE
+  // (no reload); the accounts.json poll below stays as a fallback in
+  // case the postMessage is missed (e.g. popup blocked into a full tab).
   var znConnectOpened = false;
   var znPopup = null;
+
+  // Refresh connected-account state without a full page reload:
+  //  1. swap the server-rendered accounts row (#zn-accounts-panel)
+  //  2. flip data-connected / is-disabled on every publish chip
+  // Falls back to location.reload() if either fetch fails.
+  function znRefreshAccounts() {
+    var panel = document.getElementById("zn-accounts-panel");
+    var panelP = panel
+      ? fetch("/dashboard/publish/zernio/accounts-panel", { credentials: "same-origin" })
+          .then(function (r) {
+            if (!r.ok) { throw new Error("panel HTTP " + r.status); }
+            return r.text();
+          })
+          .then(function (html) { panel.innerHTML = html; })
+      : Promise.resolve();
+    var chipsP = fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var connected = (body && body.connected) || [];
+        document.querySelectorAll(".nc-pc-platform-chip[data-platform]").forEach(function (chip) {
+          var isConn = connected.indexOf(chip.getAttribute("data-platform")) !== -1;
+          chip.setAttribute("data-connected", isConn ? "1" : "0");
+          chip.classList.toggle("is-disabled", !isConn);
+          if (!isConn) { chip.classList.remove("is-selected"); }
+        });
+      });
+    Promise.all([panelP, chipsP]).catch(function () { window.location.reload(); });
+  }
+
   window.addEventListener("message", function (e) {
     if (e.origin !== window.location.origin) return;
     if (!e.data || e.data.type !== "zernio:connected") return;
     if (znPopup) { try { znPopup.close(); } catch (err) { /* ignore */ } }
     znConnectOpened = false;
-    window.location.reload();
+    znRefreshAccounts();
   });
   function znPollUntilConnected(popup, platform, triesLeft) {
     if (triesLeft <= 0) { return; }  // give up quietly; focus-reload is the fallback
@@ -753,7 +756,8 @@
         var connected = (body && body.connected) || [];
         if (connected.indexOf(platform) !== -1) {
           if (popup) { try { popup.close(); } catch (e) { /* ignore */ } }
-          window.location.reload();
+          znConnectOpened = false;
+          znRefreshAccounts();
           return;
         }
         setTimeout(function () {
@@ -766,74 +770,81 @@
         }, 2500);
       });
   }
-  document.querySelectorAll(".js-zn-connect").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var platform = btn.getAttribute("data-platform");
-      // Open the popup synchronously inside the click gesture so popup
-      // blockers don't kill it; we redirect it once the URL arrives.
-      var w = window.open("", "_blank");
-      znPopup = w;
-      if (w) {
-        try {
-          w.document.write(
-            "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
-            "Opening " + platform + " authorization… you can close this tab " +
-            "when you're done — NexoClip will update automatically.</p>"
-          );
-        } catch (e) { /* ignore */ }
-      }
-      btn.disabled = true;
-      fetch("/dashboard/publish/zernio/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ platform: platform }),
+  // DELEGATED handler — connect buttons live inside #zn-accounts-panel,
+  // whose innerHTML gets swapped by znRefreshAccounts(); direct
+  // per-button listeners would die with the old nodes.
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-zn-connect");
+    if (!btn) return;
+    var platform = btn.getAttribute("data-platform");
+    // Open the popup synchronously inside the click gesture so popup
+    // blockers don't kill it; we redirect it once the URL arrives.
+    // Named window: re-clicking reuses the same popup instead of
+    // stacking a second OAuth window.
+    var w = window.open("", "zernio_connect", "popup=yes,width=520,height=720");
+    znPopup = w;
+    if (w) {
+      try {
+        w.document.write(
+          "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
+          "Opening " + platform + " authorization… you can close this window " +
+          "when you're done — NexoClip will update automatically.</p>"
+        );
+      } catch (e2) { /* ignore */ }
+    }
+    btn.disabled = true;
+    fetch("/dashboard/publish/zernio/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ platform: platform }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body.ok || !body.auth_url) {
+          throw new Error(body.error || body.detail || "connect failed");
+        }
+        znConnectOpened = true;
+        if (w) { w.location.href = body.auth_url; }
+        else { window.open(body.auth_url, "zernio_connect"); }
+        // Poll our backend (~75s); when the account appears, close the
+        // popup + refresh chips so the operator stays on NexoClip.
+        znPollUntilConnected(w, platform, 30);
       })
-        .then(function (r) { return r.json(); })
-        .then(function (body) {
-          if (!body.ok || !body.auth_url) {
-            throw new Error(body.error || body.detail || "connect failed");
-          }
-          znConnectOpened = true;
-          if (w) { w.location.href = body.auth_url; }
-          else { window.open(body.auth_url, "_blank"); }
-          // Poll our backend (~75s); when the account appears, close the
-          // popup + refresh so the operator stays on NexoClip.
-          znPollUntilConnected(w, platform, 30);
-        })
-        .catch(function (err) {
-          if (w) { try { w.close(); } catch (e) { /* ignore */ } }
-          alert("Connect failed: " + err.message);
-        })
-        .finally(function () { btn.disabled = false; });
-    });
+      .catch(function (err) {
+        if (w) { try { w.close(); } catch (e3) { /* ignore */ } }
+        alert("Connect failed: " + err.message);
+      })
+      .finally(function () { btn.disabled = false; });
   });
   // Fallback: if the operator returns to this tab manually, refresh so
   // a freshly-connected account shows up even if polling missed it.
   window.addEventListener("focus", function () {
-    if (znConnectOpened) { znConnectOpened = false; window.location.reload(); }
+    if (znConnectOpened) { znConnectOpened = false; znRefreshAccounts(); }
   });
 
   // ---- Disconnect an account (no Zernio UI needed) ----
-  document.querySelectorAll(".js-zn-disconnect").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var accountId = btn.getAttribute("data-account-id");
-      var label = btn.getAttribute("data-label") || "this account";
-      if (!window.confirm("Disconnect " + label + " from Zernio?")) { return; }
-      btn.disabled = true;
-      fetch("/dashboard/publish/zernio/accounts/" + encodeURIComponent(accountId) + "/disconnect", {
-        method: "POST", credentials: "same-origin",
+  // Delegated for the same reason as connect: the buttons get swapped
+  // in by znRefreshAccounts().
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-zn-disconnect");
+    if (!btn) return;
+    var accountId = btn.getAttribute("data-account-id");
+    var label = btn.getAttribute("data-label") || "this account";
+    if (!window.confirm("Disconnect " + label + " from Zernio?")) { return; }
+    btn.disabled = true;
+    fetch("/dashboard/publish/zernio/accounts/" + encodeURIComponent(accountId) + "/disconnect", {
+      method: "POST", credentials: "same-origin",
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body.ok) { throw new Error(body.error || "disconnect failed"); }
+        znRefreshAccounts();
       })
-        .then(function (r) { return r.json(); })
-        .then(function (body) {
-          if (!body.ok) { throw new Error(body.error || "disconnect failed"); }
-          window.location.reload();
-        })
-        .catch(function (err) {
-          btn.disabled = false;
-          alert("Disconnect failed: " + err.message);
-        });
-    });
+      .catch(function (err) {
+        btn.disabled = false;
+        alert("Disconnect failed: " + err.message);
+      });
   });
 
   // ---- Create profile (inline AJAX, no page leave) ----

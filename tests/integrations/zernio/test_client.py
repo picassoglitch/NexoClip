@@ -103,6 +103,43 @@ async def test_connect_url_missing_authurl_raises() -> None:
                 await _client(http).connect_url("tiktok", profile_id="ten_alice")
 
 
+@pytest.mark.asyncio
+async def test_connect_url_headless_sets_param() -> None:
+    """headless=true makes Zernio's redirect carry the selection state
+    (tempToken & co) so WE render the page/board picker."""
+    body = {"authUrl": "https://facebook.com/oauth?x=1"}
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/connect/facebook").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            await _client(http).connect_url(
+                "facebook",
+                profile_id="ten_alice",
+                redirect_url="https://nexoclip.test/dashboard/publish/zernio/connected?platform=facebook",
+                headless=True,
+            )
+    sent = route.calls.last.request
+    assert sent.url.params.get("headless") == "true"
+    # The platform rides on the redirect_url query string, percent-
+    # encoding intact, so /connected knows which chip just connected.
+    assert sent.url.params.get("redirect_url") == (
+        "https://nexoclip.test/dashboard/publish/zernio/connected?platform=facebook"
+    )
+
+
+@pytest.mark.asyncio
+async def test_connect_url_default_omits_headless() -> None:
+    body = {"authUrl": "https://tiktok.com/oauth"}
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            route = mock.get(f"{_BASE}/connect/tiktok").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            await _client(http).connect_url("tiktok", profile_id="ten_alice")
+    assert "headless" not in route.calls.last.request.url.params
+
+
 # ---- list_accounts ----
 
 
@@ -208,6 +245,118 @@ async def test_disconnect_account_raises_on_error() -> None:
             )
             with pytest.raises(ZernioError) as ei:
                 await _client(http).disconnect_account("acc_x")
+    assert ei.value.status_code == 404
+
+
+# ---- headless Facebook page selection ----
+
+
+@pytest.mark.asyncio
+async def test_list_facebook_pages_parses_rows_and_never_keeps_tokens() -> None:
+    body = {
+        "pages": [
+            {
+                "id": "123", "name": "My Brand Page", "username": "mybrand",
+                "access_token": "EAAxxxxx", "category": "Brand",
+                "tasks": ["MANAGE"],
+            },
+            {"id": "456", "name": "Side Page"},
+            {"name": "no id — dropped"},
+            "not-a-dict",
+        ]
+    }
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/connect/facebook/select-page").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            pages = await _client(http).list_facebook_pages(
+                profile_id="ten_alice", temp_token="EAAtmp",
+            )
+    sent = route.calls.last.request
+    assert sent.url.params.get("profileId") == "ten_alice"
+    assert sent.url.params.get("tempToken") == "EAAtmp"
+    assert [(p.page_id, p.name, p.username, p.category) for p in pages] == [
+        ("123", "My Brand Page", "mybrand", "Brand"),
+        ("456", "Side Page", None, None),
+    ]
+    # The page-scoped access_token must not survive parsing — we never
+    # store or log platform tokens.
+    assert not any(hasattr(p, "access_token") for p in pages)
+
+
+@pytest.mark.asyncio
+async def test_list_facebook_pages_missing_pages_raises() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.get(f"{_BASE}/connect/facebook/select-page").mock(
+                return_value=httpx.Response(200, json={"oops": True})
+            )
+            with pytest.raises(ZernioError, match="missing pages"):
+                await _client(http).list_facebook_pages(
+                    profile_id="ten_alice", temp_token="EAAtmp",
+                )
+
+
+@pytest.mark.asyncio
+async def test_select_facebook_page_posts_selection_and_parses_account() -> None:
+    body = {
+        "message": "Facebook page connected successfully",
+        "account": {
+            "accountId": "acct_fb_1", "platform": "facebook",
+            "username": "mybrand", "displayName": "My Brand Page",
+        },
+    }
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/connect/facebook/select-page").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            acct = await _client(http).select_facebook_page(
+                profile_id="ten_alice",
+                page_id="123",
+                temp_token="EAAtmp",
+                user_profile={"id": "987", "name": "Alice"},
+            )
+    assert acct.platform == "facebook"
+    assert acct.account_id == "acct_fb_1"
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload == {
+        "profileId": "ten_alice",
+        "pageId": "123",
+        "tempToken": "EAAtmp",
+        "userProfile": {"id": "987", "name": "Alice"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_select_facebook_page_missing_account_raises() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.post(f"{_BASE}/connect/facebook/select-page").mock(
+                return_value=httpx.Response(200, json={"message": "ok"})
+            )
+            with pytest.raises(ZernioError, match="missing account"):
+                await _client(http).select_facebook_page(
+                    profile_id="ten_alice", page_id="123",
+                    temp_token="EAAtmp", user_profile={"id": "987"},
+                )
+
+
+@pytest.mark.asyncio
+async def test_select_facebook_page_404_unknown_page_raises_with_status() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.post(f"{_BASE}/connect/facebook/select-page").mock(
+                return_value=httpx.Response(
+                    404, json={"error": "Selected page not found"}
+                )
+            )
+            with pytest.raises(ZernioError) as ei:
+                await _client(http).select_facebook_page(
+                    profile_id="ten_alice", page_id="999",
+                    temp_token="EAAtmp", user_profile={"id": "987"},
+                )
     assert ei.value.status_code == 404
 
 

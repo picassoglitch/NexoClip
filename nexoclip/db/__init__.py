@@ -33,6 +33,7 @@ from .repos import (
     VodSpeakersRepo,
     WebhookSecretsRepo,
     WebhookSubscriptionsRepo,
+    ZernioPublishesRepo,
 )
 from .session import db_session
 
@@ -63,6 +64,7 @@ __all__ = [
     "VodSpeakersRepo",
     "WebhookSecretsRepo",
     "WebhookSubscriptionsRepo",
+    "ZernioPublishesRepo",
     "apply_migrations",
     "db_session",
     "schema_version",

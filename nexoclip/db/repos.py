@@ -54,6 +54,7 @@ from .models import (
     VodSpeakerRow,
     WebhookSecretVersion,
     WebhookSubscription,
+    ZernioPublishRow,
 )
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -3361,3 +3362,57 @@ class DriveExportSettingsRepo:
         await conn.commit()
 
 
+
+class ZernioPublishesRepo:
+    """Local record of every Zernio publish (migration 030).
+
+    Zernio's GET /posts is scoped to the company API key — NOT per
+    tenant — so per-tenant publish history must come from this table.
+    One row per POST /posts we fired; the dashboard joins live status
+    from Zernio by post_id.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record(
+        self,
+        *,
+        post_id: str,
+        tenant_id: str,
+        clip_id: str,
+        platforms: list[str],
+        content: str | None,
+    ) -> None:
+        """Persist one fired publish. Idempotent on post_id — the
+        duplicate-resolved path (Zernio 409 → existing post) records
+        the same post id again and must not error."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT OR IGNORE INTO zernio_publishes "
+            "(post_id, tenant_id, clip_id, platforms, content, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                post_id,
+                tenant_id,
+                clip_id,
+                ",".join(platforms),
+                content or None,
+                _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def list_for_tenant(self, limit: int = 25) -> list[ZernioPublishRow]:
+        """Newest-first publish history for the bound tenant."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at "
+            "FROM zernio_publishes WHERE tenant_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (tenant_id, int(limit)),
+        )
+        return [
+            ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
+        ]

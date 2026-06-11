@@ -88,6 +88,24 @@ class ZernioAccount:
 
 
 @dataclass(frozen=True, slots=True)
+class ZernioFacebookPage:
+    """One selectable page from GET /connect/facebook/select-page.
+
+    Facebook's headless connect flow lands the operator back on our
+    /connected page with a short-lived `tempToken`; this is one of the
+    Pages that token can manage. `page_id` is what we POST back as
+    `pageId` to finish the connection. The page-scoped `access_token`
+    Zernio returns is deliberately NOT kept here — we never store or
+    log platform tokens, and select-page only needs the pageId.
+    """
+
+    page_id: str
+    name: str
+    username: str | None = None
+    category: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ZernioPostResult:
     """Result of POST /posts.
 
@@ -256,6 +274,7 @@ class ZernioClient:
         *,
         profile_id: str,
         redirect_url: str | None = None,
+        headless: bool = False,
     ) -> ZernioConnectLink:
         """GET /connect/{platform}?profileId=... — mint the hosted
         OAuth URL the tenant visits to authorize one platform.
@@ -266,10 +285,17 @@ class ZernioClient:
         OAuth callback completes — point it at our own /connected page
         so the operator lands back on NexoClip instead of Zernio's
         dashboard (their white-label flow).
+        `headless=True` skips Zernio's own post-OAuth selection UI for
+        platforms that need one (Facebook page, Pinterest board, …):
+        the redirect carries the selection state (`tempToken` + co) and
+        WE render the selector, finishing via the platform-specific
+        select endpoint (e.g. `select_facebook_page`).
         """
         params: dict[str, Any] = {"profileId": profile_id}
         if redirect_url:
             params["redirect_url"] = redirect_url
+        if headless:
+            params["headless"] = "true"
         body = await self._request(
             "GET",
             f"/connect/{platform}",
@@ -330,6 +356,83 @@ class ZernioClient:
         non-2xx so the caller can surface it."""
         await self._request(
             "DELETE", f"/accounts/{account_id}", parse_json=False,
+        )
+
+    # ---- Headless connect: Facebook page selection ----
+    # Facebook OAuth grants a user token that can manage N pages; ONE
+    # page must be picked to finish the connection. With headless=true
+    # on connect_url, Zernio's redirect carries the selection state
+    # (profileId + tempToken + userProfile) instead of showing its own
+    # picker — these two calls let us render the picker in NexoClip.
+
+    async def list_facebook_pages(
+        self,
+        *,
+        profile_id: str,
+        temp_token: str,
+    ) -> list[ZernioFacebookPage]:
+        """GET /connect/facebook/select-page — pages the OAuth'd user
+        can manage. `temp_token` is the short-lived Facebook token from
+        the headless redirect; never log it."""
+        body = await self._request(
+            "GET",
+            "/connect/facebook/select-page",
+            params={"profileId": profile_id, "tempToken": temp_token},
+        )
+        rows = body.get("pages") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            raise ZernioError("select-page response missing pages", body=body)
+        out: list[ZernioFacebookPage] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            page_id = row.get("id")
+            name = row.get("name")
+            if not (isinstance(page_id, str) and page_id):
+                continue
+            username = row.get("username")
+            category = row.get("category")
+            out.append(
+                ZernioFacebookPage(
+                    page_id=page_id,
+                    name=str(name) if name else page_id,
+                    username=username if isinstance(username, str) else None,
+                    category=category if isinstance(category, str) else None,
+                )
+            )
+        return out
+
+    async def select_facebook_page(
+        self,
+        *,
+        profile_id: str,
+        page_id: str,
+        temp_token: str,
+        user_profile: dict[str, Any],
+    ) -> ZernioAccount:
+        """POST /connect/facebook/select-page — finish the headless
+        flow by saving the picked page. `user_profile` is the decoded
+        userProfile object from the OAuth redirect, passed through
+        verbatim (Zernio requires id/name/profilePicture)."""
+        body = await self._request(
+            "POST",
+            "/connect/facebook/select-page",
+            json={
+                "profileId": profile_id,
+                "pageId": page_id,
+                "tempToken": temp_token,
+                "userProfile": user_profile,
+            },
+        )
+        account = body.get("account") if isinstance(body, dict) else None
+        if not isinstance(account, dict):
+            raise ZernioError("select-page response missing account", body=body)
+        account_id = account.get("accountId") or account.get("_id") or account.get("id")
+        if not isinstance(account_id, str) or not account_id:
+            raise ZernioError("select-page response missing accountId", body=body)
+        return ZernioAccount(
+            platform=str(account.get("platform") or "facebook"),
+            account_id=account_id,
         )
 
     # ---- Publishing ----

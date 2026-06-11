@@ -747,8 +747,10 @@
         var body = await resp.json();
         if (!resp.ok) { throw new Error(body.detail || ("HTTP " + resp.status)); }
         var ok = (body.results || []).filter(function (r) { return r.ok; }).length;
-        alert(ok + " of " + pending.length + " queued. Reloading…");
-        window.location.reload();
+        alert(ok + " of " + pending.length + " published.");
+        // Land on the Published tab — the published clips left the
+        // ready-to-publish grid and their rows are waiting there.
+        window.location.href = "/dashboard/publish/zernio?tab=published";
       } catch (err) {
         alert("Bulk publish failed: " + err.message);
         bulkBtn.disabled = false;

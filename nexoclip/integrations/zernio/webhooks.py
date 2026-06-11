@@ -75,4 +75,73 @@ def parse_post_event(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["SIGNATURE_HEADER", "parse_post_event", "verify_zernio_signature"]
+# Display name of the hub's webhook on Zernio — the idempotency key
+# for register_zernio_webhook (one hub == one webhook config).
+WEBHOOK_NAME: Final = "NexoClip Hub"
+
+
+async def register_zernio_webhook(
+    client: Any,
+    *,
+    url: str,
+    secret: str,
+    events: list[str] | None = None,
+    name: str = WEBHOOK_NAME,
+) -> dict[str, Any]:
+    """Create-or-update the hub's webhook config on Zernio (idempotent).
+
+    Finds an existing webhook by name (or exact URL) and updates it in
+    place — also re-activating it if Zernio auto-disabled it after
+    consecutive delivery failures — otherwise creates it. Returns
+    {"action": "created"|"updated", "webhook_id": ..., "url": ...,
+    "events": [...]}.
+
+    `client` is a ZernioClient (typed as Any to keep this module free
+    of the client import cycle; it only needs list/create/update).
+    """
+    if events is None:
+        from .events import SUBSCRIBED_EVENTS
+
+        events = list(SUBSCRIBED_EVENTS)
+
+    existing = await client.list_webhooks()
+    match = None
+    for row in existing:
+        if row.get("name") == name or row.get("url") == url:
+            match = row
+            break
+
+    if match is not None:
+        webhook_id = str(match.get("_id") or match.get("id") or "")
+        await client.update_webhook(
+            webhook_id,
+            url=url,
+            secret=secret,
+            events=events,
+            is_active=True,
+        )
+        return {
+            "action": "updated",
+            "webhook_id": webhook_id,
+            "url": url,
+            "events": events,
+        }
+
+    created = await client.create_webhook(
+        name=name, url=url, secret=secret, events=events,
+    )
+    return {
+        "action": "created",
+        "webhook_id": str(created.get("_id") or created.get("id") or ""),
+        "url": url,
+        "events": events,
+    }
+
+
+__all__ = [
+    "SIGNATURE_HEADER",
+    "WEBHOOK_NAME",
+    "parse_post_event",
+    "register_zernio_webhook",
+    "verify_zernio_signature",
+]

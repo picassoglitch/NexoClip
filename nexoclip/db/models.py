@@ -353,12 +353,13 @@ class PublishJob(BaseModel):
 
 
 class ZernioPublishRow(BaseModel):
-    """One Zernio publish we fired (migration 030).
+    """One Zernio publish we fired (migration 030, status cols in 031).
 
     Local, tenant-scoped record of every POST /posts — Zernio's own
     GET /posts is company-key-wide, so per-tenant history MUST come
     from here. `post_id` is Zernio's post _id (the job handle the
-    /job/{post_id} page polls)."""
+    /job/{post_id} page polls). `status`/`platforms_json` are fed by
+    the post.* webhooks (NULL until the first event lands)."""
 
     model_config = ConfigDict(extra="forbid")
     post_id: str
@@ -367,6 +368,28 @@ class ZernioPublishRow(BaseModel):
     platforms: str  # csv of platform ids, e.g. "tiktok,instagram"
     content: str | None = None
     created_at: str
+    status: str | None = None  # Zernio vocab: scheduled/published/failed/…
+    platforms_json: str | None = None  # per-platform results, verbatim JSON
+    updated_at: str | None = None
+
+
+class ZernioEventRow(BaseModel):
+    """One inbound Zernio webhook event (migration 031).
+
+    `event_id` is Zernio's stable payload.id — the at-least-once dedup
+    key. `payload` is the raw JSON body verbatim (replay + later-phase
+    backfills read it). `tenant_id` is NULL until (or unless) the
+    background processor resolves the profileId/post id to a tenant."""
+
+    model_config = ConfigDict(extra="forbid")
+    event_id: str
+    type: str
+    payload: str
+    profile_id: str | None = None
+    tenant_id: str | None = None
+    received_at: str
+    processed: bool = False
+    processed_at: str | None = None
 
 
 class Event(BaseModel):

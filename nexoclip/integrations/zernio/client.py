@@ -358,6 +358,72 @@ class ZernioClient:
             "DELETE", f"/accounts/{account_id}", parse_json=False,
         )
 
+    # ---- Webhook settings ----
+    # Company-key-wide (NOT per profile): ONE webhook config receives
+    # every tenant's events; the receiver resolves the tenant per event
+    # from the payload's profileId / post id.
+
+    async def list_webhooks(self) -> list[dict[str, Any]]:
+        """GET /webhooks/settings — all configured webhooks (max 10)."""
+        body = await self._request("GET", "/webhooks/settings")
+        rows = body.get("webhooks") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            raise ZernioError("webhooks response missing webhooks", body=body)
+        return [r for r in rows if isinstance(r, dict)]
+
+    async def create_webhook(
+        self,
+        *,
+        name: str,
+        url: str,
+        secret: str,
+        events: list[str],
+    ) -> dict[str, Any]:
+        """POST /webhooks/settings — create one webhook subscription.
+
+        `secret` keys Zernio's HMAC-SHA256 X-Zernio-Signature on every
+        delivery. Zernio auto-disables a webhook after 10 consecutive
+        delivery failures — re-running registration re-activates it."""
+        body = await self._request(
+            "POST",
+            "/webhooks/settings",
+            json={
+                "name": name,
+                "url": url,
+                "secret": secret,
+                "events": events,
+                "isActive": True,
+            },
+        )
+        webhook = body.get("webhook") if isinstance(body, dict) else None
+        if not isinstance(webhook, dict):
+            raise ZernioError("create_webhook response missing webhook", body=body)
+        return webhook
+
+    async def update_webhook(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        secret: str | None = None,
+        events: list[str] | None = None,
+        is_active: bool | None = None,
+    ) -> dict[str, Any]:
+        """PUT /webhooks/settings — update one webhook by _id. Only the
+        provided fields change."""
+        payload: dict[str, Any] = {"_id": webhook_id}
+        if url is not None:
+            payload["url"] = url
+        if secret is not None:
+            payload["secret"] = secret
+        if events is not None:
+            payload["events"] = events
+        if is_active is not None:
+            payload["isActive"] = is_active
+        body = await self._request("PUT", "/webhooks/settings", json=payload)
+        webhook = body.get("webhook") if isinstance(body, dict) else None
+        return webhook if isinstance(webhook, dict) else {"_id": webhook_id}
+
     # ---- Headless connect: Facebook page selection ----
     # Facebook OAuth grants a user token that can manage N pages; ONE
     # page must be picked to finish the connection. With headless=true

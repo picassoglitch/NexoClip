@@ -226,6 +226,65 @@ def webhooks_send_cmd(
     asyncio.run(_run())
 
 
+@webhooks_app.command("register-zernio")
+def webhooks_register_zernio_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Create-or-update the hub's webhook config on Zernio (idempotent).
+
+    Points Zernio at {NEXOCLIP_PUBLIC_URL}/api/webhooks/zernio with the
+    hub's event list, keyed by NEXOCLIP_ZERNIO_WEBHOOK_SECRET. Re-run
+    after changing PUBLIC_URL or the secret — also re-activates a
+    webhook Zernio auto-disabled after delivery failures.
+    """
+    import json
+
+    from nexoclip.integrations.zernio import register_zernio_webhook
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+    secret = (settings.zernio_webhook_secret or "").strip()
+    if not secret:
+        typer.echo(
+            "error: NEXOCLIP_ZERNIO_WEBHOOK_SECRET is not configured "
+            "(the receiver refuses unverifiable events)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    public_url = (settings.public_url or "").rstrip("/")
+    if not public_url or public_url.startswith(("http://localhost", "http://127.")):
+        typer.echo(
+            f"error: NEXOCLIP_PUBLIC_URL ({public_url or 'unset'}) is not a "
+            "publicly reachable origin — Zernio could not deliver to it",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        client = ZernioClient(
+            api_key=settings.zernio_api_key or "",
+            base_url=settings.zernio_base_url,
+        )
+        result = await register_zernio_webhook(
+            client,
+            url=f"{public_url}/api/webhooks/zernio",
+            secret=secret,
+        )
+        if json_out:
+            typer.echo(json.dumps(result))
+        else:
+            typer.echo(
+                f"webhook {result['action']}: id={result['webhook_id']} "
+                f"url={result['url']} events={len(result['events'])}"
+            )
+
+    asyncio.run(_run())
+
+
 @app.callback()
 def _root(
     log_level: str | None = typer.Option(

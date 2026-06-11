@@ -29,6 +29,7 @@ EntityKind = Literal[
     "vsp",  # vod_speakers — per-VOD speaker resolution
     "brk",  # brand_kits (voice-markers spec slice C.1)
     "drv",  # drive_watches (voice-markers spec slice E.4)
+    "zev",  # zernio_events — inbound webhook rows missing payload.id (Hub phase 2)
 ]
 
 

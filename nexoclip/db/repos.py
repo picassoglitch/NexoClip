@@ -54,6 +54,7 @@ from .models import (
     VodSpeakerRow,
     WebhookSecretVersion,
     WebhookSubscription,
+    ZernioEventRow,
     ZernioPublishRow,
 )
 
@@ -388,6 +389,23 @@ class TenantsRepo:
         if t is None:
             raise NexoClipError(f"tenant not found: {tenant_id}")
         return t
+
+    async def find_by_zernio_profile(self, profile_id: str) -> Tenant | None:
+        """Tenant-FREE reverse lookup: Zernio profileId → tenant.
+
+        Inbound Zernio webhooks carry a profileId but no tenant (the
+        signature is the transport auth); this is the resolution step.
+        One profile maps to one tenant in our model — the claim flow
+        rejects binding a profileId to a second tenant."""
+        if not profile_id:
+            return None
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id FROM tenants WHERE zernio_profile_id = ?",
+            (profile_id,),
+        )
+        row = await cur.fetchone()
+        return await self.get(row["id"]) if row else None
 
     async def list_all(self) -> list[Tenant]:
         conn = await self._db.connect()
@@ -3408,7 +3426,8 @@ class ZernioPublishesRepo:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at "
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, platforms_json, updated_at "
             "FROM zernio_publishes WHERE tenant_id = ? "
             "ORDER BY created_at DESC LIMIT ?",
             (tenant_id, int(limit)),
@@ -3416,3 +3435,124 @@ class ZernioPublishesRepo:
         return [
             ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
         ]
+
+    async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
+        """Tenant-FREE lookup by Zernio post id.
+
+        Webhook deliveries are server-to-server (no bound tenant); the
+        post id is the join key that RESOLVES the tenant. Same
+        invocation pattern as the tenant-free stream helpers above —
+        callers must treat the returned row's tenant_id as the scope.
+        """
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, platforms_json, updated_at "
+            "FROM zernio_publishes WHERE post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return ZernioPublishRow.model_validate(dict(row)) if row else None
+
+    async def set_status(
+        self,
+        post_id: str,
+        *,
+        status: str,
+        platforms_json: str | None = None,
+    ) -> None:
+        """Tenant-FREE status update fed by post.* webhooks.
+
+        Keyed by the Zernio post id (PRIMARY KEY); a webhook for a post
+        we never recorded is a silent no-op (e.g. fired from Zernio's
+        dashboard directly, outside the hub)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_publishes SET status = ?, "
+            "platforms_json = COALESCE(?, platforms_json), updated_at = ? "
+            "WHERE post_id = ?",
+            (status, platforms_json, _now(), post_id),
+        )
+        await conn.commit()
+
+
+class ZernioEventsRepo:
+    """Inbound Zernio webhook event log (migration 031).
+
+    Deliveries are at-least-once; `insert_dedup` is the dedup point
+    (PRIMARY KEY on Zernio's stable event id). Rows keep the raw
+    payload verbatim so later phases (calendar, inbox) can backfill
+    their stores without re-asking Zernio. Tenant-free by design —
+    webhooks are a server-to-server boundary and tenant resolution is
+    exactly what the processor derives FROM these rows.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert_dedup(
+        self,
+        *,
+        event_id: str,
+        type: str,  # matches the column name
+        payload: str,
+        profile_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> bool:
+        """Insert one event; return False when event_id already exists
+        (a redelivery — the caller ACKs 200 without reprocessing)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_events "
+            "(event_id, type, payload, profile_id, tenant_id, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, type, payload, profile_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def get(self, event_id: str) -> ZernioEventRow | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT event_id, type, payload, profile_id, tenant_id, "
+            "received_at, processed, processed_at "
+            "FROM zernio_events WHERE event_id = ?",
+            (event_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["processed"] = bool(d.get("processed"))
+        return ZernioEventRow.model_validate(d)
+
+    async def mark_processed(
+        self, event_id: str, *, tenant_id: str | None = None
+    ) -> None:
+        """Flip processed; also persist the resolved tenant when the
+        processor figured one out (NULL stays NULL otherwise)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_events SET processed = 1, processed_at = ?, "
+            "tenant_id = COALESCE(?, tenant_id) WHERE event_id = ?",
+            (_now(), tenant_id, event_id),
+        )
+        await conn.commit()
+
+    async def list_unprocessed(self, limit: int = 100) -> list[ZernioEventRow]:
+        """Oldest-first backlog — lets a sweep retry events whose
+        background task died before mark_processed."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT event_id, type, payload, profile_id, tenant_id, "
+            "received_at, processed, processed_at "
+            "FROM zernio_events WHERE processed = 0 "
+            "ORDER BY received_at ASC LIMIT ?",
+            (int(limit),),
+        )
+        out: list[ZernioEventRow] = []
+        for row in await cur.fetchall():
+            d = dict(row)
+            d["processed"] = bool(d.get("processed"))
+            out.append(ZernioEventRow.model_validate(d))
+        return out

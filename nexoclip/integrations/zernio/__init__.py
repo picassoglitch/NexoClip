@@ -27,8 +27,13 @@ from .client import (
     ZernioPostStatus,
     ZernioProfile,
 )
+from .events import process_pending, process_zernio_event
 from .profiles import create_profile_for_tenant
-from .webhooks import parse_post_event, verify_zernio_signature
+from .webhooks import (
+    parse_post_event,
+    register_zernio_webhook,
+    verify_zernio_signature,
+)
 
 __all__ = [
     "ZernioAccount",
@@ -41,5 +46,8 @@ __all__ = [
     "ZernioProfile",
     "create_profile_for_tenant",
     "parse_post_event",
+    "process_pending",
+    "process_zernio_event",
+    "register_zernio_webhook",
     "verify_zernio_signature",
 ]

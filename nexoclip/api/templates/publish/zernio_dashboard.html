@@ -530,17 +530,24 @@
     {% if history %}
     <table class="nc-table">
       <thead>
-        <tr><th>When</th><th>Platforms</th><th>Status</th><th>Caption</th><th>Clip</th><th></th></tr>
+        <tr><th>When</th><th>Clip</th><th>Platforms</th><th>Status</th><th>Caption</th><th></th></tr>
       </thead>
       <tbody>
         {% for h in history %}
-        <tr class="nc-pc-history-row"
-            data-href="/dashboard/publish/zernio/job/{{ h.post_id }}">
+        {% set view_url = ("/dashboard/clips/" ~ h.clip_id) if h.kind == "manual" else ("/dashboard/publish/zernio/job/" ~ h.post_id) %}
+        <tr class="nc-pc-history-row" data-href="{{ view_url }}">
           <td><span class="nc-mono nc-mono--muted">{{ (h.created_at or "")[:19] }}</span></td>
+          <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
+          </td>
           <td>
-            {% for p in h.platforms %}
-            <span class="nc-chip nc-chip--code">{{ p }}</span>
-            {% endfor %}
+            {% if h.kind == "manual" %}
+            <span class="nc-chip nc-chip--muted" title="Marked as published by you — posted outside NexoClip or before history existed">manual</span>
+            {% else %}
+              {% for p in h.platforms %}
+              <span class="nc-chip nc-chip--code">{{ p }}</span>
+              {% endfor %}
+            {% endif %}
           </td>
           <td>
             {% set st = (h.status or "")|lower %}
@@ -548,14 +555,13 @@
               {{ h.status }}
             </span>
           </td>
-          <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.content or "—" }}</td>
-          <td><span class="nc-mono nc-mono--muted">{{ (h.clip_id or "")[:14] }}…</span></td>
+          <td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.content or "—" }}</td>
           <td style="text-align:right;">
-            <a href="/dashboard/publish/zernio/job/{{ h.post_id }}"
+            <a href="{{ view_url }}"
                class="nc-btn" style="padding: 3px 10px; font-size: 12px; text-decoration:none;"
                onclick="event.stopPropagation();">
               <i class="ti ti-eye" aria-hidden="true"></i>
-              <span>View</span>
+              <span>{{ "Open clip" if h.kind == "manual" else "View" }}</span>
             </a>
           </td>
         </tr>

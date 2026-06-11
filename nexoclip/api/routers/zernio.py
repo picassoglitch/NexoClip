@@ -449,7 +449,9 @@ async def zernio_dashboard(
     # Per-tenant publish history comes from OUR table (migration 030) —
     # Zernio's GET /posts is company-key-wide and must never be rendered
     # unfiltered (every tenant would see every other tenant's posts).
-    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=25)
+    # limit=100 (not 25) so the membership set below doesn't miss older
+    # rows and wrongly re-list their clips as "marked manually".
+    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=100)
 
     accounts: list[ZernioAccount] = []
     status_by_post: dict[str, dict[str, Any]] = {}
@@ -486,24 +488,66 @@ async def zernio_dashboard(
 
     connected_set = _connected_platforms(accounts)
 
+    # Published clips — for clip titles on history rows, and to surface
+    # clips that are status='published' but have NO publish record
+    # (flipped via Mark-published before rows were written for it, or
+    # published before migration 030 existed). Those still belong on
+    # the Published tab.
+    published_clips: list[Any] = []
+    with contextlib.suppress(Exception):  # display is best-effort
+        published_clips = await ClipsRepo(db).list_for_tenant_with_status(
+            ["published"], limit=100,
+        )
+    title_by_clip = {c.id: _clip_display_title(c) for c in published_clips}
+
     # Join local rows with live status (only the tenant's own posts).
+    # Two kinds: "zernio" (a real post — View opens the job page) and
+    # "manual" (marked published by the operator; post_id is synthetic
+    # `manual_<clip_id>` — View opens the clip page).
     history: list[dict[str, Any]] = []
     for row in publishes:
+        manual = row.post_id.startswith("manual_")
         live = status_by_post.get(row.post_id, {})
         history.append(
             {
                 "post_id": row.post_id,
+                "kind": "manual" if manual else "zernio",
                 "clip_id": row.clip_id,
+                "title": title_by_clip.get(row.clip_id),
                 "platforms": [p for p in row.platforms.split(",") if p],
                 "content": row.content,
                 "created_at": row.created_at,
-                "status": str(live.get("status") or "queued"),
+                "status": (
+                    "published" if manual
+                    else str(live.get("status") or "queued")
+                ),
             }
         )
+    # Fallback entries: published clips with no record at all (clips
+    # marked before mark-published wrote rows). Timestamp is the clip's
+    # creation time — the actual publish moment was never recorded.
+    recorded_clip_ids = {row.clip_id for row in publishes}
+    for c in published_clips:
+        if c.id in recorded_clip_ids:
+            continue
+        history.append(
+            {
+                "post_id": f"manual_{c.id}",
+                "kind": "manual",
+                "clip_id": c.id,
+                "title": title_by_clip.get(c.id),
+                "platforms": [],
+                "content": None,
+                "created_at": c.created_at,
+                "status": "published",
+            }
+        )
+    history.sort(key=lambda h: str(h.get("created_at") or ""), reverse=True)
+    history = history[:25]
 
     # Publishable clips for both tabs — APPROVED only: a clip flips to
     # 'published' on its first successful publish and leaves this grid
-    # (it stays visible in History below). Decorate each with
+    # (it stays visible on the Published tab). Decorate each with
     # display_title + thumbnail URL so the template stays dumb.
     raw_clips: list[Any] = []
     with contextlib.suppress(Exception):  # display is best-effort
@@ -1226,7 +1270,8 @@ async def zernio_mark_published(
     For clips that already went out — either published before NexoClip
     started recording publishes locally (pre-migration-030), or posted
     manually outside NexoClip. Local state only; nothing is sent to
-    Zernio and no history row is created (we have no post id to record).
+    Zernio. Records a synthetic `manual_<clip_id>` history row so the
+    clip shows on the Published tab with the time it was marked.
     """
     repo = ClipsRepo(db)
     clip = await repo.get(clip_id)
@@ -1238,8 +1283,17 @@ async def zernio_mark_published(
             detail=f"clip is {clip.status!r}, not 'approved'",
         )
     await repo.update_status(clip_id, status="published")
+    await ZernioPublishesRepo(db).record(
+        post_id=f"manual_{clip_id}",
+        tenant_id=tenant_id,
+        clip_id=clip_id,
+        platforms=[],
+        content=None,
+    )
     _log.info("zernio.mark_published tenant=%s clip=%s", tenant_id, clip_id)
-    return RedirectResponse(url="/dashboard/publish/zernio", status_code=303)
+    return RedirectResponse(
+        url="/dashboard/publish/zernio?tab=published", status_code=303,
+    )
 
 
 @router.post("/post/{clip_id}")

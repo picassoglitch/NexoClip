@@ -3402,15 +3402,23 @@ class ZernioPublishesRepo:
         clip_id: str,
         platforms: list[str],
         content: str | None,
+        status: str | None = None,
+        options_json: str | None = None,
     ) -> None:
         """Persist one fired publish. Idempotent on post_id — the
         duplicate-resolved path (Zernio 409 → existing post) records
-        the same post id again and must not error."""
+        the same post id again and must not error.
+
+        `status` seeds the row state at create time (drafts record as
+        'draft' so the Borradores panel sees them before any webhook
+        lands); `options_json` snapshots the per-platform extras for
+        the draft re-publish path (migration 033)."""
         conn = await self._db.connect()
         await conn.execute(
             "INSERT OR IGNORE INTO zernio_publishes "
-            "(post_id, tenant_id, clip_id, platforms, content, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, options_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 post_id,
                 tenant_id,
@@ -3418,20 +3426,30 @@ class ZernioPublishesRepo:
                 ",".join(platforms),
                 content or None,
                 _now(),
+                status,
+                options_json,
             ),
         )
         await conn.commit()
 
-    async def list_for_tenant(self, limit: int = 25) -> list[ZernioPublishRow]:
-        """Newest-first publish history for the bound tenant."""
+    async def list_for_tenant(
+        self, limit: int = 25, *, status: str | None = None
+    ) -> list[ZernioPublishRow]:
+        """Newest-first publish history for the bound tenant; `status`
+        narrows to one state (e.g. 'draft' for the Borradores panel)."""
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
+        where = "tenant_id = ?"
+        params: list[object] = [tenant_id]
+        if status is not None:
+            where += " AND status = ?"
+            params.append(status)
         cur = await conn.execute(
             "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
-            "status, platforms_json, updated_at "
-            "FROM zernio_publishes WHERE tenant_id = ? "
+            "status, platforms_json, updated_at, options_json "
+            f"FROM zernio_publishes WHERE {where} "  # fixed fragments, params bound
             "ORDER BY created_at DESC LIMIT ?",
-            (tenant_id, int(limit)),
+            (*params, int(limit)),
         )
         return [
             ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
@@ -3448,7 +3466,7 @@ class ZernioPublishesRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
-            "status, platforms_json, updated_at "
+            "status, platforms_json, updated_at, options_json "
             "FROM zernio_publishes WHERE post_id = ?",
             (post_id,),
         )

@@ -371,6 +371,7 @@ class ZernioPublishRow(BaseModel):
     status: str | None = None  # Zernio vocab: scheduled/published/failed/…
     platforms_json: str | None = None  # per-platform results, verbatim JSON
     updated_at: str | None = None
+    options_json: str | None = None  # publish-extras snapshot (migration 033)
 
 
 class HubPublishJobRow(BaseModel):

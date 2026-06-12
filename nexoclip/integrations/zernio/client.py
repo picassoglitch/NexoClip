@@ -641,6 +641,14 @@ class ZernioClient:
             platforms=post.get("platforms"),
         )
 
+    async def delete_post(self, post_id: str) -> None:
+        """DELETE /posts/{id} — delete a draft or scheduled post.
+
+        Published posts can't be deleted this way (Zernio 400s; their
+        Unpublish endpoint is the path for those). Upload quota is
+        refunded by Zernio automatically."""
+        await self._request("DELETE", f"/posts/{post_id}", parse_json=False)
+
     async def list_posts(
         self, *, page: int = 1, limit: int = 25,
     ) -> dict[str, Any]:

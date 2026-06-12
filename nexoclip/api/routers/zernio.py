@@ -42,6 +42,7 @@ from nexoclip.integrations.zernio import (
     ZernioError,
     create_profile_for_tenant,
 )
+from nexoclip.publish.hub import PublishOptions, build_per_platform_payload
 from nexoclip.settings import get_settings
 
 from ..deps import get_db, require_full_scope, tenant_binder
@@ -251,6 +252,11 @@ async def _publish_clip(
     clip_id: str,
     platforms: list[str],
     content: str,
+    title: str | None = None,
+    mode: str = "now",
+    scheduled_for: str | None = None,
+    options: PublishOptions | None = None,
+    tiktok_privacy: str | None = None,
 ) -> str:
     """Shared publish core for the single + bulk paths.
 
@@ -259,6 +265,12 @@ async def _publish_clip(
     post_id. Raises HTTPException with an operator-readable message on
     every failure mode (unknown clip, unconnected platform, missing
     signing secret, Zernio error).
+
+    Phase-4 power-ups: `mode` is now|draft|schedule (draft → isDraft,
+    schedule → scheduledFor); `options` carries per-platform caption
+    overrides + first comment (built into customContent /
+    platformSpecificData via the SAME helper the internal API uses);
+    `tiktok_privacy` must be a creator-info value when set.
     """
     repo = ClipsRepo(db)
     clip = await repo.get(clip_id)
@@ -372,14 +384,25 @@ async def _publish_clip(
         ) from e
 
     tiktok = _tiktok_settings() if any(p.lower() == "tiktok" for p, _ in targets) else None
+    platform_keys = [p.lower() for p, _ in targets]
+    opts = options or PublishOptions()
+    custom_content, platform_data = build_per_platform_payload(
+        opts, platform_keys, title=title, tiktok_privacy=tiktok_privacy,
+    )
     try:
         result = await client.create_post(
             profile_id=profile_id,
             content=content,
             media_url=media_url,
             platforms=targets,
-            publish_now=True,
+            publish_now=(mode == "now"),
+            title=title,
+            is_draft=(mode == "draft"),
+            scheduled_for=scheduled_for if mode == "schedule" else None,
+            timezone="UTC" if (mode == "schedule" and scheduled_for) else None,
             tiktok_settings=tiktok,
+            custom_content=custom_content,
+            platform_specific_data=platform_data,
         )
     except ZernioError as e:
         # Zernio 409s when the EXACT same content already posted (or is
@@ -402,17 +425,37 @@ async def _publish_clip(
     # Record the publish locally — this table IS the tenant's publish
     # history (Zernio's GET /posts is company-key-wide; migration 030).
     # Idempotent on post_id, so the duplicate-resolved path is safe.
+    # Drafts seed status='draft' (the Borradores panel reads it) and
+    # snapshot the per-platform extras so re-publish rebuilds the
+    # exact payload after the signed URL expires.
+    import json as _json
+
+    options_json = None
+    if opts.per_platform_captions or opts.first_comment or tiktok_privacy or title:
+        options_json = _json.dumps(
+            {
+                "title": title,
+                "per_platform_captions": opts.per_platform_captions,
+                "first_comment": opts.first_comment,
+                "tiktok_privacy": tiktok_privacy,
+            }
+        )
     await ZernioPublishesRepo(db).record(
         post_id=post_id,
         tenant_id=tenant_id,
         clip_id=clip_id,
         platforms=[p for p, _ in targets],
         content=content,
+        status="draft" if mode == "draft" else (
+            "scheduled" if mode == "schedule" else None
+        ),
+        options_json=options_json,
     )
     # Flip the clip out of the "ready to publish" grid. Best-effort —
     # the publish already happened; a status-write hiccup must not fail
-    # the request.
-    if clip.status == "approved":
+    # the request. Drafts stay approved: the clip isn't out the door
+    # yet, and the Borradores panel is its new home.
+    if clip.status == "approved" and mode != "draft":
         try:
             await repo.update_status(clip_id, status="published")
         except Exception:
@@ -506,6 +549,10 @@ async def zernio_dashboard(
     # `manual_<clip_id>` — View opens the clip page).
     history: list[dict[str, Any]] = []
     for row in publishes:
+        # Drafts live in their own Borradores panel; deleted rows are
+        # tombstones (replaced/removed drafts) — neither is history.
+        if row.status in ("draft", "deleted"):
+            continue
         manual = row.post_id.startswith("manual_")
         live = status_by_post.get(row.post_id, {})
         history.append(
@@ -601,6 +648,9 @@ async def zernio_dashboard(
             "publishable_clips": publishable,
             "supported_platforms": _SUPPORTED_PLATFORMS,
             "stats": stats,
+            # Borradores — local rows seeded status='draft' at save time
+            # (publishes already tenant-filtered; limit=100 above).
+            "drafts": [p for p in publishes if p.status == "draft"],
         },
     )
 
@@ -1303,6 +1353,10 @@ async def zernio_post_clip(
     platforms_csv: str = Form(..., alias="platforms"),
     title: str = Form(""),
     description: str = Form(""),
+    mode: str = Form("now"),
+    scheduled_for: str = Form(""),
+    first_comment: str = Form(""),
+    tiktok_privacy: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     _: None = Depends(require_full_scope),
     _t: None = Depends(require_paid_tier),
@@ -1317,10 +1371,54 @@ async def zernio_post_clip(
     (1h TTL); Zernio downloads from there, re-hosts, and publishes to
     each requested account. The page's feed polls
     /status/{post_id}.json for completion.
+
+    Phase-4 fields: `mode` (now|draft|schedule + `scheduled_for`),
+    `first_comment` (only sent to platforms that support it),
+    `tiktok_privacy`, and collapsed per-platform caption overrides as
+    `caption_{platform}` form keys (+ `yt_title` for YouTube's
+    required title).
     """
     platforms = [p.strip() for p in platforms_csv.split(",") if p.strip()]
     if not platforms:
         raise HTTPException(status_code=400, detail="No platforms selected.")
+    mode = (mode or "now").strip().lower()
+    if mode not in ("now", "draft", "schedule"):
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {mode!r}")
+    scheduled_for = (scheduled_for or "").strip()
+    if mode == "schedule" and not scheduled_for:
+        raise HTTPException(
+            status_code=400,
+            detail="Programar necesita fecha y hora (scheduled_for).",
+        )
+
+    # Collapsed per-platform caption overrides ride as caption_{key}
+    # form fields; YouTube's title has its own field.
+    form = await request.form()
+    per_platform: dict[str, Any] = {}
+    for key in _SUPPORTED_PLATFORM_IDS:
+        override = str(form.get(f"caption_{key}") or "").strip()
+        if override:
+            per_platform[key] = override
+    yt_title = str(form.get("yt_title") or "").strip()
+    if yt_title:
+        entry = per_platform.get("youtube")
+        per_platform["youtube"] = (
+            {"caption": entry, "title": yt_title}
+            if isinstance(entry, str)
+            else {"title": yt_title}
+        )
+
+    # YouTube requires a video title — fail BEFORE rendering/minting,
+    # with a message the operator can act on.
+    effective_yt_title = yt_title or (title or "").strip()
+    if "youtube" in (p.lower() for p in platforms) and not effective_yt_title:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "YouTube necesita un título — completa el campo Title "
+                "o el título de YouTube en las opciones por plataforma."
+            ),
+        )
 
     profile_id = await _require_profile(db, tenant_id)
     client = _build_client()
@@ -1350,6 +1448,14 @@ async def zernio_post_clip(
             clip_id=clip_id,
             platforms=platforms,
             content=content,
+            title=(title or "").strip() or None,
+            mode=mode,
+            scheduled_for=scheduled_for or None,
+            options=PublishOptions(
+                per_platform_captions=per_platform,
+                first_comment=(first_comment or "").strip() or None,
+            ),
+            tiktok_privacy=(tiktok_privacy or "").strip() or None,
         )
     except HTTPException:
         raise
@@ -1377,13 +1483,155 @@ async def zernio_post_clip(
         ) from e
 
     _log.info(
-        "zernio.post.queued tenant=%s clip=%s post_id=%s platforms=%s",
-        tenant_id, clip_id, post_id, platforms,
+        "zernio.post.queued tenant=%s clip=%s post_id=%s platforms=%s mode=%s",
+        tenant_id, clip_id, post_id, platforms, mode,
     )
+    if mode == "draft":
+        return RedirectResponse(
+            url="/dashboard/publish/zernio?draft=saved", status_code=303,
+        )
     return RedirectResponse(
         url=f"/dashboard/publish/zernio?queued={post_id}",
         status_code=303,
     )
+
+
+# ---------- Drafts (Borradores) ----------
+# "Guardar como borrador" is also the agency client-approval workflow:
+# the operator stages posts, the client reviews, then Publicar ahora /
+# Programar fires them — or delete kills them. Drafts live on Zernio
+# (isDraft) AND in zernio_publishes (status='draft', with the options
+# snapshot that re-publish needs once the original signed URL expires).
+
+
+def _parse_draft_options(row: Any) -> tuple[str | None, PublishOptions, str | None]:
+    """(title, options, tiktok_privacy) from a draft row's snapshot."""
+    import json as _json
+
+    title: str | None = None
+    options = PublishOptions()
+    tiktok_privacy: str | None = None
+    if row.options_json:
+        try:
+            data = _json.loads(row.options_json)
+        except ValueError:
+            data = {}
+        if isinstance(data, dict):
+            title = data.get("title") or None
+            captions = data.get("per_platform_captions")
+            options = PublishOptions(
+                per_platform_captions=captions if isinstance(captions, dict) else {},
+                first_comment=data.get("first_comment") or None,
+            )
+            tiktok_privacy = data.get("tiktok_privacy") or None
+    return title, options, tiktok_privacy
+
+
+async def _require_draft(
+    db: Database, tenant_id: str, post_id: str
+) -> Any:
+    """Load a draft row, enforcing tenant ownership + draft state."""
+    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+    if row is None or row.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="draft not found")
+    if row.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=f"post {post_id} is not a draft (status={row.status}).",
+        )
+    return row
+
+
+@router.post("/draft/{post_id}/publish")
+async def zernio_draft_publish(
+    request: Request,
+    post_id: str,
+    scheduled_for: str = Form(""),
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Publicar ahora / Programar a saved draft.
+
+    Zernio has no publish-a-draft endpoint (POST /posts/{id}/edit is
+    X-only post-publication editing), so the hub re-creates the post
+    from the LOCAL snapshot — fresh signed media URL, same captions /
+    first comment / privacy — then deletes the Zernio-side draft.
+    `scheduled_for` empty = ahora; set = programar.
+    """
+    row = await _require_draft(db, tenant_id, post_id)
+    scheduled_for = (scheduled_for or "").strip()
+    title, options, tiktok_privacy = _parse_draft_options(row)
+
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        account_map = _account_map(
+            await client.list_accounts(profile_id=profile_id),
+        )
+    except ZernioError as e:
+        raise HTTPException(
+            status_code=502, detail=f"Zernio setup failed: {e}",
+        ) from e
+
+    new_post_id = await _publish_clip(
+        client=client,
+        db=db,
+        request=request,
+        tenant_id=tenant_id,
+        profile_id=profile_id,
+        account_map=account_map,
+        clip_id=row.clip_id,
+        platforms=[p for p in row.platforms.split(",") if p],
+        content=row.content or "",
+        title=title,
+        mode="schedule" if scheduled_for else "now",
+        scheduled_for=scheduled_for or None,
+        options=options,
+        tiktok_privacy=tiktok_privacy,
+    )
+    # The Zernio-side draft is now redundant — delete it (best-effort;
+    # an orphaned draft on Zernio is cosmetic, the local row rules).
+    try:
+        await client.delete_post(post_id)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.draft.cleanup_failed tenant=%s post=%s err=%s",
+            tenant_id, post_id, e,
+        )
+    await ZernioPublishesRepo(db).set_status(post_id, status="deleted")
+    _log.info(
+        "zernio.draft.published tenant=%s draft=%s new_post=%s scheduled=%s",
+        tenant_id, post_id, new_post_id, bool(scheduled_for),
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish/zernio?queued={new_post_id}", status_code=303,
+    )
+
+
+@router.post("/draft/{post_id}/delete")
+async def zernio_draft_delete(
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Delete a draft on Zernio + mark the local row deleted."""
+    await _require_draft(db, tenant_id, post_id)
+    client = _build_client()
+    try:
+        await client.delete_post(post_id)
+    except ZernioError as e:
+        # 404 = already gone on Zernio's side; anything else still
+        # removes it locally (the operator asked it gone).
+        _log.warning(
+            "zernio.draft.delete_remote_failed tenant=%s post=%s err=%s",
+            tenant_id, post_id, e,
+        )
+    await ZernioPublishesRepo(db).set_status(post_id, status="deleted")
+    return RedirectResponse(url="/dashboard/publish/zernio", status_code=303)
 
 
 @router.post("/bulk-post")
@@ -1547,6 +1795,8 @@ async def zernio_feed(
             ),
         }
         for row in publishes
+        # Drafts have their own panel; deleted rows are tombstones.
+        if row.status not in ("draft", "deleted")
     ]
     return JSONResponse({"history": history, "configured": True, "connected": True})
 

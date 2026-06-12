@@ -178,6 +178,15 @@
 </a>
 {% endif %}
 
+{% if request.query_params.get('draft') == 'saved' %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-file-pencil" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Borrador guardado — lo encuentras abajo en <strong>Borradores</strong> para publicarlo o programarlo.
+  </div>
+</div>
+{% endif %}
+
 {% if request.query_params.get('claimed') %}
 <div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
@@ -449,15 +458,66 @@
                   placeholder="Optional — the caption sent to every selected platform"></textarea>
       </label>
 
-      <div style="display: flex; gap: 8px; margin-top: 12px;">
-        <button type="submit" class="nc-btn nc-btn--primary">
+      <label class="nc-label">
+        Primer comentario <span class="nc-text--muted">(opcional — solo Facebook / Instagram / LinkedIn / YouTube)</span>
+        <input class="nc-input" name="first_comment" maxlength="500"
+               placeholder="Primer comentario — ej. link a tu canal de Kick">
+      </label>
+
+      {# Collapsed per-platform overrides: customContent per target +
+         YouTube's required title + TikTok privacy. Server reads
+         caption_{platform} / yt_title / tiktok_privacy form keys. #}
+      <details style="margin-top: 10px;">
+        <summary class="nc-text--muted" style="cursor: pointer; font-size: 13px;">
+          <i class="ti ti-adjustments" aria-hidden="true"></i>
+          Captions por plataforma (opcional)
+        </summary>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-left: 8px;">
+          <label class="nc-label" data-yt-only style="margin: 0;">
+            Título de YouTube <span class="nc-text--muted">(obligatorio si publicas a YouTube y no hay Title)</span>
+            <input class="nc-input" name="yt_title" maxlength="100"
+                   placeholder="Título del video en YouTube">
+          </label>
+          <label class="nc-label" data-tiktok-only style="margin: 0;">
+            Privacidad de TikTok
+            <select class="nc-input" name="tiktok_privacy">
+              <option value="">Por defecto (público)</option>
+              <option value="PUBLIC_TO_EVERYONE">Público</option>
+              <option value="MUTUAL_FOLLOW_FRIENDS">Amigos (follow mutuo)</option>
+              <option value="FOLLOWER_OF_CREATOR">Solo seguidores</option>
+              <option value="SELF_ONLY">Solo yo</option>
+            </select>
+          </label>
+          {% for key, label, icon in supported_platforms %}
+          <label class="nc-label" style="margin: 0;">
+            <span><i class="ti {{ icon }}" aria-hidden="true"></i> Caption {{ label }}</span>
+            <textarea class="nc-input" name="caption_{{ key }}" rows="2"
+                      placeholder="Override solo para {{ label }} — vacío usa la caption general"></textarea>
+          </label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <input type="hidden" name="mode" id="zn-mode" value="now">
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center;">
+        <button type="submit" class="nc-btn nc-btn--primary" data-mode="now">
           <i class="ti ti-send" aria-hidden="true"></i>
           <span>Publish to <span id="zn-platform-count">0</span> platform(s)</span>
         </button>
-        <button type="button" class="nc-btn" disabled title="Coming soon">
-          <i class="ti ti-calendar-event" aria-hidden="true"></i>
-          <span>Schedule</span>
+        <button type="submit" class="nc-btn" data-mode="draft"
+                title="Guarda en Borradores para revisar o aprobar después">
+          <i class="ti ti-file-pencil" aria-hidden="true"></i>
+          <span>Guardar como borrador</span>
         </button>
+        <span style="display: inline-flex; gap: 6px; align-items: center;">
+          <input class="nc-input" type="datetime-local" name="scheduled_for"
+                 id="zn-schedule-at" style="width: auto; padding: 6px 8px;">
+          <button type="submit" class="nc-btn" data-mode="schedule"
+                  title="Programa la publicación para la fecha elegida (UTC)">
+            <i class="ti ti-calendar-event" aria-hidden="true"></i>
+            <span>Programar</span>
+          </button>
+        </span>
       </div>
     </form>
   </div>
@@ -514,6 +574,66 @@
     </div>
   </div>
   {% endif %}
+</div>
+{% endif %}
+
+{# ========== Borradores — drafts saved via "Guardar como borrador".
+   Local zernio_publishes rows with status='draft'; also the agency
+   client-approval flow: stage → review → Publicar ahora / Programar. #}
+{% if drafts %}
+<div class="nc-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-file-pencil" aria-hidden="true"></i>
+    Borradores ({{ drafts|length }})
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table" style="margin: 0;">
+      <thead>
+        <tr><th>Caption</th><th>Plataformas</th><th>Creado</th><th style="width: 1%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for d in drafts %}
+        <tr>
+          <td style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              title="{{ d.content or '' }}">
+            {{ (d.content or '(sin caption)')[:80] }}
+          </td>
+          <td><span class="nc-chip nc-chip--code">{{ d.platforms }}</span></td>
+          <td class="nc-text--muted" style="font-size: 12px;">{{ d.created_at[:16] }}</td>
+          <td>
+            <div style="display: flex; gap: 6px; align-items: center; white-space: nowrap;">
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/publish"
+                    style="margin: 0; display: inline;">
+                <button type="submit" class="nc-btn nc-btn--primary" style="padding: 4px 10px; font-size: 12px;"
+                        title="Publicar este borrador ahora mismo">
+                  <i class="ti ti-send" aria-hidden="true"></i> Publicar ahora
+                </button>
+              </form>
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/publish"
+                    style="margin: 0; display: inline-flex; gap: 4px; align-items: center;"
+                    onsubmit="var i=this.querySelector('[type=datetime-local]'); if(!i.value){alert('Elige fecha y hora.');return false;} var h=document.createElement('input'); h.type='hidden'; h.name='scheduled_for'; h.value=new Date(i.value).toISOString(); i.removeAttribute('name'); this.appendChild(h); return true;">
+                <input class="nc-input" type="datetime-local" name="scheduled_for"
+                       style="width: auto; padding: 3px 6px; font-size: 12px;">
+                <button type="submit" class="nc-btn" style="padding: 4px 10px; font-size: 12px;"
+                        title="Programar este borrador">
+                  <i class="ti ti-calendar-event" aria-hidden="true"></i> Programar
+                </button>
+              </form>
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/delete"
+                    style="margin: 0; display: inline;"
+                    onsubmit="return confirm('¿Eliminar este borrador? No se puede deshacer.');">
+                <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;"
+                        title="Eliminar borrador">
+                  <i class="ti ti-trash" aria-hidden="true"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 
@@ -682,6 +802,14 @@
     });
   }
   if (form) {
+    // Three submit buttons share the form; each stamps its mode
+    // (now / draft / schedule) into the hidden input before submit.
+    var modeInput = document.getElementById("zn-mode");
+    form.querySelectorAll("button[data-mode]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (modeInput) { modeInput.value = btn.getAttribute("data-mode"); }
+      });
+    });
     form.addEventListener("submit", function (e) {
       var selected = singleChips
         ? Array.from(singleChips.querySelectorAll(".is-selected"))
@@ -689,6 +817,33 @@
         : [];
       if (!selected.length) { e.preventDefault(); alert("Pick at least one platform."); return; }
       if (!form.action) { e.preventDefault(); alert("Pick a clip first."); return; }
+      var mode = modeInput ? modeInput.value : "now";
+      var schedAt = document.getElementById("zn-schedule-at");
+      if (mode === "schedule") {
+        if (!schedAt || !schedAt.value) {
+          e.preventDefault();
+          alert("Elige fecha y hora para programar.");
+          return;
+        }
+        // datetime-local is the operator's LOCAL time; ship the UTC
+        // instant so Zernio schedules the moment they actually meant.
+        var iso = new Date(schedAt.value).toISOString();
+        var hiddenSched = document.createElement("input");
+        hiddenSched.type = "hidden"; hiddenSched.name = "scheduled_for";
+        hiddenSched.value = iso;
+        schedAt.removeAttribute("name");  // the hidden ISO field wins
+        form.appendChild(hiddenSched);
+      }
+      // YouTube needs a title — catch it before the round-trip.
+      if (selected.indexOf("youtube") !== -1) {
+        var t = (form.querySelector('[name="title"]') || {}).value || "";
+        var yt = (form.querySelector('[name="yt_title"]') || {}).value || "";
+        if (!t.trim() && !yt.trim()) {
+          e.preventDefault();
+          alert("YouTube necesita un título — completa Title o el título de YouTube.");
+          return;
+        }
+      }
       var hidden = document.createElement("input");
       hidden.type = "hidden"; hidden.name = "platforms";
       hidden.value = selected.join(",");

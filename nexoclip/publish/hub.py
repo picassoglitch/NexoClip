@@ -315,6 +315,9 @@ async def hub_publish(
         idempotency_key=idempotency_key,
     )
 
+    custom_content, platform_data = build_per_platform_payload(
+        options, platform_keys, title=title,
+    )
     try:
         result = await client.create_post(
             profile_id=profile_id,
@@ -327,10 +330,8 @@ async def hub_publish(
             scheduled_for=effective_scheduled,
             timezone="UTC" if effective_scheduled else None,
             tiktok_settings=_tiktok_defaults() if "tiktok" in platform_keys else None,
-            custom_content=_custom_content(options, platform_keys),
-            platform_specific_data=_platform_data(
-                options, platform_keys, title=title,
-            ),
+            custom_content=custom_content,
+            platform_specific_data=platform_data,
         )
     except ZernioError as e:
         mapped = _map_zernio_error(e, during="create_post")
@@ -480,45 +481,46 @@ def _pending_platforms(targets_csv: str) -> list[dict[str, str]]:
     ]
 
 
-def _custom_content(
-    options: PublishOptions, platforms: list[str]
-) -> dict[str, str] | None:
-    """per_platform_captions → customContent overrides. A string value
-    is the caption; a dict uses its "caption" key (the "title" key
-    rides via platformSpecificData where the platform has one)."""
-    out: dict[str, str] = {}
+def build_per_platform_payload(
+    options: PublishOptions,
+    platforms: list[str],
+    *,
+    title: str | None,
+    tiktok_privacy: str | None = None,
+) -> tuple[dict[str, str] | None, dict[str, dict[str, Any]] | None]:
+    """The ONE builder for per-target createPost extras — shared by the
+    internal API and the dashboard publish path so the payload matrix
+    has a single source of truth. Returns (customContent overrides,
+    platformSpecificData per target).
+
+    per_platform_captions values: a string is the caption override; a
+    dict uses its "caption" key, and its "title" key rides via
+    platformSpecificData (YouTube). firstComment lands ONLY on
+    platforms whose spec supports it (silently skipped elsewhere).
+    tiktok_privacy must be a value from TikTok's creator-info options.
+    """
+    content: dict[str, str] = {}
+    data: dict[str, dict[str, Any]] = {}
     for p, v in options.per_platform_captions.items():
         key = p.strip().lower()
         if key not in platforms:
             continue
         if isinstance(v, str) and v:
-            out[key] = v
-        elif isinstance(v, dict) and isinstance(v.get("caption"), str):
-            out[key] = v["caption"]
-    return out or None
-
-
-def _platform_data(
-    options: PublishOptions,
-    platforms: list[str],
-    *,
-    title: str | None,
-) -> dict[str, dict[str, Any]] | None:
-    """Build per-target platformSpecificData: per-platform title
-    overrides (YouTube) + firstComment where the spec supports it
-    (silently skipped elsewhere)."""
-    out: dict[str, dict[str, Any]] = {}
-    for p, v in options.per_platform_captions.items():
-        key = p.strip().lower()
-        if key in platforms and isinstance(v, dict) and isinstance(v.get("title"), str):
-            out.setdefault(key, {})["title"] = v["title"]
-    if "youtube" in platforms and title and "youtube" not in out:
-        out.setdefault("youtube", {})["title"] = title
+            content[key] = v
+        elif isinstance(v, dict):
+            if isinstance(v.get("caption"), str) and v["caption"]:
+                content[key] = v["caption"]
+            if isinstance(v.get("title"), str) and v["title"]:
+                data.setdefault(key, {})["title"] = v["title"]
+    if "youtube" in platforms and title and "title" not in data.get("youtube", {}):
+        data.setdefault("youtube", {})["title"] = title
     if options.first_comment:
         for p in platforms:
             if p in FIRST_COMMENT_PLATFORMS:
-                out.setdefault(p, {})["firstComment"] = options.first_comment
-    return out or None
+                data.setdefault(p, {})["firstComment"] = options.first_comment
+    if tiktok_privacy and "tiktok" in platforms:
+        data.setdefault("tiktok", {})["privacyLevel"] = tiktok_privacy
+    return content or None, data or None
 
 
 def _next_fallback_hour(now: _dt.datetime) -> _dt.datetime:

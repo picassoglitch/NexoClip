@@ -1154,6 +1154,213 @@ async def zernio_accounts_panel(
     )
 
 
+# ---------- Programación (recurring queue slots + upcoming + best time) ----------
+# Queue SLOT dayOfWeek is 0=Sunday..6=Saturday (Zernio's convention,
+# different from best-time's 0=Monday). The UI sends weekday+time pairs
+# straight through; we never translate.
+
+
+@router.get("/schedule.json")
+async def zernio_schedule_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Programación payload: recurring queue slots + the upcoming
+    (scheduled/queued) posts list. Read-only; tenant-scoped via the
+    profile. Empty + ok when no profile/key so the panel renders a
+    clean empty state instead of erroring."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if not profile_id or not settings.zernio_api_key:
+        return JSONResponse({"ok": True, "queues": [], "upcoming": []})
+    client = _build_client()
+    queues: list[dict[str, Any]] = []
+    upcoming: list[dict[str, Any]] = []
+    try:
+        queues = await client.list_queues(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning("zernio.schedule.queues_failed tenant=%s err=%s", tenant_id, e)
+    try:
+        feed = await client.list_posts(
+            status="scheduled", profile_id=profile_id,
+            sort_by="scheduled-asc", limit=50,
+        )
+        raw = feed.get("posts")
+        if isinstance(raw, list):
+            for p in raw:
+                if not isinstance(p, dict):
+                    continue
+                pid = p.get("_id") or p.get("id")
+                upcoming.append(
+                    {
+                        "post_id": pid,
+                        "content": (p.get("content") or "")[:80],
+                        "scheduled_for": p.get("scheduledFor"),
+                        "status": p.get("status"),
+                        "platforms": [
+                            pl.get("platform")
+                            for pl in (p.get("platforms") or [])
+                            if isinstance(pl, dict)
+                        ],
+                    }
+                )
+    except ZernioError as e:
+        _log.warning("zernio.schedule.upcoming_failed tenant=%s err=%s", tenant_id, e)
+    return JSONResponse({"ok": True, "queues": queues, "upcoming": upcoming})
+
+
+@router.post("/schedule/slots")
+async def zernio_save_slots(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Replace the default queue's recurring slots.
+
+    JSON body: {"timezone": "America/Mexico_City", "slots": [
+      {"dayOfWeek": 1, "time": "09:00"}, ...]}. dayOfWeek is
+    0=Sunday..6=Saturday, time "HH:mm". Validated before the Zernio
+    call so a bad weekday/time is a clean 400, not a Zernio 400."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    raw_slots = data.get("slots")
+    if not isinstance(raw_slots, list) or not raw_slots:
+        return JSONResponse(
+            {"ok": False, "error": "slots must be a non-empty list"},
+            status_code=400,
+        )
+    import re as _re
+
+    slots: list[dict[str, Any]] = []
+    for s in raw_slots:
+        if not isinstance(s, dict):
+            return JSONResponse(
+                {"ok": False, "error": "each slot must be an object"},
+                status_code=400,
+            )
+        dow = s.get("dayOfWeek")
+        tm = s.get("time")
+        if not isinstance(dow, int) or not (0 <= dow <= 6):
+            return JSONResponse(
+                {"ok": False, "error": f"dayOfWeek must be 0-6, got {dow!r}"},
+                status_code=400,
+            )
+        if not isinstance(tm, str) or not _re.fullmatch(
+            r"([01][0-9]|2[0-3]):[0-5][0-9]", tm
+        ):
+            return JSONResponse(
+                {"ok": False, "error": f"time must be HH:mm, got {tm!r}"},
+                status_code=400,
+            )
+        slots.append({"dayOfWeek": dow, "time": tm})
+    timezone = str(data.get("timezone") or "UTC")
+
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        sched = await client.upsert_default_queue(
+            profile_id=profile_id, slots=slots, timezone=timezone,
+            reshuffle_existing=bool(data.get("reshuffle_existing")),
+        )
+    except ZernioError as e:
+        _log.warning("zernio.schedule.save_failed tenant=%s err=%s", tenant_id, e)
+        return JSONResponse(
+            {"ok": False, "error": f"Couldn't save the schedule: {e}"},
+            status_code=502,
+        )
+    _log.info(
+        "zernio.schedule.saved tenant=%s slots=%d tz=%s",
+        tenant_id, len(slots), timezone,
+    )
+    return JSONResponse({"ok": True, "queue_id": sched.get("_id")})
+
+
+@router.post("/schedule/queue/{queue_id}/delete")
+async def zernio_delete_queue(
+    queue_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Delete one recurring queue."""
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        await client.delete_queue(profile_id=profile_id, queue_id=queue_id)
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"Couldn't delete the queue: {e}"},
+            status_code=502,
+        )
+    return JSONResponse({"ok": True})
+
+
+@router.get("/best-time.json")
+async def zernio_best_time_json(
+    platform: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Best-time slots for the "Hora óptima" panel + the "Usar hora
+    óptima" prefill on Programar. 403 (Analytics add-on) or no data →
+    empty list, not an error — the panel shows a "sin datos aún" state."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if not profile_id or not settings.zernio_api_key:
+        return JSONResponse({"ok": True, "slots": []})
+    client = _build_client()
+    try:
+        slots = await client.best_time_slots(
+            profile_id=profile_id, platform=(platform or None),
+        )
+    except ZernioError:
+        # Analytics add-on missing / not enough history → no data.
+        return JSONResponse({"ok": True, "slots": []})
+    return JSONResponse({"ok": True, "slots": slots})
+
+
+@router.post("/schedule/cancel/{post_id}")
+async def zernio_cancel_scheduled(
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Cancel a scheduled/queued post (DELETE /posts/{id} — Zernio only
+    allows it for non-published posts). Also tombstones a matching
+    local row so it leaves our history immediately."""
+    client = _build_client()
+    try:
+        await client.delete_post(post_id)
+    except ZernioError as e:
+        if e.status_code == 400:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Ya se publicó — no se puede cancelar.",
+                },
+                status_code=409,
+            )
+        _log.warning("zernio.schedule.cancel_failed tenant=%s err=%s", tenant_id, e)
+        return JSONResponse(
+            {"ok": False, "error": f"Couldn't cancel: {e}"}, status_code=502,
+        )
+    # Best-effort local tombstone (the post may have been scheduled
+    # directly on Zernio with no local row).
+    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+    if row is not None and row.tenant_id == tenant_id:
+        await ZernioPublishesRepo(db).set_status(post_id, status="cancelled")
+    _log.info("zernio.schedule.cancelled tenant=%s post=%s", tenant_id, post_id)
+    return JSONResponse({"ok": True})
+
+
 @router.get("/accounts.json")
 async def zernio_accounts_json(
     request: Request,

@@ -626,6 +626,58 @@ class ZernioClient:
         slots = body.get("slots") if isinstance(body, dict) else None
         return [s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []
 
+    # ---- Queue (recurring schedule slots) ----
+    # NOTE: a queue SLOT's dayOfWeek is 0=Sunday..6=Saturday — NOT the
+    # best-time convention (0=Monday). Don't mix the two.
+
+    async def list_queues(self, *, profile_id: str) -> list[dict[str, Any]]:
+        """GET /queue/slots?all=true — every recurring queue for the
+        profile. Returns the raw QueueSchedule dicts (each with `_id`,
+        `name`, `timezone`, `slots:[{dayOfWeek,time}]`, `active`,
+        `isDefault`). Empty list when the profile has no queues yet."""
+        body = await self._request(
+            "GET", "/queue/slots",
+            params={"profileId": profile_id, "all": "true"},
+        )
+        rows = body.get("queues") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def upsert_default_queue(
+        self,
+        *,
+        profile_id: str,
+        slots: list[dict[str, Any]],
+        timezone: str = "UTC",
+        name: str = "NexoClip Queue",
+        reshuffle_existing: bool = False,
+    ) -> dict[str, Any]:
+        """PUT /queue/slots — create-or-update the profile's DEFAULT
+        queue (no queueId → default). `slots` is a list of
+        {dayOfWeek 0=Sun..6=Sat, time "HH:mm"}. Returns the saved
+        QueueSchedule."""
+        body = await self._request(
+            "PUT", "/queue/slots",
+            json={
+                "profileId": profile_id,
+                "name": name,
+                "timezone": timezone,
+                "slots": slots,
+                "active": True,
+                "reshuffleExisting": reshuffle_existing,
+            },
+        )
+        sched = body.get("schedule") if isinstance(body, dict) else None
+        return sched if isinstance(sched, dict) else (body if isinstance(body, dict) else {})
+
+    async def delete_queue(self, *, profile_id: str, queue_id: str) -> None:
+        """DELETE /queue/slots?profileId=&queueId= — remove one queue.
+        Deleting the default promotes another queue to default."""
+        await self._request(
+            "DELETE", "/queue/slots",
+            params={"profileId": profile_id, "queueId": queue_id},
+            parse_json=False,
+        )
+
     # ---- Status + history ----
 
     async def get_post(self, post_id: str) -> ZernioPostStatus:
@@ -650,14 +702,29 @@ class ZernioClient:
         await self._request("DELETE", f"/posts/{post_id}", parse_json=False)
 
     async def list_posts(
-        self, *, page: int = 1, limit: int = 25,
+        self,
+        *,
+        page: int = 1,
+        limit: int = 25,
+        status: str | None = None,
+        profile_id: str | None = None,
+        sort_by: str | None = None,
     ) -> dict[str, Any]:
         """GET /posts — feed of past + scheduled posts. Returns the
         raw dict so the UI can render whatever the backend gives
-        back (mirrors the old history feed)."""
-        body = await self._request(
-            "GET", "/posts", params={"page": page, "limit": limit},
-        )
+        back (mirrors the old history feed).
+
+        `status` (draft|scheduled|published|failed), `profile_id`, and
+        `sort_by` (e.g. scheduled-asc) narrow the feed — used by the
+        Upcoming list (scheduled, soonest-first) and the drafts panel."""
+        params: dict[str, Any] = {"page": page, "limit": limit}
+        if status:
+            params["status"] = status
+        if profile_id:
+            params["profileId"] = profile_id
+        if sort_by:
+            params["sortBy"] = sort_by
+        body = await self._request("GET", "/posts", params=params)
         if not isinstance(body, dict):
             raise ZernioError("posts list response is not an object", body=body)
         return body

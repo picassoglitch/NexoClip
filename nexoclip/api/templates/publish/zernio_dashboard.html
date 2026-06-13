@@ -577,6 +577,77 @@
 </div>
 {% endif %}
 
+{# ========== Programación — recurring queue slots + Hora óptima +
+   upcoming (scheduled/queued) list with cancel. All data loads from
+   /schedule.json + /best-time.json; vanilla JS, no reload. ========== #}
+{% if profile_id %}
+<div class="nc-panel" id="zn-schedule-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-calendar-clock" aria-hidden="true"></i>
+    Programación
+    <span class="nc-text--muted" style="font-size:12px; margin-left:auto;">
+      Slots recurrentes · cola · hora óptima
+    </span>
+  </div>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:16px;">
+
+    {# --- Recurring slots editor --- #}
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <strong style="font-size:13px;">Slots recurrentes</strong>
+        <span class="nc-text--muted" style="font-size:12px;">
+          La cola publica en estos huecos. Modo “Cola” al publicar usa el próximo libre.
+        </span>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-bottom:8px;">
+        <label class="nc-label" style="margin:0;">
+          Día
+          <select class="nc-input" id="zn-slot-dow" style="width:auto;">
+            <option value="1">Lunes</option><option value="2">Martes</option>
+            <option value="3">Miércoles</option><option value="4">Jueves</option>
+            <option value="5">Viernes</option><option value="6">Sábado</option>
+            <option value="0">Domingo</option>
+          </select>
+        </label>
+        <label class="nc-label" style="margin:0;">
+          Hora
+          <input class="nc-input" id="zn-slot-time" type="time" value="18:00" style="width:auto;">
+        </label>
+        <label class="nc-label" style="margin:0;">
+          Zona horaria
+          <input class="nc-input" id="zn-slot-tz" placeholder="UTC" value="UTC" style="width:auto;">
+        </label>
+        <button type="button" class="nc-btn" id="zn-slot-add" style="padding:6px 12px;">
+          <i class="ti ti-plus" aria-hidden="true"></i> Añadir slot
+        </button>
+      </div>
+      <div id="zn-slot-chips" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <button type="button" class="nc-btn nc-btn--primary" id="zn-slot-save" style="padding:6px 14px;">
+          <i class="ti ti-device-floppy" aria-hidden="true"></i> Guardar slots
+        </button>
+        <span class="nc-text--muted" id="zn-slot-msg" style="font-size:12px;"></span>
+      </div>
+    </div>
+
+    {# --- Hora óptima --- #}
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <strong style="font-size:13px;">Hora óptima</strong>
+        <span class="nc-text--muted" style="font-size:12px;">Según el engagement histórico (UTC).</span>
+      </div>
+      <div id="zn-besttime" class="nc-text--muted" style="font-size:13px;">Cargando…</div>
+    </div>
+
+    {# --- Upcoming --- #}
+    <div>
+      <strong style="font-size:13px;">Próximas publicaciones</strong>
+      <div id="zn-upcoming" style="margin-top:8px;"></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ========== Borradores — drafts saved via "Guardar como borrador".
    Local zernio_publishes rows with status='draft'; also the agency
    client-approval flow: stage → review → Publicar ahora / Programar. #}
@@ -1093,6 +1164,167 @@
         cpMsg.textContent = "Couldn't create profile: " + err.message;
       }
     });
+  }
+
+  // ---- Programación: recurring slots + hora óptima + próximas ----
+  var schedPanel = document.getElementById("zn-schedule-panel");
+  if (schedPanel) {
+    var DOW = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    // Working set of {dayOfWeek, time} the operator is editing; seeded
+    // from the saved default queue on load.
+    var slots = [];
+    var chipsHost = document.getElementById("zn-slot-chips");
+    var slotMsg = document.getElementById("zn-slot-msg");
+
+    function renderSlots() {
+      chipsHost.innerHTML = "";
+      if (!slots.length) {
+        chipsHost.innerHTML =
+          '<span class="nc-text--muted" style="font-size:12px;">Sin slots todavía — añade al menos uno.</span>';
+        return;
+      }
+      slots
+        .slice()
+        .sort(function (a, b) { return a.dayOfWeek - b.dayOfWeek || a.time.localeCompare(b.time); })
+        .forEach(function (s) {
+          var chip = document.createElement("span");
+          chip.className = "nc-pc-acct-chip";
+          chip.innerHTML = "<span>" + DOW[s.dayOfWeek] + " " + s.time + "</span>";
+          var x = document.createElement("button");
+          x.type = "button";
+          x.style.cssText = "background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;";
+          x.innerHTML = '<i class="ti ti-x"></i>';
+          x.addEventListener("click", function () {
+            slots = slots.filter(function (o) {
+              return !(o.dayOfWeek === s.dayOfWeek && o.time === s.time);
+            });
+            renderSlots();
+          });
+          chip.appendChild(x);
+          chipsHost.appendChild(chip);
+        });
+    }
+
+    document.getElementById("zn-slot-add").addEventListener("click", function () {
+      var dow = parseInt(document.getElementById("zn-slot-dow").value, 10);
+      var time = document.getElementById("zn-slot-time").value;
+      if (!time) { return; }
+      if (slots.some(function (s) { return s.dayOfWeek === dow && s.time === time; })) { return; }
+      slots.push({ dayOfWeek: dow, time: time });
+      renderSlots();
+    });
+
+    document.getElementById("zn-slot-save").addEventListener("click", function () {
+      if (!slots.length) { slotMsg.textContent = "Añade al menos un slot."; return; }
+      var tz = document.getElementById("zn-slot-tz").value || "UTC";
+      slotMsg.style.color = "var(--nc-text--muted)";
+      slotMsg.textContent = "Guardando…";
+      fetch("/dashboard/publish/zernio/schedule/slots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ timezone: tz, slots: slots }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          if (!b.ok) { throw new Error(b.error || "fallo"); }
+          slotMsg.style.color = "var(--nc-green, #48bb78)";
+          slotMsg.textContent = "Slots guardados ✓";
+        })
+        .catch(function (e) {
+          slotMsg.style.color = "#ff7575";
+          slotMsg.textContent = "No se pudo guardar: " + e.message;
+        });
+    });
+
+    function loadSchedule() {
+      fetch("/dashboard/publish/zernio/schedule.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          // Seed slots from the default (or first) saved queue.
+          var queues = b.queues || [];
+          var def = queues.filter(function (q) { return q.isDefault; })[0] || queues[0];
+          if (def && Array.isArray(def.slots)) {
+            slots = def.slots
+              .filter(function (s) { return typeof s.dayOfWeek === "number" && s.time; })
+              .map(function (s) { return { dayOfWeek: s.dayOfWeek, time: s.time }; });
+            if (def.timezone) { document.getElementById("zn-slot-tz").value = def.timezone; }
+          }
+          renderSlots();
+
+          // Upcoming list.
+          var up = document.getElementById("zn-upcoming");
+          var items = b.upcoming || [];
+          if (!items.length) {
+            up.innerHTML =
+              '<span class="nc-text--muted" style="font-size:13px;">No hay publicaciones programadas.</span>';
+            return;
+          }
+          up.innerHTML = "";
+          items.forEach(function (p) {
+            var row = document.createElement("div");
+            row.style.cssText =
+              "display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05);";
+            var when = p.scheduled_for ? new Date(p.scheduled_for).toLocaleString() : "—";
+            row.innerHTML =
+              '<span class="nc-chip nc-chip--code">' + (p.platforms || []).join(", ") + "</span>" +
+              '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
+              (p.content || "(sin caption)") + "</span>" +
+              '<span class="nc-text--muted" style="font-size:12px;">' + when + "</span>";
+            var cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.className = "nc-btn nc-btn--danger";
+            cancel.style.cssText = "padding:4px 8px; font-size:12px;";
+            cancel.innerHTML = '<i class="ti ti-x"></i> Cancelar';
+            cancel.addEventListener("click", function () {
+              if (!window.confirm("¿Cancelar esta publicación programada?")) { return; }
+              cancel.disabled = true;
+              fetch("/dashboard/publish/zernio/schedule/cancel/" + encodeURIComponent(p.post_id), {
+                method: "POST", credentials: "same-origin",
+              })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                  if (!res.ok) { throw new Error(res.error || "fallo"); }
+                  row.remove();
+                })
+                .catch(function (e) { cancel.disabled = false; alert("No se pudo cancelar: " + e.message); });
+            });
+            row.appendChild(cancel);
+            up.appendChild(row);
+          });
+        })
+        .catch(function () {
+          document.getElementById("zn-upcoming").innerHTML =
+            '<span class="nc-text--muted">No se pudo cargar la programación.</span>';
+        });
+    }
+
+    function loadBestTime() {
+      fetch("/dashboard/publish/zernio/best-time.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-besttime");
+          var s = (b.slots || []).slice(0, 5);
+          if (!s.length) {
+            host.textContent = "Sin datos suficientes todavía — publica más clips para ver tus mejores horas.";
+            return;
+          }
+          // best-time dayOfWeek is 0=Monday.
+          var BT = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+          host.innerHTML = s
+            .map(function (slot) {
+              var d = BT[slot.day_of_week] || "?";
+              var hh = ("0" + slot.hour).slice(-2);
+              return '<span class="nc-pc-acct-chip" style="margin:2px;">' +
+                d + " " + hh + ":00 UTC</span>";
+            })
+            .join("");
+        })
+        .catch(function () {});
+    }
+
+    loadSchedule();
+    loadBestTime();
   }
 })();
 </script>

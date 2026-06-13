@@ -485,3 +485,92 @@ async def test_list_posts_passes_pagination() -> None:
     sent = route.calls.last.request
     assert sent.url.params.get("page") == "2"
     assert sent.url.params.get("limit") == "50"
+
+
+@pytest.mark.asyncio
+async def test_list_posts_status_and_profile_filters() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/posts").mock(
+                return_value=httpx.Response(200, json={"posts": []})
+            )
+            await _client(http).list_posts(
+                status="scheduled", profile_id="ten_alice", sort_by="scheduled-asc",
+            )
+    sent = route.calls.last.request
+    assert sent.url.params.get("status") == "scheduled"
+    assert sent.url.params.get("profileId") == "ten_alice"
+    assert sent.url.params.get("sortBy") == "scheduled-asc"
+
+
+# ---- queue slots ----
+
+
+@pytest.mark.asyncio
+async def test_list_queues_returns_schedules() -> None:
+    body = {
+        "queues": [
+            {"_id": "q1", "name": "Morning", "isDefault": True,
+             "timezone": "UTC", "slots": [{"dayOfWeek": 1, "time": "09:00"}],
+             "active": True},
+        ],
+        "count": 1,
+    }
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/queue/slots").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            queues = await _client(http).list_queues(profile_id="ten_alice")
+    assert [q["_id"] for q in queues] == ["q1"]
+    sent = route.calls.last.request
+    assert sent.url.params.get("profileId") == "ten_alice"
+    assert sent.url.params.get("all") == "true"
+
+
+@pytest.mark.asyncio
+async def test_list_queues_empty_when_none() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.get(f"{_BASE}/queue/slots").mock(
+                return_value=httpx.Response(200, json={"queues": [], "count": 0})
+            )
+            assert await _client(http).list_queues(profile_id="x") == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_default_queue_sends_slots() -> None:
+    body = {
+        "success": True,
+        "schedule": {"_id": "q9", "name": "NexoClip Queue", "slots": []},
+    }
+    slots = [{"dayOfWeek": 1, "time": "09:00"}, {"dayOfWeek": 5, "time": "18:30"}]
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.put(f"{_BASE}/queue/slots").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            sched = await _client(http).upsert_default_queue(
+                profile_id="ten_alice", slots=slots, timezone="America/Mexico_City",
+            )
+    assert sched["_id"] == "q9"
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload["profileId"] == "ten_alice"
+    assert payload["timezone"] == "America/Mexico_City"
+    assert payload["slots"] == slots
+    assert payload["active"] is True
+    # No queueId → Zernio targets the DEFAULT queue.
+    assert "queueId" not in payload
+
+
+@pytest.mark.asyncio
+async def test_delete_queue_passes_ids() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.delete(f"{_BASE}/queue/slots").mock(
+                return_value=httpx.Response(200, json={"success": True})
+            )
+            await _client(http).delete_queue(profile_id="ten_alice", queue_id="q1")
+    sent = route.calls.last.request
+    assert sent.url.params.get("profileId") == "ten_alice"
+    assert sent.url.params.get("queueId") == "q1"

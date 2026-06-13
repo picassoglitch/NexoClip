@@ -614,3 +614,60 @@ async def test_batch_replay_is_idempotent_per_clip(
     assert second.status_code == 200
     assert second.json()["results"][0]["duplicate"] is True
     assert len(post_route.calls) == 1
+
+
+# ---- internal analytics ----
+
+
+@pytest.mark.asyncio
+async def test_internal_analytics_requires_service_token(
+    hub_env: None, client: httpx.AsyncClient, alice: dict[str, str]
+) -> None:
+    resp = await client.get(
+        "/api/internal/v1/analytics", params={"tenant_id": alice["id"]},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_internal_analytics_returns_normalized_performance(
+    hub_env: None, client: httpx.AsyncClient, alice: dict[str, str]
+) -> None:
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/analytics").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "posts": [
+                        {"_id": "p1", "content": "Clip A",
+                         "analytics": {"likes": 10, "views": 100},
+                         "platforms": []},
+                    ]
+                },
+            )
+        )
+        resp = await client.get(
+            "/api/internal/v1/analytics",
+            params={"tenant_id": alice["id"], "days": 7},
+            headers=_auth(),
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["source"] == "live"
+    assert body["totals"]["likes"] == 10
+    # no fake zeros: nobody reported comments → null
+    assert body["totals"]["comments"] is None
+    assert body["posts"][0]["post_id"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_internal_analytics_unknown_tenant_404(
+    hub_env: None, client: httpx.AsyncClient
+) -> None:
+    resp = await client.get(
+        "/api/internal/v1/analytics",
+        params={"tenant_id": "ten_nope"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 404

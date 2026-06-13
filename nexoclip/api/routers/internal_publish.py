@@ -280,4 +280,27 @@ async def internal_batch(
     )
 
 
+@router.get("/analytics")
+async def internal_analytics_read(
+    tenant_id: str,
+    days: int = 30,
+    _consumer: str = Depends(require_hub_service),
+    db: Database = Depends(get_db),
+) -> JSONResponse:
+    """Performance read for Nexo AI engines — so a ranking engine can
+    see which VOD moments produced winning clips. Live Zernio analytics
+    when available, latest stored snapshots as fallback. Metrics follow
+    the no-fake-zeros rule (absent → null, never an invented 0)."""
+    from nexoclip.publish.analytics_service import internal_analytics
+
+    tenant = await TenantsRepo(db).get(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="unknown tenant")
+    days = max(1, min(int(days), 366))
+    settings = get_settings()
+    client = _build_client() if settings.zernio_api_key else None
+    result = await internal_analytics(db, tenant_id, days=days, client=client)
+    return JSONResponse({"ok": True, **result})
+
+
 __all__ = ["router"]

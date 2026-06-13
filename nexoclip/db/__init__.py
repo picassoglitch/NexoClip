@@ -37,6 +37,7 @@ from .repos import (
     ZernioAutoRetriesRepo,
     ZernioEventsRepo,
     ZernioPublishesRepo,
+    ZernioPublishSnapshotsRepo,
 )
 from .session import db_session
 
@@ -70,6 +71,7 @@ __all__ = [
     "WebhookSubscriptionsRepo",
     "ZernioAutoRetriesRepo",
     "ZernioEventsRepo",
+    "ZernioPublishSnapshotsRepo",
     "ZernioPublishesRepo",
     "apply_migrations",
     "db_session",

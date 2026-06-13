@@ -285,6 +285,52 @@ def webhooks_register_zernio_cmd(
     asyncio.run(_run())
 
 
+@webhooks_app.command("snapshot-analytics")
+def webhooks_snapshot_analytics_cmd(
+    tenant_id: str = typer.Option(
+        "", "--tenant", help="One tenant; omit for all bound tenants."
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Capture today's per-post metric snapshot (Hub phase 7).
+
+    Run daily (cron). Idempotent per (post, UTC day) — a same-day
+    re-run refreshes rows instead of duplicating. Persist-only: no
+    scoring, no ML, just history for the clip-selection feedback loop.
+    """
+    from nexoclip.db import TenantsRepo, apply_migrations
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.publish.analytics_service import snapshot_tenant
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            client = ZernioClient(
+                api_key=settings.zernio_api_key or "",
+                base_url=settings.zernio_base_url,
+            )
+            tenants = (
+                [tenant_id]
+                if tenant_id
+                else [t.id for t in await TenantsRepo(db).list_all()]
+            )
+            total = 0
+            for tid in tenants:
+                total += await snapshot_tenant(db, tid, client=client)
+            typer.echo(f"snapshot tenants={len(tenants)} posts={total}")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
 @app.callback()
 def _root(
     log_level: str | None = typer.Option(

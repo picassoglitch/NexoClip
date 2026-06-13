@@ -3495,6 +3495,68 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioPublishSnapshotsRepo:
+    """Per-post daily metric snapshots (migration 035).
+
+    Persist-only history for the future clip-selection feedback loop.
+    tenant_id is explicit (the snapshot job iterates tenants); the
+    UNIQUE (post_id, day) index makes a same-day re-run idempotent."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self,
+        tenant_id: str,
+        *,
+        post_id: str,
+        day: str,
+        metrics_json: str,
+        platforms_json: str | None = None,
+    ) -> None:
+        """Insert or refresh the (post, day) snapshot."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_publish_snapshots "
+            "(id, tenant_id, post_id, day, metrics_json, platforms_json, captured_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(post_id, day) DO UPDATE SET "
+            "metrics_json = excluded.metrics_json, "
+            "platforms_json = excluded.platforms_json, "
+            "captured_at = excluded.captured_at",
+            (
+                new_id("snp"), tenant_id, post_id, day,
+                metrics_json, platforms_json, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def latest_for_tenant(
+        self, tenant_id: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Newest snapshot per post for a tenant (one row per post,
+        most-recent day). Drives the internal analytics endpoint."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, day, metrics_json, platforms_json, captured_at "
+            "FROM zernio_publish_snapshots WHERE tenant_id = ? "
+            "AND day = (SELECT MAX(day) FROM zernio_publish_snapshots s2 "
+            "           WHERE s2.post_id = zernio_publish_snapshots.post_id) "
+            "ORDER BY day DESC LIMIT ?",
+            (tenant_id, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def count_for_tenant(self, tenant_id: str) -> int:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM zernio_publish_snapshots WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
 class ZernioAutoRetriesRepo:
     """Once-only guard for the post.failed auto-retry (migration 034).
 

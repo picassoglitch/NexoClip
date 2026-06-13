@@ -626,6 +626,41 @@ class ZernioClient:
         slots = body.get("slots") if isinstance(body, dict) else None
         return [s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []
 
+    async def post_analytics_list(
+        self,
+        *,
+        profile_id: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """GET /analytics — paginated post analytics + overview for the
+        profile. Returns the raw dict ({overview, posts:[...]}); each
+        post carries an `analytics` object and per-platform `platforms`.
+        `from_date`/`to_date` are YYYY-MM-DD (defaults: 90 days → today,
+        max 366-day range)."""
+        params: dict[str, Any] = {"profileId": profile_id, "limit": limit}
+        if from_date:
+            params["fromDate"] = from_date
+        if to_date:
+            params["toDate"] = to_date
+        body = await self._request("GET", "/analytics", params=params)
+        if not isinstance(body, dict):
+            raise ZernioError("analytics response is not an object", body=body)
+        return body
+
+    async def post_analytics_one(self, post_id: str) -> dict[str, Any]:
+        """GET /analytics?postId= — analytics for ONE post (accepts a
+        Zernio or external post id; Zernio auto-resolves). May return
+        202 (sync pending) — surfaced as ZernioError the caller treats
+        as "no data yet"."""
+        body = await self._request(
+            "GET", "/analytics", params={"postId": post_id},
+        )
+        if not isinstance(body, dict):
+            raise ZernioError("analytics response is not an object", body=body)
+        return body
+
     # ---- Queue (recurring schedule slots) ----
     # NOTE: a queue SLOT's dayOfWeek is 0=Sunday..6=Saturday — NOT the
     # best-time convention (0=Monday). Don't mix the two.

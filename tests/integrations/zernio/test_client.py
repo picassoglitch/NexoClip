@@ -608,3 +608,35 @@ async def test_retry_post_posts_to_retry_endpoint() -> None:
             result = await _client(http).retry_post("pf1")
     assert result.post_id == "pf1"
     assert route.calls.last.request.headers["Authorization"] == "Bearer sk_test_abc"
+
+
+# ---- analytics ----
+
+
+@pytest.mark.asyncio
+async def test_post_analytics_list_passes_dates_and_profile() -> None:
+    body = {"overview": {"totalPosts": 1}, "posts": [{"_id": "p1"}]}
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/analytics").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            out = await _client(http).post_analytics_list(
+                profile_id="ten_alice", from_date="2026-05-01", to_date="2026-06-01",
+            )
+    assert out["posts"][0]["_id"] == "p1"
+    sent = route.calls.last.request
+    assert sent.url.params.get("profileId") == "ten_alice"
+    assert sent.url.params.get("fromDate") == "2026-05-01"
+    assert sent.url.params.get("toDate") == "2026-06-01"
+
+
+@pytest.mark.asyncio
+async def test_post_analytics_one_passes_post_id() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/analytics").mock(
+                return_value=httpx.Response(200, json={"postId": "p1"})
+            )
+            await _client(http).post_analytics_one("p1")
+    assert route.calls.last.request.url.params.get("postId") == "p1"

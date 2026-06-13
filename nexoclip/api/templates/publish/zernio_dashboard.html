@@ -366,6 +366,10 @@
     <i class="ti ti-circle-check" aria-hidden="true"></i>
     Published{% if history %} ({{ history|length }}){% endif %}
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="rendimiento">
+    <i class="ti ti-chart-bar" aria-hidden="true"></i>
+    Rendimiento
+  </button>
 </div>
 
 {# ========== Tab: Single Publish ========== #}
@@ -801,6 +805,26 @@
 </div>
 </div>
 
+{# ========== Tab: Rendimiento — recent clips with per-platform metrics.
+   Loads live from /rendimiento.json; 7/30-day toggle. Unavailable
+   metrics render "—" (no fake zeros). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="rendimiento">
+<div class="nc-panel">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-chart-bar" aria-hidden="true"></i>
+    <span class="nc-panel__title">Rendimiento</span>
+    <span style="margin-left:auto; display:inline-flex; gap:4px;">
+      <button type="button" class="nc-btn js-perf-days is-active" data-days="7" style="padding:3px 10px; font-size:12px;">7 días</button>
+      <button type="button" class="nc-btn js-perf-days" data-days="30" style="padding:3px 10px; font-size:12px;">30 días</button>
+    </span>
+  </div>
+  <div class="nc-panel__body">
+    <div id="zn-perf-totals" class="nc-text--muted" style="font-size:14px; margin-bottom:12px;">Cargando…</div>
+    <div id="zn-perf-table"></div>
+  </div>
+</div>
+</div>
+
 {% endif %}
 
 {# ----- Behavior JS ----- #}
@@ -1183,6 +1207,81 @@
         cpMsg.style.color = "#ff7575";
         cpMsg.textContent = "Couldn't create profile: " + err.message;
       }
+    });
+  }
+
+  // ---- Rendimiento tab ----
+  var perfTable = document.getElementById("zn-perf-table");
+  if (perfTable) {
+    var perfDays = 7;
+    function fmtMetric(v) { return (v === null || v === undefined) ? "—" : v.toLocaleString(); }
+
+    function renderPerf(body) {
+      var t = body.totals || {};
+      document.getElementById("zn-perf-totals").innerHTML =
+        "Tus clips (" + body.days + " días): " +
+        "<strong>" + fmtMetric(t.views) + "</strong> views · " +
+        "<strong>" + fmtMetric(t.likes) + "</strong> likes · " +
+        "<strong>" + fmtMetric(t.comments) + "</strong> comentarios · " +
+        "<strong>" + fmtMetric(t.shares) + "</strong> compartidos";
+      var posts = body.posts || [];
+      if (!posts.length) {
+        perfTable.innerHTML =
+          '<div class="nc-empty"><div class="nc-empty__title">Sin datos de rendimiento aún</div>' +
+          '<p class="nc-empty__body">Publica clips y vuelve en unas horas — las métricas tardan en sincronizar.</p></div>';
+        return;
+      }
+      var rows = posts.map(function (p) {
+        var m = p.metrics || {};
+        var plats = (p.per_platform || []).map(function (pl) {
+          return '<span class="nc-chip nc-chip--code">' + (pl.platform || "?") + "</span>";
+        }).join(" ");
+        return "<tr>" +
+          '<td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+          (p.content || "(sin caption)") + "</td>" +
+          "<td>" + plats + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.views) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.likes) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.comments) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.shares) + "</td>" +
+          "</tr>";
+      }).join("");
+      perfTable.innerHTML =
+        '<table class="nc-table"><thead><tr>' +
+        "<th>Clip</th><th>Plataformas</th>" +
+        '<th style="text-align:right;">Views</th>' +
+        '<th style="text-align:right;">Likes</th>' +
+        '<th style="text-align:right;">Coment.</th>' +
+        '<th style="text-align:right;">Compart.</th>' +
+        "</tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+
+    function loadPerf() {
+      document.getElementById("zn-perf-totals").textContent = "Cargando…";
+      fetch("/dashboard/publish/zernio/rendimiento.json?days=" + perfDays, { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(renderPerf)
+        .catch(function () {
+          perfTable.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>';
+        });
+    }
+
+    document.querySelectorAll(".js-perf-days").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        perfDays = parseInt(btn.getAttribute("data-days"), 10);
+        document.querySelectorAll(".js-perf-days").forEach(function (b) {
+          b.classList.toggle("is-active", b === btn);
+        });
+        loadPerf();
+      });
+    });
+
+    // Lazy-load when the Rendimiento tab is first opened.
+    var perfLoaded = false;
+    document.querySelectorAll('.nc-pc-tab[data-tab="rendimiento"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!perfLoaded) { perfLoaded = true; loadPerf(); }
+      });
     });
   }
 

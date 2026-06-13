@@ -27,6 +27,12 @@ from .client import (
     ZernioPostStatus,
     ZernioProfile,
 )
+from .analytics import (
+    normalize_list,
+    normalize_metrics,
+    normalize_post,
+    sum_headline,
+)
 from .errors import (
     is_transient,
     post_is_auto_retryable,
@@ -52,12 +58,16 @@ __all__ = [
     "ZernioProfile",
     "create_profile_for_tenant",
     "is_transient",
+    "normalize_list",
+    "normalize_metrics",
+    "normalize_post",
     "parse_post_event",
     "post_is_auto_retryable",
     "process_pending",
     "process_zernio_event",
     "register_zernio_webhook",
     "spanish_hint",
+    "sum_headline",
     "summarize_failed_platforms",
     "verify_zernio_signature",
 ]

@@ -1300,6 +1300,26 @@ async def zernio_delete_queue(
     return JSONResponse({"ok": True})
 
 
+@router.get("/rendimiento.json")
+async def zernio_performance_json(
+    days: int = 30,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Rendimiento tab data: recent clips with per-platform metrics +
+    a totals header, over the last `days` (7 or 30). Live from Zernio,
+    normalized (no fake zeros — absent metrics render as "—")."""
+    from nexoclip.publish.analytics_service import performance_for_tenant
+
+    days = 7 if days == 7 else 30
+    settings = get_settings()
+    client = _build_client() if settings.zernio_api_key else None
+    view = await performance_for_tenant(db, tenant_id, days=days, client=client)
+    return JSONResponse(
+        {"ok": True, "days": view.days, "totals": view.totals, "posts": view.rows}
+    )
+
+
 @router.get("/failed.json")
 async def zernio_failed_json(
     tenant_id: str = Depends(tenant_binder),

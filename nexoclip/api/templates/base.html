@@ -56,14 +56,14 @@
             page surfaces every ingest method (URL · upload · live · Drive). -#}
         {{ side_link("/dashboard/start", t("nav.new_clip"), "plus", prefix="/dashboard/start") }}
         {#- Slice O.9/O.24 — labels go through t() so es/en switch. The
-            /dashboard/streams route keeps its path (bookmarks) but is
-            surfaced as "Streams"; /dashboard/inbox is surfaced as "Clips". -#}
+            /dashboard/streams route keeps its path (bookmarks). The legacy
+            /dashboard/inbox "Clips" surface was removed; clips are reached
+            by drilling into a stream. -#}
         {{ side_link("/dashboard/streams", t("nav.clips"), "movie") }}
-        {{ side_link("/dashboard/inbox", t("nav.inbox"), "layout-grid") }}
         {{ side_link("/dashboard/live", "Live", "broadcast", prefix="/dashboard/live") }}
         {{ side_link("/dashboard/personas", t("nav.personas"), "user") }}
         {{ side_link("/dashboard/brand-kits", t("nav.brand_kits"), "palette") }}
-        {{ side_link("/dashboard/publish", t("nav.publish"), "send") }}
+        {{ side_link("/dashboard/publish/zernio", t("nav.publish"), "send") }}
         {#- Slice O.9 — operator-only surfaces, gated by NEXOCLIP_ADMIN_TENANT_IDS. -#}
         {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
         {% if _is_admin %}

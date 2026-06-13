@@ -11,7 +11,7 @@ Tools split:
     Reads: list_streams, get_stream, list_candidates, list_clips,
            get_clip (with breakdown), list_personas, list_llm_calls,
            get_calibration, get_cost_projection.
-    State transitions (full-scope only): update_clip_status, publish_clip.
+    State transitions (full-scope only): update_clip_status.
 
 Persona / connected-account writes stay out of MCP — those are dashboard
 flows (the operator sets up tenancy + integrations once; agents act
@@ -36,12 +36,10 @@ from nexoclip.db import (
     ApiTokensRepo,
     CandidatesRepo,
     ClipsRepo,
-    ConnectedAccountsRepo,
     Database,
     EventsRepo,
     LLMCallsRepo,
     PersonasRepo,
-    PublishJobsRepo,
     StreamsRepo,
     VariantsRepo,
     apply_migrations,
@@ -254,66 +252,6 @@ async def tool_update_clip_status(
     return refreshed.model_dump()
 
 
-async def tool_publish_clip(
-    db: Database,
-    tenant_id: str,
-    scope: str,
-    *,
-    clip_id: str,
-    variant_id: str,
-    account_ids: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Enqueue publish_jobs for the clip's connected accounts.
-
-    Same shape as `POST /clips/{id}/publish` — `account_ids=None` means
-    "every connected account on this tenant". Returns the enqueued
-    publish_jobs.
-    """
-    if scope != "full":
-        raise TenancyError(f"requires scope=full, token has scope={scope!r}")
-    with bound_tenant(tenant_id):
-        clip = await ClipsRepo(db).get(clip_id)
-        if clip is None:
-            raise NexoClipError(f"clip not found: {clip_id}")
-
-        variants = await VariantsRepo(db).list_for_clip(clip_id)
-        variant = next((v for v in variants if v.id == variant_id), None)
-        if variant is None:
-            raise NexoClipError(
-                f"variant {variant_id!r} not found for clip {clip_id}"
-            )
-
-        accounts = await ConnectedAccountsRepo(db).list_for_tenant()
-        if account_ids is not None:
-            wanted = set(account_ids)
-            accounts = [a for a in accounts if a.id in wanted]
-            missing = wanted - {a.id for a in accounts}
-            if missing:
-                raise NexoClipError(f"unknown account ids: {sorted(missing)}")
-        if not accounts:
-            raise NexoClipError("no connected accounts to publish to")
-
-        jobs_repo = PublishJobsRepo(db)
-        out: list[dict[str, Any]] = []
-        for account in accounts:
-            job = await jobs_repo.enqueue(
-                clip_id=clip_id,
-                variant_id=variant_id,
-                account_id=account.id,
-                platform=account.platform,
-            )
-            out.append(job.model_dump())
-        await EventsRepo(db).emit(
-            type="clip.publish_requested",
-            payload={
-                "clip_id": clip_id,
-                "variant_id": variant_id,
-                "n_jobs": len(out),
-            },
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # FastMCP wiring
 # ---------------------------------------------------------------------------
@@ -412,28 +350,6 @@ def build_server(
     async def _update_clip_status(clip_id: str, new_status: str) -> dict[str, Any]:
         return await tool_update_clip_status(
             db, tenant_id, scope, clip_id=clip_id, new_status=new_status
-        )
-
-    @server.tool(
-        name="publish_clip",
-        description=(
-            "Enqueue publish_jobs for the clip's connected accounts. "
-            "account_ids=null means 'every connected account'. Requires "
-            "scope=full."
-        ),
-    )
-    async def _publish_clip(
-        clip_id: str,
-        variant_id: str,
-        account_ids: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        return await tool_publish_clip(
-            db,
-            tenant_id,
-            scope,
-            clip_id=clip_id,
-            variant_id=variant_id,
-            account_ids=account_ids,
         )
 
     return server

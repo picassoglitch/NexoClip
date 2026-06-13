@@ -1,4 +1,4 @@
-"""Clip detail + status update + publish enqueue."""
+"""Clip detail + status update."""
 
 from __future__ import annotations
 
@@ -6,22 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from nexoclip.db import (
     ClipsRepo,
-    ConnectedAccountsRepo,
     Database,
     EventsRepo,
-    PublishJobsRepo,
-    VariantsRepo,
 )
-from nexoclip.errors import QuotaExceeded, TenancyError
-from nexoclip.governance import BudgetGovernor
 
 from ..deps import get_db, require_full_scope, tenant_binder
-from ..status_gate import require_active_tenant, require_top_tier
 from ..schemas import (
     ClipResponse,
     ClipUpdateRequest,
-    PublishJobResponse,
-    PublishRequest,
 )
 
 router = APIRouter(prefix="/clips", tags=["clips"])
@@ -88,83 +80,3 @@ async def update_clip(
     refreshed = await ClipsRepo(db).get(clip_id)
     assert refreshed is not None
     return ClipResponse.model_validate(refreshed.model_dump())
-
-
-@router.post(
-    "/{clip_id}/publish",
-    response_model=list[PublishJobResponse],
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[
-        Depends(require_full_scope),
-        Depends(require_active_tenant),
-        Depends(require_top_tier),
-    ],
-)
-async def publish_clip(
-    clip_id: str,
-    payload: PublishRequest,
-    tenant_id: str = Depends(tenant_binder),
-    db: Database = Depends(get_db),
-) -> list[PublishJobResponse]:
-    """Enqueue one publish_job per connected account for this clip + variant."""
-    clip = await ClipsRepo(db).get(clip_id)
-    if clip is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="clip not found")
-
-    variants = await VariantsRepo(db).list_for_clip(clip_id)
-    variant = next((v for v in variants if v.id == payload.variant_id), None)
-    if variant is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"variant {payload.variant_id!r} not found for this clip",
-        )
-
-    accounts = await ConnectedAccountsRepo(db).list_for_tenant()
-    if payload.account_ids is not None:
-        wanted = set(payload.account_ids)
-        accounts = [a for a in accounts if a.id in wanted]
-        missing = wanted - {a.id for a in accounts}
-        if missing:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"unknown account ids: {sorted(missing)}",
-            )
-    if not accounts:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="no connected accounts to publish to",
-        )
-
-    # Enforce daily publish quota at enqueue time, not just at worker
-    # dispatch (publish/service.py:251). Without this an attacker can
-    # enqueue thousands of jobs in a single POST; the worker rate-limits
-    # one job at a time and most never run, but the queue still bloats
-    # and the audit/event log surface is spammed. Per-platform cap is
-    # not currently used; pass platform=None for cross-platform total.
-    governor = BudgetGovernor(db)
-    try:
-        await governor.check_publish_quota(tenant_id)
-    except QuotaExceeded as e:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)
-        ) from e
-
-    jobs_repo = PublishJobsRepo(db)
-    created: list[PublishJobResponse] = []
-    try:
-        for account in accounts:
-            job = await jobs_repo.enqueue(
-                clip_id=clip_id,
-                variant_id=variant.id,
-                account_id=account.id,
-                platform=account.platform,
-            )
-            created.append(PublishJobResponse.model_validate(job.model_dump()))
-    except TenancyError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
-
-    await EventsRepo(db).emit(
-        type="clip.publish_requested",
-        payload={"clip_id": clip_id, "variant_id": variant.id, "n_jobs": len(created)},
-    )
-    return created

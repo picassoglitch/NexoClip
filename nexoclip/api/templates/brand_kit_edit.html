@@ -220,31 +220,9 @@
     </div>
   </div>
 
-  <div class="nc-panel">
-    <div class="nc-panel__header">
-      <i class="ti ti-rocket" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Auto-publish</span>
-      <small>— review-first stays the default</small>
-    </div>
-    <div class="nc-panel__body">
-      <label class="nc-checkbox">
-        <input type="checkbox" name="auto_publish_enabled" value="1"
-               {% if kit and kit.auto_publish_enabled %}checked{% endif %}>
-        <span>Enable auto-publish for this kit</span>
-      </label>
-      <div class="nc-grid-2">
-        <label class="nc-label">Platforms <small>(comma-separated: tiktok, shorts, reels)</small>
-          <input class="nc-input nc-input--mono" type="text" name="auto_publish_platforms"
-                 value="{{ kit.auto_publish_platforms|join(', ') if kit else '' }}"
-                 placeholder="tiktok, shorts">
-        </label>
-        <label class="nc-label">Undo window (minutes)
-          <input class="nc-input" type="number" name="auto_publish_delay_min" min="0" max="1440"
-                 value="{{ kit.auto_publish_delay_min if kit else 60 }}">
-        </label>
-      </div>
-    </div>
-  </div>
+  {# Auto-publish moved to the Publish Center → "Piloto automático" tab
+     (per-tenant, routed through Zernio). The old per-kit toggle is gone —
+     it fed the retired publish_jobs worker. #}
 
   <div class="nc-panel">
     <div class="nc-panel__header">

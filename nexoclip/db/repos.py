@@ -3835,6 +3835,59 @@ class ZernioWhatsappNumbersRepo:
         return [dict(r) for r in await cur.fetchall()]
 
 
+class AutopublishSettingsRepo:
+    """Per-tenant auto-publish ("Piloto automático") settings (migration 044).
+
+    When `enabled`, the Publish Center auto-enqueues clips to Zernio with
+    their burned-in render. `mode` is on_approve | hands_free; `post_mode`
+    is the Zernio publish mode (queue | now); `targets` is a csv of Zernio
+    platform ids; `daily_cap` is an anti-spam ceiling per UTC day (0 = off).
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def get(self, tenant_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id, enabled, mode, targets, post_mode, daily_cap, "
+            "updated_at FROM autopublish_settings WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled"))
+        return d
+
+    async def upsert(
+        self,
+        tenant_id: str,
+        *,
+        enabled: bool,
+        mode: str,
+        targets: str | None,
+        post_mode: str,
+        daily_cap: int,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO autopublish_settings "
+            "(tenant_id, enabled, mode, targets, post_mode, daily_cap, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_id) DO UPDATE SET "
+            "enabled = excluded.enabled, mode = excluded.mode, "
+            "targets = excluded.targets, post_mode = excluded.post_mode, "
+            "daily_cap = excluded.daily_cap, updated_at = excluded.updated_at",
+            (
+                tenant_id, 1 if enabled else 0, mode, targets, post_mode,
+                daily_cap, _now(),
+            ),
+        )
+        await conn.commit()
+
+
 class ZernioCommunityRepo:
     """Community-notification settings + notify ledger (migration 039).
 

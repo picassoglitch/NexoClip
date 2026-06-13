@@ -10,6 +10,7 @@ from .connection import Database
 from .migrations import MigrationError, apply_migrations, schema_version
 from .repos import (
     ApiTokensRepo,
+    AutopublishSettingsRepo,
     BrandKitsRepo,
     CandidatesRepo,
     ChannelWatchesRepo,
@@ -49,6 +50,7 @@ from .session import db_session
 
 __all__ = [
     "ApiTokensRepo",
+    "AutopublishSettingsRepo",
     "BrandKitsRepo",
     "CandidatesRepo",
     "ChannelWatchesRepo",

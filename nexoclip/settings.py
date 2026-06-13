@@ -365,6 +365,12 @@ class Settings(BaseSettings):
     # to disable auto-retry. Env: NEXOCLIP_HUB_AUTO_RETRY_DELAY_S.
     hub_auto_retry_delay_s: float = 600.0
 
+    # Growth layer (phase 10) anti-spam: max broadcasts a tenant may
+    # SEND per UTC day. A broadcast is a mass DM — a mistake is
+    # irreversible spam — so the cap is deliberately low.
+    # Env: NEXOCLIP_HUB_MAX_BROADCASTS_PER_DAY.
+    hub_max_broadcasts_per_day: int = 1
+
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.
 

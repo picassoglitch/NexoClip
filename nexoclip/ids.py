@@ -32,6 +32,7 @@ EntityKind = Literal[
     "zev",  # zernio_events — inbound webhook rows missing payload.id (Hub phase 2)
     "hpj",  # hub_publish_jobs — internal service API publishes (Hub phase 3)
     "snp",  # zernio_publish_snapshots — daily per-post metrics (Hub phase 7)
+    "bcl",  # zernio_broadcast_log — per-tenant daily broadcast cap (Hub phase 10)
 ]
 
 

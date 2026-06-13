@@ -9,7 +9,7 @@ import pytest
 from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
-_CURRENT_HEAD = 37  # bumped each time we add a migration (037_zernio_inbox)
+_CURRENT_HEAD = 38  # bumped each time we add a migration (038_zernio_broadcast_log)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

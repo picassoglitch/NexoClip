@@ -382,6 +382,10 @@
     <i class="ti ti-mail" aria-hidden="true"></i>
     DMs
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="crecimiento">
+    <i class="ti ti-rocket" aria-hidden="true"></i>
+    Crecimiento
+  </button>
 </div>
 
 {# ========== Tab: Single Publish ========== #}
@@ -861,6 +865,107 @@
     <div id="zn-cal-detail" style="margin-top:14px;"></div>
   </div>
 </div>
+</div>
+
+{# ========== Tab: Crecimiento — Pro-gated funnel machine. Non-Pro
+   sees an upsell card (never a 500); Pro sees 4 sub-panels. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="crecimiento">
+{% if not is_pro %}
+<div class="nc-panel" style="border-color: var(--nc-magenta, #ff2d95);">
+  <div class="nc-panel__body" style="text-align:center; padding:32px;">
+    <i class="ti ti-rocket" aria-hidden="true" style="font-size:32px; color: var(--nc-magenta, #ff2d95);"></i>
+    <h3 style="margin:12px 0 6px;">Crecimiento es una función Pro</h3>
+    <p class="nc-text--muted" style="max-width:460px; margin:0 auto 16px;">
+      Automatiza comentario→DM, gestiona contactos, lanza secuencias de bienvenida
+      y broadcasts a tu comunidad. Sube a Pro para activar el embudo Nexo.
+    </p>
+    <a class="nc-btn nc-btn--primary" href="https://nexo-ai.world/app/subscription"
+       target="_blank" rel="noopener">Subir a Pro</a>
+  </div>
+</div>
+{% else %}
+<div style="display:flex; flex-direction:column; gap:16px;">
+
+  {# Automatizaciones comentario→DM #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-robot" aria-hidden="true"></i>
+      <span class="nc-panel__title">Automatizaciones comentario → DM</span>
+      <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">Solo Instagram / Facebook</span>
+    </div>
+    <div class="nc-panel__body">
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:10px;">
+        <label class="nc-label" style="margin:0;">Cuenta (IG/FB)
+          <select class="nc-input" id="zn-auto-account" style="width:auto;"></select></label>
+        <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Clip objetivo
+          <select class="nc-input" id="zn-auto-post" style="width:100%;">
+            <option value="">Cualquier post</option></select></label>
+        <label class="nc-label" style="margin:0;">Keywords
+          <input class="nc-input" id="zn-auto-keywords" value="CLIP, LINK" style="width:auto;"></label>
+      </div>
+      <label class="nc-label">Mensaje DM
+        <input class="nc-input" id="zn-auto-dm" value="Aquí está el link 👉 {url}"></label>
+      <label class="nc-label">Respuesta pública (opcional)
+        <input class="nc-input" id="zn-auto-reply" placeholder="¡Revisa tu DM! 📩"></label>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-auto-create" style="margin-top:10px;">
+        <i class="ti ti-plus"></i> Crear automatización</button>
+      <div id="zn-auto-list" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+  {# Contactos #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-users" aria-hidden="true"></i>
+      <span class="nc-panel__title">Contactos</span></div>
+    <div class="nc-panel__body">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <input class="nc-input" id="zn-contacts-q" placeholder="Buscar por nombre o usuario…" style="flex:1;">
+        <select class="nc-input" id="zn-contacts-tag" style="width:auto;">
+          <option value="">Todos los tags</option>
+          <option value="comment-lead">comment-lead</option>
+          <option value="dm-lead">dm-lead</option>
+        </select>
+      </div>
+      <div id="zn-contacts-list"><span class="nc-text--muted">Cargando…</span></div>
+    </div>
+  </div>
+
+  {# Secuencias #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-list-numbers" aria-hidden="true"></i>
+      <span class="nc-panel__title">Secuencias (drip)</span>
+      <button type="button" class="nc-btn" id="zn-seq-template" style="margin-left:auto; padding:4px 12px; font-size:12px;">
+        <i class="ti ti-template"></i> Usar “Bienvenida Nexo”</button>
+    </div>
+    <div class="nc-panel__body"><div id="zn-seq-list"><span class="nc-text--muted">Cargando…</span></div></div>
+  </div>
+
+  {# Broadcasts #}
+  <div class="nc-panel" style="border-color: var(--nc-magenta, #ff2d95);">
+    <div class="nc-panel__header"><i class="ti ti-broadcast" aria-hidden="true"></i>
+      <span class="nc-panel__title">Broadcast</span>
+      <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">Tope diario por seguridad anti-spam</span>
+    </div>
+    <div class="nc-panel__body">
+      <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:8px;">
+        <label class="nc-label" style="margin:0;">Cuenta
+          <select class="nc-input" id="zn-bc-account" style="width:auto;"></select></label>
+        <label class="nc-label" style="margin:0;">Segmento (tag)
+          <select class="nc-input" id="zn-bc-tag" style="width:auto;">
+            <option value="">Todos los contactos</option>
+            <option value="comment-lead">comment-lead</option>
+            <option value="dm-lead">dm-lead</option></select></label>
+      </div>
+      <label class="nc-label">Nombre interno
+        <input class="nc-input" id="zn-bc-name" placeholder="Promo de la semana"></label>
+      <label class="nc-label">Mensaje
+        <textarea class="nc-input" id="zn-bc-message" rows="2" placeholder="¡Nuevo clip publicado! 🎬"></textarea></label>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-bc-send" style="margin-top:8px;">
+        <i class="ti ti-send"></i> Enviar broadcast</button>
+    </div>
+  </div>
+
+</div>
+{% endif %}
 </div>
 
 {# ========== Tab: Comentarios — unified comment feed on the streamer's
@@ -1611,6 +1716,134 @@
     document.querySelectorAll('.nc-pc-tab[data-tab="dms"]').forEach(function (tab) {
       tab.addEventListener("click", function () {
         if (!dmLoaded) { dmLoaded = true; loadConversations(); }
+      });
+    });
+  }
+
+  // ---- Crecimiento tab (Pro) ----
+  var growthAccount = document.getElementById("zn-auto-account");
+  if (growthAccount) {
+    var growthLoaded = false;
+    function gPost(url, body, ok) {
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                   credentials: "same-origin", body: JSON.stringify(body) })
+        .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+        .then(function (res) {
+          if (!res.j.ok) { throw new Error(res.j.error || ("HTTP " + res.s)); }
+          ok(res.j);
+        })
+        .catch(function (e) { alert("Error: " + e.message); });
+    }
+
+    // Populate account selects from the connected accounts.
+    function loadGrowthAccounts() {
+      fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var opts = (b.accounts || []).map(function (a) {
+            return '<option value="' + a.account_id + '">' + a.platform + " · " + a.account_id.slice(-6) + "</option>";
+          }).join("");
+          ["zn-auto-account", "zn-bc-account"].forEach(function (id) {
+            var el = document.getElementById(id); if (el) { el.innerHTML = opts; }
+          });
+        });
+      // Recent published clips → automation target picker.
+      fetch("/dashboard/publish/zernio/feed.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var sel = document.getElementById("zn-auto-post");
+          (b.history || []).slice(0, 20).forEach(function (h) {
+            var o = document.createElement("option");
+            o.value = h.post_id; o.textContent = (h.content || h.post_id || "").slice(0, 40);
+            sel.appendChild(o);
+          });
+        }).catch(function () {});
+    }
+
+    function loadAutomations() {
+      fetch("/dashboard/publish/zernio/growth/automations.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-auto-list");
+          var items = b.automations || [];
+          if (!items.length) { host.innerHTML = '<span class="nc-text--muted">Sin automatizaciones todavía.</span>'; return; }
+          host.innerHTML = items.map(function (a) {
+            var st = a.stats || {};
+            return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);">' +
+              '<strong>' + (a.name || "") + "</strong> " +
+              '<span class="nc-chip nc-chip--code">' + (a.platform || "") + "</span> " +
+              (a.isActive ? '<span class="nc-chip nc-chip--success">activa</span>' : '<span class="nc-chip nc-chip--muted">pausada</span>') +
+              '<span class="nc-text--muted" style="font-size:12px; margin-left:8px;">disparos: ' + (st.triggered || 0) + " · DMs: " + (st.dmsSent || 0) + "</span></div>";
+          }).join("");
+        });
+    }
+
+    document.getElementById("zn-auto-create").addEventListener("click", function () {
+      var kw = (document.getElementById("zn-auto-keywords").value || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+      gPost("/dashboard/publish/zernio/growth/automations", {
+        account_id: growthAccount.value,
+        name: "Auto " + (document.getElementById("zn-auto-post").selectedOptions[0] || {}).text || "clip",
+        dm_message: document.getElementById("zn-auto-dm").value,
+        keywords: kw,
+        platform_post_id: document.getElementById("zn-auto-post").value || null,
+        comment_reply: document.getElementById("zn-auto-reply").value || null,
+      }, function () { loadAutomations(); alert("Automatización creada."); });
+    });
+
+    function loadContacts() {
+      var q = document.getElementById("zn-contacts-q").value;
+      var tag = document.getElementById("zn-contacts-tag").value;
+      fetch("/dashboard/publish/zernio/growth/contacts.json?q=" + encodeURIComponent(q) + "&tag=" + encodeURIComponent(tag),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-contacts-list");
+          var items = b.contacts || [];
+          if (!items.length) { host.innerHTML = '<span class="nc-text--muted">Sin contactos.</span>'; return; }
+          host.innerHTML = items.map(function (c) {
+            return '<div style="padding:4px 0;"><strong>' + (c.name || c.username || c.contact_key) + "</strong> " +
+              '<span class="nc-text--muted" style="font-size:12px;">' + (c.tags || "") + "</span></div>";
+          }).join("");
+        });
+    }
+    document.getElementById("zn-contacts-q").addEventListener("input", loadContacts);
+    document.getElementById("zn-contacts-tag").addEventListener("change", loadContacts);
+
+    function loadSequences() {
+      fetch("/dashboard/publish/zernio/growth/sequences.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-seq-list");
+          var items = b.sequences || [];
+          host.innerHTML = items.length
+            ? items.map(function (s) { return '<div style="padding:4px 0;">' + (s.name || "") + "</div>"; }).join("")
+            : '<span class="nc-text--muted">Sin secuencias. Usa la plantilla para empezar.</span>';
+        });
+    }
+    document.getElementById("zn-seq-template").addEventListener("click", function () {
+      gPost("/dashboard/publish/zernio/growth/sequences", {
+        account_id: growthAccount.value, name: "Bienvenida Nexo", template: "bienvenida",
+      }, function () { loadSequences(); alert("Secuencia “Bienvenida Nexo” creada."); });
+    });
+
+    document.getElementById("zn-bc-send").addEventListener("click", function () {
+      var name = document.getElementById("zn-bc-name").value;
+      var msg = document.getElementById("zn-bc-message").value;
+      var tag = document.getElementById("zn-bc-tag").value;
+      if (!name.trim() || !msg.trim()) { alert("Completa nombre y mensaje."); return; }
+      var seg = tag ? ("contactos con tag “" + tag + "”") : "TODOS tus contactos";
+      if (!window.confirm("¿Enviar este broadcast a " + seg + "? Esta acción no se puede deshacer.")) { return; }
+      gPost("/dashboard/publish/zernio/growth/broadcasts/send", {
+        account_id: document.getElementById("zn-bc-account").value,
+        name: name, message: msg, tag: tag || null, confirm: true,
+      }, function () { alert("Broadcast enviado."); });
+    });
+
+    document.querySelectorAll('.nc-pc-tab[data-tab="crecimiento"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (growthLoaded) { return; }
+        growthLoaded = true;
+        loadGrowthAccounts(); loadAutomations(); loadContacts(); loadSequences();
       });
     });
   }

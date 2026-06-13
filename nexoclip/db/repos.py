@@ -3495,6 +3495,36 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioBroadcastLogRepo:
+    """Per-tenant daily broadcast-send log (migration 038) — the
+    anti-spam guardrail. Tenant_id is explicit (the route passes it).
+    A row is written only when a broadcast actually SENDS."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def count_for_day(self, tenant_id: str, *, day: str) -> int:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM zernio_broadcast_log "
+            "WHERE tenant_id = ? AND day = ?",
+            (tenant_id, day),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
+    async def record(
+        self, tenant_id: str, *, broadcast_id: str, day: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_broadcast_log "
+            "(id, tenant_id, broadcast_id, day, sent_at) VALUES (?, ?, ?, ?, ?)",
+            (new_id("bcl"), tenant_id, broadcast_id, day, _now()),
+        )
+        await conn.commit()
+
+
 class ZernioInboxRepo:
     """Comments + DM conversations/messages + contacts (migration 037).
 

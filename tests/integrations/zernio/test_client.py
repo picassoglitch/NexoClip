@@ -686,3 +686,86 @@ async def test_set_conversation_status_archives() -> None:
             )
     payload = json.loads(route.calls.last.request.content.decode())
     assert payload == {"accountId": "acc1", "status": "archived"}
+
+
+# ---- growth layer ----
+
+
+@pytest.mark.asyncio
+async def test_create_comment_automation_body() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/comment-automations").mock(
+                return_value=httpx.Response(200, json={"id": "auto1"})
+            )
+            await _client(http).create_comment_automation(
+                profile_id="prof", account_id="acc1", name="Clip link",
+                dm_message="Aquí 👉 {url}", keywords=["CLIP", "LINK"],
+                platform_post_id="pp1", comment_reply="¡Revisa tu DM!",
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload["accountId"] == "acc1"
+    assert payload["keywords"] == ["CLIP", "LINK"]
+    assert payload["platformPostId"] == "pp1"
+    assert payload["dmMessage"] == "Aquí 👉 {url}"
+    assert payload["isActive"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_sequence_sends_steps() -> None:
+    steps = [
+        {"order": 1, "delayMinutes": 0, "message": {"text": "Bienvenida"}},
+        {"order": 2, "delayMinutes": 1440, "message": {"text": "Tips"}},
+    ]
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/sequences").mock(
+                return_value=httpx.Response(200, json={"id": "seq1"})
+            )
+            await _client(http).create_sequence(
+                profile_id="prof", account_id="acc1", platform="instagram",
+                name="Bienvenida Nexo", steps=steps,
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload["steps"] == steps
+    assert payload["platform"] == "instagram"
+
+
+@pytest.mark.asyncio
+async def test_enroll_in_sequence() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/sequences/seq1/enroll").mock(
+                return_value=httpx.Response(200, json={"enrolled": 2, "skipped": 0})
+            )
+            out = await _client(http).enroll_in_sequence(
+                "seq1", contact_ids=["c1", "c2"],
+            )
+    assert out["enrolled"] == 2
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload == {"contactIds": ["c1", "c2"]}
+
+
+@pytest.mark.asyncio
+async def test_broadcast_create_recipients_send_flow() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            create = mock.post(f"{_BASE}/broadcasts").mock(
+                return_value=httpx.Response(200, json={"id": "b1"})
+            )
+            recips = mock.post(f"{_BASE}/broadcasts/b1/recipients").mock(
+                return_value=httpx.Response(200, json={"added": 3, "skipped": 0})
+            )
+            send = mock.post(f"{_BASE}/broadcasts/b1/send").mock(
+                return_value=httpx.Response(200, json={"status": "sending", "sent": 3})
+            )
+            await _client(http).create_broadcast(
+                profile_id="prof", account_id="acc1", platform="instagram",
+                name="Promo", message_text="¡Nuevo clip!",
+            )
+            await _client(http).add_broadcast_recipients("b1", contact_ids=["c1"])
+            out = await _client(http).send_broadcast("b1")
+    assert create.called and recips.called and send.called
+    assert out["status"] == "sending"
+    create_body = json.loads(create.calls.last.request.content.decode())
+    assert create_body["message"] == {"text": "¡Nuevo clip!"}

@@ -39,6 +39,7 @@ from nexoclip.db import (
     ClipsRepo,
     Database,
     TenantsRepo,
+    ZernioBroadcastLogRepo,
     ZernioCalendarRepo,
     ZernioInboxRepo,
     ZernioPublishesRepo,
@@ -658,8 +659,20 @@ async def zernio_dashboard(
             # Borradores — local rows seeded status='draft' at save time
             # (publishes already tenant-filtered; limit=100 above).
             "drafts": [p for p in publishes if p.status == "draft"],
+            # Phase 10 growth layer is Pro-gated — the tab shows the
+            # panels for paid tiers, an upsell card otherwise.
+            "is_pro": _is_paid_tier(request),
         },
     )
+
+
+def _is_paid_tier(request: Request) -> bool:
+    """True when the requesting tenant is on a paid tier (Pro / All-
+    Access). Gates the growth tab's content (upsell otherwise)."""
+    from nexoclip.tiers import PAID_TIERS
+
+    tier = getattr(request.state, "tenant_tier", None) or "free"
+    return tier in PAID_TIERS
 
 
 # ---------- Profile ----------
@@ -1320,6 +1333,403 @@ async def _tenant_account_ids(db: Database, tenant_id: str) -> list[str]:
     except ZernioError:
         return []
     return [a.account_id for a in accounts]
+
+
+# ---------- Crecimiento: funnel machine (phase 10, Pro-gated) ----------
+# Automations (IG/FB only), contacts, sequences, broadcasts. All
+# mutating routes carry require_paid_tier (non-Pro → 402, the JS shows
+# an upsell). Broadcasts carry a per-tenant daily cap (irreversible
+# mass-DM guardrail).
+
+# The "Bienvenida Nexo" sequence template (3 steps: welcome / tips /
+# CTA). delayMinutes: immediate, +1 day, +3 days.
+_BIENVENIDA_NEXO_STEPS: list[dict[str, Any]] = [
+    {"order": 1, "delayMinutes": 0,
+     "message": {"text": "¡Bienvenido! Gracias por escribir 🙌"}},
+    {"order": 2, "delayMinutes": 1440,
+     "message": {"text": "Tip: mira mis últimos clips para no perderte nada 🎬"}},
+    {"order": 3, "delayMinutes": 4320,
+     "message": {"text": "¿Te sumas a la comunidad? Aquí el link 👉"}},
+]
+
+# Comment-to-DM automations are Instagram/Facebook only (Zernio
+# enforces it; we gate first for a clean error).
+_AUTOMATION_PLATFORMS = frozenset({"instagram", "facebook"})
+
+
+async def _account_platform(db: Database, tenant_id: str, account_id: str) -> str | None:
+    """Resolve one of the tenant's connected accounts to its platform,
+    or None if the account isn't theirs."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not get_settings().zernio_api_key:
+        return None
+    try:
+        accounts = await _build_client().list_accounts(profile_id=profile_id)
+    except ZernioError:
+        return None
+    for a in accounts:
+        if a.account_id == account_id:
+            return a.platform.lower()
+    return None
+
+
+@router.get("/growth/contacts.json")
+async def zernio_growth_contacts_json(
+    tag: str = "",
+    q: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Contacts seeded from comments/DMs (phase 9), with optional tag
+    filter + free-text search over name/username."""
+    account_ids = await _tenant_account_ids(db, tenant_id)
+    rows = await ZernioInboxRepo(db).list_contacts(account_ids, tag=(tag or None))
+    needle = (q or "").strip().lower()
+    if needle:
+        rows = [
+            r for r in rows
+            if needle in (r.get("name") or "").lower()
+            or needle in (r.get("username") or "").lower()
+        ]
+    return JSONResponse({"ok": True, "contacts": rows})
+
+
+@router.get("/growth/automations.json")
+async def zernio_growth_automations_json(
+    tenant_id: str = Depends(tenant_binder),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """List the tenant's comment-to-DM automations with stats."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not get_settings().zernio_api_key:
+        return JSONResponse({"ok": True, "automations": []})
+    try:
+        autos = await _build_client().list_comment_automations(profile_id=profile_id)
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, "automations": autos})
+
+
+@router.post("/growth/automations")
+async def zernio_growth_create_automation(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create a comment-to-DM automation. IG/FB only (enforced). Body:
+    {account_id, name, dm_message, keywords?, platform_post_id?,
+    post_id?, comment_reply?}."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    name = str(data.get("name") or "").strip()
+    dm_message = str(data.get("dm_message") or "").strip()
+    if not (account_id and name and dm_message):
+        return JSONResponse(
+            {"ok": False, "error": "account_id, name y dm_message obligatorios"},
+            status_code=400,
+        )
+    platform = await _account_platform(db, tenant_id, account_id)
+    if platform is None:
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    if platform not in _AUTOMATION_PLATFORMS:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Las automatizaciones comentario→DM solo funcionan en "
+                         "Instagram y Facebook.",
+            },
+            status_code=409,
+        )
+    profile_id = await _require_profile(db, tenant_id)
+    keywords = data.get("keywords")
+    keywords_list = (
+        [str(k).strip() for k in keywords if str(k).strip()]
+        if isinstance(keywords, list) else None
+    )
+    try:
+        result = await _build_client().create_comment_automation(
+            profile_id=profile_id,
+            account_id=account_id,
+            name=name,
+            dm_message=dm_message,
+            keywords=keywords_list,
+            platform_post_id=str(data.get("platform_post_id") or "") or None,
+            post_id=str(data.get("post_id") or "") or None,
+            comment_reply=str(data.get("comment_reply") or "") or None,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo crear la automatización: {e}"},
+            status_code=502,
+        )
+    return JSONResponse({"ok": True, "automation": result})
+
+
+@router.post("/growth/automations/{automation_id}/toggle")
+async def zernio_growth_toggle_automation(
+    automation_id: str,
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Activate/pause an automation. Body: {active: bool}."""
+    data = await _read_json(request)
+    active = bool(data.get("active")) if isinstance(data, dict) else False
+    try:
+        await _build_client().set_comment_automation_active(
+            automation_id, is_active=active,
+        )
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True})
+
+
+@router.get("/growth/sequences.json")
+async def zernio_growth_sequences_json(
+    tenant_id: str = Depends(tenant_binder),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """List the tenant's drip sequences."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not get_settings().zernio_api_key:
+        return JSONResponse({"ok": True, "sequences": []})
+    try:
+        seqs = await _build_client().list_sequences(profile_id=profile_id)
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, "sequences": seqs})
+
+
+def _validate_sequence_steps(raw: Any) -> list[dict[str, Any]] | None:
+    """Coerce + validate the steps editor payload. Returns None on a
+    bad shape (caller → 400). Each step needs order (int), delayMinutes
+    (int ≥ 0), and message text."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    steps: list[dict[str, Any]] = []
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict):
+            return None
+        delay = s.get("delayMinutes", s.get("delay_minutes"))
+        text = ""
+        msg = s.get("message")
+        if isinstance(msg, dict):
+            text = str(msg.get("text") or "")
+        elif isinstance(s.get("text"), str):
+            text = s["text"]
+        if not isinstance(delay, int) or delay < 0 or not text.strip():
+            return None
+        steps.append(
+            {"order": i + 1, "delayMinutes": delay, "message": {"text": text.strip()}}
+        )
+    return steps
+
+
+@router.post("/growth/sequences")
+async def zernio_growth_create_sequence(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create a drip sequence. Body: {account_id, name, steps:[...],
+    description?, template?}. template='bienvenida' uses the built-in
+    "Bienvenida Nexo" 3-step template."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    name = str(data.get("name") or "").strip()
+    if not (account_id and name):
+        return JSONResponse(
+            {"ok": False, "error": "account_id y name obligatorios"}, status_code=400,
+        )
+    platform = await _account_platform(db, tenant_id, account_id)
+    if platform is None:
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    if data.get("template") == "bienvenida":
+        steps: list[dict[str, Any]] | None = list(_BIENVENIDA_NEXO_STEPS)
+    else:
+        steps = _validate_sequence_steps(data.get("steps"))
+    if steps is None:
+        return JSONResponse(
+            {"ok": False, "error": "Cada paso necesita delayMinutes (≥0) y texto."},
+            status_code=400,
+        )
+    profile_id = await _require_profile(db, tenant_id)
+    try:
+        result = await _build_client().create_sequence(
+            profile_id=profile_id, account_id=account_id, platform=platform,
+            name=name, steps=steps,
+            description=str(data.get("description") or "") or None,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo crear la secuencia: {e}"},
+            status_code=502,
+        )
+    return JSONResponse({"ok": True, "sequence": result})
+
+
+@router.post("/growth/sequences/{sequence_id}/toggle")
+async def zernio_growth_toggle_sequence(
+    sequence_id: str,
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    data = await _read_json(request)
+    active = bool(data.get("active")) if isinstance(data, dict) else False
+    try:
+        await _build_client().set_sequence_active(sequence_id, active=active)
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/growth/sequences/{sequence_id}/enroll")
+async def zernio_growth_enroll_sequence(
+    sequence_id: str,
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Enroll contacts. Body: {contact_ids:[...]} OR {tag: "..."} to
+    enroll all contacts carrying that tag."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    contact_ids = data.get("contact_ids")
+    ids = (
+        [str(c) for c in contact_ids if c]
+        if isinstance(contact_ids, list) else []
+    )
+    tag = str(data.get("tag") or "").strip()
+    if tag and not ids:
+        # "enroll all with tag X" — resolve to the contacts' Zernio ids.
+        account_ids = await _tenant_account_ids(db, tenant_id)
+        rows = await ZernioInboxRepo(db).list_contacts(account_ids, tag=tag)
+        ids = [
+            str(r["zernio_contact_id"]) for r in rows if r.get("zernio_contact_id")
+        ]
+    if not ids:
+        return JSONResponse(
+            {"ok": False, "error": "Sin contactos para inscribir (faltan ids de Zernio)."},
+            status_code=400,
+        )
+    try:
+        result = await _build_client().enroll_in_sequence(
+            sequence_id, contact_ids=ids,
+        )
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, "result": result})
+
+
+@router.post("/growth/broadcasts/send")
+async def zernio_growth_send_broadcast(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Create + populate + SEND a broadcast in one call (the UI's
+    confirm modal gates the click). Body: {account_id, name, message,
+    contact_ids?, tag?, confirm: true}.
+
+    Guardrail: the per-tenant daily cap is checked BEFORE the send —
+    a broadcast is an irreversible mass DM. `confirm` must be true."""
+    import datetime as _dt
+
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    if not data.get("confirm"):
+        return JSONResponse(
+            {"ok": False, "error": "Confirmación requerida."}, status_code=400,
+        )
+    account_id = str(data.get("account_id") or "")
+    name = str(data.get("name") or "").strip()
+    message = str(data.get("message") or "").strip()
+    if not (account_id and name and message):
+        return JSONResponse(
+            {"ok": False, "error": "account_id, name y message obligatorios"},
+            status_code=400,
+        )
+    platform = await _account_platform(db, tenant_id, account_id)
+    if platform is None:
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+
+    # --- daily cap (irreversible mass-DM guardrail) ---
+    day = _dt.datetime.now(_dt.UTC).date().isoformat()
+    cap = get_settings().hub_max_broadcasts_per_day
+    log = ZernioBroadcastLogRepo(db)
+    if await log.count_for_day(tenant_id, day=day) >= cap:
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "daily_cap",
+                "error": f"Límite diario de broadcasts alcanzado ({cap}/día). "
+                         "Inténtalo mañana.",
+            },
+            status_code=429,
+        )
+
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    contact_ids = data.get("contact_ids")
+    ids = [str(c) for c in contact_ids if c] if isinstance(contact_ids, list) else []
+    tag = str(data.get("tag") or "").strip()
+    if tag and not ids:
+        account_ids = await _tenant_account_ids(db, tenant_id)
+        rows = await ZernioInboxRepo(db).list_contacts(account_ids, tag=tag)
+        ids = [str(r["zernio_contact_id"]) for r in rows if r.get("zernio_contact_id")]
+    try:
+        created = await client.create_broadcast(
+            profile_id=profile_id, account_id=account_id, platform=platform,
+            name=name, message_text=message,
+        )
+        broadcast_id = str(created.get("_id") or created.get("id") or "")
+        if not broadcast_id:
+            return JSONResponse(
+                {"ok": False, "error": "Zernio no devolvió un id de broadcast."},
+                status_code=502,
+            )
+        await client.add_broadcast_recipients(
+            broadcast_id, contact_ids=ids or None, use_segment=not ids,
+        )
+        result = await client.send_broadcast(broadcast_id)
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo enviar el broadcast: {e}"},
+            status_code=502,
+        )
+    # Record the send AFTER it fires — only successful sends count
+    # against the cap.
+    await log.record(tenant_id, broadcast_id=broadcast_id, day=day)
+    _log.info(
+        "zernio.broadcast.sent tenant=%s broadcast=%s recipients=%s",
+        tenant_id, broadcast_id, len(ids) if ids else "segment",
+    )
+    return JSONResponse({"ok": True, "broadcast_id": broadcast_id, "result": result})
 
 
 # ---------- Inbox: comentarios + DMs (phase 9) ----------

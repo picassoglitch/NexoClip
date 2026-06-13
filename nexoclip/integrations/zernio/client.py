@@ -776,6 +776,223 @@ class ZernioClient:
             json={"accountId": account_id, "status": status}, parse_json=False,
         )
 
+    # ---- Growth layer: contacts ----
+
+    async def list_contacts(
+        self, *, profile_id: str, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """GET /contacts — CRM contacts for the profile."""
+        body = await self._request(
+            "GET", "/contacts", params={"profileId": profile_id, "limit": limit},
+        )
+        rows = body.get("contacts") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            rows = body.get("data") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def create_contact(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        tags: list[str] | None = None,
+        account_id: str | None = None,
+        platform: str | None = None,
+        platform_identifier: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /contacts — create a CRM contact, optionally with a
+        platform channel (accountId + platform + platformIdentifier)."""
+        payload: dict[str, Any] = {"profileId": profile_id, "name": name}
+        if tags:
+            payload["tags"] = tags
+        if account_id and platform and platform_identifier:
+            payload["accountId"] = account_id
+            payload["platform"] = platform
+            payload["platformIdentifier"] = platform_identifier
+        body = await self._request("POST", "/contacts", json=payload)
+        return body if isinstance(body, dict) else {}
+
+    # ---- Growth layer: comment-to-DM automations (IG/FB) ----
+
+    async def list_comment_automations(
+        self, *, profile_id: str,
+    ) -> list[dict[str, Any]]:
+        """GET /comment-automations?profileId= — list with stats."""
+        body = await self._request(
+            "GET", "/comment-automations", params={"profileId": profile_id},
+        )
+        rows = body.get("automations") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def create_comment_automation(
+        self,
+        *,
+        profile_id: str,
+        account_id: str,
+        name: str,
+        dm_message: str,
+        keywords: list[str] | None = None,
+        platform_post_id: str | None = None,
+        post_id: str | None = None,
+        comment_reply: str | None = None,
+        match_mode: str = "contains",
+    ) -> dict[str, Any]:
+        """POST /comment-automations — Instagram/Facebook only (the
+        endpoint rejects other platforms; the route gates it too).
+        Empty `keywords` = any comment triggers."""
+        payload: dict[str, Any] = {
+            "profileId": profile_id,
+            "accountId": account_id,
+            "name": name,
+            "dmMessage": dm_message,
+            "matchMode": match_mode,
+            "isActive": True,
+        }
+        if keywords:
+            payload["keywords"] = keywords
+        if platform_post_id:
+            payload["platformPostId"] = platform_post_id
+        if post_id:
+            payload["postId"] = post_id
+        if comment_reply:
+            payload["commentReply"] = comment_reply
+        body = await self._request(
+            "POST", "/comment-automations", json=payload,
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def set_comment_automation_active(
+        self, automation_id: str, *, is_active: bool,
+    ) -> None:
+        """PATCH /comment-automations/{id} — toggle active."""
+        await self._request(
+            "PATCH", f"/comment-automations/{automation_id}",
+            json={"isActive": is_active}, parse_json=False,
+        )
+
+    async def comment_automation_logs(
+        self, automation_id: str,
+    ) -> list[dict[str, Any]]:
+        """GET /comment-automations/{id}/logs — trigger history."""
+        body = await self._request(
+            "GET", f"/comment-automations/{automation_id}/logs",
+        )
+        rows = body.get("logs") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    # ---- Growth layer: sequences (drip) ----
+
+    async def list_sequences(self, *, profile_id: str) -> list[dict[str, Any]]:
+        """GET /sequences?profileId=."""
+        body = await self._request(
+            "GET", "/sequences", params={"profileId": profile_id},
+        )
+        rows = body.get("sequences") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def create_sequence(
+        self,
+        *,
+        profile_id: str,
+        account_id: str,
+        platform: str,
+        name: str,
+        steps: list[dict[str, Any]],
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /sequences — `steps` is [{order, delayMinutes,
+        message:{text}}] (validated by the route before this call)."""
+        payload: dict[str, Any] = {
+            "profileId": profile_id,
+            "accountId": account_id,
+            "platform": platform,
+            "name": name,
+            "steps": steps,
+        }
+        if description:
+            payload["description"] = description
+        body = await self._request("POST", "/sequences", json=payload)
+        return body if isinstance(body, dict) else {}
+
+    async def set_sequence_active(
+        self, sequence_id: str, *, active: bool,
+    ) -> None:
+        """POST /sequences/{id}/activate | /pause."""
+        verb = "activate" if active else "pause"
+        await self._request(
+            "POST", f"/sequences/{sequence_id}/{verb}", parse_json=False,
+        )
+
+    async def enroll_in_sequence(
+        self, sequence_id: str, *, contact_ids: list[str],
+    ) -> dict[str, Any]:
+        """POST /sequences/{id}/enroll — already-enrolled are skipped."""
+        body = await self._request(
+            "POST", f"/sequences/{sequence_id}/enroll",
+            json={"contactIds": contact_ids},
+        )
+        return body if isinstance(body, dict) else {}
+
+    # ---- Growth layer: broadcasts ----
+
+    async def create_broadcast(
+        self,
+        *,
+        profile_id: str,
+        account_id: str,
+        platform: str,
+        name: str,
+        message_text: str,
+    ) -> dict[str, Any]:
+        """POST /broadcasts — creates a DRAFT broadcast (recipients +
+        send are separate calls). Returns the broadcast with its id."""
+        body = await self._request(
+            "POST", "/broadcasts",
+            json={
+                "profileId": profile_id,
+                "accountId": account_id,
+                "platform": platform,
+                "name": name,
+                "message": {"text": message_text},
+            },
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def add_broadcast_recipients(
+        self,
+        broadcast_id: str,
+        *,
+        contact_ids: list[str] | None = None,
+        use_segment: bool = False,
+    ) -> dict[str, Any]:
+        """POST /broadcasts/{id}/recipients."""
+        payload: dict[str, Any] = {}
+        if contact_ids:
+            payload["contactIds"] = contact_ids
+        if use_segment:
+            payload["useSegment"] = True
+        body = await self._request(
+            "POST", f"/broadcasts/{broadcast_id}/recipients", json=payload,
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def send_broadcast(self, broadcast_id: str) -> dict[str, Any]:
+        """POST /broadcasts/{id}/send — start sending now."""
+        body = await self._request(
+            "POST", f"/broadcasts/{broadcast_id}/send",
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def schedule_broadcast(
+        self, broadcast_id: str, *, scheduled_at: str,
+    ) -> dict[str, Any]:
+        """POST /broadcasts/{id}/schedule — send later (ISO-8601)."""
+        body = await self._request(
+            "POST", f"/broadcasts/{broadcast_id}/schedule",
+            json={"scheduledAt": scheduled_at},
+        )
+        return body if isinstance(body, dict) else {}
+
     # ---- Queue (recurring schedule slots) ----
     # NOTE: a queue SLOT's dayOfWeek is 0=Sunday..6=Saturday — NOT the
     # best-time convention (0=Monday). Don't mix the two.

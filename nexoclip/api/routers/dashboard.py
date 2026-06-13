@@ -37,6 +37,7 @@ from nexoclip.db import (
     ApiTokensRepo,
     BrandKitsRepo,
     CandidatesRepo,
+    ChannelWatchesRepo,
     ClipsRepo,
     ConnectedAccountsRepo,
     Database,
@@ -3560,33 +3561,9 @@ async def clip_overlay_finalize(
         },
     )
 
-    # Slice G.5 — fire the per-clip auto-publish trigger as soon as the
-    # operator approves. The periodic sweep ALSO runs, but waiting up
-    # to publish_interval_s (default 60s) for the undo countdown to
-    # appear made the UX feel broken — the operator clicks Complete
-    # and the inbox's "fires in" chip should populate immediately.
-    # Skip rules + idempotence are shared with the sweep so the two
-    # paths can coexist without duplicating jobs.
-    try:
-        from nexoclip.publish.auto import dispatch_for_clip
-        report = await dispatch_for_clip(db, clip_id=clip_id)
-        if report.jobs_enqueued:
-            await EventsRepo(db).emit(
-                type="clip.auto_publish_enqueued",
-                payload={
-                    "clip_id": clip_id,
-                    "jobs": report.jobs_enqueued,
-                    "skipped_no_account": report.clips_skipped_no_account,
-                    "skipped_already_queued": report.clips_skipped_already_queued,
-                },
-            )
-    except Exception as e:  # noqa: BLE001 — auto-publish must never block approval
-        from structlog import get_logger
-        get_logger(__name__).warning(
-            "clip.finalize.auto_publish_failed",
-            clip_id=clip_id,
-            reason=str(e),
-        )
+    # Slice G.5 auto-publish-on-approve removed (Etapa A): it enqueued into
+    # the legacy publish_jobs worker, which is being retired — publishing
+    # now goes through Zernio. Nothing to trigger here on approve.
 
     # Slice N.2 — Approve & continue. After finalize, walk to the
     # NEXT clip on the same stream that's still in the editor queue
@@ -5844,6 +5821,78 @@ def _parse_phrase_list(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+@router.get("/sources", response_class=HTMLResponse)
+async def sources_list(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Connected channels — auto-ingest sources (YouTube/Twitch/Kick)."""
+    watches = await ChannelWatchesRepo(db).list_for_tenant()
+    personas = await PersonasRepo(db).list_for_tenant()
+    return templates.TemplateResponse(
+        request,
+        "sources.html",
+        {"watches": watches, "personas": personas},
+    )
+
+
+@router.post("/sources", dependencies=[Depends(require_full_scope)])
+async def sources_add(
+    request: Request,
+    channel_url: str = Form(...),
+    persona_id: str = Form(...),
+    platform: str = Form(""),
+    language: str = Form(""),
+    label: str = Form(""),
+    max_per_poll: int = Form(3),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    from nexoclip.ingest.service import detect_platform
+
+    resolved = platform.strip() or detect_platform(channel_url)
+    await ChannelWatchesRepo(db).create(
+        platform=resolved,
+        channel_url=channel_url.strip(),
+        persona_id=persona_id,
+        channel_label=label.strip() or None,
+        language=language.strip() or None,
+        max_per_poll=int(max_per_poll),
+    )
+    await EventsRepo(db).emit(
+        type="channel_watch.created",
+        payload={"channel_url": channel_url.strip(), "platform": resolved},
+    )
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
+@router.post("/sources/{watch_id}/toggle", dependencies=[Depends(require_full_scope)])
+async def sources_toggle(
+    request: Request,
+    watch_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    repo = ChannelWatchesRepo(db)
+    existing = await repo.get(watch_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="channel watch not found")
+    await repo.set_enabled(watch_id, not existing.enabled)
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
+@router.post("/sources/{watch_id}/delete", dependencies=[Depends(require_full_scope)])
+async def sources_delete(
+    request: Request,
+    watch_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    await ChannelWatchesRepo(db).delete(watch_id)
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
 @router.get("/brand-kits", response_class=HTMLResponse)
 async def brand_kits_list(
     request: Request,
@@ -5978,15 +6027,34 @@ async def brand_kits_edit_submit(
     auto_publish_delay_min: int = Form(60),
     forward_phrases: str = Form(""),
     retroactive_phrases: str = Form(""),
+    safe_schedule_enabled: str = Form(""),
+    content_timezone: str = Form("UTC"),
+    safety_policy_json: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    import json as _json
+
     from nexoclip.branding.captions import _preset_by_id
 
     repo = BrandKitsRepo(db)
     if await repo.get(kit_id) is None:
         raise HTTPException(status_code=404, detail="brand kit not found")
     caption_style = _preset_by_id(caption_preset).model_dump()
+
+    # Safe trap — advanced per-platform overrides arrive as a JSON blob.
+    # An empty / malformed blob means "fall back to the built-in defaults"
+    # rather than 500ing the settings save.
+    safety_policy: dict[str, object] | None = None
+    blob = safety_policy_json.strip()
+    if blob:
+        try:
+            parsed = _json.loads(blob)
+            if isinstance(parsed, dict):
+                safety_policy = parsed
+        except _json.JSONDecodeError:
+            safety_policy = None
+
     await repo.update(
         kit_id,
         name=name,
@@ -6008,6 +6076,9 @@ async def brand_kits_edit_submit(
             forward=_parse_phrase_list(forward_phrases),
             retroactive=_parse_phrase_list(retroactive_phrases),
         ),
+        safe_schedule_enabled=bool(safe_schedule_enabled),
+        content_timezone=content_timezone or "UTC",
+        safety_policy=safety_policy,
     )
     return RedirectResponse(url=f"/dashboard/brand-kits/{kit_id}", status_code=303)
 

@@ -68,7 +68,9 @@ async def test_background_drains_lifespan_starts_three_named_loops(
         metrics_interval_s=3600.0,
     ):
         names = {t.get_name() for t in asyncio.all_tasks()}
-        assert "nexoclip-publish-loop" in names
+        # The legacy publish_jobs drain loop was removed (Etapa A) —
+        # publishing goes through Zernio now, not the per-platform worker.
+        assert "nexoclip-publish-loop" not in names
         assert "nexoclip-webhook-loop" in names
         assert "nexoclip-metrics-loop" in names
 

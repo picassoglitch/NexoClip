@@ -555,10 +555,13 @@ def _explain_download_failure(
     ):
         return IngestError(
             f"yt-dlp 403'd on Kick for {vod_url}. Kick blocks unauthenticated "
-            f"scraping; pass logged-in browser cookies through. Set "
-            f"NEXOCLIP_COOKIES_FROM_BROWSER=chrome (or edge / firefox / brave / "
-            f"chromium) in your .env or shell, then retry. The browser must "
-            f"have visited Kick at least once. "
+            f"scraping; pass logged-in cookies through. On a server / container "
+            f"deploy (no browser installed) export a Netscape cookies.txt while "
+            f"logged into Kick, place it on the persistent volume, and set "
+            f"NEXOCLIP_COOKIES_FILE=/data/cookies.txt, then retry. For local dev "
+            f"you can instead set NEXOCLIP_COOKIES_FROM_BROWSER=chrome (or edge / "
+            f"firefox / brave / chromium); that browser must have visited Kick at "
+            f"least once. "
             f"Raw error: {raw}"
         )
     return IngestError(f"yt-dlp failed for {vod_url}: {raw}")

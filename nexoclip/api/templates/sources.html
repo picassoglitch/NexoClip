@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Connected channels - NexoClip{% endblock %}
+{% block content %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Connected channels</h2>
+    <small>Watch a creator's channel — new VODs auto-ingest and run the full pipeline (clip → variants → safe auto-publish).</small>
+  </div>
+</div>
+
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-plug-connected" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">Connect a channel</span>
+  </div>
+  <div class="nc-panel__body">
+    {% if personas %}
+    <form action="/dashboard/sources" method="post">
+      <label class="nc-label">Channel URL
+        <input class="nc-input nc-input--mono" type="text" name="channel_url" required
+               placeholder="https://www.youtube.com/@creator/videos">
+      </label>
+      <div class="nc-grid-3">
+        <label class="nc-label">Platform <small>(blank = auto-detect)</small>
+          <select class="nc-input" name="platform">
+            <option value="">auto</option>
+            <option value="youtube">youtube</option>
+            <option value="twitch">twitch</option>
+            <option value="kick">kick</option>
+          </select>
+        </label>
+        <label class="nc-label">Persona
+          <select class="nc-input" name="persona_id" required>
+            {% for p in personas %}
+            <option value="{{ p.id }}">{{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="nc-label">Max per poll
+          <input class="nc-input" type="number" name="max_per_poll" min="1" max="25" value="3">
+        </label>
+      </div>
+      <div class="nc-grid-2">
+        <label class="nc-label">Label <small>(optional)</small>
+          <input class="nc-input" type="text" name="label" placeholder="e.g. Main YouTube">
+        </label>
+        <label class="nc-label">Language <small>(optional hint)</small>
+          <input class="nc-input nc-input--mono" type="text" name="language" placeholder="es">
+        </label>
+      </div>
+      <div style="margin-top: 12px;">
+        <button type="submit" class="nc-btn nc-btn--primary">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+          <span>Connect channel</span>
+        </button>
+      </div>
+    </form>
+    {% else %}
+    <p class="nc-empty__body">
+      Create a persona first — auto-ingested VODs need one for variant
+      generation. <a href="/dashboard/personas">Manage personas</a>.
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+{% if watches %}
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-broadcast" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+    <span class="nc-panel__title">{{ watches|length }} channel{{ "s" if watches|length != 1 else "" }}</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table">
+      <thead>
+        <tr>
+          <th>Channel</th>
+          <th>Platform</th>
+          <th>State</th>
+          <th>Seen</th>
+          <th>Last polled</th>
+          <th class="nc-cell-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in watches %}
+        <tr>
+          <td>
+            <strong style="color: var(--nc-text);">{{ w.channel_label or w.channel_url }}</strong>
+            <div><span class="nc-mono nc-mono--muted" style="font-size: 11px;">{{ w.channel_url }}</span></div>
+          </td>
+          <td><span class="nc-chip nc-chip--code">{{ w.platform }}</span></td>
+          <td>
+            {% if w.enabled %}
+            <span class="nc-chip nc-chip--success">
+              <span class="nc-status-dot nc-status-dot--success"></span>
+              <span>watching</span>
+            </span>
+            {% else %}
+            <span class="nc-chip nc-chip--muted">paused</span>
+            {% endif %}
+          </td>
+          <td><span class="nc-mono">{{ w.seen_video_ids|length }}</span></td>
+          <td><span class="nc-mono" style="font-size: 11px;">{{ w.last_polled_at or 'never' }}</span></td>
+          <td class="nc-cell-actions">
+            <form action="/dashboard/sources/{{ w.id }}/toggle" method="post" style="display: inline; margin: 0;">
+              <button type="submit" class="nc-btn nc-btn--sm">{{ "Pause" if w.enabled else "Resume" }}</button>
+            </form>
+            <form action="/dashboard/sources/{{ w.id }}/delete" method="post" style="display: inline; margin: 0;"
+                  onsubmit="return confirm('Remove this channel watch?');">
+              <button type="submit" class="nc-btn nc-btn--sm nc-btn--danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="nc-panel">
+  <div class="nc-empty">
+    <div class="nc-empty__icon"><i class="ti ti-broadcast" aria-hidden="true"></i></div>
+    <div class="nc-empty__title">No channels connected</div>
+    <p class="nc-empty__body">
+      Connect a YouTube, Twitch, or Kick channel above. NexoClip checks it
+      for new VODs on a schedule and runs each one through the full pipeline
+      automatically — no manual upload needed.
+    </p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% endblock %}

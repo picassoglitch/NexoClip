@@ -53,6 +53,7 @@ from nexoclip.detect import (
     CandidateBatch,
     detect_candidates,
     detect_viral_moments,
+    fallback_interval_candidates,
     save_candidates,
 )
 from nexoclip.diarize import (
@@ -851,6 +852,20 @@ async def _run_pipeline(
             extra_phrases_by_speaker=extra_phrases_by_speaker or None,
             extra_phrases_tenant_wide=extra_phrases_tenant_wide,
         )
+        # Always-give-clips fallback: a silent, static clip (no speech, no
+        # audio peaks, no visual motion — e.g. some gameplay / ambient
+        # streams) fires zero detectors. Rather than ship an empty result,
+        # place evenly-spaced interval anchors so the user still gets clips
+        # to review. Real signal-based candidates always rank above these.
+        if not candidates:
+            candidates = fallback_interval_candidates(
+                tenant_id=tenant_id, stream=stream,
+            )
+            _log.info(
+                "detect.fallback_interval",
+                stream_id=stream.id,
+                count=len(candidates),
+            )
         save_candidates(
             stream_dir,
             CandidateBatch(stream_id=stream.id, tenant_id=tenant_id, candidates=candidates),
@@ -904,6 +919,10 @@ async def _run_pipeline(
             None if _admin_uncapped
             else max(300.0, stream.duration_s * 6.0)
         )
+        # No-speech path: an empty transcript has no sentence boundaries to
+        # snap to, so drop it and let cut use static pre/post-roll windows
+        # around each candidate anchor (the dynamic windower needs words).
+        cut_transcript = transcript if transcript.segments else None
         try:
             if _cut_timeout is None:
                 clips = await cut_clips(
@@ -914,7 +933,7 @@ async def _run_pipeline(
                     config=config.clip,
                     force=force,
                     brand_kits=candidate_kits,
-                    transcript=transcript,
+                    transcript=cut_transcript,
                     # Task 1d — wire the DB through so cut_clips can
                     # emit clip.cut.started / .substep / .completed
                     # events into the existing event log. The dashboard
@@ -934,7 +953,8 @@ async def _run_pipeline(
                         brand_kits=candidate_kits,
                         # Slice G.1 — dynamic per-candidate windowing snaps each
                         # clip's start/end to transcript sentence boundaries.
-                        transcript=transcript,
+                        # (None on a silent stream → static windows.)
+                        transcript=cut_transcript,
                         db=db,
                     ),
                     timeout=_cut_timeout,

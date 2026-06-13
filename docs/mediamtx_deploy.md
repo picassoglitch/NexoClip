@@ -1,4 +1,55 @@
-# Deploying MediaMTX for NexoClip live ingest (phase L.1)
+# Deploying MediaMTX for NexoClip live ingest
+
+> **Canonical deploy is now Path B — the `nexoclip-live` repo + S3-compatible
+> object storage.** The MediaMTX service lives in its own repo
+> (`picassoglitch/nexoclip-live`), records each stream, and uploads it to an
+> object store; NexoClip pulls it to auto-clip (Phase L.2). **Default store is
+> Cloudflare R2** — $0 egress, so the once-per-stream download is free
+> (~$0.005/stream vs ~$0.40 on metered-egress stores); cheapest for video and
+> it isolates bulky recordings from the shared Supabase egress budget.
+> Supabase/MinIO/S3 also work — it's all the same `NEXOCLIP_LIVE_STORAGE_*`
+> config, only the endpoint + keys change.
+>
+> The shared-`/data`-volume approach below is **Path A (legacy)** — kept for
+> reference / single-box setups. It works, but doesn't scale (RTMP ingest and
+> the clip workers are pinned to one volume). Prefer Path B.
+
+---
+
+## Path B — separate repo + object storage (recommended)
+
+```
+OBS ──rtmp──▶ nexoclip-live (MediaMTX svc) ──upload──▶ store/live/<stream_id>/
+                     │ webhooks (authorize/started/ended)        ▲
+                     ▼                                            │ pull
+                  NexoClip  ──auto-clip──────────────────────────┘
+```
+
+- **Service repo + full deploy steps:** `nexoclip-live/README.md`.
+- **NexoClip side:** set `NEXOCLIP_LIVE_STORAGE_BUCKET`,
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT`, `NEXOCLIP_LIVE_STORAGE_ACCESS_KEY_ID`,
+  `NEXOCLIP_LIVE_STORAGE_SECRET_ACCESS_KEY` (+ optional
+  `NEXOCLIP_LIVE_STORAGE_PREFIX`, `NEXOCLIP_LIVE_STORAGE_REGION`) and
+  `NEXOCLIP_LIVE_RTMP_BASE_URL`. When the bucket is set, the live runner
+  pulls recordings from the store instead of disk — no shared volume.
+
+  **Cloudflare R2 (default):** create a bucket, create an R2 API token, and set
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
+  with `NEXOCLIP_LIVE_STORAGE_REGION=auto`. $0 egress + a 10 GB / 1M-op free
+  tier, so low volume is genuinely free and there's no monthly minimum.
+
+  **Supabase Storage (alternative):** create a private bucket, grab S3 keys
+  from *Project Settings → Storage*, set
+  `NEXOCLIP_LIVE_STORAGE_ENDPOINT=https://<ref>.supabase.co/storage/v1/s3`
+  + `NEXOCLIP_LIVE_STORAGE_REGION=<project region>`, and raise the bucket's
+  file-size limit (default 50 MB). Note: ~$0.09/GB egress on every pull, and
+  it draws from the project-wide egress budget.
+
+The rest of this doc is **Path A (legacy, shared volume).**
+
+---
+
+# Path A (legacy) — shared `/data` volume
 
 This is the operator-side deploy guide for the MediaMTX service that
 sits in front of NexoClip and accepts RTMP push from OBS.

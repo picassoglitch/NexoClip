@@ -1,0 +1,2261 @@
+{% extends "base.html" %}
+{% block title %}Publish Center - NexoClip{% endblock %}
+{% block content %}
+
+<style>
+  .nc-pc-acct-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 14px;
+  }
+  .nc-pc-acct-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.02);
+  }
+  .nc-pc-acct-chip.is-connected {
+    border-color: rgba(72, 187, 120, 0.35);
+    background: rgba(72, 187, 120, 0.08);
+    color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-connect-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 500; cursor: pointer;
+    border: 1px dashed rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.02); color: var(--nc-text--muted, #aaa);
+  }
+  .nc-pc-connect-btn:hover {
+    border-color: var(--nc-green, #48bb78); color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-tabs {
+    display: flex; gap: 4px; margin: 16px 0 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .nc-pc-tab {
+    padding: 8px 16px; background: none; border: none;
+    color: var(--nc-text--muted, #aaa); cursor: pointer;
+    font-size: 13px; font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .nc-pc-tab.is-active {
+    color: var(--nc-green, #48bb78);
+    border-bottom-color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-tab-body { display: none; }
+  .nc-pc-tab-body.is-active { display: block; }
+
+  .nc-pc-clip-list { display: flex; flex-direction: column; gap: 8px; }
+  .nc-pc-clip-row {
+    display: grid; grid-template-columns: 100px 1fr auto;
+    gap: 12px; align-items: center; padding: 8px 12px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; cursor: pointer;
+    transition: border-color 120ms, background 120ms;
+  }
+  .nc-pc-clip-row:hover { border-color: rgba(255,255,255,0.15); }
+  .nc-pc-clip-row.is-expanded {
+    border-color: var(--nc-green, #48bb78);
+    background: rgba(72, 187, 120, 0.05);
+  }
+  .nc-pc-clip-row__thumb {
+    width: 100px; aspect-ratio: 9 / 16;
+    border-radius: 4px; overflow: hidden;
+    background: #0a0a0a; position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .nc-pc-clip-row__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .nc-pc-clip-row__thumb-fallback { color: rgba(255,255,255,0.2); font-size: 24px; }
+  .nc-pc-clip-row__dur {
+    position: absolute; bottom: 4px; right: 4px;
+    background: rgba(0,0,0,0.75); color: #fff;
+    padding: 1px 5px; border-radius: 3px; font-size: 10px; font-family: monospace;
+  }
+  .nc-pc-clip-row__meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .nc-pc-clip-row__title {
+    font-size: 14px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nc-pc-clip-row__id {
+    font-size: 11px; color: var(--nc-text--muted, #888); font-family: monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nc-pc-clip-row__status {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--nc-text--muted, #aaa);
+  }
+  .nc-pc-clip-row__caret {
+    color: var(--nc-text--muted, #aaa);
+    transition: transform 120ms, color 120ms; font-size: 18px;
+  }
+  .nc-pc-clip-row.is-expanded .nc-pc-clip-row__caret {
+    transform: rotate(180deg); color: var(--nc-green, #48bb78);
+  }
+
+  .nc-pc-publish-panel {
+    margin: 0; padding: 16px;
+    background: rgba(72, 187, 120, 0.04);
+    border: 1px solid rgba(72, 187, 120, 0.25);
+    border-radius: 8px; display: none;
+  }
+  .nc-pc-publish-panel.is-active { display: block; }
+  .nc-pc-publish-panel__header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .nc-pc-publish-panel__title { font-size: 15px; font-weight: 600; }
+  .nc-pc-publish-panel__meta { font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace; }
+  .nc-pc-platform-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .nc-pc-platform-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.02);
+    cursor: pointer; user-select: none; transition: all 100ms;
+  }
+  .nc-pc-platform-chip:hover { border-color: rgba(255,255,255,0.25); }
+  .nc-pc-platform-chip.is-disabled {
+    opacity: 0.35; cursor: not-allowed; background: rgba(255,255,255,0.01);
+  }
+  .nc-pc-platform-chip.is-selected {
+    background: var(--nc-green, #48bb78); color: #000; border-color: var(--nc-green, #48bb78);
+  }
+  .nc-pc-bulk-row {
+    display: grid; grid-template-columns: 80px 1fr auto;
+    gap: 12px; align-items: center; padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .nc-pc-bulk-row__thumb { width: 80px; aspect-ratio: 9/16; border-radius: 4px; overflow: hidden; background: #0a0a0a; }
+  .nc-pc-bulk-row__thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .nc-pc-bulk-row__meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .nc-pc-bulk-row__title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nc-pc-bulk-row__dur { font-size: 11px; color: var(--nc-text--muted, #aaa); font-family: monospace; }
+  .nc-pc-bulk-actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+
+  .nc-pc-stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px; margin-bottom: 16px;
+  }
+  .nc-pc-stat {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .nc-pc-stat__n { font-size: 22px; font-weight: 700; font-family: monospace; }
+  .nc-pc-stat__label { font-size: 11px; color: var(--nc-text--muted, #888); text-transform: uppercase; letter-spacing: 0.05em; }
+  .nc-pc-stat--ok { border-left: 3px solid var(--nc-green, #48bb78); }
+  .nc-pc-stat--ok .nc-pc-stat__n { color: var(--nc-green, #48bb78); }
+  .nc-pc-stat--fail { border-left: 3px solid #ff7575; }
+  .nc-pc-stat--fail .nc-pc-stat__n { color: #ff7575; }
+  .nc-pc-stat--sched { border-left: 3px solid #ffd84a; }
+  .nc-pc-stat--sched .nc-pc-stat__n { color: #ffd84a; }
+  .nc-pc-stat--total { border-left: 3px solid rgba(255,255,255,0.2); }
+
+  .nc-pc-history-row { cursor: pointer; transition: background 100ms; }
+  .nc-pc-history-row:hover { background: rgba(72, 187, 120, 0.05); }
+  .nc-pc-history-row--inert { cursor: default; }
+  .nc-pc-history-row--inert:hover { background: transparent; }
+
+  .nc-pc-queued-banner { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; }
+  .nc-pc-queued-banner:hover { color: var(--nc-green, #48bb78); }
+  .nc-pc-queued-banner__cta { margin-left: auto; font-weight: 500; }
+</style>
+
+{# ----- Flash banners ----- #}
+{% if request.query_params.get('queued') %}
+<a href="/dashboard/publish/zernio/job/{{ request.query_params.get('queued') }}"
+   class="nc-panel nc-pc-queued-banner"
+   style="border-color: var(--nc-green); margin-bottom: 12px; display: block;">
+  <div class="nc-panel__body" style="padding: 12px 16px; display:flex; align-items:center; gap:10px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    <span>Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span></span>
+    <span class="nc-pc-queued-banner__cta">
+      View status <i class="ti ti-arrow-right" aria-hidden="true"></i>
+    </span>
+  </div>
+</a>
+{% endif %}
+
+{% if request.query_params.get('draft') == 'saved' %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-file-pencil" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Borrador guardado — lo encuentras abajo en <strong>Borradores</strong> para publicarlo o programarlo.
+  </div>
+</div>
+{% endif %}
+
+{% if request.query_params.get('claimed') %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
+    Linked Zernio profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
+  </div>
+</div>
+{% endif %}
+
+{% if request.query_params.get('unlinked') %}
+<div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
+    Cleared. Connect a platform to publish.
+  </div>
+</div>
+{% endif %}
+
+{# ----- Not configured short-circuit ----- #}
+{% if not configured %}
+<div class="nc-page-header"><div><h2>Publish Center</h2></div></div>
+<div class="nc-panel">
+  <div class="nc-panel__body">
+    <div class="nc-empty">
+      <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
+      <div class="nc-empty__title">Zernio not configured</div>
+      <p class="nc-empty__body">
+        Set <code class="nc-mono">NEXOCLIP_ZERNIO_API_KEY</code>
+        in the deployment environment and redeploy.
+      </p>
+    </div>
+  </div>
+</div>
+
+{% else %}
+
+<div class="nc-page-header">
+  <div>
+    <h2>Publish Center</h2>
+    <small>
+      {% if profile_id %}
+      Profile <strong>{{ profile_name or profile_id }}</strong> —
+      ship clips from your library to every connected platform.
+      {% else %}
+      Create a profile to group your social accounts, then publish.
+      {% endif %}
+    </small>
+  </div>
+  {% if profile_id %}
+  <a href="/dashboard/publish/zernio?tab=published"
+     class="nc-btn nc-btn--primary js-open-published"
+     style="text-decoration:none; white-space:nowrap;">
+    <i class="ti ti-circle-check" aria-hidden="true"></i>
+    <span>View published{% if history %} ({{ history|length }}){% endif %}</span>
+  </a>
+  {% endif %}
+</div>
+
+{% if profile_id %}
+<div class="nc-pc-stats">
+  <div class="nc-pc-stat nc-pc-stat--ok js-open-published"
+       style="cursor:pointer;" title="View your published posts"
+       role="button" tabindex="0">
+    <div class="nc-pc-stat__n">{{ stats.published }}</div>
+    <div class="nc-pc-stat__label">Published</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--fail js-open-failed"
+       style="cursor:pointer;" title="Ver y reintentar publicaciones fallidas"
+       role="button" tabindex="0">
+    <div class="nc-pc-stat__n">{{ stats.failed }}</div>
+    <div class="nc-pc-stat__label">Failed</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--sched">
+    <div class="nc-pc-stat__n">{{ stats.scheduled }}</div>
+    <div class="nc-pc-stat__label">Scheduled</div>
+  </div>
+  <div class="nc-pc-stat nc-pc-stat--total">
+    <div class="nc-pc-stat__n">{{ stats.total }}</div>
+    <div class="nc-pc-stat__label">Last 25</div>
+  </div>
+</div>
+{% endif %}
+
+{# =========================================================
+   SECTION 1 — Connected accounts. Zernio connects ONE platform
+   at a time (per-platform hosted OAuth), so each not-yet-connected
+   platform gets its own Connect button rather than one magic link.
+   ========================================================= #}
+{% if profile_id %}
+{# Swappable wrapper: the connect popup's postMessage triggers a fetch
+   of /accounts-panel and replaces this innerHTML — no full reload.
+   Connect/disconnect clicks are DELEGATED (see JS) so swapped-in
+   buttons keep working. #}
+<div id="zn-accounts-panel">
+  {% include "publish/_zernio_accounts.html" %}
+</div>
+
+{% if connect_fetch_failed %}
+<div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i>
+    Could not list connected accounts from Zernio — chips below may be
+    stale. The publish form still works.
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+{# First-time setup — create a profile (groups your social accounts),
+   then connect platforms to it. Creation is inline (AJAX) so the
+   operator never leaves the page. #}
+<div class="nc-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__body">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px;">
+      <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-green);"></i>
+      <strong>Create your publishing profile</strong>
+    </div>
+    <p class="nc-text--muted" style="margin: 0 0 12px 0; font-size: 13px;">
+      A profile groups the social accounts you publish from (e.g.
+      “Personal brand” or “My agency”). Create one to get started —
+      you’ll connect TikTok / Instagram / YouTube etc. to it next.
+    </p>
+    <form id="zn-create-profile-form" style="display:flex; flex-direction:column; gap:8px; max-width: 520px;">
+      <label class="nc-label" style="margin:0;">
+        Profile name
+        <input class="nc-input" id="zn-profile-name" name="name" required
+               maxlength="80" placeholder="My brand" autocomplete="off">
+      </label>
+      <label class="nc-label" style="margin:0;">
+        Description <span class="nc-text--muted">(optional)</span>
+        <input class="nc-input" id="zn-profile-desc" name="description"
+               maxlength="200" placeholder="What this profile is for">
+      </label>
+      <div style="display:flex; align-items:center; gap:10px; margin-top: 4px;">
+        <button type="submit" class="nc-btn nc-btn--primary" id="zn-create-profile-btn">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+          <span>Create profile</span>
+        </button>
+        <span id="zn-create-profile-msg" class="nc-text--muted" style="font-size:12px;"></span>
+      </div>
+    </form>
+
+    <details style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
+      <summary class="nc-text--muted" style="cursor:pointer; font-size:12px;">
+        Already have a Zernio profile? Link it instead.
+      </summary>
+      <p class="nc-text--muted" style="font-size: 12px; margin: 8px 0;">
+        Paste an existing Zernio <code class="nc-mono">profileId</code>
+        (it must already have at least one connected account).
+      </p>
+      <form action="/dashboard/publish/zernio/accounts/claim" method="post" style="display: flex; gap: 8px; max-width: 520px;">
+        <input class="nc-input nc-input--mono" name="profile_id" required placeholder="prof_abc123…" style="flex:1;">
+        <button type="submit" class="nc-btn">
+          <i class="ti ti-link" aria-hidden="true"></i>
+          <span>Link</span>
+        </button>
+      </form>
+    </details>
+  </div>
+</div>
+{% endif %}
+
+{# =========================================================
+   SECTION 2 — Tab switcher + publish surfaces
+   ========================================================= #}
+{% if profile_id %}
+<div class="nc-pc-tabs">
+  <button type="button" class="nc-pc-tab is-active" data-tab="single">
+    <i class="ti ti-square" aria-hidden="true"></i>
+    Single Publish
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="bulk">
+    <i class="ti ti-layout-grid" aria-hidden="true"></i>
+    Bulk Publish
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="published">
+    <i class="ti ti-circle-check" aria-hidden="true"></i>
+    Published{% if history %} ({{ history|length }}){% endif %}
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="rendimiento">
+    <i class="ti ti-chart-bar" aria-hidden="true"></i>
+    Rendimiento
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="calendario">
+    <i class="ti ti-calendar" aria-hidden="true"></i>
+    Calendario
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="programacion">
+    <i class="ti ti-calendar-clock" aria-hidden="true"></i>
+    Programación
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="comentarios">
+    <i class="ti ti-message-circle" aria-hidden="true"></i>
+    Comentarios
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="dms">
+    <i class="ti ti-mail" aria-hidden="true"></i>
+    DMs
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="crecimiento">
+    <i class="ti ti-rocket" aria-hidden="true"></i>
+    Crecimiento
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="comunidad">
+    <i class="ti ti-speakerphone" aria-hidden="true"></i>
+    Comunidad
+  </button>
+</div>
+
+{# ========== Tab: Single Publish ========== #}
+<div class="nc-pc-tab-body is-active" data-tab-body="single">
+  {% if not publishable_clips %}
+  <div class="nc-panel">
+    <div class="nc-empty">
+      <div class="nc-empty__title">No clips ready to publish</div>
+      <p class="nc-empty__body">
+        Cut + approve a clip in <a href="/dashboard/streams">Streams</a>,
+        then come back here.
+      </p>
+    </div>
+  </div>
+  {% else %}
+  <div class="nc-pc-clip-list" id="zn-clip-list">
+    {% for c in publishable_clips %}
+    <div class="nc-pc-clip-row"
+         data-clip-id="{{ c.id }}"
+         data-clip-title="{{ c.title }}"
+         data-clip-duration="{{ c.duration_s|round(1) }}">
+      <div class="nc-pc-clip-row__thumb">
+        <img src="{{ c.thumbnail_url }}" alt=""
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+        <span class="nc-pc-clip-row__thumb-fallback" style="display:none;">
+          <i class="ti ti-photo" aria-hidden="true"></i>
+        </span>
+        <span class="nc-pc-clip-row__dur">{{ c.duration_s|round(0) }}s</span>
+      </div>
+      <div class="nc-pc-clip-row__meta">
+        <div class="nc-pc-clip-row__title">{{ c.title }}</div>
+        <div class="nc-pc-clip-row__id">{{ c.id }}</div>
+        <span class="nc-pc-clip-row__status">
+          <i class="ti ti-circle-dot" aria-hidden="true" style="color: var(--nc-green);"></i>
+          Ready to publish
+        </span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <form action="/dashboard/publish/zernio/clip/{{ c.id }}/mark-published"
+              method="post" style="margin:0;"
+              onclick="event.stopPropagation();"
+              onsubmit="return confirm('Mark this clip as already published? It moves out of this list (no post is sent).');">
+          <button type="submit" class="nc-btn"
+                  style="padding: 3px 10px; font-size: 11px; color: var(--nc-text--muted, #888);"
+                  title="Already posted this clip? Mark it published so it leaves this list — nothing is sent.">
+            <i class="ti ti-check" aria-hidden="true"></i>
+            <span>Mark published</span>
+          </button>
+        </form>
+        <i class="ti ti-chevron-down nc-pc-clip-row__caret" aria-hidden="true"></i>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="nc-pc-publish-panel" id="zn-publish-panel">
+    <div class="nc-pc-publish-panel__header">
+      <i class="ti ti-send" aria-hidden="true" style="color: var(--nc-green);"></i>
+      <div>
+        <div class="nc-pc-publish-panel__title" id="zn-selected-title">—</div>
+        <div class="nc-pc-publish-panel__meta">
+          <span id="zn-selected-id">—</span> · <span id="zn-selected-dur">—</span>s · 9:16
+        </div>
+      </div>
+    </div>
+
+    <form id="zn-single-form" method="post" action="" style="margin: 0;">
+      <div>
+        <small class="nc-text--muted">Platforms — click chips to toggle, grayed-out are not connected.</small>
+        <div class="nc-pc-platform-chips" id="zn-platform-chips">
+          {% for key, label, icon in supported_platforms %}
+            {% set is_conn = key in connected_set %}
+            <span class="nc-pc-platform-chip {% if not is_conn %}is-disabled{% endif %}"
+                  data-platform="{{ key }}"
+                  data-connected="{{ '1' if is_conn else '0' }}">
+              <i class="ti {{ icon }}" aria-hidden="true"></i>
+              <span>{{ label }}</span>
+            </span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <label class="nc-label" style="margin-top: 12px;">
+        Title
+        <input class="nc-input" name="title" maxlength="140"
+               placeholder="Optional — used as the post title where the platform supports one">
+      </label>
+
+      <label class="nc-label">
+        Caption
+        <textarea class="nc-input" name="description" rows="3"
+                  placeholder="Optional — the caption sent to every selected platform"></textarea>
+      </label>
+
+      <label class="nc-label">
+        Primer comentario <span class="nc-text--muted">(opcional — solo Facebook / Instagram / LinkedIn / YouTube)</span>
+        <input class="nc-input" name="first_comment" maxlength="500"
+               placeholder="Primer comentario — ej. link a tu canal de Kick">
+      </label>
+
+      {# Collapsed per-platform overrides: customContent per target +
+         YouTube's required title + TikTok privacy. Server reads
+         caption_{platform} / yt_title / tiktok_privacy form keys. #}
+      <details style="margin-top: 10px;">
+        <summary class="nc-text--muted" style="cursor: pointer; font-size: 13px;">
+          <i class="ti ti-adjustments" aria-hidden="true"></i>
+          Captions por plataforma (opcional)
+        </summary>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-left: 8px;">
+          <label class="nc-label" data-yt-only style="margin: 0;">
+            Título de YouTube <span class="nc-text--muted">(obligatorio si publicas a YouTube y no hay Title)</span>
+            <input class="nc-input" name="yt_title" maxlength="100"
+                   placeholder="Título del video en YouTube">
+          </label>
+          <label class="nc-label" data-tiktok-only style="margin: 0;">
+            Privacidad de TikTok
+            <select class="nc-input" name="tiktok_privacy">
+              <option value="">Por defecto (público)</option>
+              <option value="PUBLIC_TO_EVERYONE">Público</option>
+              <option value="MUTUAL_FOLLOW_FRIENDS">Amigos (follow mutuo)</option>
+              <option value="FOLLOWER_OF_CREATOR">Solo seguidores</option>
+              <option value="SELF_ONLY">Solo yo</option>
+            </select>
+          </label>
+          {% for key, label, icon in supported_platforms %}
+          <label class="nc-label" style="margin: 0;">
+            <span><i class="ti {{ icon }}" aria-hidden="true"></i> Caption {{ label }}</span>
+            <textarea class="nc-input" name="caption_{{ key }}" rows="2"
+                      placeholder="Override solo para {{ label }} — vacío usa la caption general"></textarea>
+          </label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <input type="hidden" name="mode" id="zn-mode" value="now">
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center;">
+        <button type="submit" class="nc-btn nc-btn--primary" data-mode="now">
+          <i class="ti ti-send" aria-hidden="true"></i>
+          <span>Publish to <span id="zn-platform-count">0</span> platform(s)</span>
+        </button>
+        <button type="submit" class="nc-btn" data-mode="draft"
+                title="Guarda en Borradores para revisar o aprobar después">
+          <i class="ti ti-file-pencil" aria-hidden="true"></i>
+          <span>Guardar como borrador</span>
+        </button>
+        <span style="display: inline-flex; gap: 6px; align-items: center;">
+          <input class="nc-input" type="datetime-local" name="scheduled_for"
+                 id="zn-schedule-at" style="width: auto; padding: 6px 8px;">
+          <button type="submit" class="nc-btn" data-mode="schedule"
+                  title="Programa la publicación para la fecha elegida (UTC)">
+            <i class="ti ti-calendar-event" aria-hidden="true"></i>
+            <span>Programar</span>
+          </button>
+        </span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{# ========== Tab: Bulk Publish ========== #}
+<div class="nc-pc-tab-body" data-tab-body="bulk">
+  {% if not publishable_clips %}
+  <div class="nc-panel">
+    <div class="nc-empty"><div class="nc-empty__title">No clips ready to publish</div></div>
+  </div>
+  {% else %}
+  <div class="nc-panel">
+    <div class="nc-panel__body">
+      <p class="nc-text--muted" style="margin: 0 0 8px 0;">
+        Pick platforms per clip below — chips toggle independently.
+        Hit Publish Selected to fire them all in parallel.
+      </p>
+      <div id="zn-bulk-rows">
+        {% for c in publishable_clips %}
+        <div class="nc-pc-bulk-row" data-clip-id="{{ c.id }}">
+          <div class="nc-pc-bulk-row__thumb">
+            <img src="{{ c.thumbnail_url }}" alt="" onerror="this.style.opacity=0">
+          </div>
+          <div class="nc-pc-bulk-row__meta">
+            <div class="nc-pc-bulk-row__title">{{ c.title }}</div>
+            <div class="nc-pc-bulk-row__dur">{{ c.duration_s|round(0) }}s · {{ c.id[:18] }}…</div>
+          </div>
+          <div class="nc-pc-platform-chips" style="margin: 0;">
+            {% for key, label, icon in supported_platforms %}
+              {% set is_conn = key in connected_set %}
+              <span class="nc-pc-platform-chip {% if not is_conn %}is-disabled{% endif %}"
+                    data-platform="{{ key }}"
+                    data-connected="{{ '1' if is_conn else '0' }}"
+                    style="padding: 4px 10px; font-size: 11px;">
+                <i class="ti {{ icon }}" aria-hidden="true"></i>
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="nc-pc-bulk-actions">
+        <button type="button" id="zn-bulk-publish" class="nc-btn nc-btn--primary">
+          <i class="ti ti-send" aria-hidden="true"></i>
+          <span>Publish selected (<span id="zn-bulk-count">0</span>)</span>
+        </button>
+        <span class="nc-text--muted" style="font-size: 12px;" id="zn-bulk-hint">
+          Pick at least one platform per clip to enable.
+        </span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ========== Programación — recurring queue slots + Hora óptima +
+   upcoming (scheduled/queued) list with cancel. All data loads from
+   /schedule.json + /best-time.json; vanilla JS, no reload. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="programacion">
+{% if profile_id %}
+<div class="nc-panel" id="zn-schedule-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-calendar-clock" aria-hidden="true"></i>
+    Programación
+    <span class="nc-text--muted" style="font-size:12px; margin-left:auto;">
+      Slots recurrentes · cola · hora óptima
+    </span>
+  </div>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:16px;">
+
+    {# --- Recurring slots editor --- #}
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <strong style="font-size:13px;">Slots recurrentes</strong>
+        <span class="nc-text--muted" style="font-size:12px;">
+          La cola publica en estos huecos. Modo “Cola” al publicar usa el próximo libre.
+        </span>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin-bottom:8px;">
+        <label class="nc-label" style="margin:0;">
+          Día
+          <select class="nc-input" id="zn-slot-dow" style="width:auto;">
+            <option value="1">Lunes</option><option value="2">Martes</option>
+            <option value="3">Miércoles</option><option value="4">Jueves</option>
+            <option value="5">Viernes</option><option value="6">Sábado</option>
+            <option value="0">Domingo</option>
+          </select>
+        </label>
+        <label class="nc-label" style="margin:0;">
+          Hora
+          <input class="nc-input" id="zn-slot-time" type="time" value="18:00" style="width:auto;">
+        </label>
+        <label class="nc-label" style="margin:0;">
+          Zona horaria
+          <input class="nc-input" id="zn-slot-tz" placeholder="UTC" value="UTC" style="width:auto;">
+        </label>
+        <button type="button" class="nc-btn" id="zn-slot-add" style="padding:6px 12px;">
+          <i class="ti ti-plus" aria-hidden="true"></i> Añadir slot
+        </button>
+      </div>
+      <div id="zn-slot-chips" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <button type="button" class="nc-btn nc-btn--primary" id="zn-slot-save" style="padding:6px 14px;">
+          <i class="ti ti-device-floppy" aria-hidden="true"></i> Guardar slots
+        </button>
+        <span class="nc-text--muted" id="zn-slot-msg" style="font-size:12px;"></span>
+      </div>
+    </div>
+
+    {# --- Hora óptima --- #}
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <strong style="font-size:13px;">Hora óptima</strong>
+        <span class="nc-text--muted" style="font-size:12px;">Según el engagement histórico (UTC).</span>
+      </div>
+      <div id="zn-besttime" class="nc-text--muted" style="font-size:13px;">Cargando…</div>
+    </div>
+
+    {# --- Upcoming --- #}
+    <div>
+      <strong style="font-size:13px;">Próximas publicaciones</strong>
+      <div id="zn-upcoming" style="margin-top:8px;"></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+</div>
+
+{# ========== Comunidad — Discord/Telegram connect + announce-on-publish
+   toggle + brand identity + weekly digest (phase 11). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="comunidad">
+{% if profile_id %}
+<div class="nc-panel" id="zn-community-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-speakerphone" aria-hidden="true"></i>
+    Comunidad
+    <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">
+      Avisa a tu Discord / Telegram cuando publicas
+    </span>
+  </div>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:12px;">
+    <div class="nc-pc-acct-row" style="padding:0;">
+      {% for key, label, icon in community_platforms %}
+        {% if key in community_connected %}
+        <span class="nc-pc-acct-chip is-connected">
+          <i class="ti {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
+          <i class="ti ti-check" aria-hidden="true"></i>
+        </span>
+        {% else %}
+        <button type="button" class="nc-pc-connect-btn js-zn-connect" data-platform="{{ key }}"
+                title="Conectar {{ label }}">
+          <i class="ti {{ icon }}" aria-hidden="true"></i><span>Conectar {{ label }}</span>
+        </button>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" id="zn-comm-enabled"> Avisar a mi comunidad al publicar
+    </label>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      <label class="nc-label" style="margin:0;">Canal Discord
+        <select class="nc-input" id="zn-comm-discord" style="width:auto;"><option value="">—</option></select></label>
+      <label class="nc-label" style="margin:0;">Canal Telegram
+        <select class="nc-input" id="zn-comm-telegram" style="width:auto;"><option value="">—</option></select></label>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Nombre de marca (Discord)
+        <input class="nc-input" id="zn-comm-brand" placeholder="Mi canal" maxlength="80"></label>
+      <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Avatar (URL)
+        <input class="nc-input" id="zn-comm-avatar" placeholder="https://…/avatar.png"></label>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" id="zn-comm-digest"> Resumen semanal de métricas (opcional)
+    </label>
+    <div>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-comm-save" style="padding:6px 14px;">
+        <i class="ti ti-device-floppy"></i> Guardar
+      </button>
+      <span class="nc-text--muted" id="zn-comm-msg" style="font-size:12px; margin-left:8px;"></span>
+    </div>
+  </div>
+</div>
+{% endif %}
+</div>
+
+{# ========== FAILED list — clickable from the Failed counter. Loads
+   from /failed.json with per-platform error + Spanish hint; Reintentar
+   per post + Reintentar todos. Hidden until the counter is clicked. #}
+<div class="nc-pc-tab-body" data-tab-body="published">
+{% if profile_id %}
+<div class="nc-panel" id="zn-failed-panel" style="margin-bottom: 16px; display:none; border-color:#ff7575;">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-alert-triangle" aria-hidden="true" style="color:#ff7575;"></i>
+    Publicaciones fallidas
+    <button type="button" class="nc-btn" id="zn-retry-all" style="margin-left:auto; padding:4px 12px; font-size:12px;">
+      <i class="ti ti-refresh" aria-hidden="true"></i> Reintentar todos
+    </button>
+  </div>
+  <div class="nc-panel__body" id="zn-failed-list" style="padding:12px 16px;">
+    <span class="nc-text--muted">Cargando…</span>
+  </div>
+</div>
+{% endif %}
+</div>
+
+{# ========== Borradores — drafts saved via "Guardar como borrador".
+   Local zernio_publishes rows with status='draft'; also the agency
+   client-approval flow: stage → review → Publicar ahora / Programar. #}
+<div class="nc-pc-tab-body" data-tab-body="published">
+{% if drafts %}
+<div class="nc-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-file-pencil" aria-hidden="true"></i>
+    Borradores ({{ drafts|length }})
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    <table class="nc-table" style="margin: 0;">
+      <thead>
+        <tr><th>Caption</th><th>Plataformas</th><th>Creado</th><th style="width: 1%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for d in drafts %}
+        <tr>
+          <td style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              title="{{ d.content or '' }}">
+            {{ (d.content or '(sin caption)')[:80] }}
+          </td>
+          <td><span class="nc-chip nc-chip--code">{{ d.platforms }}</span></td>
+          <td class="nc-text--muted" style="font-size: 12px;">{{ d.created_at[:16] }}</td>
+          <td>
+            <div style="display: flex; gap: 6px; align-items: center; white-space: nowrap;">
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/publish"
+                    style="margin: 0; display: inline;">
+                <button type="submit" class="nc-btn nc-btn--primary" style="padding: 4px 10px; font-size: 12px;"
+                        title="Publicar este borrador ahora mismo">
+                  <i class="ti ti-send" aria-hidden="true"></i> Publicar ahora
+                </button>
+              </form>
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/publish"
+                    style="margin: 0; display: inline-flex; gap: 4px; align-items: center;"
+                    onsubmit="var i=this.querySelector('[type=datetime-local]'); if(!i.value){alert('Elige fecha y hora.');return false;} var h=document.createElement('input'); h.type='hidden'; h.name='scheduled_for'; h.value=new Date(i.value).toISOString(); i.removeAttribute('name'); this.appendChild(h); return true;">
+                <input class="nc-input" type="datetime-local" name="scheduled_for"
+                       style="width: auto; padding: 3px 6px; font-size: 12px;">
+                <button type="submit" class="nc-btn" style="padding: 4px 10px; font-size: 12px;"
+                        title="Programar este borrador">
+                  <i class="ti ti-calendar-event" aria-hidden="true"></i> Programar
+                </button>
+              </form>
+              <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/delete"
+                    style="margin: 0; display: inline;"
+                    onsubmit="return confirm('¿Eliminar este borrador? No se puede deshacer.');">
+                <button type="submit" class="nc-btn nc-btn--danger" style="padding: 4px 8px; font-size: 12px;"
+                        title="Eliminar borrador">
+                  <i class="ti ti-trash" aria-hidden="true"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+</div>
+
+{# ========== Tab: Published (this tenant's publish history; local
+   zernio_publishes rows + live status joined by post id) ========== #}
+<div class="nc-pc-tab-body" data-tab-body="published">
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-history" aria-hidden="true"></i>
+    <span class="nc-panel__title">Published</span>
+    <span class="nc-chip nc-chip--muted" style="margin-left:auto;">last 25</span>
+  </div>
+  <div class="nc-panel__body" style="padding: 0;">
+    {% if history %}
+    <table class="nc-table">
+      <thead>
+        <tr><th>When</th><th>Clip</th><th>Platforms</th><th>Status</th><th>Caption</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        {% set view_url = ("/dashboard/clips/" ~ h.clip_id) if h.kind == "manual" else ("/dashboard/publish/zernio/job/" ~ h.post_id) %}
+        <tr class="nc-pc-history-row" data-href="{{ view_url }}">
+          <td><span class="nc-mono nc-mono--muted">{{ (h.created_at or "")[:19] }}</span></td>
+          <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
+          </td>
+          <td>
+            {% if h.kind == "manual" %}
+            <span class="nc-chip nc-chip--muted" title="Marked as published by you — posted outside NexoClip or before history existed">manual</span>
+            {% else %}
+              {% for p in h.platforms %}
+              <span class="nc-chip nc-chip--code">{{ p }}</span>
+              {% endfor %}
+            {% endif %}
+          </td>
+          <td>
+            {% set st = (h.status or "")|lower %}
+            <span class="nc-chip {% if st in ('published','finished','success') %}nc-chip--success{% elif st in ('failed','error') %}nc-chip--warn{% else %}nc-chip--code{% endif %}">
+              {{ h.status }}
+            </span>
+          </td>
+          <td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.content or "—" }}</td>
+          <td style="text-align:right;">
+            <a href="{{ view_url }}"
+               class="nc-btn" style="padding: 3px 10px; font-size: 12px; text-decoration:none;"
+               onclick="event.stopPropagation();">
+              <i class="ti ti-eye" aria-hidden="true"></i>
+              <span>{{ "Open clip" if h.kind == "manual" else "View" }}</span>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <script>
+    (function () {
+      document.querySelectorAll(".nc-pc-history-row[data-href]").forEach(function (tr) {
+        tr.addEventListener("click", function () {
+          window.location.href = tr.getAttribute("data-href");
+        });
+      });
+    })();
+    </script>
+    {% else %}
+    <div class="nc-empty">
+      <div class="nc-empty__title">No publishes yet</div>
+      <p class="nc-empty__body">
+        Publish a clip from the Single or Bulk tab — every publish
+        lands here with its status and a View button.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+</div>
+
+{# ========== Tab: Rendimiento — recent clips with per-platform metrics.
+   Loads live from /rendimiento.json; 7/30-day toggle. Unavailable
+   metrics render "—" (no fake zeros). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="rendimiento">
+<div class="nc-panel">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-chart-bar" aria-hidden="true"></i>
+    <span class="nc-panel__title">Rendimiento</span>
+    <span style="margin-left:auto; display:inline-flex; gap:4px;">
+      <button type="button" class="nc-btn js-perf-days is-active" data-days="7" style="padding:3px 10px; font-size:12px;">7 días</button>
+      <button type="button" class="nc-btn js-perf-days" data-days="30" style="padding:3px 10px; font-size:12px;">30 días</button>
+    </span>
+  </div>
+  <div class="nc-panel__body">
+    <div id="zn-perf-totals" class="nc-text--muted" style="font-size:14px; margin-bottom:12px;">Cargando…</div>
+    <div id="zn-perf-table"></div>
+    {% if feature_ads %}
+    {# Phase 12 — ads next to organic (read-only), feature-flagged. #}
+    <div style="margin-top:16px;">
+      <strong style="font-size:13px;"><i class="ti ti-ad" aria-hidden="true"></i> Anuncios</strong>
+      <div id="zn-ads-table" class="nc-text--muted" style="margin-top:8px;">Cargando…</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+</div>
+
+{# ========== Tab: Calendario — unified, 3 sources (hub / scheduled /
+   external), color-coded. Month grid; click a day to see its entries.
+   Loads from /calendar.json. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="calendario">
+<div class="nc-panel">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-calendar" aria-hidden="true"></i>
+    <span class="nc-panel__title">Calendario</span>
+    <span style="margin-left:auto; display:inline-flex; gap:8px; align-items:center;">
+      <button type="button" class="nc-btn" id="zn-cal-prev" style="padding:3px 10px; font-size:12px;"><i class="ti ti-chevron-left"></i></button>
+      <span id="zn-cal-month" style="font-weight:600; min-width:140px; text-align:center;"></span>
+      <button type="button" class="nc-btn" id="zn-cal-next" style="padding:3px 10px; font-size:12px;"><i class="ti ti-chevron-right"></i></button>
+    </span>
+  </div>
+  <div class="nc-panel__body">
+    <div style="display:flex; gap:14px; margin-bottom:10px; font-size:12px;" class="nc-text--muted">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c5f82a;"></span> Hub</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#00e5ff;"></span> Programado</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ff2d95;"></span> Externo</span>
+    </div>
+    <div id="zn-cal-grid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px;"></div>
+    <div id="zn-cal-detail" style="margin-top:14px;"></div>
+  </div>
+</div>
+</div>
+
+{# ========== Tab: Crecimiento — Pro-gated funnel machine. Non-Pro
+   sees an upsell card (never a 500); Pro sees 4 sub-panels. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="crecimiento">
+{% if not is_pro %}
+<div class="nc-panel" style="border-color: var(--nc-magenta, #ff2d95);">
+  <div class="nc-panel__body" style="text-align:center; padding:32px;">
+    <i class="ti ti-rocket" aria-hidden="true" style="font-size:32px; color: var(--nc-magenta, #ff2d95);"></i>
+    <h3 style="margin:12px 0 6px;">Crecimiento es una función Pro</h3>
+    <p class="nc-text--muted" style="max-width:460px; margin:0 auto 16px;">
+      Automatiza comentario→DM, gestiona contactos, lanza secuencias de bienvenida
+      y broadcasts a tu comunidad. Sube a Pro para activar el embudo Nexo.
+    </p>
+    <a class="nc-btn nc-btn--primary" href="https://nexo-ai.world/app/subscription"
+       target="_blank" rel="noopener">Subir a Pro</a>
+  </div>
+</div>
+{% else %}
+<div style="display:flex; flex-direction:column; gap:16px;">
+
+  {# Automatizaciones comentario→DM #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-robot" aria-hidden="true"></i>
+      <span class="nc-panel__title">Automatizaciones comentario → DM</span>
+      <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">Solo Instagram / Facebook</span>
+    </div>
+    <div class="nc-panel__body">
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:10px;">
+        <label class="nc-label" style="margin:0;">Cuenta (IG/FB)
+          <select class="nc-input" id="zn-auto-account" style="width:auto;"></select></label>
+        <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Clip objetivo
+          <select class="nc-input" id="zn-auto-post" style="width:100%;">
+            <option value="">Cualquier post</option></select></label>
+        <label class="nc-label" style="margin:0;">Keywords
+          <input class="nc-input" id="zn-auto-keywords" value="CLIP, LINK" style="width:auto;"></label>
+      </div>
+      <label class="nc-label">Mensaje DM
+        <input class="nc-input" id="zn-auto-dm" value="Aquí está el link 👉 {url}"></label>
+      <label class="nc-label">Respuesta pública (opcional)
+        <input class="nc-input" id="zn-auto-reply" placeholder="¡Revisa tu DM! 📩"></label>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-auto-create" style="margin-top:10px;">
+        <i class="ti ti-plus"></i> Crear automatización</button>
+      <div id="zn-auto-list" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+  {# Contactos #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-users" aria-hidden="true"></i>
+      <span class="nc-panel__title">Contactos</span></div>
+    <div class="nc-panel__body">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <input class="nc-input" id="zn-contacts-q" placeholder="Buscar por nombre o usuario…" style="flex:1;">
+        <select class="nc-input" id="zn-contacts-tag" style="width:auto;">
+          <option value="">Todos los tags</option>
+          <option value="comment-lead">comment-lead</option>
+          <option value="dm-lead">dm-lead</option>
+        </select>
+      </div>
+      <div id="zn-contacts-list"><span class="nc-text--muted">Cargando…</span></div>
+    </div>
+  </div>
+
+  {# Secuencias #}
+  <div class="nc-panel">
+    <div class="nc-panel__header"><i class="ti ti-list-numbers" aria-hidden="true"></i>
+      <span class="nc-panel__title">Secuencias (drip)</span>
+      <button type="button" class="nc-btn" id="zn-seq-template" style="margin-left:auto; padding:4px 12px; font-size:12px;">
+        <i class="ti ti-template"></i> Usar “Bienvenida Nexo”</button>
+    </div>
+    <div class="nc-panel__body"><div id="zn-seq-list"><span class="nc-text--muted">Cargando…</span></div></div>
+  </div>
+
+  {# Broadcasts #}
+  <div class="nc-panel" style="border-color: var(--nc-magenta, #ff2d95);">
+    <div class="nc-panel__header"><i class="ti ti-broadcast" aria-hidden="true"></i>
+      <span class="nc-panel__title">Broadcast</span>
+      <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">Tope diario por seguridad anti-spam</span>
+    </div>
+    <div class="nc-panel__body">
+      <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:8px;">
+        <label class="nc-label" style="margin:0;">Cuenta
+          <select class="nc-input" id="zn-bc-account" style="width:auto;"></select></label>
+        <label class="nc-label" style="margin:0;">Segmento (tag)
+          <select class="nc-input" id="zn-bc-tag" style="width:auto;">
+            <option value="">Todos los contactos</option>
+            <option value="comment-lead">comment-lead</option>
+            <option value="dm-lead">dm-lead</option></select></label>
+      </div>
+      <label class="nc-label">Nombre interno
+        <input class="nc-input" id="zn-bc-name" placeholder="Promo de la semana"></label>
+      <label class="nc-label">Mensaje
+        <textarea class="nc-input" id="zn-bc-message" rows="2" placeholder="¡Nuevo clip publicado! 🎬"></textarea></label>
+      {% if feature_whatsapp %}
+      <p class="nc-text--muted" style="font-size:12px; margin:6px 0 0;">
+        <i class="ti ti-brand-whatsapp" aria-hidden="true"></i>
+        WhatsApp tiene costo extra (tarifa por número + uso de Meta por mensaje) y usa plantillas aprobadas.
+      </p>
+      {% endif %}
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-bc-send" style="margin-top:8px;">
+        <i class="ti ti-send"></i> Enviar broadcast</button>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+</div>
+
+{# ========== Tab: Comentarios — unified comment feed on the streamer's
+   clips; reply / like / hide (where supported). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="comentarios">
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-message-circle" aria-hidden="true"></i>
+    <span class="nc-panel__title">Comentarios</span>
+  </div>
+  <div class="nc-panel__body" id="zn-comments-list">
+    <span class="nc-text--muted">Cargando…</span>
+  </div>
+</div>
+</div>
+
+{# ========== Tab: DMs — conversation list + thread + reply / archive. #}
+<div class="nc-pc-tab-body" data-tab-body="dms">
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-mail" aria-hidden="true"></i>
+    <span class="nc-panel__title">Mensajes directos</span>
+  </div>
+  <div class="nc-panel__body" style="display:grid; grid-template-columns:280px 1fr; gap:14px; min-height:320px;">
+    <div id="zn-dm-list" style="border-right:1px solid rgba(255,255,255,0.08); padding-right:12px; overflow-y:auto; max-height:480px;">
+      <span class="nc-text--muted">Cargando…</span>
+    </div>
+    <div id="zn-dm-thread">
+      <span class="nc-text--muted">Elige una conversación.</span>
+    </div>
+  </div>
+</div>
+</div>
+
+{% endif %}
+
+{# ----- Behavior JS ----- #}
+<script>
+(function () {
+  // ---- Tab switcher ----
+  function activateTab(which) {
+    document.querySelectorAll(".nc-pc-tab").forEach(function (t) {
+      t.classList.toggle("is-active", t.getAttribute("data-tab") === which);
+    });
+    document.querySelectorAll(".nc-pc-tab-body").forEach(function (b) {
+      b.classList.toggle("is-active", b.getAttribute("data-tab-body") === which);
+    });
+  }
+  document.querySelectorAll(".nc-pc-tab").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      activateTab(tab.getAttribute("data-tab"));
+    });
+  });
+  // Deep link only — publishing/marking does NOT force a tab change;
+  // the operator stays on the list they were working in (the queued
+  // banner + the View published button cover "go see it" when wanted).
+  var qs = new URLSearchParams(window.location.search);
+  if (qs.get("tab") === "published") {
+    activateTab("published");
+  }
+  // Header "View published" button + the Published stat tile both jump
+  // to the tab in place. The button's ?tab=published href stays as a
+  // no-JS fallback.
+  document.querySelectorAll(".js-open-published").forEach(function (el) {
+    el.addEventListener("click", function (e) {
+      e.preventDefault();
+      activateTab("published");
+    });
+  });
+
+  // ---- Single Publish: row selection (inline panel) ----
+  var panel = document.getElementById("zn-publish-panel");
+  var titleEl = document.getElementById("zn-selected-title");
+  var idEl    = document.getElementById("zn-selected-id");
+  var durEl   = document.getElementById("zn-selected-dur");
+  var form    = document.getElementById("zn-single-form");
+  var countEl = document.getElementById("zn-platform-count");
+  var list    = document.getElementById("zn-clip-list");
+
+  if (list && panel) {
+    list.addEventListener("click", function (e) {
+      var row = e.target.closest(".nc-pc-clip-row");
+      if (!row) return;
+      if (row.classList.contains("is-expanded")) {
+        row.classList.remove("is-expanded");
+        panel.classList.remove("is-active");
+        list.appendChild(panel);
+        return;
+      }
+      list.querySelectorAll(".nc-pc-clip-row.is-expanded").forEach(function (r) {
+        r.classList.remove("is-expanded");
+      });
+      row.classList.add("is-expanded");
+      var clipId = row.getAttribute("data-clip-id");
+      var title  = row.getAttribute("data-clip-title");
+      var dur    = row.getAttribute("data-clip-duration");
+      if (titleEl) titleEl.textContent = title;
+      if (idEl) idEl.textContent = clipId;
+      if (durEl) durEl.textContent = dur;
+      if (form) form.action = "/dashboard/publish/zernio/post/" + encodeURIComponent(clipId);
+      var chipsHost = document.getElementById("zn-platform-chips");
+      if (chipsHost) {
+        chipsHost.querySelectorAll(".is-selected").forEach(function (c) {
+          c.classList.remove("is-selected");
+        });
+      }
+      if (countEl) countEl.textContent = "0";
+      row.parentNode.insertBefore(panel, row.nextSibling);
+      panel.classList.add("is-active");
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+
+  // ---- Chip toggles (single form) ----
+  var singleChips = document.getElementById("zn-platform-chips");
+  if (singleChips) {
+    singleChips.addEventListener("click", function (e) {
+      var chip = e.target.closest(".nc-pc-platform-chip");
+      if (!chip) return;
+      if (chip.getAttribute("data-connected") !== "1") return;
+      chip.classList.toggle("is-selected");
+      var n = singleChips.querySelectorAll(".is-selected").length;
+      if (countEl) countEl.textContent = n;
+    });
+  }
+  if (form) {
+    // Three submit buttons share the form; each stamps its mode
+    // (now / draft / schedule) into the hidden input before submit.
+    var modeInput = document.getElementById("zn-mode");
+    form.querySelectorAll("button[data-mode]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (modeInput) { modeInput.value = btn.getAttribute("data-mode"); }
+      });
+    });
+    form.addEventListener("submit", function (e) {
+      var selected = singleChips
+        ? Array.from(singleChips.querySelectorAll(".is-selected"))
+            .map(function (x) { return x.getAttribute("data-platform"); })
+        : [];
+      if (!selected.length) { e.preventDefault(); alert("Pick at least one platform."); return; }
+      if (!form.action) { e.preventDefault(); alert("Pick a clip first."); return; }
+      var mode = modeInput ? modeInput.value : "now";
+      var schedAt = document.getElementById("zn-schedule-at");
+      if (mode === "schedule") {
+        if (!schedAt || !schedAt.value) {
+          e.preventDefault();
+          alert("Elige fecha y hora para programar.");
+          return;
+        }
+        // datetime-local is the operator's LOCAL time; ship the UTC
+        // instant so Zernio schedules the moment they actually meant.
+        var iso = new Date(schedAt.value).toISOString();
+        var hiddenSched = document.createElement("input");
+        hiddenSched.type = "hidden"; hiddenSched.name = "scheduled_for";
+        hiddenSched.value = iso;
+        schedAt.removeAttribute("name");  // the hidden ISO field wins
+        form.appendChild(hiddenSched);
+      }
+      // YouTube needs a title — catch it before the round-trip.
+      if (selected.indexOf("youtube") !== -1) {
+        var t = (form.querySelector('[name="title"]') || {}).value || "";
+        var yt = (form.querySelector('[name="yt_title"]') || {}).value || "";
+        if (!t.trim() && !yt.trim()) {
+          e.preventDefault();
+          alert("YouTube necesita un título — completa Title o el título de YouTube.");
+          return;
+        }
+      }
+      var hidden = document.createElement("input");
+      hidden.type = "hidden"; hidden.name = "platforms";
+      hidden.value = selected.join(",");
+      form.appendChild(hidden);
+    });
+  }
+
+  // ---- Bulk publish ----
+  var bulkRows = document.getElementById("zn-bulk-rows");
+  var bulkBtn = document.getElementById("zn-bulk-publish");
+  var bulkCount = document.getElementById("zn-bulk-count");
+  var bulkHint = document.getElementById("zn-bulk-hint");
+
+  function recomputeBulk() {
+    if (!bulkRows) return [];
+    var rows = bulkRows.querySelectorAll(".nc-pc-bulk-row");
+    var pending = [];
+    rows.forEach(function (row) {
+      var sel = Array.from(row.querySelectorAll(".nc-pc-platform-chip.is-selected"))
+        .map(function (x) { return x.getAttribute("data-platform"); });
+      if (sel.length) {
+        pending.push({ clip_id: row.getAttribute("data-clip-id"), platforms: sel });
+      }
+    });
+    if (bulkCount) bulkCount.textContent = pending.length;
+    if (bulkHint) {
+      bulkHint.textContent = pending.length
+        ? pending.length + " clip(s) ready to ship."
+        : "Pick at least one platform per clip to enable.";
+    }
+    return pending;
+  }
+
+  if (bulkRows) {
+    bulkRows.addEventListener("click", function (e) {
+      var chip = e.target.closest(".nc-pc-platform-chip");
+      if (!chip || chip.getAttribute("data-connected") !== "1") return;
+      chip.classList.toggle("is-selected");
+      recomputeBulk();
+    });
+  }
+
+  if (bulkBtn) {
+    bulkBtn.addEventListener("click", async function () {
+      var pending = recomputeBulk();
+      if (!pending.length) { alert("Pick at least one platform per clip."); return; }
+      bulkBtn.disabled = true;
+      bulkBtn.querySelector("span").textContent = "Sending…";
+      try {
+        var resp = await fetch("/dashboard/publish/zernio/bulk-post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ clips: pending }),
+        });
+        var body = await resp.json();
+        if (!resp.ok) { throw new Error(body.detail || ("HTTP " + resp.status)); }
+        var ok = (body.results || []).filter(function (r) { return r.ok; }).length;
+        alert(ok + " of " + pending.length + " published.");
+        // Reload in place — the published clips leave this list; their
+        // rows are on the Published tab when the operator wants them.
+        window.location.href = "/dashboard/publish/zernio";
+      } catch (err) {
+        alert("Bulk publish failed: " + err.message);
+        bulkBtn.disabled = false;
+        bulkBtn.querySelector("span").textContent = "Publish selected (" + pending.length + ")";
+      }
+    });
+  }
+
+  // ---- Connect a platform (Zernio OAuth in a popup, auto-closed) ----
+  // We pass redirect_url to Zernio so the OAuth callback lands the popup
+  // on our own /connected page (same-origin), which postMessages this
+  // tab and closes itself — the operator never sees Zernio's dashboard.
+  // On the message we refresh the accounts row + publish chips IN PLACE
+  // (no reload); the accounts.json poll below stays as a fallback in
+  // case the postMessage is missed (e.g. popup blocked into a full tab).
+  var znConnectOpened = false;
+  var znPopup = null;
+
+  // Refresh connected-account state without a full page reload:
+  //  1. swap the server-rendered accounts row (#zn-accounts-panel)
+  //  2. flip data-connected / is-disabled on every publish chip
+  // Falls back to location.reload() if either fetch fails.
+  function znRefreshAccounts() {
+    var panel = document.getElementById("zn-accounts-panel");
+    var panelP = panel
+      ? fetch("/dashboard/publish/zernio/accounts-panel", { credentials: "same-origin" })
+          .then(function (r) {
+            if (!r.ok) { throw new Error("panel HTTP " + r.status); }
+            return r.text();
+          })
+          .then(function (html) { panel.innerHTML = html; })
+      : Promise.resolve();
+    var chipsP = fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var connected = (body && body.connected) || [];
+        document.querySelectorAll(".nc-pc-platform-chip[data-platform]").forEach(function (chip) {
+          var isConn = connected.indexOf(chip.getAttribute("data-platform")) !== -1;
+          chip.setAttribute("data-connected", isConn ? "1" : "0");
+          chip.classList.toggle("is-disabled", !isConn);
+          if (!isConn) { chip.classList.remove("is-selected"); }
+        });
+      });
+    Promise.all([panelP, chipsP]).catch(function () { window.location.reload(); });
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.origin !== window.location.origin) return;
+    if (!e.data || e.data.type !== "zernio:connected") return;
+    if (znPopup) { try { znPopup.close(); } catch (err) { /* ignore */ } }
+    znConnectOpened = false;
+    znRefreshAccounts();
+  });
+  function znPollUntilConnected(popup, platform, triesLeft) {
+    if (triesLeft <= 0) { return; }  // give up quietly; focus-reload is the fallback
+    fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        var connected = (body && body.connected) || [];
+        if (connected.indexOf(platform) !== -1) {
+          if (popup) { try { popup.close(); } catch (e) { /* ignore */ } }
+          znConnectOpened = false;
+          znRefreshAccounts();
+          return;
+        }
+        setTimeout(function () {
+          znPollUntilConnected(popup, platform, triesLeft - 1);
+        }, 2500);
+      })
+      .catch(function () {
+        setTimeout(function () {
+          znPollUntilConnected(popup, platform, triesLeft - 1);
+        }, 2500);
+      });
+  }
+  // DELEGATED handler — connect buttons live inside #zn-accounts-panel,
+  // whose innerHTML gets swapped by znRefreshAccounts(); direct
+  // per-button listeners would die with the old nodes.
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-zn-connect");
+    if (!btn) return;
+    var platform = btn.getAttribute("data-platform");
+    // Open the popup synchronously inside the click gesture so popup
+    // blockers don't kill it; we redirect it once the URL arrives.
+    // Named window: re-clicking reuses the same popup instead of
+    // stacking a second OAuth window.
+    var w = window.open("", "zernio_connect", "popup=yes,width=520,height=720");
+    znPopup = w;
+    if (w) {
+      try {
+        w.document.write(
+          "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
+          "Opening " + platform + " authorization… you can close this window " +
+          "when you're done — NexoClip will update automatically.</p>"
+        );
+      } catch (e2) { /* ignore */ }
+    }
+    btn.disabled = true;
+    fetch("/dashboard/publish/zernio/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ platform: platform }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body.ok || !body.auth_url) {
+          throw new Error(body.error || body.detail || "connect failed");
+        }
+        znConnectOpened = true;
+        if (w) { w.location.href = body.auth_url; }
+        else { window.open(body.auth_url, "zernio_connect"); }
+        // Poll our backend (~75s); when the account appears, close the
+        // popup + refresh chips so the operator stays on NexoClip.
+        znPollUntilConnected(w, platform, 30);
+      })
+      .catch(function (err) {
+        if (w) { try { w.close(); } catch (e3) { /* ignore */ } }
+        alert("Connect failed: " + err.message);
+      })
+      .finally(function () { btn.disabled = false; });
+  });
+  // Fallback: if the operator returns to this tab manually, refresh so
+  // a freshly-connected account shows up even if polling missed it.
+  window.addEventListener("focus", function () {
+    if (znConnectOpened) { znConnectOpened = false; znRefreshAccounts(); }
+  });
+
+  // ---- Disconnect an account (no Zernio UI needed) ----
+  // Delegated for the same reason as connect: the buttons get swapped
+  // in by znRefreshAccounts().
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".js-zn-disconnect");
+    if (!btn) return;
+    var accountId = btn.getAttribute("data-account-id");
+    var label = btn.getAttribute("data-label") || "this account";
+    if (!window.confirm("Disconnect " + label + " from Zernio?")) { return; }
+    btn.disabled = true;
+    fetch("/dashboard/publish/zernio/accounts/" + encodeURIComponent(accountId) + "/disconnect", {
+      method: "POST", credentials: "same-origin",
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body.ok) { throw new Error(body.error || "disconnect failed"); }
+        znRefreshAccounts();
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        alert("Disconnect failed: " + err.message);
+      });
+  });
+
+  // ---- Create profile (inline AJAX, no page leave) ----
+  var cpForm = document.getElementById("zn-create-profile-form");
+  if (cpForm) {
+    var cpBtn = document.getElementById("zn-create-profile-btn");
+    var cpMsg = document.getElementById("zn-create-profile-msg");
+    cpForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var name = (document.getElementById("zn-profile-name").value || "").trim();
+      var desc = (document.getElementById("zn-profile-desc").value || "").trim();
+      if (!name) { cpMsg.textContent = "Enter a profile name."; return; }
+      cpBtn.disabled = true;
+      cpMsg.style.color = "";
+      cpMsg.textContent = "Creating…";
+      try {
+        var resp = await fetch("/dashboard/publish/zernio/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ name: name, description: desc }),
+        });
+        var body = await resp.json();
+        if (!resp.ok || !body.ok) {
+          throw new Error(body.error || body.detail || ("HTTP " + resp.status));
+        }
+        cpMsg.style.color = "var(--nc-green, #48bb78)";
+        cpMsg.textContent = "Profile “" + (body.name || name) + "” created. Loading…";
+        // Reload in place so the per-platform Connect buttons appear
+        // under the new profile (same URL — no navigation away).
+        window.location.reload();
+      } catch (err) {
+        cpBtn.disabled = false;
+        cpMsg.style.color = "#ff7575";
+        cpMsg.textContent = "Couldn't create profile: " + err.message;
+      }
+    });
+  }
+
+  // ---- Rendimiento tab ----
+  var perfTable = document.getElementById("zn-perf-table");
+  if (perfTable) {
+    var perfDays = 7;
+    function fmtMetric(v) { return (v === null || v === undefined) ? "—" : v.toLocaleString(); }
+
+    function renderPerf(body) {
+      var t = body.totals || {};
+      document.getElementById("zn-perf-totals").innerHTML =
+        "Tus clips (" + body.days + " días): " +
+        "<strong>" + fmtMetric(t.views) + "</strong> views · " +
+        "<strong>" + fmtMetric(t.likes) + "</strong> likes · " +
+        "<strong>" + fmtMetric(t.comments) + "</strong> comentarios · " +
+        "<strong>" + fmtMetric(t.shares) + "</strong> compartidos";
+      var posts = body.posts || [];
+      if (!posts.length) {
+        perfTable.innerHTML =
+          '<div class="nc-empty"><div class="nc-empty__title">Sin datos de rendimiento aún</div>' +
+          '<p class="nc-empty__body">Publica clips y vuelve en unas horas — las métricas tardan en sincronizar.</p></div>';
+        return;
+      }
+      var rows = posts.map(function (p) {
+        var m = p.metrics || {};
+        var plats = (p.per_platform || []).map(function (pl) {
+          return '<span class="nc-chip nc-chip--code">' + (pl.platform || "?") + "</span>";
+        }).join(" ");
+        return "<tr>" +
+          '<td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+          (p.content || "(sin caption)") + "</td>" +
+          "<td>" + plats + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.views) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.likes) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.comments) + "</td>" +
+          '<td style="text-align:right;">' + fmtMetric(m.shares) + "</td>" +
+          "</tr>";
+      }).join("");
+      perfTable.innerHTML =
+        '<table class="nc-table"><thead><tr>' +
+        "<th>Clip</th><th>Plataformas</th>" +
+        '<th style="text-align:right;">Views</th>' +
+        '<th style="text-align:right;">Likes</th>' +
+        '<th style="text-align:right;">Coment.</th>' +
+        '<th style="text-align:right;">Compart.</th>' +
+        "</tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+
+    function loadPerf() {
+      document.getElementById("zn-perf-totals").textContent = "Cargando…";
+      fetch("/dashboard/publish/zernio/rendimiento.json?days=" + perfDays, { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(renderPerf)
+        .catch(function () {
+          perfTable.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>';
+        });
+    }
+
+    document.querySelectorAll(".js-perf-days").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        perfDays = parseInt(btn.getAttribute("data-days"), 10);
+        document.querySelectorAll(".js-perf-days").forEach(function (b) {
+          b.classList.toggle("is-active", b === btn);
+        });
+        loadPerf();
+      });
+    });
+
+    // Phase 12 — ads table (only present when FEATURE_ADS is on).
+    function loadAds() {
+      var host = document.getElementById("zn-ads-table");
+      if (!host) { return; }
+      fetch("/dashboard/publish/zernio/ads/campaigns.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var items = b.campaigns || [];
+          host.innerHTML = items.length
+            ? items.map(function (c) {
+                return '<div style="padding:4px 0;">' + (c.name || c.id || "") +
+                  ' <span class="nc-chip nc-chip--code">' + (c.status || "") + "</span></div>";
+              }).join("")
+            : "Sin campañas de anuncios.";
+        })
+        .catch(function () { host.textContent = "No se pudo cargar anuncios."; });
+    }
+
+    // Lazy-load when the Rendimiento tab is first opened.
+    var perfLoaded = false;
+    document.querySelectorAll('.nc-pc-tab[data-tab="rendimiento"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!perfLoaded) { perfLoaded = true; loadPerf(); loadAds(); }
+      });
+    });
+  }
+
+  // ---- Calendario tab ----
+  var calGrid = document.getElementById("zn-cal-grid");
+  if (calGrid) {
+    var SRC_COLOR = { hub: "#c5f82a", scheduled: "#00e5ff", external: "#ff2d95" };
+    var calRef = new Date();
+    calRef.setDate(1);
+    var calEntries = [];
+    var calLoadedMonth = null;
+
+    function ymd(d) {
+      return d.getFullYear() + "-" +
+        ("0" + (d.getMonth() + 1)).slice(-2) + "-" +
+        ("0" + d.getDate()).slice(-2);
+    }
+
+    function renderCalendar() {
+      var year = calRef.getFullYear(), month = calRef.getMonth();
+      document.getElementById("zn-cal-month").textContent =
+        calRef.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      // Bucket entries by YYYY-MM-DD.
+      var byDay = {};
+      calEntries.forEach(function (e) {
+        if (!e.date) { return; }
+        var day = e.date.slice(0, 10);
+        (byDay[day] = byDay[day] || []).push(e);
+      });
+      calGrid.innerHTML = "";
+      ["L", "M", "X", "J", "V", "S", "D"].forEach(function (d) {
+        var h = document.createElement("div");
+        h.className = "nc-text--muted";
+        h.style.cssText = "text-align:center; font-size:11px; padding:2px;";
+        h.textContent = d;
+        calGrid.appendChild(h);
+      });
+      var first = new Date(year, month, 1);
+      // Monday-based offset.
+      var lead = (first.getDay() + 6) % 7;
+      for (var i = 0; i < lead; i++) { calGrid.appendChild(document.createElement("div")); }
+      var daysInMonth = new Date(year, month + 1, 0).getDate();
+      for (var day = 1; day <= daysInMonth; day++) {
+        var cell = document.createElement("div");
+        cell.style.cssText =
+          "min-height:54px; border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:4px; cursor:pointer;";
+        var key = ymd(new Date(year, month, day));
+        var items = byDay[key] || [];
+        var dots = items.slice(0, 4).map(function (e) {
+          var deleted = e.status === "deleted";
+          return '<span title="' + (e.source || "") + '" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px;background:' +
+            (SRC_COLOR[e.source] || "#888") + ";" + (deleted ? "opacity:0.3;" : "") + '"></span>';
+        }).join("");
+        cell.innerHTML =
+          '<div style="font-size:11px;" class="nc-text--muted">' + day + "</div>" + dots +
+          (items.length > 4 ? '<div style="font-size:10px;" class="nc-text--muted">+' + (items.length - 4) + "</div>" : "");
+        if (items.length) {
+          cell.addEventListener("click", (function (dayItems, label) {
+            return function () { showDayDetail(label, dayItems); };
+          })(items, key));
+        }
+        calGrid.appendChild(cell);
+      }
+    }
+
+    function showDayDetail(day, items) {
+      var host = document.getElementById("zn-cal-detail");
+      host.innerHTML = "<h4 style='margin:0 0 8px;'>" + day + "</h4>" +
+        items.map(function (e) {
+          var deleted = e.status === "deleted";
+          var link = e.url ? ' · <a href="' + e.url + '" target="_blank" rel="noopener">ver</a>' : "";
+          return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);' +
+            (deleted ? "opacity:0.45;text-decoration:line-through;" : "") + '">' +
+            '<span class="nc-chip" style="background:' + (SRC_COLOR[e.source] || "#888") + ';color:#000;">' +
+            e.source + "</span> " +
+            (e.platforms || []).map(function (p) { return '<span class="nc-chip nc-chip--code">' + p + "</span>"; }).join(" ") +
+            " " + (e.content || "(sin caption)") + link + "</div>";
+        }).join("");
+    }
+
+    function loadCalendar() {
+      var year = calRef.getFullYear(), month = calRef.getMonth();
+      var from = ymd(new Date(year, month, 1));
+      var to = ymd(new Date(year, month + 1, 0));
+      fetch("/dashboard/publish/zernio/calendar.json?date_from=" + from + "&date_to=" + to,
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { calEntries = b.entries || []; renderCalendar(); })
+        .catch(function () { calEntries = []; renderCalendar(); });
+    }
+
+    document.getElementById("zn-cal-prev").addEventListener("click", function () {
+      calRef.setMonth(calRef.getMonth() - 1); loadCalendar();
+    });
+    document.getElementById("zn-cal-next").addEventListener("click", function () {
+      calRef.setMonth(calRef.getMonth() + 1); loadCalendar();
+    });
+
+    document.querySelectorAll('.nc-pc-tab[data-tab="calendario"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var m = calRef.getFullYear() + "-" + calRef.getMonth();
+        if (calLoadedMonth !== m) { calLoadedMonth = m; loadCalendar(); }
+      });
+    });
+  }
+
+  // ---- Comentarios tab ----
+  var commentsHost = document.getElementById("zn-comments-list");
+  if (commentsHost) {
+    var commentsLoaded = false;
+    function esc(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+    function renderComments(items) {
+      if (!items.length) {
+        commentsHost.innerHTML = '<span class="nc-text--muted">Aún no hay comentarios en tus clips.</span>';
+        return;
+      }
+      commentsHost.innerHTML = "";
+      items.forEach(function (c) {
+        var hidden = c.status === "hidden";
+        var card = document.createElement("div");
+        card.style.cssText = "padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05);" + (hidden ? "opacity:0.5;" : "");
+        card.innerHTML =
+          '<div style="display:flex; gap:8px; align-items:center;">' +
+          '<span class="nc-chip nc-chip--code">' + esc(c.platform) + "</span>" +
+          "<strong>" + esc(c.author_name || c.author_username || "anónimo") + "</strong>" +
+          (hidden ? ' <span class="nc-chip nc-chip--muted">oculto</span>' : "") + "</div>" +
+          '<div style="margin:4px 0;">' + esc(c.text) + "</div>";
+        var actions = document.createElement("div");
+        actions.style.cssText = "display:flex; gap:6px;";
+        function act(label, icon, fn) {
+          var b = document.createElement("button");
+          b.type = "button"; b.className = "nc-btn"; b.style.cssText = "padding:3px 10px; font-size:12px;";
+          b.innerHTML = '<i class="ti ' + icon + '"></i> ' + label;
+          b.addEventListener("click", fn);
+          return b;
+        }
+        actions.appendChild(act("Responder", "ti-arrow-back-up", function () {
+          var msg = window.prompt("Tu respuesta:");
+          if (!msg) { return; }
+          postJSON("/dashboard/publish/zernio/inbox/comments/reply", {
+            account_id: c.account_id, post_id: c.platform_post_id || c.post_id,
+            comment_id: c.comment_id, message: msg,
+          }, function () { alert("Respuesta enviada."); });
+        }));
+        actions.appendChild(act("Like", "ti-heart", function () {
+          postJSON("/dashboard/publish/zernio/inbox/comments/like", {
+            account_id: c.account_id, post_id: c.platform_post_id || c.post_id, comment_id: c.comment_id,
+          }, function () {});
+        }));
+        if (c.can_hide && !hidden) {
+          actions.appendChild(act("Ocultar", "ti-eye-off", function () {
+            postJSON("/dashboard/publish/zernio/inbox/comments/hide", {
+              account_id: c.account_id, post_id: c.platform_post_id || c.post_id,
+              comment_id: c.comment_id, platform: c.platform,
+            }, function () { card.style.opacity = "0.5"; });
+          }));
+        }
+        card.appendChild(actions);
+        commentsHost.appendChild(card);
+      });
+    }
+
+    function postJSON(url, body, ok) {
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                   credentials: "same-origin", body: JSON.stringify(body) })
+        .then(function (r) { return r.json(); })
+        .then(function (res) { if (!res.ok) { throw new Error(res.error || "fallo"); } ok(res); })
+        .catch(function (e) { alert("Error: " + e.message); });
+    }
+    window._znPostJSON = postJSON;
+
+    function loadComments() {
+      fetch("/dashboard/publish/zernio/inbox/comments.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderComments(b.comments || []); })
+        .catch(function () { commentsHost.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>'; });
+    }
+    document.querySelectorAll('.nc-pc-tab[data-tab="comentarios"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!commentsLoaded) { commentsLoaded = true; loadComments(); }
+      });
+    });
+  }
+
+  // ---- DMs tab ----
+  var dmList = document.getElementById("zn-dm-list");
+  if (dmList) {
+    var dmLoaded = false;
+    var dmThread = document.getElementById("zn-dm-thread");
+    function escD(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+    function openThread(conv) {
+      dmThread.innerHTML = '<span class="nc-text--muted">Cargando…</span>';
+      fetch("/dashboard/publish/zernio/inbox/messages.json?conversation_id=" + encodeURIComponent(conv.conversation_id),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var msgs = (b.messages || []).map(function (m) {
+            var mine = m.direction === "outgoing";
+            return '<div style="text-align:' + (mine ? "right" : "left") + '; margin:4px 0;">' +
+              '<span style="display:inline-block; padding:6px 10px; border-radius:10px; max-width:80%;' +
+              "background:" + (mine ? "var(--nc-green,#48bb78); color:#000;" : "rgba(255,255,255,0.08);") + '">' +
+              escD(m.text) + "</span></div>";
+          }).join("");
+          dmThread.innerHTML =
+            "<div style='display:flex; align-items:center; gap:8px; margin-bottom:8px;'>" +
+            "<strong>" + escD(conv.participant_name || conv.participant_username || "contacto") + "</strong>" +
+            '<span class="nc-chip nc-chip--code">' + escD(conv.platform) + "</span>" +
+            "<button type='button' class='nc-btn' id='zn-dm-archive' style='margin-left:auto; padding:3px 10px; font-size:12px;'>" +
+            "<i class='ti ti-archive'></i> Archivar</button></div>" +
+            "<div style='max-height:320px; overflow-y:auto;'>" + (msgs || "<span class='nc-text--muted'>Sin mensajes.</span>") + "</div>" +
+            "<div style='display:flex; gap:6px; margin-top:10px;'>" +
+            "<input class='nc-input' id='zn-dm-input' placeholder='Escribe una respuesta…' style='flex:1;'>" +
+            "<button type='button' class='nc-btn nc-btn--primary' id='zn-dm-send'>Enviar</button></div>";
+          document.getElementById("zn-dm-send").addEventListener("click", function () {
+            var inp = document.getElementById("zn-dm-input");
+            if (!inp.value.trim()) { return; }
+            window._znPostJSON("/dashboard/publish/zernio/inbox/conversations/reply", {
+              account_id: conv.account_id, conversation_id: conv.conversation_id,
+              message: inp.value.trim(), platform: conv.platform,
+            }, function () { inp.value = ""; openThread(conv); });
+          });
+          document.getElementById("zn-dm-archive").addEventListener("click", function () {
+            window._znPostJSON("/dashboard/publish/zernio/inbox/conversations/archive", {
+              account_id: conv.account_id, conversation_id: conv.conversation_id,
+            }, function () { loadConversations(); dmThread.innerHTML = '<span class="nc-text--muted">Conversación archivada.</span>'; });
+          });
+        });
+    }
+
+    function loadConversations() {
+      fetch("/dashboard/publish/zernio/inbox/conversations.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var convs = b.conversations || [];
+          if (!convs.length) {
+            dmList.innerHTML = '<span class="nc-text--muted">Sin conversaciones.</span>';
+            return;
+          }
+          dmList.innerHTML = "";
+          convs.forEach(function (c) {
+            var item = document.createElement("div");
+            item.style.cssText = "padding:8px; border-radius:6px; cursor:pointer;";
+            item.innerHTML =
+              "<strong>" + escD(c.participant_name || c.participant_username || "contacto") + "</strong>" +
+              ' <span class="nc-chip nc-chip--code">' + escD(c.platform) + "</span>" +
+              (c.status === "archived" ? ' <span class="nc-chip nc-chip--muted">archivada</span>' : "");
+            item.addEventListener("click", function () { openThread(c); });
+            item.addEventListener("mouseenter", function () { item.style.background = "rgba(255,255,255,0.04)"; });
+            item.addEventListener("mouseleave", function () { item.style.background = "transparent"; });
+            dmList.appendChild(item);
+          });
+        })
+        .catch(function () { dmList.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>'; });
+    }
+    document.querySelectorAll('.nc-pc-tab[data-tab="dms"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!dmLoaded) { dmLoaded = true; loadConversations(); }
+      });
+    });
+  }
+
+  // ---- Crecimiento tab (Pro) ----
+  var growthAccount = document.getElementById("zn-auto-account");
+  if (growthAccount) {
+    var growthLoaded = false;
+    function gPost(url, body, ok) {
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                   credentials: "same-origin", body: JSON.stringify(body) })
+        .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+        .then(function (res) {
+          if (!res.j.ok) { throw new Error(res.j.error || ("HTTP " + res.s)); }
+          ok(res.j);
+        })
+        .catch(function (e) { alert("Error: " + e.message); });
+    }
+
+    // Populate account selects from the connected accounts.
+    function loadGrowthAccounts() {
+      fetch("/dashboard/publish/zernio/accounts.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var opts = (b.accounts || []).map(function (a) {
+            return '<option value="' + a.account_id + '">' + a.platform + " · " + a.account_id.slice(-6) + "</option>";
+          }).join("");
+          ["zn-auto-account", "zn-bc-account"].forEach(function (id) {
+            var el = document.getElementById(id); if (el) { el.innerHTML = opts; }
+          });
+        });
+      // Recent published clips → automation target picker.
+      fetch("/dashboard/publish/zernio/feed.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var sel = document.getElementById("zn-auto-post");
+          (b.history || []).slice(0, 20).forEach(function (h) {
+            var o = document.createElement("option");
+            o.value = h.post_id; o.textContent = (h.content || h.post_id || "").slice(0, 40);
+            sel.appendChild(o);
+          });
+        }).catch(function () {});
+    }
+
+    function loadAutomations() {
+      fetch("/dashboard/publish/zernio/growth/automations.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-auto-list");
+          var items = b.automations || [];
+          if (!items.length) { host.innerHTML = '<span class="nc-text--muted">Sin automatizaciones todavía.</span>'; return; }
+          host.innerHTML = items.map(function (a) {
+            var st = a.stats || {};
+            return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);">' +
+              '<strong>' + (a.name || "") + "</strong> " +
+              '<span class="nc-chip nc-chip--code">' + (a.platform || "") + "</span> " +
+              (a.isActive ? '<span class="nc-chip nc-chip--success">activa</span>' : '<span class="nc-chip nc-chip--muted">pausada</span>') +
+              '<span class="nc-text--muted" style="font-size:12px; margin-left:8px;">disparos: ' + (st.triggered || 0) + " · DMs: " + (st.dmsSent || 0) + "</span></div>";
+          }).join("");
+        });
+    }
+
+    document.getElementById("zn-auto-create").addEventListener("click", function () {
+      var kw = (document.getElementById("zn-auto-keywords").value || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+      gPost("/dashboard/publish/zernio/growth/automations", {
+        account_id: growthAccount.value,
+        name: "Auto " + (document.getElementById("zn-auto-post").selectedOptions[0] || {}).text || "clip",
+        dm_message: document.getElementById("zn-auto-dm").value,
+        keywords: kw,
+        platform_post_id: document.getElementById("zn-auto-post").value || null,
+        comment_reply: document.getElementById("zn-auto-reply").value || null,
+      }, function () { loadAutomations(); alert("Automatización creada."); });
+    });
+
+    function loadContacts() {
+      var q = document.getElementById("zn-contacts-q").value;
+      var tag = document.getElementById("zn-contacts-tag").value;
+      fetch("/dashboard/publish/zernio/growth/contacts.json?q=" + encodeURIComponent(q) + "&tag=" + encodeURIComponent(tag),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-contacts-list");
+          var items = b.contacts || [];
+          if (!items.length) { host.innerHTML = '<span class="nc-text--muted">Sin contactos.</span>'; return; }
+          host.innerHTML = items.map(function (c) {
+            return '<div style="padding:4px 0;"><strong>' + (c.name || c.username || c.contact_key) + "</strong> " +
+              '<span class="nc-text--muted" style="font-size:12px;">' + (c.tags || "") + "</span></div>";
+          }).join("");
+        });
+    }
+    document.getElementById("zn-contacts-q").addEventListener("input", loadContacts);
+    document.getElementById("zn-contacts-tag").addEventListener("change", loadContacts);
+
+    function loadSequences() {
+      fetch("/dashboard/publish/zernio/growth/sequences.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-seq-list");
+          var items = b.sequences || [];
+          host.innerHTML = items.length
+            ? items.map(function (s) { return '<div style="padding:4px 0;">' + (s.name || "") + "</div>"; }).join("")
+            : '<span class="nc-text--muted">Sin secuencias. Usa la plantilla para empezar.</span>';
+        });
+    }
+    document.getElementById("zn-seq-template").addEventListener("click", function () {
+      gPost("/dashboard/publish/zernio/growth/sequences", {
+        account_id: growthAccount.value, name: "Bienvenida Nexo", template: "bienvenida",
+      }, function () { loadSequences(); alert("Secuencia “Bienvenida Nexo” creada."); });
+    });
+
+    document.getElementById("zn-bc-send").addEventListener("click", function () {
+      var name = document.getElementById("zn-bc-name").value;
+      var msg = document.getElementById("zn-bc-message").value;
+      var tag = document.getElementById("zn-bc-tag").value;
+      if (!name.trim() || !msg.trim()) { alert("Completa nombre y mensaje."); return; }
+      var seg = tag ? ("contactos con tag “" + tag + "”") : "TODOS tus contactos";
+      if (!window.confirm("¿Enviar este broadcast a " + seg + "? Esta acción no se puede deshacer.")) { return; }
+      gPost("/dashboard/publish/zernio/growth/broadcasts/send", {
+        account_id: document.getElementById("zn-bc-account").value,
+        name: name, message: msg, tag: tag || null, confirm: true,
+      }, function () { alert("Broadcast enviado."); });
+    });
+
+    document.querySelectorAll('.nc-pc-tab[data-tab="crecimiento"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (growthLoaded) { return; }
+        growthLoaded = true;
+        loadGrowthAccounts(); loadAutomations(); loadContacts(); loadSequences();
+      });
+    });
+  }
+
+  // ---- Comunidad settings ----
+  var commPanel = document.getElementById("zn-community-panel");
+  if (commPanel) {
+    function fillChannelSelect(sel, channels, platform, current) {
+      sel.innerHTML = '<option value="">—</option>';
+      channels.filter(function (c) { return c.platform === platform; }).forEach(function (c) {
+        var o = document.createElement("option");
+        o.value = c.account_id; o.textContent = c.account_id.slice(-8);
+        if (c.account_id === current) { o.selected = true; }
+        sel.appendChild(o);
+      });
+    }
+    function loadCommunity() {
+      fetch("/dashboard/publish/zernio/community/settings.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var s = b.settings || {};
+          document.getElementById("zn-comm-enabled").checked = !!s.enabled;
+          document.getElementById("zn-comm-digest").checked = !!s.weekly_digest;
+          document.getElementById("zn-comm-brand").value = s.brand_name || "";
+          document.getElementById("zn-comm-avatar").value = s.brand_avatar_url || "";
+          fillChannelSelect(document.getElementById("zn-comm-discord"), b.channels || [], "discord", s.discord_account_id);
+          fillChannelSelect(document.getElementById("zn-comm-telegram"), b.channels || [], "telegram", s.telegram_account_id);
+        })
+        .catch(function () {});
+    }
+    document.getElementById("zn-comm-save").addEventListener("click", function () {
+      var msg = document.getElementById("zn-comm-msg");
+      msg.textContent = "Guardando…";
+      fetch("/dashboard/publish/zernio/community/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          enabled: document.getElementById("zn-comm-enabled").checked,
+          weekly_digest: document.getElementById("zn-comm-digest").checked,
+          discord_account_id: document.getElementById("zn-comm-discord").value || null,
+          telegram_account_id: document.getElementById("zn-comm-telegram").value || null,
+          brand_name: document.getElementById("zn-comm-brand").value || null,
+          brand_avatar_url: document.getElementById("zn-comm-avatar").value || null,
+        }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          msg.style.color = res.ok ? "var(--nc-green, #48bb78)" : "#ff7575";
+          msg.textContent = res.ok ? "Guardado ✓" : ("Error: " + (res.error || res.detail || ""));
+        })
+        .catch(function (e) { msg.style.color = "#ff7575"; msg.textContent = "Error: " + e.message; });
+    });
+    loadCommunity();
+  }
+
+  // ---- FAILED list + retry ----
+  var failedPanel = document.getElementById("zn-failed-panel");
+  if (failedPanel) {
+    var failedList = document.getElementById("zn-failed-list");
+
+    function renderFailed(items) {
+      if (!items.length) {
+        failedList.innerHTML =
+          '<span class="nc-text--muted">No hay publicaciones fallidas. 🎉</span>';
+        return;
+      }
+      failedList.innerHTML = "";
+      items.forEach(function (p) {
+        var card = document.createElement("div");
+        card.style.cssText =
+          "padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05);";
+        var plats = (p.platforms || [])
+          .map(function (pl) {
+            return '<div style="margin:4px 0;">' +
+              '<span class="nc-chip nc-chip--code">' + (pl.platform || "?") + "</span> " +
+              '<span style="color:#ff7575; font-size:12px;">' + (pl.error || "error") + "</span>" +
+              '<div class="nc-text--muted" style="font-size:12px; margin-top:2px;">💡 ' +
+              (pl.hint || "") + "</div></div>";
+          })
+          .join("");
+        card.innerHTML =
+          '<div style="display:flex; align-items:center; gap:10px;">' +
+          '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
+          (p.content || "(sin caption)") + "</span></div>" + plats;
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "nc-btn";
+        retry.style.cssText = "padding:4px 12px; font-size:12px; margin-top:6px;";
+        retry.innerHTML = '<i class="ti ti-refresh"></i> Reintentar';
+        retry.addEventListener("click", function () {
+          retry.disabled = true;
+          fetch("/dashboard/publish/zernio/retry/" + encodeURIComponent(p.post_id), {
+            method: "POST", credentials: "same-origin",
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (!res.ok) { throw new Error(res.error || "fallo"); }
+              card.style.opacity = "0.4";
+              retry.innerHTML = '<i class="ti ti-check"></i> Reintentado';
+            })
+            .catch(function (e) { retry.disabled = false; alert(e.message); });
+        });
+        card.appendChild(retry);
+        failedList.appendChild(card);
+      });
+    }
+
+    function loadFailed() {
+      fetch("/dashboard/publish/zernio/failed.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderFailed(b.failed || []); })
+        .catch(function () {
+          failedList.innerHTML =
+            '<span class="nc-text--muted">No se pudo cargar.</span>';
+        });
+    }
+
+    function openFailed() {
+      activateTab("published");
+      failedPanel.style.display = "block";
+      loadFailed();
+      failedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    document.querySelectorAll(".js-open-failed").forEach(function (el) {
+      el.addEventListener("click", openFailed);
+      el.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openFailed(); }
+      });
+    });
+
+    document.getElementById("zn-retry-all").addEventListener("click", function () {
+      var btn = this;
+      if (!window.confirm("¿Reintentar todas las publicaciones fallidas?")) { return; }
+      btn.disabled = true;
+      fetch("/dashboard/publish/zernio/retry-all", {
+        method: "POST", credentials: "same-origin",
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.error || "fallo"); }
+          alert((res.retried || 0) + " reintentadas. Recargando lista…");
+          loadFailed();
+        })
+        .catch(function (e) { alert("No se pudo: " + e.message); })
+        .finally(function () { btn.disabled = false; });
+    });
+  }
+
+  // ---- Programación: recurring slots + hora óptima + próximas ----
+  var schedPanel = document.getElementById("zn-schedule-panel");
+  if (schedPanel) {
+    var DOW = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    // Working set of {dayOfWeek, time} the operator is editing; seeded
+    // from the saved default queue on load.
+    var slots = [];
+    var chipsHost = document.getElementById("zn-slot-chips");
+    var slotMsg = document.getElementById("zn-slot-msg");
+
+    function renderSlots() {
+      chipsHost.innerHTML = "";
+      if (!slots.length) {
+        chipsHost.innerHTML =
+          '<span class="nc-text--muted" style="font-size:12px;">Sin slots todavía — añade al menos uno.</span>';
+        return;
+      }
+      slots
+        .slice()
+        .sort(function (a, b) { return a.dayOfWeek - b.dayOfWeek || a.time.localeCompare(b.time); })
+        .forEach(function (s) {
+          var chip = document.createElement("span");
+          chip.className = "nc-pc-acct-chip";
+          chip.innerHTML = "<span>" + DOW[s.dayOfWeek] + " " + s.time + "</span>";
+          var x = document.createElement("button");
+          x.type = "button";
+          x.style.cssText = "background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;";
+          x.innerHTML = '<i class="ti ti-x"></i>';
+          x.addEventListener("click", function () {
+            slots = slots.filter(function (o) {
+              return !(o.dayOfWeek === s.dayOfWeek && o.time === s.time);
+            });
+            renderSlots();
+          });
+          chip.appendChild(x);
+          chipsHost.appendChild(chip);
+        });
+    }
+
+    document.getElementById("zn-slot-add").addEventListener("click", function () {
+      var dow = parseInt(document.getElementById("zn-slot-dow").value, 10);
+      var time = document.getElementById("zn-slot-time").value;
+      if (!time) { return; }
+      if (slots.some(function (s) { return s.dayOfWeek === dow && s.time === time; })) { return; }
+      slots.push({ dayOfWeek: dow, time: time });
+      renderSlots();
+    });
+
+    document.getElementById("zn-slot-save").addEventListener("click", function () {
+      if (!slots.length) { slotMsg.textContent = "Añade al menos un slot."; return; }
+      var tz = document.getElementById("zn-slot-tz").value || "UTC";
+      slotMsg.style.color = "var(--nc-text--muted)";
+      slotMsg.textContent = "Guardando…";
+      fetch("/dashboard/publish/zernio/schedule/slots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ timezone: tz, slots: slots }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          if (!b.ok) { throw new Error(b.error || "fallo"); }
+          slotMsg.style.color = "var(--nc-green, #48bb78)";
+          slotMsg.textContent = "Slots guardados ✓";
+        })
+        .catch(function (e) {
+          slotMsg.style.color = "#ff7575";
+          slotMsg.textContent = "No se pudo guardar: " + e.message;
+        });
+    });
+
+    function loadSchedule() {
+      fetch("/dashboard/publish/zernio/schedule.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          // Seed slots from the default (or first) saved queue.
+          var queues = b.queues || [];
+          var def = queues.filter(function (q) { return q.isDefault; })[0] || queues[0];
+          if (def && Array.isArray(def.slots)) {
+            slots = def.slots
+              .filter(function (s) { return typeof s.dayOfWeek === "number" && s.time; })
+              .map(function (s) { return { dayOfWeek: s.dayOfWeek, time: s.time }; });
+            if (def.timezone) { document.getElementById("zn-slot-tz").value = def.timezone; }
+          }
+          renderSlots();
+
+          // Upcoming list.
+          var up = document.getElementById("zn-upcoming");
+          var items = b.upcoming || [];
+          if (!items.length) {
+            up.innerHTML =
+              '<span class="nc-text--muted" style="font-size:13px;">No hay publicaciones programadas.</span>';
+            return;
+          }
+          up.innerHTML = "";
+          items.forEach(function (p) {
+            var row = document.createElement("div");
+            row.style.cssText =
+              "display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05);";
+            var when = p.scheduled_for ? new Date(p.scheduled_for).toLocaleString() : "—";
+            row.innerHTML =
+              '<span class="nc-chip nc-chip--code">' + (p.platforms || []).join(", ") + "</span>" +
+              '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
+              (p.content || "(sin caption)") + "</span>" +
+              '<span class="nc-text--muted" style="font-size:12px;">' + when + "</span>";
+            var cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.className = "nc-btn nc-btn--danger";
+            cancel.style.cssText = "padding:4px 8px; font-size:12px;";
+            cancel.innerHTML = '<i class="ti ti-x"></i> Cancelar';
+            cancel.addEventListener("click", function () {
+              if (!window.confirm("¿Cancelar esta publicación programada?")) { return; }
+              cancel.disabled = true;
+              fetch("/dashboard/publish/zernio/schedule/cancel/" + encodeURIComponent(p.post_id), {
+                method: "POST", credentials: "same-origin",
+              })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                  if (!res.ok) { throw new Error(res.error || "fallo"); }
+                  row.remove();
+                })
+                .catch(function (e) { cancel.disabled = false; alert("No se pudo cancelar: " + e.message); });
+            });
+            row.appendChild(cancel);
+            up.appendChild(row);
+          });
+        })
+        .catch(function () {
+          document.getElementById("zn-upcoming").innerHTML =
+            '<span class="nc-text--muted">No se pudo cargar la programación.</span>';
+        });
+    }
+
+    function loadBestTime() {
+      fetch("/dashboard/publish/zernio/best-time.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var host = document.getElementById("zn-besttime");
+          var s = (b.slots || []).slice(0, 5);
+          if (!s.length) {
+            host.textContent = "Sin datos suficientes todavía — publica más clips para ver tus mejores horas.";
+            return;
+          }
+          // best-time dayOfWeek is 0=Monday.
+          var BT = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+          host.innerHTML = s
+            .map(function (slot) {
+              var d = BT[slot.day_of_week] || "?";
+              var hh = ("0" + slot.hour).slice(-2);
+              return '<span class="nc-pc-acct-chip" style="margin:2px;">' +
+                d + " " + hh + ":00 UTC</span>";
+            })
+            .join("");
+        })
+        .catch(function () {});
+    }
+
+    loadSchedule();
+    loadBestTime();
+  }
+})();
+</script>
+
+{% endblock %}

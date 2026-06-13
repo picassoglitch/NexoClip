@@ -5,7 +5,7 @@ NexoClip recognizes exactly three internal tiers, lowest → highest:
     free        — ingest + clip + DOWNLOAD (watermarked). No publishing.
     pro         — "mid" tier. Adds the paid perks below the top tier
                   (e.g. Drive export — see task #31). NOT publishing.
-    all_access  — "top" tier. Adds external publishing (upload-post /
+    all_access  — "top" tier. Adds external publishing (Zernio /
                   TikTok / YouTube / IG auto-posting).
 
 Nexo AI (the IdP) sometimes labels the top tier differently on its
@@ -44,15 +44,39 @@ TOP_TIERS: Final[frozenset[str]] = frozenset({ALL_ACCESS})
 # Tiers above free — any paid perk that isn't specifically top-tier.
 PAID_TIERS: Final[frozenset[str]] = frozenset({PRO, ALL_ACCESS})
 
+# Connected-social-account cap per tier for the Zernio publish surface.
+# `pro` CAN publish, but with exactly ONE connected account; `all_access`
+# (VIP) is unlimited (None). `free` connects nothing — publishing stays
+# behind the paid gate.
+ZERNIO_ACCOUNT_LIMITS: Final[dict[str, int | None]] = {
+    FREE: 0,
+    PRO: 1,
+    ALL_ACCESS: None,
+}
+
+
+def zernio_account_limit(raw: str | None) -> int | None:
+    """Connected-account cap for a (possibly raw/aliased) tier label.
+
+    None = unlimited. Unknown labels normalize to `free` → 0, the
+    least-privilege default.
+    """
+    return ZERNIO_ACCOUNT_LIMITS.get(normalize_tier(raw), 0)
+
 # Aliases Nexo AI (or future billing sources) may use for a canonical
 # tier. Keyed lowercase. Extend this — NOT the comparison sites — when
-# a new label shows up. `partner` == our top tier `all_access`.
+# a new label shows up. `partner` == our top tier `all_access`, and so is
+# `vip` — Nexo AI renamed its top tier ALL_ACCESS → VIP, so every SSO
+# token and provisioning call for top-tier users now carries 'vip'.
+# Without this entry those users land as `free` (the normalize fallback)
+# and lose every paid perk on login.
 _ALIASES: Final[dict[str, str]] = {
     "partner": ALL_ACCESS,
     "partners": ALL_ACCESS,
     "enterprise": ALL_ACCESS,
     "allaccess": ALL_ACCESS,
     "all-access": ALL_ACCESS,
+    "vip": ALL_ACCESS,
 }
 
 
@@ -92,6 +116,8 @@ __all__ = [
     "CANONICAL_TIERS",
     "TOP_TIERS",
     "PAID_TIERS",
+    "ZERNIO_ACCOUNT_LIMITS",
     "resolve_tier_alias",
     "normalize_tier",
+    "zernio_account_limit",
 ]

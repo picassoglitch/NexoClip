@@ -261,10 +261,79 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "<code>Authorization: Bearer &lt;token&gt;</code>."
         ),
 
-        # ---- Footer -----------------------------------------------
+        # ---- Sticky nav (new — added when the reference port landed)
+        "landing.nav.brand_prefix": "Nexo",
+        "landing.nav.brand_suffix": "Clip",
+        "landing.nav.link_features": "Features",
+        "landing.nav.link_solution": "Solution",
+        "landing.nav.link_pricing": "Pricing",
+        "landing.nav.link_agents": "Agencies / Agents",
+        "landing.nav.link_api": "API",
+        "landing.nav.signin": "Sign in",
+        "landing.nav.cta": "Start free",
+
+        # ---- Hero — paste-link box + alternate paths -------------
+        "landing.hero.badge": (
+            "AI clipping for streamers · #1 in LATAM"
+        ),
+        "landing.hero.paste_placeholder": (
+            "Paste your VOD link — Kick, Twitch, YouTube…"
+        ),
+        "landing.hero.paste_cta": "Generate clips",
+        "landing.hero.alt_or": "or",
+        "landing.hero.alt_upload": "upload a file",
+        "landing.hero.alt_micro": "Your first stream, free. No card.",
+        "landing.hero.demo_label": "Watch demo:",
+        "landing.hero.demo_gaming": "Gaming",
+        "landing.hero.demo_chat": "Just Chatting",
+        "landing.hero.demo_podcast": "Podcast",
+
+        # ---- Hero — feature chips under the animation -----------
+        "landing.chips.cut": "AI cutting",
+        "landing.chips.subs": "Auto subtitles",
+        "landing.chips.reframe": "9:16 reframe",
+        "landing.chips.hooks": "Hooks & titles",
+        "landing.chips.hashtags": "Hashtags",
+        "landing.chips.schedule": "Multi-platform scheduling",
+
+        # ---- ClipFanAnimation (source VOD card + 5 fanning
+        #      vertical clips with a counting-up viral score) ------
+        "landing.anim.source_label": "your_full_stream.mp4",
+        "landing.anim.live_tag": "● LIVE · VOD",
+        "landing.anim.score_label": "Score",
+        "landing.anim.cap1": "\"You won't believe what happened…\"",
+        "landing.anim.cap2": "The most viral moment of the stream",
+        "landing.anim.cap3": "The reaction that broke it all",
+        "landing.anim.cap4": "Clip you triggered with 'clip that'",
+        "landing.anim.cap5": "Highlight with auto captions",
+        "landing.anim.note": (
+            "1 stream → 5 platforms → clips scored by viral "
+            "potential, automatically"
+        ),
+
+        # ---- Footer (4-column layout) ----------------------------
         "landing.foot.tagline": (
             "NexoClip · turn one stream into 20+ ready-to-post clips"
         ),
+        "landing.foot.brand_blurb": (
+            "Turn your streams into viral, ready-to-post clips. "
+            "A Quantor · Nexo AI product."
+        ),
+        "landing.foot.col_product": "Product",
+        "landing.foot.col_developers": "Developers",
+        "landing.foot.col_platforms": "Platforms",
+        "landing.foot.link_features": "Features",
+        "landing.foot.link_pricing": "Pricing",
+        "landing.foot.link_get_started": "Start free",
+        "landing.foot.link_openapi": "OpenAPI spec",
+        "landing.foot.platform_tiktok": "TikTok",
+        "landing.foot.platform_reels": "Instagram Reels",
+        "landing.foot.platform_shorts": "YouTube Shorts",
+        "landing.foot.platform_kick": "Kick · Twitch VODs",
+        "landing.foot.copyright": (
+            "© 2026 NexoClip · Quantor. All rights reserved."
+        ),
+        "landing.foot.made": "Built in Nexo AI World ◇",
         "landing.foot.link_agents": "For agents / agencies",
         "landing.foot.link_llms": "llms.txt",
         "landing.foot.link_docs": "API docs",
@@ -354,6 +423,51 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav.site_settings": "Site / Landing",
         "nav.docs_agents": "Docs / Agents",
         "nav.logout": "Logout",
+        "nav.new_clip": "New clip",
+        # ---- New clip — ingest hub (single hero card + mode selector) ----
+        "newClip.modesHint": "or send it another way",
+        "newClip.modes.url.label": "Paste URL",
+        "newClip.modes.upload.label": "Upload",
+        "newClip.modes.live.label": "Push live",
+        "newClip.modes.drive.label": "Drive folder",
+        "newClip.url.title": "Paste a URL",
+        "newClip.url.tag": "Fastest",
+        "newClip.url.help": "Kick, Twitch, or YouTube VOD. We download it for you.",
+        "newClip.url.fieldLabel": "VOD URL",
+        "newClip.url.placeholder": "https://kick.com/aldovillanueva/videos/…",
+        "newClip.url.supportedPre": "Supported:",
+        "newClip.url.start": "Start",
+        "newClip.url.cookiesPre": "Kick + age-gated YouTube need a logged-in cookies.txt on the volume — set",
+        "newClip.url.cookiesMid": "to point at it.",
+        "newClip.upload.title": "Upload a video",
+        "newClip.upload.tag": "No URL needed",
+        "newClip.upload.help": "Already-recorded VOD or phone video.",
+        "newClip.upload.fieldLabel": "Video file",
+        "newClip.upload.dropTitle": "Drop a file or click to browse",
+        "newClip.upload.dropHint": "Drag your VOD here, or select it from your device",
+        "newClip.upload.cta": "Upload & process",
+        "newClip.upload.largeFiles": "Large files (> 500 MB) — keep the tab open until the upload finishes.",
+        "newClip.live.title": "Push live (RTMP)",
+        "newClip.live.tag": "OBS / Streamlabs",
+        "newClip.live.help": "Paste these into OBS. We record the live push and run the pipeline when you stop the broadcast.",
+        "newClip.live.serverLabel": "Server",
+        "newClip.live.keyLabel": "Stream key",
+        "newClip.live.reveal": "Reveal",
+        "newClip.live.hide": "Hide",
+        "newClip.live.copy": "Copy",
+        "newClip.live.copied": "Copied",
+        "newClip.live.openDashboard": "Open live dashboard",
+        "newClip.live.note": "We start recording the moment OBS connects. Stop the broadcast to trigger the pipeline automatically.",
+        "newClip.live.notConfigured": "Not configured on this deployment. Set NEXOCLIP_LIVE_RTMP_BASE_URL in env to enable.",
+        "newClip.live.unavailable": "Not available",
+        "newClip.drive.title": "Watch a Drive folder",
+        "newClip.drive.tag": "Auto-ingest",
+        "newClip.drive.help": "Drop new VODs into a Google Drive folder; we pull each one automatically. Good for team workflows.",
+        "newClip.drive.watchedLabel": "Watched folder",
+        "newClip.drive.connectTitle": "Connect a Drive folder",
+        "newClip.drive.connectHint": "No folder watched yet — set one up to auto-ingest new VODs.",
+        "newClip.drive.manage": "Manage Drive watches",
+        "newClip.drive.note": "New files are detected within ~60 seconds and run through the same pipeline as everything else.",
 
         # ============================================================
         # SITE SETTINGS (admin — operator-editable landing values)
@@ -615,10 +729,80 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "<code>Authorization: Bearer &lt;token&gt;</code>."
         ),
 
-        # ---- Footer -----------------------------------------------
+        # ---- Sticky nav (new — added when the reference port landed)
+        "landing.nav.brand_prefix": "Nexo",
+        "landing.nav.brand_suffix": "Clip",
+        "landing.nav.link_features": "Características",
+        "landing.nav.link_solution": "Solución",
+        "landing.nav.link_pricing": "Precios",
+        "landing.nav.link_agents": "Agencias / Agentes",
+        "landing.nav.link_api": "API",
+        "landing.nav.signin": "Iniciar sesión",
+        "landing.nav.cta": "Empezar gratis",
+
+        # ---- Hero — paste-link box + alternate paths -------------
+        "landing.hero.badge": (
+            "Clipping con IA para streamers · #1 en LATAM"
+        ),
+        "landing.hero.paste_placeholder": (
+            "Pegá el link de tu VOD — Kick, Twitch, YouTube…"
+        ),
+        "landing.hero.paste_cta": "Generar clips",
+        "landing.hero.alt_or": "o",
+        "landing.hero.alt_upload": "subir un archivo",
+        "landing.hero.alt_micro": "Tu primer stream gratis. Sin tarjeta.",
+        "landing.hero.demo_label": "Ver demo:",
+        "landing.hero.demo_gaming": "Gaming",
+        "landing.hero.demo_chat": "Just Chatting",
+        "landing.hero.demo_podcast": "Podcast",
+
+        # ---- Hero — feature chips under the animation -----------
+        "landing.chips.cut": "Recorte con IA",
+        "landing.chips.subs": "Subtítulos automáticos",
+        "landing.chips.reframe": "Reencuadre 9:16",
+        "landing.chips.hooks": "Hooks y títulos",
+        "landing.chips.hashtags": "Hashtags",
+        "landing.chips.schedule": "Programación multiplataforma",
+
+        # ---- ClipFanAnimation (tarjeta VOD origen + 5 clips
+        #      verticales en abanico con un score viral que cuenta
+        #      hacia su valor al entrar en pantalla) ----------------
+        "landing.anim.source_label": "tu_stream_completo.mp4",
+        "landing.anim.live_tag": "● EN VIVO · VOD",
+        "landing.anim.score_label": "Score",
+        "landing.anim.cap1": "\"No vas a creer lo que pasó…\"",
+        "landing.anim.cap2": "El momento más viral del directo",
+        "landing.anim.cap3": "La reacción que lo rompió todo",
+        "landing.anim.cap4": "Clip que pediste con \"clipeá eso\"",
+        "landing.anim.cap5": "Highlight con subtítulos automáticos",
+        "landing.anim.note": (
+            "1 stream → 5 plataformas → clips puntuados por "
+            "potencial viral, automáticamente"
+        ),
+
+        # ---- Footer (4-column layout) ----------------------------
         "landing.foot.tagline": (
             "NexoClip · convertí un stream en 20+ clips listos para publicar"
         ),
+        "landing.foot.brand_blurb": (
+            "Convertí tus streams en clips virales listos para "
+            "publicar. Un producto de Quantor · Nexo AI."
+        ),
+        "landing.foot.col_product": "Producto",
+        "landing.foot.col_developers": "Desarrolladores",
+        "landing.foot.col_platforms": "Plataformas",
+        "landing.foot.link_features": "Características",
+        "landing.foot.link_pricing": "Precios",
+        "landing.foot.link_get_started": "Empezar gratis",
+        "landing.foot.link_openapi": "Spec OpenAPI",
+        "landing.foot.platform_tiktok": "TikTok",
+        "landing.foot.platform_reels": "Instagram Reels",
+        "landing.foot.platform_shorts": "YouTube Shorts",
+        "landing.foot.platform_kick": "Kick · Twitch VODs",
+        "landing.foot.copyright": (
+            "© 2026 NexoClip · Quantor. Todos los derechos reservados."
+        ),
+        "landing.foot.made": "Construido en Nexo AI World ◇",
         "landing.foot.link_agents": "Para agentes / agencias",
         "landing.foot.link_llms": "llms.txt",
         "landing.foot.link_docs": "Docs API",
@@ -710,6 +894,51 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav.site_settings": "Sitio / Landing",
         "nav.docs_agents": "Docs / Agentes",
         "nav.logout": "Salir",
+        "nav.new_clip": "Nuevo clip",
+        # ---- Nuevo clip — hub de ingesta (una sola card + selector) ----
+        "newClip.modesHint": "o envialo de otra forma",
+        "newClip.modes.url.label": "Pegar URL",
+        "newClip.modes.upload.label": "Subir",
+        "newClip.modes.live.label": "En vivo",
+        "newClip.modes.drive.label": "Carpeta Drive",
+        "newClip.url.title": "Pegá una URL",
+        "newClip.url.tag": "Lo más rápido",
+        "newClip.url.help": "VOD de Kick, Twitch o YouTube. Lo descargamos por vos.",
+        "newClip.url.fieldLabel": "URL del VOD",
+        "newClip.url.placeholder": "https://kick.com/aldovillanueva/videos/…",
+        "newClip.url.supportedPre": "Soportados:",
+        "newClip.url.start": "Empezar",
+        "newClip.url.cookiesPre": "Kick y YouTube con restricción de edad necesitan un cookies.txt con sesión iniciada en el volumen — definí",
+        "newClip.url.cookiesMid": "para apuntarlo.",
+        "newClip.upload.title": "Subí un video",
+        "newClip.upload.tag": "Sin URL",
+        "newClip.upload.help": "VOD ya grabado o video del celular.",
+        "newClip.upload.fieldLabel": "Archivo de video",
+        "newClip.upload.dropTitle": "Soltá un archivo o hacé clic para buscar",
+        "newClip.upload.dropHint": "Arrastrá tu VOD acá, o seleccionalo desde tu dispositivo",
+        "newClip.upload.cta": "Subir y procesar",
+        "newClip.upload.largeFiles": "Archivos grandes (> 500 MB) — mantené la pestaña abierta hasta que termine la subida.",
+        "newClip.live.title": "Transmití en vivo (RTMP)",
+        "newClip.live.tag": "OBS / Streamlabs",
+        "newClip.live.help": "Pegá esto en OBS. Grabamos la transmisión y corremos el pipeline cuando la cortás.",
+        "newClip.live.serverLabel": "Servidor",
+        "newClip.live.keyLabel": "Clave de transmisión",
+        "newClip.live.reveal": "Mostrar",
+        "newClip.live.hide": "Ocultar",
+        "newClip.live.copy": "Copiar",
+        "newClip.live.copied": "Copiado",
+        "newClip.live.openDashboard": "Abrir panel en vivo",
+        "newClip.live.note": "Empezamos a grabar apenas OBS se conecta. Cortá la transmisión para disparar el pipeline automáticamente.",
+        "newClip.live.notConfigured": "No está configurado en este despliegue. Definí NEXOCLIP_LIVE_RTMP_BASE_URL en el env para habilitarlo.",
+        "newClip.live.unavailable": "No disponible",
+        "newClip.drive.title": "Mirá una carpeta de Drive",
+        "newClip.drive.tag": "Auto-ingesta",
+        "newClip.drive.help": "Soltá nuevos VODs en una carpeta de Google Drive; los traemos uno por uno automáticamente. Ideal para equipos.",
+        "newClip.drive.watchedLabel": "Carpeta vigilada",
+        "newClip.drive.connectTitle": "Conectá una carpeta de Drive",
+        "newClip.drive.connectHint": "Todavía no hay carpeta vigilada — configurá una para auto-ingestar nuevos VODs.",
+        "newClip.drive.manage": "Gestionar carpetas de Drive",
+        "newClip.drive.note": "Los archivos nuevos se detectan en ~60 segundos y pasan por el mismo pipeline que todo lo demás.",
 
         # ============================================================
         # SITE SETTINGS (admin — valores del landing editables por el operador)

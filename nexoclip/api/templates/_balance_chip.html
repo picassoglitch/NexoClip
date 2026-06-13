@@ -1,9 +1,12 @@
 {# Slice O.47 — token-balance chip fragment.
    Slice O.56 — hardened against missing / partial dict shapes.
 
-   Standalone <a> fragment so the nav can swap it via HTMX every 30s
-   AND after token-consuming actions (clip finalize, publish, download)
-   without re-rendering the whole nav.
+   Standalone <a> fragment the nav swaps in place (outerHTML) whenever the
+   `balance-poll` event fires on <body> — no more 30s polling. That event is
+   dispatched (a) after token-consuming actions (clip finalize, publish,
+   download) and (b) by the SSE relay in base.html when the server pushes a
+   `balance` change (see /dashboard/_balance/stream + balance_bus). So a
+   refetch happens on an actual change, not on a timer.
 
    _bal is either None (no cache yet) or a dict with these keys:
      - remaining (int | None)
@@ -31,7 +34,7 @@
    class="nc-chip nc-chip--muted"
    title="Sin balance en cache. Click para refrescar desde Nexo AI."
    hx-get="/dashboard/_balance/chip"
-   hx-trigger="every 30s, balance-poll from:body"
+   hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-coin" aria-hidden="true"></i>
@@ -43,7 +46,7 @@
    class="nc-chip nc-chip--success"
    title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
-   hx-trigger="every 30s, balance-poll from:body"
+   hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-infinity" aria-hidden="true"></i>
@@ -58,7 +61,7 @@
    class="nc-chip nc-chip--danger"
    title="⚠ {{ _sync_err }}"
    hx-get="/dashboard/_balance/chip"
-   hx-trigger="every 30s, balance-poll from:body"
+   hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-alert-triangle" aria-hidden="true"></i>
@@ -75,7 +78,7 @@
    class="nc-chip nc-chip--{% if _low %}warn{% else %}success{% endif %}"
    title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
-   hx-trigger="every 30s, balance-poll from:body"
+   hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-coin" aria-hidden="true"></i>

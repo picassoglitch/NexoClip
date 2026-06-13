@@ -73,11 +73,19 @@ class Tenant(BaseModel):
     last_usage_report_at: str | None = None
     last_usage_report_ok: int | None = None   # 1 ok / 0 fail / None never tried
     last_usage_report_error: str | None = None
-    # upload-post integration (migration 022). Each tenant maps to ONE
-    # upload-post "user profile" created lazily on first connect/publish
-    # click. Persisted here so subsequent API calls reuse the same
-    # profile name. NULL = tenant has never started a publish flow.
+    # DEPRECATED (dormant). upload-post integration (migration 022) —
+    # retired in favor of Zernio. Column kept (sqlite column-drop is a
+    # destructive table rebuild) but no longer written or read by app
+    # code. Safe to drop in a future schema-rebuild migration.
     upload_post_profile_username: str | None = None
+    # Zernio integration (migration 028/029). Each tenant maps to ONE
+    # Zernio profile, CREATED via Zernio's POST /profiles (returns a
+    # server `_id` like `prof_abc123`) from the publish dashboard.
+    # Zernio scopes connected accounts + posts by `zernio_profile_id`.
+    # `zernio_profile_name` is the operator-chosen display name (mig 029).
+    # NULL = tenant has not created a profile yet.
+    zernio_profile_id: str | None = None
+    zernio_profile_name: str | None = None
 
 
 class User(BaseModel):
@@ -344,6 +352,74 @@ class PublishJob(BaseModel):
     platform_metadata: dict[str, object] | None = None
 
 
+class ZernioPublishRow(BaseModel):
+    """One Zernio publish we fired (migration 030, status cols in 031).
+
+    Local, tenant-scoped record of every POST /posts — Zernio's own
+    GET /posts is company-key-wide, so per-tenant history MUST come
+    from here. `post_id` is Zernio's post _id (the job handle the
+    /job/{post_id} page polls). `status`/`platforms_json` are fed by
+    the post.* webhooks (NULL until the first event lands)."""
+
+    model_config = ConfigDict(extra="forbid")
+    post_id: str
+    tenant_id: str
+    clip_id: str
+    platforms: str  # csv of platform ids, e.g. "tiktok,instagram"
+    content: str | None = None
+    created_at: str
+    status: str | None = None  # Zernio vocab: scheduled/published/failed/…
+    platforms_json: str | None = None  # per-platform results, verbatim JSON
+    updated_at: str | None = None
+    options_json: str | None = None  # publish-extras snapshot (migration 033)
+
+
+class HubPublishJobRow(BaseModel):
+    """One internal-API publish job (migration 032).
+
+    Created by /api/internal/v1/publish (NexoOBS, Nexo AI). The
+    idempotency_key dedups caller retries per tenant; zernio_post_id
+    links to the Zernio post once accepted, and the phase-2 webhook
+    processor keeps status/platforms_json live from there."""
+
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    tenant_id: str
+    idempotency_key: str | None = None
+    source: str
+    mode: str  # now | queue | schedule | draft
+    targets: str  # csv of resolved platform ids
+    video_url: str
+    title: str | None = None
+    caption: str | None = None
+    scheduled_for: str | None = None
+    zernio_post_id: str | None = None
+    status: str = "pending"
+    platforms_json: str | None = None
+    error: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
+class ZernioEventRow(BaseModel):
+    """One inbound Zernio webhook event (migration 031).
+
+    `event_id` is Zernio's stable payload.id — the at-least-once dedup
+    key. `payload` is the raw JSON body verbatim (replay + later-phase
+    backfills read it). `tenant_id` is NULL until (or unless) the
+    background processor resolves the profileId/post id to a tenant."""
+
+    model_config = ConfigDict(extra="forbid")
+    event_id: str
+    type: str
+    payload: str
+    profile_id: str | None = None
+    tenant_id: str | None = None
+    received_at: str
+    processed: bool = False
+    processed_at: str | None = None
+
+
 class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -576,6 +652,15 @@ class BrandKitRow(BaseModel):
     # tenants keep crediting until they explicitly opt out).
     show_nexoclip_credit: bool = True
 
+    # Publishing safe trap (migration 042). When `safe_schedule_enabled`,
+    # auto-publish schedules into the next compliant window and the drain
+    # hard-gates blocked posts; otherwise the trap is advisory only.
+    # `safety_policy` is a {platform: {field: value}} override map overlaid
+    # on the built-in PLATFORM_DEFAULTS; None == pure defaults.
+    safe_schedule_enabled: bool = False
+    safety_policy: dict[str, object] | None = None
+    content_timezone: str = "UTC"
+
     created_at: str
     updated_at: str
 
@@ -599,6 +684,33 @@ class DriveWatchRow(BaseModel):
     # Drive file IDs we've already ingested — the dedup key.
     seen_file_ids: list[str] = Field(default_factory=list)
     enabled: bool = True
+    created_at: str
+    updated_at: str
+
+
+class ChannelWatchRow(BaseModel):
+    """One row in `channel_watches` — a creator channel NexoClip polls for
+    new VODs (YouTube / Twitch / Kick). The auto-ingest counterpart to
+    `DriveWatchRow`: instead of a Drive folder it watches a channel URL,
+    and `seen_video_ids` is the per-video dedup key."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    platform: str  # youtube | twitch | kick
+    channel_url: str
+    channel_label: str | None = None
+    persona_id: str
+    language: str | None = None
+    last_polled_at: str | None = None
+    seen_video_ids: list[str] = Field(default_factory=list)
+    max_per_poll: int = 3
+    enabled: bool = True
+    # How many times a day to poll this channel. The loop only runs the
+    # yt-dlp listing once ≥ 24h/polls_per_day has elapsed since the last
+    # poll (1 = once a day, 4 = every 6h, 24 = hourly). Default 1.
+    polls_per_day: int = 1
     created_at: str
     updated_at: str
 

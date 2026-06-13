@@ -306,6 +306,24 @@ async def test_finished_run_with_stale_upload_status_shows_complete(
     assert "Analyzing your video" not in html
 
 
+async def test_processing_status_with_clips_shows_complete(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """A live stream left at 'processing' by the auto-clip claim but which
+    HAS clips is DONE — clips win over a stale 'processing' status, so the
+    hero shows the outcome, not 'Analyzing your video…' forever."""
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id, stream_status="processing", with_clips=True)
+    r = await client.get(
+        "/dashboard/streams/str_sd", headers=auth(tenants["alice"]["token"]),
+    )
+    html = r.text
+    assert "Processing complete" in html
+    assert "Analyzing your video" not in html
+
+
 async def test_running_stream_shows_progress_not_outcome(
     client: httpx.AsyncClient,
     db: Database,

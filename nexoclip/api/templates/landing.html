@@ -528,9 +528,495 @@
       .nc-fix__step { width: 100%; }
       .nc-fix__arrow { transform: rotate(90deg); }
     }
+
+    /* =================================================================
+       Reference-port additions: sticky nav, paste-link box, OpusClip-
+       style ClipFanAnimation centerpiece, 4-column footer.
+       Lime stays primary; magenta + brand colors are secondary signals
+       (LIVE tag, progress sweep, platform badges).
+       ================================================================= */
+
+    /* ---- Hero h1 line-2 gradient (lime → cyan) ---- */
+    .nc-hero h1 .nc-hero__h1-line--accent {
+      background: linear-gradient(120deg, var(--nc-lime), var(--nc-cyan));
+      -webkit-background-clip: text;
+              background-clip: text;
+      color: transparent;
+    }
+
+    /* ---- Sticky top nav ---- */
+    .nc-topnav {
+      position: sticky; top: 0; z-index: 500;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      background: linear-gradient(180deg,
+                    rgba(6, 8, 13, 0.92),
+                    rgba(6, 8, 13, 0.55));
+      border-bottom: 1px solid var(--nc-blue-dim);
+    }
+    .nc-topnav__inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 22px;
+      display: flex; align-items: center; gap: 30px;
+      height: 64px;
+    }
+    .nc-topnav__logo {
+      display: inline-flex; align-items: center; gap: 9px;
+      color: #fff;
+      font-weight: 700; font-size: 21px; letter-spacing: 0.5px;
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .nc-topnav__logo:hover { text-decoration: none; opacity: 0.92; }
+    .nc-topnav__logo-dot {
+      width: 11px; height: 11px; border-radius: 50%;
+      background: var(--nc-lime);
+      box-shadow: 0 0 14px var(--nc-lime);
+      animation: nc-topnav-pulse 2.4s infinite;
+    }
+    .nc-topnav__logo-accent { color: var(--nc-lime); }
+    @keyframes nc-topnav-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+    .nc-topnav__links {
+      display: flex; gap: 26px;
+      font-size: 13.5px;
+      color: var(--nc-text-muted);
+      margin-left: 6px;
+    }
+    .nc-topnav__links a {
+      color: var(--nc-text-muted);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+    .nc-topnav__links a:hover { color: var(--nc-lime); }
+    .nc-topnav__cta {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 16px;
+      flex-shrink: 0;
+    }
+    .nc-topnav__signin {
+      font-size: 13.5px;
+      color: var(--nc-text-muted);
+      text-decoration: none;
+    }
+    .nc-topnav__signin:hover { color: var(--nc-text); }
+    @media (max-width: 860px) {
+      .nc-topnav__links { display: none; }
+      .nc-topnav__inner { gap: 16px; }
+    }
+    @media (max-width: 480px) {
+      .nc-topnav__signin { display: none; }
+      .nc-topnav__inner { height: 56px; padding: 0 16px; }
+    }
+
+    /* ---- Hero paste box + alt links + demo row ---- */
+    .nc-paste {
+      max-width: 600px;
+      margin: 6px auto 14px;
+      display: flex; align-items: center; gap: 8px;
+      background: var(--nc-bg-panel);
+      border: 1px solid var(--nc-blue-dim);
+      border-radius: 14px;
+      padding: 8px 8px 8px 18px;
+      box-shadow:
+        0 18px 50px rgba(0, 0, 0, 0.5),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    }
+    .nc-paste__icon { flex: none; opacity: 0.6; color: var(--nc-text-muted); }
+    .nc-paste__input {
+      flex: 1;
+      background: none; border: none; outline: none;
+      color: var(--nc-text);
+      font-family: var(--nc-font-mono);
+      font-size: 14px;
+      padding: 8px 4px;
+    }
+    .nc-paste__input::placeholder { color: var(--nc-text-muted); }
+    .nc-paste .nc-btn--primary { flex-shrink: 0; }
+
+    .nc-hero__alt {
+      font-size: 12.5px;
+      color: var(--nc-text-muted);
+      margin: 0 0 8px;
+    }
+    .nc-hero__alt a {
+      color: var(--nc-lime);
+      border-bottom: 1px dashed var(--nc-lime-dim);
+    }
+    .nc-hero__alt a:hover { color: var(--nc-lime-bright); text-decoration: none; }
+
+    .nc-hero__demo {
+      font-size: 12.5px;
+      color: var(--nc-text-muted);
+      display: flex; gap: 14px;
+      justify-content: center; align-items: center; flex-wrap: wrap;
+      margin: 6px 0 8px;
+    }
+    .nc-hero__demo a {
+      color: var(--nc-text-body);
+      border: 1px solid var(--nc-blue-dim);
+      border-radius: 20px;
+      padding: 4px 12px;
+      text-decoration: none;
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+    .nc-hero__demo a:hover { border-color: var(--nc-lime); color: var(--nc-lime); }
+
+    /* ---- ClipFanAnimation: source card + 5 vertical clip cards ---- */
+    .nc-stage {
+      position: relative;
+      margin: 46px auto 8px;
+      max-width: 980px;
+    }
+    .nc-stage__source {
+      position: relative;
+      width: min(420px, 86%);
+      margin: 0 auto;
+      aspect-ratio: 16 / 9;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #0d1830, #0a1422);
+      border: 1px solid var(--nc-lime-dim);
+      overflow: hidden;
+      box-shadow:
+        0 0 0 1px rgba(200, 255, 92, 0.12),
+        0 22px 60px rgba(0, 0, 0, 0.6),
+        0 0 60px rgba(200, 255, 92, 0.12);
+      z-index: 3;
+    }
+    .nc-stage__scene {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(120px 120px at 30% 45%, rgba(200, 255, 92, 0.30), transparent 70%),
+        radial-gradient(140px 140px at 72% 60%, rgba(255, 60, 200, 0.22), transparent 70%),
+        linear-gradient(160deg, #0c1a33, #071020);
+    }
+    .nc-stage__ring {
+      position: absolute; top: 50%; left: 50%;
+      width: 88px; height: 88px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      border: 2px solid rgba(200, 255, 92, 0.55);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .nc-stage__ring::after {
+      content: "";
+      width: 0; height: 0;
+      border-left: 18px solid var(--nc-lime);
+      border-top: 11px solid transparent;
+      border-bottom: 11px solid transparent;
+      margin-left: 5px;
+      filter: drop-shadow(0 0 6px var(--nc-lime));
+    }
+    .nc-stage__live {
+      position: absolute; top: 12px; left: 12px;
+      font-family: var(--nc-font-mono);
+      font-size: 9px; letter-spacing: 1.5px;
+      color: #fff;
+      background: var(--nc-magenta);
+      padding: 3px 8px;
+      border-radius: 4px;
+      box-shadow: 0 0 14px rgba(255, 60, 200, 0.55);
+    }
+    .nc-stage__dur {
+      position: absolute; bottom: 11px; right: 12px;
+      font-family: var(--nc-font-mono);
+      font-size: 11px;
+      color: var(--nc-lime);
+      background: rgba(0, 0, 0, 0.55);
+      padding: 3px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--nc-blue-dim);
+    }
+    .nc-stage__label {
+      position: absolute; bottom: 11px; left: 12px;
+      font-family: var(--nc-font-mono);
+      font-size: 10px; letter-spacing: 1px;
+      color: #cfe9f2;
+      opacity: 0.85;
+    }
+    .nc-stage__progress {
+      position: absolute; left: 0; bottom: 0;
+      height: 3px; width: 0;
+      background: linear-gradient(90deg, var(--nc-lime), var(--nc-magenta));
+      animation: nc-stage-scan 4.2s linear infinite;
+    }
+    @keyframes nc-stage-scan {
+      0%   { width: 0; }
+      100% { width: 100%; }
+    }
+    .nc-stage__feed-line {
+      position: absolute;
+      left: 50%; top: 56%;
+      width: 1px; height: 54px;
+      transform: translateX(-50%);
+      background: linear-gradient(var(--nc-lime), transparent);
+      z-index: 1;
+      opacity: 0.5;
+    }
+    .nc-stage__clips {
+      display: flex;
+      justify-content: center; align-items: flex-end;
+      gap: 14px;
+      margin-top: 30px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 2;
+    }
+    .nc-stage__clip {
+      position: relative;
+      width: 118px;
+      aspect-ratio: 9 / 16;
+      border-radius: 11px;
+      overflow: hidden;
+      background: linear-gradient(160deg, #0e1a30, #0a1320);
+      border: 1px solid var(--nc-blue-dim);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+      opacity: 0;
+      transform: translateY(26px) scale(0.9);
+      animation: nc-stage-rise 0.6s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
+    }
+    @keyframes nc-stage-rise {
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .nc-stage__clip-thumb { position: absolute; inset: 0; }
+    /* Per-clip thumb tints — keep the source card's signature palette
+       (lime + magenta + cyan-ish blue) so the animation reads as ONE
+       VOD spawning many siblings. */
+    .nc-stage__clip:nth-child(1) .nc-stage__clip-thumb {
+      background:
+        radial-gradient(90px 90px at 50% 35%, rgba(200, 255, 92, 0.35), transparent),
+        linear-gradient(160deg, #1a2410, #0a1320);
+    }
+    .nc-stage__clip:nth-child(2) .nc-stage__clip-thumb {
+      background:
+        radial-gradient(90px 90px at 50% 40%, rgba(255, 60, 200, 0.40), transparent),
+        linear-gradient(160deg, #221024, #0a1320);
+    }
+    .nc-stage__clip:nth-child(3) .nc-stage__clip-thumb {
+      background:
+        radial-gradient(90px 90px at 50% 38%, rgba(0, 217, 255, 0.35), transparent),
+        linear-gradient(160deg, #0b1d36, #0a1320);
+    }
+    .nc-stage__clip:nth-child(4) .nc-stage__clip-thumb {
+      background:
+        radial-gradient(90px 90px at 50% 42%, rgba(181, 143, 255, 0.40), transparent),
+        linear-gradient(160deg, #16122e, #0a1320);
+    }
+    .nc-stage__clip:nth-child(5) .nc-stage__clip-thumb {
+      background:
+        radial-gradient(90px 90px at 50% 36%, rgba(200, 255, 92, 0.32), transparent),
+        linear-gradient(160deg, #1c2410, #0a1320);
+    }
+    .nc-stage__plat {
+      position: absolute;
+      top: 8px; right: 8px;
+      font-family: var(--nc-font-mono);
+      font-size: 8.5px; font-weight: 600;
+      letter-spacing: 0.4px;
+      padding: 3px 7px;
+      border-radius: 20px;
+      color: #fff;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    /* Platform-brand colors — exactly per reference. */
+    .nc-stage__plat--tiktok  { background: #000; }
+    .nc-stage__plat--reels   { background: linear-gradient(45deg, #f09433, #dc2743, #bc1888); }
+    .nc-stage__plat--shorts  { background: #ff0000; }
+    .nc-stage__plat--kick    { background: #53fc18; color: #000; }
+    .nc-stage__plat--twitch  { background: #9146ff; }
+    .nc-stage__cap {
+      position: absolute;
+      left: 7px; right: 7px; bottom: 30px;
+      font-size: 8px;
+      color: #dff3fa;
+      background: rgba(0, 0, 0, 0.40);
+      padding: 3px 5px;
+      border-radius: 4px;
+      line-height: 1.3;
+      text-align: center;
+    }
+    .nc-stage__score {
+      position: absolute;
+      left: 7px; bottom: 7px;
+      font-family: var(--nc-font-mono);
+      font-size: 8.5px;
+      color: var(--nc-lime);
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid var(--nc-blue-dim);
+      border-radius: 5px;
+      padding: 3px 7px;
+      display: flex; flex-direction: column;
+      line-height: 1.1;
+    }
+    .nc-stage__score-label {
+      font-size: 6.5px; letter-spacing: 1px;
+      color: var(--nc-text-muted);
+      text-transform: uppercase;
+    }
+    .nc-stage__score-num {
+      font-size: 13px;
+      color: var(--nc-lime);
+      text-shadow: 0 0 8px rgba(200, 255, 92, 0.55);
+      font-variant-numeric: tabular-nums;
+    }
+    .nc-stage__note {
+      text-align: center;
+      font-family: var(--nc-font-mono);
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--nc-text-muted);
+      margin-top: 24px;
+    }
+
+    /* ---- Feature chips under the animation ---- */
+    .nc-hero__chips {
+      display: flex; gap: 10px;
+      justify-content: center; flex-wrap: wrap;
+      margin: 40px 0 6px;
+    }
+    .nc-hero__chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 12px;
+      color: var(--nc-text-muted);
+      border: 1px solid var(--nc-blue-dim);
+      background: var(--nc-blue-faint);
+      border-radius: 30px;
+      padding: 8px 14px;
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+    .nc-hero__chip:hover { border-color: var(--nc-lime); color: var(--nc-text); }
+    .nc-hero__chip-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--nc-lime);
+      box-shadow: 0 0 8px var(--nc-lime);
+    }
+
+    /* ---- Stage responsive ---- */
+    @media (max-width: 860px) {
+      .nc-stage__clip { width: 96px; }
+    }
+    @media (max-width: 480px) {
+      .nc-stage__clips { gap: 9px; }
+      .nc-stage__clip { width: 80px; }
+      .nc-stage__source { width: 94%; }
+    }
+
+    /* ---- 4-column footer ---- */
+    .nc-foot--cols {
+      text-align: left;
+      padding: 54px 22px 24px;
+    }
+    .nc-foot__grid {
+      max-width: 1180px;
+      margin: 0 auto 40px;
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr 1fr;
+      gap: 30px;
+    }
+    .nc-foot__brand {
+      display: inline-flex; align-items: center; gap: 9px;
+      color: #fff;
+      font-weight: 700; font-size: 18px; letter-spacing: 0.5px;
+      text-decoration: none;
+      margin-bottom: 14px;
+    }
+    .nc-foot__brand-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--nc-lime);
+      box-shadow: 0 0 12px var(--nc-lime);
+    }
+    .nc-foot__brand-accent { color: var(--nc-lime); }
+    .nc-foot__brand-blurb {
+      font-size: 12.5px;
+      color: var(--nc-text-muted);
+      max-width: 280px;
+      line-height: 1.55;
+    }
+    .nc-foot__col-head {
+      font-size: 13px; font-weight: 600;
+      color: var(--nc-text);
+      letter-spacing: 0.5px;
+      margin: 0 0 14px;
+    }
+    .nc-foot__col a {
+      display: block;
+      font-size: 13px;
+      color: var(--nc-text-muted);
+      text-decoration: none;
+      margin-bottom: 9px;
+      transition: color 0.2s ease;
+    }
+    .nc-foot__col a:hover { color: var(--nc-lime); }
+    .nc-foot__bot {
+      max-width: 1180px;
+      margin: 0 auto;
+      border-top: 1px solid var(--nc-blue-dim);
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between; align-items: center;
+      gap: 16px; flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--nc-text-muted);
+    }
+    .nc-foot__made { color: var(--nc-lime); font-family: var(--nc-font-mono); }
+    @media (max-width: 860px) {
+      .nc-foot__grid { grid-template-columns: 1fr 1fr; gap: 24px; }
+    }
+    @media (max-width: 480px) {
+      .nc-foot__grid { grid-template-columns: 1fr; }
+    }
+
+    /* ---- Reduced motion: kill the animations, render final state ---- */
+    @media (prefers-reduced-motion: reduce) {
+      .nc-topnav__logo-dot,
+      .nc-stage__progress { animation: none; }
+      .nc-stage__clip {
+        opacity: 1;
+        transform: none;
+        animation: none;
+      }
+    }
   </style>
 </head>
 <body>
+
+  {# ===========================================================
+       STICKY TOP NAV — added with the reference port. Logo,
+       in-page anchors (Características / Solución / Precios),
+       cross-page links to /agents and /docs, sign-in + primary
+       CTA on the right. Mobile (<860px) hides the link row.
+     =========================================================== #}
+  <nav class="nc-topnav" aria-label="Primary">
+    <div class="nc-topnav__inner">
+      <a href="/" class="nc-topnav__logo">
+        <span class="nc-topnav__logo-dot" aria-hidden="true"></span>
+        <span>{{ t('landing.nav.brand_prefix') }}<span class="nc-topnav__logo-accent">{{ t('landing.nav.brand_suffix') }}</span></span>
+      </a>
+      <div class="nc-topnav__links">
+        <a href="#features">{{ t('landing.nav.link_features') }}</a>
+        <a href="#solucion">{{ t('landing.nav.link_solution') }}</a>
+        <a href="#precio">{{ t('landing.nav.link_pricing') }}</a>
+        <a href="/agents">{{ t('landing.nav.link_agents') }}</a>
+        <a href="/docs">{{ t('landing.nav.link_api') }}</a>
+      </div>
+      {# Every auth link carries next=/auth/launch/nexoclip so nexo-ai
+         bounces the user straight back into NexoClip after sign-in /
+         registration (trial + provisioning happen server-side on the
+         nexo-ai launch route) — the visitor never sees the platform
+         dashboard. CTAs add mode=signup; the sign-in link stays signin. #}
+      <div class="nc-topnav__cta">
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?next=/auth/launch/nexoclip" class="nc-topnav__signin">{{ t('landing.nav.signin') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">{{ t('landing.nav.cta') }}</a>
+      </div>
+    </div>
+  </nav>
 
   {# ===========================================================
        HERO — two-line headline, outcome first. The dream is sold
@@ -552,16 +1038,119 @@
 
     <div class="nc-hero__ctas">
       <span class="nc-hero__cta-primary-wrap">
-        <a href="/dashboard/login" class="nc-btn nc-btn--primary">
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">
           <i class="ti ti-upload" aria-hidden="true"></i>
           <span>{{ t('landing.hero.cta_primary') }}</span>
         </a>
         <span class="nc-hero__cta-micro">{{ t('landing.hero.cta_primary_micro') }}</span>
       </span>
-      <a href="#how-it-works" class="nc-btn">
+      <a href="#features" class="nc-btn">
         <i class="ti ti-player-play" aria-hidden="true"></i>
         <span>{{ t('landing.hero.cta_secondary') }}</span>
       </a>
+    </div>
+
+    {# ---- Paste-link box: shortcut from URL to /dashboard/login.
+         Enter key submits via the inline script at end-of-body. -- #}
+    <form class="nc-paste" action="https://nexo-ai.world/{{ locale() }}/sign-in" method="get" role="search" aria-label="VOD link">
+      <svg class="nc-paste__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/>
+        <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>
+      </svg>
+      {# GET forms drop the action's query string, so the signup funnel
+         params ride as hidden fields instead. #}
+      <input type="hidden" name="mode" value="signup">
+      <input type="hidden" name="next" value="/auth/launch/nexoclip">
+      <label class="nc-trunc" for="nc-paste-input" style="display:none">VOD link</label>
+      <input id="nc-paste-input" class="nc-paste__input" type="text" name="vod" autocomplete="off"
+             placeholder="{{ t('landing.hero.paste_placeholder') }}">
+      <button type="submit" class="nc-btn nc-btn--primary">
+        <i class="ti ti-sparkles" aria-hidden="true"></i>
+        <span>{{ t('landing.hero.paste_cta') }}</span>
+      </button>
+    </form>
+    <p class="nc-hero__alt">{{ t('landing.hero.alt_or') }} <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.hero.alt_upload') }}</a> · {{ t('landing.hero.alt_micro') }}</p>
+    <div class="nc-hero__demo">
+      <span>{{ t('landing.hero.demo_label') }}</span>
+      <a href="#solucion">{{ t('landing.hero.demo_gaming') }}</a>
+      <a href="#solucion">{{ t('landing.hero.demo_chat') }}</a>
+      <a href="#solucion">{{ t('landing.hero.demo_podcast') }}</a>
+    </div>
+
+    {# ---- ClipFanAnimation — source VOD card on top, 5 vertical
+         clip cards rising staggered below with a platform badge
+         and a viral SCORE badge that counts up on viewport entry.
+         Scores re-trigger every time the stage enters the viewport.
+         prefers-reduced-motion: kills the count-up + rise. ------ #}
+    <div class="nc-stage" id="nc-clipfan">
+      <div class="nc-stage__source" aria-hidden="true">
+        <div class="nc-stage__scene"></div>
+        <div class="nc-stage__ring"></div>
+        <div class="nc-stage__live">{{ t('landing.anim.live_tag') }}</div>
+        <div class="nc-stage__label">{{ t('landing.anim.source_label') }}</div>
+        <div class="nc-stage__dur">4:12:08</div>
+        <div class="nc-stage__progress"></div>
+      </div>
+      <div class="nc-stage__feed-line" aria-hidden="true"></div>
+      <ul class="nc-stage__clips" role="list" aria-label="Generated clips preview">
+        <li class="nc-stage__clip" style="animation-delay:0.20s">
+          <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <span class="nc-stage__plat nc-stage__plat--tiktok">TikTok</span>
+          <span class="nc-stage__cap">{{ t('landing.anim.cap1') }}</span>
+          <span class="nc-stage__score">
+            <span class="nc-stage__score-label">{{ t('landing.anim.score_label') }}</span>
+            <span class="nc-stage__score-num" data-score="97">97</span>
+          </span>
+        </li>
+        <li class="nc-stage__clip" style="animation-delay:0.45s">
+          <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <span class="nc-stage__plat nc-stage__plat--reels">Reels</span>
+          <span class="nc-stage__cap">{{ t('landing.anim.cap2') }}</span>
+          <span class="nc-stage__score">
+            <span class="nc-stage__score-label">{{ t('landing.anim.score_label') }}</span>
+            <span class="nc-stage__score-num" data-score="99">99</span>
+          </span>
+        </li>
+        <li class="nc-stage__clip" style="animation-delay:0.70s">
+          <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <span class="nc-stage__plat nc-stage__plat--shorts">Shorts</span>
+          <span class="nc-stage__cap">{{ t('landing.anim.cap3') }}</span>
+          <span class="nc-stage__score">
+            <span class="nc-stage__score-label">{{ t('landing.anim.score_label') }}</span>
+            <span class="nc-stage__score-num" data-score="95">95</span>
+          </span>
+        </li>
+        <li class="nc-stage__clip" style="animation-delay:0.95s">
+          <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <span class="nc-stage__plat nc-stage__plat--kick">Kick</span>
+          <span class="nc-stage__cap">{{ t('landing.anim.cap4') }}</span>
+          <span class="nc-stage__score">
+            <span class="nc-stage__score-label">{{ t('landing.anim.score_label') }}</span>
+            <span class="nc-stage__score-num" data-score="98">98</span>
+          </span>
+        </li>
+        <li class="nc-stage__clip" style="animation-delay:1.20s">
+          <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <span class="nc-stage__plat nc-stage__plat--twitch">Twitch</span>
+          <span class="nc-stage__cap">{{ t('landing.anim.cap5') }}</span>
+          <span class="nc-stage__score">
+            <span class="nc-stage__score-label">{{ t('landing.anim.score_label') }}</span>
+            <span class="nc-stage__score-num" data-score="96">96</span>
+          </span>
+        </li>
+      </ul>
+      <p class="nc-stage__note">↑ {{ t('landing.anim.note') }}</p>
+    </div>
+
+    {# ---- Feature chips — one-line capabilities scoped to the
+         hero so the eye lands here after the animation. ------- #}
+    <div class="nc-hero__chips">
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.cut') }}</span>
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.subs') }}</span>
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.reframe') }}</span>
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.hooks') }}</span>
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.hashtags') }}</span>
+      <span class="nc-hero__chip"><i class="nc-hero__chip-dot" aria-hidden="true"></i>{{ t('landing.chips.schedule') }}</span>
     </div>
 
     {#
@@ -589,7 +1178,7 @@
          PAIN — editing is killing your growth. Output is the
          problem, not talent. Tight, declarative.
        ========================================================= #}
-    <section class="nc-section nc-pain">
+    <section id="problema" class="nc-section nc-pain">
       <div class="nc-section--narrow">
         <h2>{{ t('landing.pain.heading') }}</h2>
         <p>{{ t('landing.pain.line1') }}</p>
@@ -609,7 +1198,7 @@
     {# =========================================================
          FIX — the four-word loop. Upload → clips → publish → done.
        ========================================================= #}
-    <section class="nc-section nc-fix">
+    <section id="solucion" class="nc-section nc-fix">
       <h2>{{ t('landing.fix.heading') }}</h2>
       <div class="nc-fix__steps">
         <span class="nc-fix__step">{{ t('landing.fix.s1') }}</span>
@@ -651,7 +1240,7 @@
     {# =========================================================
          MONEY — what does one editor cost?
        ========================================================= #}
-    <section class="nc-section nc-section--wide">
+    <section id="precio" class="nc-section nc-section--wide">
       <div class="nc-math__head">
         <h2>{{ t('landing.math.heading') }}</h2>
       </div>
@@ -723,7 +1312,8 @@
          FEATURES — six outcome-led benefit cards. The engine
          detail stays in the body; the headline is the outcome.
        ========================================================= #}
-    <section id="how-it-works" class="nc-section nc-section--wide">
+    <section id="features" class="nc-section nc-section--wide">
+      <a id="how-it-works" aria-hidden="true"></a>
       <div class="nc-features__head">
         <h2>{{ t('landing.features.heading') }}</h2>
         <p>{{ t('landing.features.intro') }}</p>
@@ -782,7 +1372,7 @@
       <h2>{{ t('landing.final.heading') }}</h2>
       <p>{{ t('landing.final.body') }}</p>
       <span class="nc-final__cta-wrap">
-        <a href="/dashboard/login" class="nc-btn nc-btn--primary">
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip" class="nc-btn nc-btn--primary">
           <i class="ti ti-upload" aria-hidden="true"></i>
           <span>{{ t('landing.final.cta') }}</span>
         </a>
@@ -832,15 +1422,89 @@
        FOOTER — agent-readability entry points stay here.
        The /agents link is the "second door" for technical buyers.
      ========================================================= #}
-  <footer class="nc-foot">
-    <div class="nc-foot__links">
-      <a href="/agents">{{ t('landing.foot.link_agents') }}</a>
-      <a href="/docs">{{ t('landing.foot.link_docs') }}</a>
-      <a href="/llms.txt">{{ t('landing.foot.link_llms') }}</a>
-      <a href="/dashboard/login">{{ t('landing.foot.link_signin') }}</a>
+  <footer class="nc-foot nc-foot--cols">
+    <div class="nc-foot__grid">
+      <div class="nc-foot__col nc-foot__col--brand">
+        <a href="/" class="nc-foot__brand">
+          <span class="nc-foot__brand-dot" aria-hidden="true"></span>
+          <span>{{ t('landing.nav.brand_prefix') }}<span class="nc-foot__brand-accent">{{ t('landing.nav.brand_suffix') }}</span></span>
+        </a>
+        <p class="nc-foot__brand-blurb">{{ t('landing.foot.brand_blurb') }}</p>
+      </div>
+      <div class="nc-foot__col">
+        <h5 class="nc-foot__col-head">{{ t('landing.foot.col_product') }}</h5>
+        <a href="#features">{{ t('landing.foot.link_features') }}</a>
+        <a href="#precio">{{ t('landing.foot.link_pricing') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?next=/auth/launch/nexoclip">{{ t('landing.foot.link_signin') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.link_get_started') }}</a>
+      </div>
+      <div class="nc-foot__col">
+        <h5 class="nc-foot__col-head">{{ t('landing.foot.col_developers') }}</h5>
+        <a href="/agents">{{ t('landing.foot.link_agents') }}</a>
+        <a href="/docs">{{ t('landing.foot.link_docs') }}</a>
+        <a href="/openapi.json">{{ t('landing.foot.link_openapi') }}</a>
+        <a href="/llms.txt">{{ t('landing.foot.link_llms') }}</a>
+      </div>
+      <div class="nc-foot__col">
+        <h5 class="nc-foot__col-head">{{ t('landing.foot.col_platforms') }}</h5>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_tiktok') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_reels') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_shorts') }}</a>
+        <a href="https://nexo-ai.world/{{ locale() }}/sign-in?mode=signup&next=/auth/launch/nexoclip">{{ t('landing.foot.platform_kick') }}</a>
+      </div>
     </div>
-    <div class="nc-foot__tagline">{{ t('landing.foot.tagline') }}</div>
+    <div class="nc-foot__bot">
+      <span>{{ t('landing.foot.copyright') }}</span>
+      <span class="nc-foot__made">{{ t('landing.foot.made') }}</span>
+    </div>
   </footer>
+
+  {# ===========================================================
+       ClipFanAnimation count-up + paste-box keyboard shortcut.
+       - Score numbers re-count to their data-score value every
+         time the stage scrolls back into view (>= 40% visible).
+       - Respects prefers-reduced-motion: leaves final values.
+       - Enter inside the paste input fires the form's submit
+         (which routes to /dashboard/login).
+     =========================================================== #}
+  <script>
+    (function () {
+      var reduce = window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      function countUp(el) {
+        var target = parseInt(el.getAttribute('data-score'), 10) || 0;
+        if (reduce) { el.textContent = target; return; }
+        var n = 0;
+        el.textContent = '0';
+        function tick() {
+          var step = Math.max(1, Math.round((target - n) / 6));
+          n += step;
+          if (n >= target) { el.textContent = String(target); return; }
+          el.textContent = String(n);
+          window.requestAnimationFrame(tick);
+        }
+        window.setTimeout(tick, 200 + Math.random() * 900);
+      }
+
+      function runStage() {
+        var nums = document.querySelectorAll('#nc-clipfan .nc-stage__score-num');
+        for (var i = 0; i < nums.length; i++) countUp(nums[i]);
+      }
+
+      var stage = document.getElementById('nc-clipfan');
+      if (stage && 'IntersectionObserver' in window) {
+        var io = new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (entries[i].isIntersecting) runStage();
+          }
+        }, { threshold: 0.4 });
+        io.observe(stage);
+      } else if (stage) {
+        runStage();
+      }
+    })();
+  </script>
 
 </body>
 </html>

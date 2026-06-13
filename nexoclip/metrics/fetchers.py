@@ -68,8 +68,8 @@ async def fetch_youtube_metric(
 ) -> NormalizedMetric:
     """Pull statistics for one video from the YouTube Data API.
 
-    `external_id` on the publish_job is the YouTube videoId - that's what
-    `nexoclip.publish.youtube.YouTubeClient.publish` records.
+    `external_id` on the publish_job is the YouTube videoId recorded when
+    the post was published.
     """
     if not job.external_id:
         return NormalizedMetric(raw_metadata={"skipped": "no external_id"})
@@ -195,8 +195,8 @@ async def fetch_instagram_metric(
 ) -> NormalizedMetric:
     """Pull stats for one IG Reels post via the Graph Insights API.
 
-    `external_id` on the publish_job is the IG media id - that's what
-    `nexoclip.publish.instagram.InstagramClient.publish` records.
+    `external_id` on the publish_job is the IG media id recorded when the
+    post was published.
     Sandbox apps return 200 with an empty `data` array; we record the
     audit row regardless.
     """

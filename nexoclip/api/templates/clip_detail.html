@@ -6119,14 +6119,16 @@
       return "whisper found no speech in this stream — check the audio extract or re-run on GPU";
     if (reason === "no_word_timestamps")
       return "transcript is pre-F.7-F (no word timings) — re-run the pipeline to refresh";
-    if (reason === "window_outside_transcript") {
-      var spanLabel = span ? (span[0].toFixed(1) + "s – " + span[1].toFixed(1) + "s") : "?";
-      var winLabel  = win.length === 2 ? (win[0].toFixed(1) + "s – " + win[1].toFixed(1) + "s") : "?";
-      return "clip window " + winLabel + " is outside the transcribed span (" + spanLabel + ", lang=" + lang + ")";
-    }
-    // silent_stretch + the default "no captions in window" deliberately
-    // return null — see comment above. Operator doesn't need a banner
-    // telling them their own clip is silent.
+    // window_outside_transcript: the clip is a VISUAL moment (scene change /
+    // on-screen action) in a stretch with no speech — common for live
+    // streams with a silent intro/outro. The clip is perfectly valid; it
+    // just has no captions. Per the O.9 rule we DO NOT burn a technical
+    // "outside the transcribed span" error across the creator's preview.
+    // (Detection breakdown still lives in the "WHY THIS CLIP?" panel.)
+    //
+    // silent_stretch + the default "no captions in window" also return
+    // null — operator doesn't need a banner telling them their own clip
+    // is silent.
     return null;
   }
 
@@ -6149,6 +6151,11 @@
   }
 
   function syncCaptionFrame() {
+    // Defensive: this runs every animation frame AND from preset-apply
+    // during init — which can fire before `captionLines`/`pvCaptionEl` are
+    // assigned. A thrown TypeError here repeats every frame and tanks
+    // playback (the lag), so bail cleanly until both exist.
+    if (!pvCaptionEl) return;
     if (!captionsEnabled()) {
       if (pvCaptionEl.children.length) {
         pvCaptionEl.innerHTML = "";
@@ -6156,7 +6163,7 @@
       }
       return;
     }
-    if (!captionLines.length) {
+    if (!captionLines || !captionLines.length) {
       // Only paint the empty-state once we know the fetch resolved;
       // before that, leave the box blank so we don't flash a misleading
       // "no transcript" hint while the data is still loading.

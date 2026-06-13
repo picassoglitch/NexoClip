@@ -31,8 +31,8 @@ from .auth import BearerAuthMiddleware
 from .lifespan import background_drains_lifespan
 from .routers import clips as clips_router
 from .routers import dashboard as dashboard_router
-from .routers import upload_post as upload_post_router
 from .routers import internal as internal_router
+from .routers import internal_publish as internal_publish_router
 from .routers import live as live_router
 from .routers import llm_calls as llm_calls_router
 from .routers import nexo_ai as nexo_ai_router
@@ -40,6 +40,8 @@ from .routers import overlay as overlay_router
 from .routers import personas as personas_router
 from .routers import streams as streams_router
 from .routers import webhooks as webhooks_router
+from .routers import zernio as zernio_router
+from .routers import zernio_webhooks as zernio_webhooks_router
 
 __all__ = ["PipelineKickoff", "PipelineRunner", "create_app"]
 
@@ -233,10 +235,13 @@ def create_app(
     app.include_router(llm_calls_router.router)
     app.include_router(dashboard_router.router)
     app.include_router(webhooks_router.router)
-    # upload-post.com integration — multi-platform publish dashboard
-    # at /dashboard/publish/upload-post. Replaces the in-house OAuth
-    # surface that lived briefly in Wave 1 + 2 commits.
-    app.include_router(upload_post_router.router)
+    # Zernio integration — multi-platform publish dashboard at
+    # /dashboard/publish/zernio. Replaces the upload-post.com surface
+    # (a legacy 308 redirect from the old path lives in dashboard.py).
+    app.include_router(zernio_router.router)
+    # Inbound Zernio webhook receiver at /api/webhooks/zernio (HMAC-
+    # verified, auth-exempt — see auth._PUBLIC_PREFIXES).
+    app.include_router(zernio_webhooks_router.router)
     # Slice M.4 — OBS-friendly overlay routes. Intentionally NOT
     # auth-protected (OBS Browser Source can't carry credentials).
     # Each route reads its config from query-string params.
@@ -249,6 +254,10 @@ def create_app(
     # HMAC on a signed URL; the bearer-cookie middleware skips
     # /api/internal/* (see auth.py allowlist).
     app.include_router(internal_router.router)
+    # Hub phase 3 — service-token publish API for NexoOBS / Nexo AI.
+    # Same /api/internal/ middleware exemption; each route enforces
+    # its own bearer check against NEXOCLIP_HUB_SERVICE_TOKENS.
+    app.include_router(internal_publish_router.router)
     # Phase L.1 — live RTMP ingest dashboard + MediaMTX webhooks.
     # Webhooks live under /api/internal/live/* and share the same
     # bearer-skip from the auth middleware. Dashboard pages live

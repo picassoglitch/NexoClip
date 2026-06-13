@@ -1,40 +1,14 @@
-"""Publish-job worker.
+"""Publish package.
 
-Drains pending `publish_jobs` rows, posts them to the connected platform
-(Phase 1: Buffer), records the result, retries with backoff on transient
-failures, and gives up after `max_attempts`. The same `run_publish_jobs`
-entry point is called from:
+Two live surfaces, both imported by full path (no package-level re-exports):
 
-    1. The `nexoclip publish --tenant <id>` CLI (one-shot drain).
-    2. A FastAPI lifespan background task (every 60s while the API is up).
+* `nexoclip.publish.hub` — the Zernio hub publish API: resolve targets,
+  build per-platform payloads, create/track HubPublishJobs. Used by the
+  dashboard publish flow and the internal publish API.
+* `nexoclip.publish.analytics_service` — per-tenant performance snapshots,
+  weekly digests, and internal analytics reads.
 
-Phase 2 adds native TikTok / YT Shorts publishers behind the same
-`Publisher` protocol; the orchestration here doesn't change.
+The legacy per-platform worker — the `publish_jobs` drain (`run_publish_jobs`),
+the Buffer/TikTok/YouTube/Instagram adapters, the OAuth refresh helper, and
+the auto-publish dispatcher — was removed. Publishing goes through Zernio.
 """
-
-from .auto import AutoPublishReport, dispatch_auto_publish
-from .buffer import BufferClient, BufferError
-from .instagram import InstagramClient, InstagramError
-from .oauth import RefreshedToken, refresh_if_expiring
-from .protocol import PublisherError
-from .service import PublishOutcome, run_publish_jobs
-from .tiktok import TikTokClient, TikTokError
-from .youtube import YouTubeClient, YouTubeError
-
-__all__ = [
-    "AutoPublishReport",
-    "BufferClient",
-    "BufferError",
-    "InstagramClient",
-    "InstagramError",
-    "PublishOutcome",
-    "PublisherError",
-    "RefreshedToken",
-    "TikTokClient",
-    "TikTokError",
-    "YouTubeClient",
-    "YouTubeError",
-    "dispatch_auto_publish",
-    "refresh_if_expiring",
-    "run_publish_jobs",
-]

@@ -1,4 +1,4 @@
-"""Internal endpoints — slice O.44 + upload-post fetch target.
+"""Internal endpoints — slice O.44 + publisher (Zernio) fetch target.
 
 Both routes here share an HMAC-signed-URL auth model that's separate
 from the rest of the API:
@@ -8,7 +8,7 @@ from the rest of the API:
   - Signature binds (resource_id, tenant_id, expiry_unix_ts).
   - Expiry is bounded; anything past TTL 403s.
 
-Why: external callers (Modal Whisper, upload-post) can't carry our
+Why: external callers (Modal Whisper, Zernio) can't carry our
 operator session cookie. Short-lived signed URLs are bounded — if
 one leaks, the worst case is one media file is exposed for the
 remaining TTL window. The signing secret never crosses the wire.
@@ -75,14 +75,15 @@ def mint_signed_clip_url(
     ttl_seconds: int = 3600,
 ) -> str:
     """Helper used by the publish router to build the URL we hand to
-    upload-post. The signature binds (clip_id, tenant_id, exp) so a
-    leaked URL only exposes one clip for at most `ttl_seconds`."""
+    the publishing vendor (Zernio). The signature binds (clip_id,
+    tenant_id, exp) so a leaked URL only exposes one clip for at most
+    `ttl_seconds`."""
     settings = get_settings()
     secret = (settings.internal_signing_secret or "").strip()
     if not secret:
         raise RuntimeError(
             "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured; "
-            "cannot mint signed clip URL for upload-post"
+            "cannot mint signed clip URL for the publisher"
         )
     exp = int(time.time()) + int(ttl_seconds)
     msg = f"{clip_id}|{tenant_id}|{exp}".encode()
@@ -133,27 +134,35 @@ async def fetch_audio_for_transcribe(
     )
 
 
-@router.get("/clip/{clip_id}")
-async def fetch_clip_for_upload_post(
+# GET + HEAD: Zernio probes the media URL with HEAD before downloading
+# it — a GET-only route 405s the probe. FileResponse handles HEAD
+# natively (headers only, no body).
+@router.api_route("/clip/{clip_id}", methods=["GET", "HEAD"])
+async def fetch_clip_for_publisher(
     clip_id: str,
     request: Request,
     tenant: str = "",
     exp: int = 0,
     sig: str = "",
 ) -> FileResponse:
-    """Serve the rendered clip MP4 to upload-post (or any caller with
-    a valid signed URL).
+    """Serve the rendered clip MP4 to the publishing vendor (Zernio) or
+    any caller with a valid signed URL.
 
-    Used by the publish router: when we call upload-post's
-    `/api/upload`, the `video` field is a URL pointing here. upload-
-    post downloads the file, re-hosts it, then publishes to each
-    target platform. TTL is wider than the audio path (1h ceiling +
-    24h cap) because upload-post's per-platform pipeline can take
-    several minutes for a 4K clip across 5 platforms.
+    Used by the publish router: when we call Zernio's `POST /posts`,
+    each `mediaItems[].url` points here. Zernio downloads the file,
+    re-hosts it, then publishes to each target platform. TTL is wider
+    than the audio path (1h ceiling + 24h cap) because the per-platform
+    pipeline can take several minutes for a 4K clip across 5 platforms.
 
-    Serves the FINAL rendered MP4 (libass captions burned in) when
-    one exists at the 1080-cache path; falls back to the original
-    pre-render clip MP4 only when the rendered version is missing.
+    Serves ONLY the FINAL rendered MP4 (overlays + libass captions
+    burned in) from the 1080-cache path. It deliberately does NOT fall
+    back to the raw pre-render source: that fallback was the bug where
+    a published clip went out missing its hooks + captions while the
+    operator's download had them. The publish path
+    (`zernio._publish_clip` → `ensure_clip_rendered`) renders this file
+    before it hands us the URL, so by the time Zernio fetches it's on
+    disk; if it somehow isn't, we 409 so the post errors loudly rather
+    than shipping the unedited clip.
     """
     _verify_signed_params(
         resource_id=clip_id,
@@ -169,20 +178,24 @@ async def fetch_clip_for_upload_post(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
 
-    original = Path(clip.path)
-    # Prefer the rendered version (overlays + captions burned in)
-    # if it exists. That's the file the operator was looking at on
-    # the editor preview, so it matches what they expect to publish.
-    rendered = original.parent / "clip_render_1080.mp4"
-    final_path = rendered if rendered.exists() else original
-    if not final_path.exists():
+    from nexoclip.api._render_validation import is_servable_cached_mp4
+
+    rendered = Path(clip.path).parent / "clip_render_1080.mp4"
+    # Gate on is_servable_cached_mp4 (size floor + ISO BMFF magic) so a
+    # partial/0-byte file from an aborted encode is treated as "not
+    # ready" rather than served as a corrupt download.
+    if not is_servable_cached_mp4(rendered):
         raise HTTPException(
-            status_code=410,
-            detail=f"clip file missing from disk: {final_path}",
+            status_code=409,
+            detail=(
+                "clip render not ready (hooks + captions not burned in "
+                "yet). Re-publish from the dashboard — the render runs "
+                "before the post is sent."
+            ),
         )
 
     return FileResponse(
-        path=final_path,
+        path=rendered,
         media_type="video/mp4",
         filename=f"nexoclip_{clip_id}.mp4",
     )

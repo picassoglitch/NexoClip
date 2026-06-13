@@ -32,12 +32,14 @@ from .models import (
     ApiTokenRow,
     BrandKitRow,
     CandidateRow,
+    ChannelWatchRow,
     ClipRow,
     ConnectedAccount,
     CustomTriggerPhrases,
     DriveExportSettingsRow,
     DriveWatchRow,
     Event,
+    HubPublishJobRow,
     LiveStreamKeyRow,
     LLMCallRow,
     ProviderSpend,
@@ -54,6 +56,8 @@ from .models import (
     VodSpeakerRow,
     WebhookSecretVersion,
     WebhookSubscription,
+    ZernioEventRow,
+    ZernioPublishRow,
 )
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -171,7 +175,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         )
@@ -196,7 +200,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants WHERE external_user_id = ?",
             (external_user_id,),
         )
@@ -232,7 +236,7 @@ class TenantsRepo:
             "t.cached_balance_remaining, t.cached_balance_unlimited, "
             "t.cached_balance_monthly_used, t.cached_balance_at, "
             "t.last_usage_report_at, t.last_usage_report_ok, t.last_usage_report_error, "
-            "t.upload_post_profile_username "
+            "t.upload_post_profile_username, t.zernio_profile_id, t.zernio_profile_name "
             "FROM tenants t "
             "INNER JOIN users u ON u.tenant_id = t.id "
             "WHERE LOWER(u.email) = ? "
@@ -278,6 +282,23 @@ class TenantsRepo:
             (remaining, 1 if unlimited else 0, monthly_used, at_iso, tenant_id),
         )
         await conn.commit()
+        # Push the change to any open balance-chip SSE connections for this
+        # tenant so the chip updates instantly (no client polling). Best-effort
+        # and never raises — a failed notify must not fail the balance write.
+        try:
+            from nexoclip.events.balance_bus import balance_bus
+
+            balance_bus.publish(
+                tenant_id,
+                {
+                    "remaining": remaining,
+                    "unlimited": bool(unlimited),
+                    "monthly_used": monthly_used,
+                    "at": at_iso,
+                },
+            )
+        except Exception:  # pragma: no cover — notify is best-effort
+            pass
 
     async def set_usage_report_status(
         self,
@@ -337,11 +358,56 @@ class TenantsRepo:
         )
         await conn.commit()
 
+    async def set_zernio_profile(
+        self,
+        tenant_id: str,
+        *,
+        profile_id: str | None,
+        profile_name: str | None = None,
+    ) -> None:
+        """Persist (or clear) the Zernio profile binding for a tenant.
+
+        Set when the operator creates a profile (create_profile_for_tenant)
+        or binds an existing one (/accounts/claim); cleared via /unlink.
+        Zernio scopes connect + accounts by `profile_id`; `profile_name`
+        is the display name. Pass None/empty profile_id to clear BOTH
+        columns (forget the binding without touching Zernio's side).
+        """
+        # Normalize empty string to NULL — the model treats both as
+        # "unbound" but NULL is the canonical storage form. Clearing the
+        # id always clears the name too (they're one binding).
+        pid = profile_id or None
+        pname = (profile_name or None) if pid else None
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE tenants SET zernio_profile_id = ?, zernio_profile_name = ? "
+            "WHERE id = ?",
+            (pid, pname, tenant_id),
+        )
+        await conn.commit()
+
     async def get_or_raise(self, tenant_id: str) -> Tenant:
         t = await self.get(tenant_id)
         if t is None:
             raise NexoClipError(f"tenant not found: {tenant_id}")
         return t
+
+    async def find_by_zernio_profile(self, profile_id: str) -> Tenant | None:
+        """Tenant-FREE reverse lookup: Zernio profileId → tenant.
+
+        Inbound Zernio webhooks carry a profileId but no tenant (the
+        signature is the transport auth); this is the resolution step.
+        One profile maps to one tenant in our model — the claim flow
+        rejects binding a profileId to a second tenant."""
+        if not profile_id:
+            return None
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT id FROM tenants WHERE zernio_profile_id = ?",
+            (profile_id,),
+        )
+        row = await cur.fetchone()
+        return await self.get(row["id"]) if row else None
 
     async def list_all(self) -> list[Tenant]:
         conn = await self._db.connect()
@@ -353,7 +419,7 @@ class TenantsRepo:
             "cached_balance_remaining, cached_balance_unlimited, "
             "cached_balance_monthly_used, cached_balance_at, "
             "last_usage_report_at, last_usage_report_ok, last_usage_report_error, "
-            "upload_post_profile_username "
+            "upload_post_profile_username, zernio_profile_id, zernio_profile_name "
             "FROM tenants ORDER BY created_at"
         )
         return [Tenant.model_validate(dict(r)) for r in await cur.fetchall()]
@@ -934,7 +1000,7 @@ async def _streams_repo_try_claim_for_processing(
     """Phase L.2 — atomically claim a just-ended live stream for the
     auto-clip pipeline.
 
-    Flips status `from_status` → 'processing' ONLY if the row is still in
+    Flips status `from_status` -> 'processing' ONLY if the row is still in
     `from_status`. Returns True iff THIS call won the claim. This is the
     idempotency guard for the auto-clip kickoff: MediaMTX may deliver the
     'ended' webhook more than once (retries / flaky TCP), and we must not
@@ -955,6 +1021,23 @@ async def _streams_repo_try_claim_for_processing(
     )
     await conn.commit()
     return (cur.rowcount or 0) == 1
+
+
+async def _streams_repo_set_status(
+    db: "Database", *, stream_id: str, status: str
+) -> None:
+    """Phase L.2 — tenant-free stream status update (same invocation
+    contract as the mark_live_* / claim helpers). The live runner calls
+    this to flip a stream to a terminal status ('done') once its clip
+    pipeline finishes — otherwise it stays at the 'processing' the autoclip
+    claim set, and the dashboard shows 'Analyzing…' forever with clips on
+    disk."""
+    conn = await db.connect()
+    await conn.execute(
+        "UPDATE streams SET status = ? WHERE id = ?",
+        (status, stream_id),
+    )
+    await conn.commit()
 
 
 class LiveStreamKeysRepo:
@@ -2043,6 +2126,59 @@ class PublishJobsRepo:
             )
         return [_publish_job_from_row(r) for r in await cur.fetchall()]
 
+    async def reschedule(self, job_id: str, *, scheduled_for: str) -> bool:
+        """Push a still-pending job's `scheduled_for` forward.
+
+        Used by the safe trap (safe-window gate) to defer a job that would
+        post inside a blocked window — it reappears to the worker once the
+        new `scheduled_for` elapses. Only pending jobs move; sent/failed
+        jobs are untouched.
+
+        Returns True iff a pending row owned by the current tenant moved.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "UPDATE publish_jobs SET scheduled_for = ? "
+            "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+            (scheduled_for, job_id, tenant_id),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
+
+    async def recent_post_times(
+        self,
+        *,
+        platform: str,
+        since: str,
+        exclude_job_id: str | None = None,
+    ) -> list[str]:
+        """Effective post times for `platform` since `since` (ISO, UTC).
+
+        Drives the safe trap's spacing + daily-cap math. We count jobs that
+        already shipped (`sent`) or are still in flight (`pending`, incl.
+        future-scheduled), using `COALESCE(scheduled_for, created_at)` as
+        the moment the post lands. `canceled` / `failed` jobs don't count —
+        they never reach (or no longer occupy) the platform.
+
+        `exclude_job_id` drops the job being evaluated so it doesn't collide
+        with its own scheduled slot.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        sql = (
+            "SELECT COALESCE(scheduled_for, created_at) AS t FROM publish_jobs "
+            "WHERE tenant_id = ? AND platform = ? "
+            "AND status IN ('sent', 'pending') "
+            "AND COALESCE(scheduled_for, created_at) >= ?"
+        )
+        params: list[object] = [tenant_id, platform, since]
+        if exclude_job_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_job_id)
+        cur = await conn.execute(sql, tuple(params))
+        return [str(r[0]) for r in await cur.fetchall()]
+
     async def count_for_tenant_today(self, *, platform: str | None = None) -> int:
         """Today's (UTC) publish_jobs count for the bound tenant.
 
@@ -2751,6 +2887,8 @@ _BRAND_KIT_COLS = (
     "target_platform, "
     # Slice O.1 — pro-tier "show nexoclip credit" toggle (migration 013).
     "show_nexoclip_credit, "
+    # Publishing safe trap (migration 042).
+    "safe_schedule_enabled, safety_policy_json, content_timezone, "
     "created_at, updated_at"
 )
 
@@ -2769,6 +2907,10 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     d["top_hook_enabled_default"] = bool(d.get("top_hook_enabled_default", 0))
     # Slice O.1 — pro-tier credit toggle (migration 013).
     d["show_nexoclip_credit"] = bool(d.get("show_nexoclip_credit", 1))
+    # Safe trap (migration 042).
+    d["safe_schedule_enabled"] = bool(d.get("safe_schedule_enabled", 0))
+    raw_safety = d.pop("safety_policy_json", None)
+    d["safety_policy"] = json.loads(raw_safety) if raw_safety else None
 
     raw_caption = d.pop("caption_style_json", None)
     d["caption_style"] = json.loads(raw_caption) if raw_caption else None
@@ -2826,6 +2968,9 @@ class BrandKitsRepo:
         auto_publish_platforms: list[str] | None = None,
         auto_publish_delay_min: int = 60,
         custom_trigger_phrases: CustomTriggerPhrases | None = None,
+        safe_schedule_enabled: bool = False,
+        safety_policy: dict[str, object] | None = None,
+        content_timezone: str = "UTC",
     ) -> BrandKitRow:
         tenant_id = current_tenant_id()
         kit_id = new_id("brk")
@@ -2837,13 +2982,13 @@ class BrandKitsRepo:
                 "WHERE tenant_id = ? AND is_default = 1",
                 (now, tenant_id),
             )
-        # Slice O.41 — INSERT had 38 ? placeholders for 40 columns
-        # (_BRAND_KIT_COLS lists 40), so every brand-kit create raised
-        # "incorrect number of bindings" → 500. Restore parity at 40.
+        # _BRAND_KIT_COLS lists 43 columns (40 + 3 safe-trap cols from
+        # migration 042) — keep the placeholder count in lockstep or
+        # sqlite raises "incorrect number of bindings".
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -2879,6 +3024,10 @@ class BrandKitsRepo:
                 None,    # target_platform
                 # Slice O.1 — show_nexoclip_credit defaults ON.
                 1,
+                # Safe trap (migration 042) — advisory by default.
+                1 if safe_schedule_enabled else 0,
+                json.dumps(safety_policy) if safety_policy else None,
+                content_timezone,
                 now, now,
             ),
         )
@@ -2979,6 +3128,10 @@ class BrandKitsRepo:
         top_hook_style_default: str | None = None,
         # Slice K.5 — operator's default target platform.
         target_platform: str | None = None,
+        # Safe trap (migration 042).
+        safe_schedule_enabled: bool | None = None,
+        safety_policy: dict[str, object] | None = None,
+        content_timezone: str | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -3076,6 +3229,16 @@ class BrandKitsRepo:
         if target_platform is not None:
             sets.append("target_platform = ?")
             values.append(target_platform if target_platform else None)
+        # Safe trap (migration 042).
+        if safe_schedule_enabled is not None:
+            sets.append("safe_schedule_enabled = ?")
+            values.append(1 if safe_schedule_enabled else 0)
+        if safety_policy is not None:
+            sets.append("safety_policy_json = ?")
+            values.append(json.dumps(safety_policy) if safety_policy else None)
+        if content_timezone is not None:
+            sets.append("content_timezone = ?")
+            values.append(content_timezone)
         if not sets:
             return existing
         sets.append("updated_at = ?")
@@ -3237,6 +3400,162 @@ class DriveWatchesRepo:
         await conn.commit()
 
 
+# ---------- Channel watches (auto-ingest from creator channels) ----------
+
+
+_CHANNEL_WATCH_COLS = (
+    "id, tenant_id, platform, channel_url, channel_label, persona_id, "
+    "language, last_polled_at, seen_video_ids_json, max_per_poll, enabled, "
+    "created_at, updated_at, polls_per_day"
+)
+
+
+def _channel_watch_from_row(row: aiosqlite.Row) -> ChannelWatchRow:
+    d = dict(row)
+    seen_blob = d.pop("seen_video_ids_json")
+    d["seen_video_ids"] = json.loads(seen_blob) if seen_blob else []
+    d["enabled"] = bool(d["enabled"])
+    return ChannelWatchRow.model_validate(d)
+
+
+class ChannelWatchesRepo:
+    """CRUD for `channel_watches`. Polled by `nexoclip channel poll` and the
+    in-process channel-poll loop to auto-ingest new VODs from a creator's
+    YouTube / Twitch / Kick channel. Mirrors `DriveWatchesRepo`."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        platform: str,
+        channel_url: str,
+        persona_id: str,
+        channel_label: str | None = None,
+        language: str | None = None,
+        max_per_poll: int = 3,
+        polls_per_day: int = 1,
+    ) -> ChannelWatchRow:
+        tenant_id = current_tenant_id()
+        watch_id = new_id("chw")
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            f"INSERT INTO channel_watches ({_CHANNEL_WATCH_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?, ?)",
+            (
+                watch_id,
+                tenant_id,
+                platform,
+                channel_url,
+                channel_label,
+                persona_id,
+                language,
+                max_per_poll,
+                now,
+                now,
+                max(polls_per_day, 1),
+            ),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def set_polls_per_day(
+        self, watch_id: str, polls_per_day: int
+    ) -> ChannelWatchRow:
+        """Change the poll cadence (times/day). Clamped to >= 1."""
+        existing = await self.get(watch_id)
+        if existing is None:
+            raise NexoClipError(f"channel watch {watch_id!r} not found")
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET polls_per_day = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (max(polls_per_day, 1), _now(), watch_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def get(self, watch_id: str) -> ChannelWatchRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_CHANNEL_WATCH_COLS} FROM channel_watches "
+            "WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _channel_watch_from_row(row) if row else None
+
+    async def list_for_tenant(self) -> list[ChannelWatchRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_CHANNEL_WATCH_COLS} FROM channel_watches "
+            "WHERE tenant_id = ? ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_channel_watch_from_row(r) for r in await cur.fetchall()]
+
+    async def mark_polled(
+        self,
+        watch_id: str,
+        *,
+        seen_video_ids: list[str],
+        last_polled_at: str | None,
+    ) -> None:
+        """Persist progress after a poll pass (seen-set + last_polled_at)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET seen_video_ids_json = ?, "
+            "last_polled_at = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                json.dumps(seen_video_ids),
+                last_polled_at,
+                _now(),
+                watch_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+
+    async def set_enabled(
+        self, watch_id: str, enabled: bool
+    ) -> ChannelWatchRow:
+        """Pause / resume a watch without deleting (preserves seen-set)."""
+        existing = await self.get(watch_id)
+        if existing is None:
+            raise NexoClipError(f"channel watch {watch_id!r} not found")
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET enabled = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (1 if enabled else 0, _now(), watch_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def delete(self, watch_id: str) -> None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM channel_watches WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        await conn.commit()
+
+
 _DRIVE_EXPORT_COLS = (
     "tenant_id, enabled, folder_id, folder_name, refresh_token, "
     "access_token, access_token_expires_at, created_at, updated_at"
@@ -3364,3 +3683,974 @@ class DriveExportSettingsRepo:
         await conn.commit()
 
 
+
+class ZernioPublishesRepo:
+    """Local record of every Zernio publish (migration 030).
+
+    Zernio's GET /posts is scoped to the company API key — NOT per
+    tenant — so per-tenant publish history must come from this table.
+    One row per POST /posts we fired; the dashboard joins live status
+    from Zernio by post_id.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record(
+        self,
+        *,
+        post_id: str,
+        tenant_id: str,
+        clip_id: str,
+        platforms: list[str],
+        content: str | None,
+        status: str | None = None,
+        options_json: str | None = None,
+    ) -> None:
+        """Persist one fired publish. Idempotent on post_id — the
+        duplicate-resolved path (Zernio 409 → existing post) records
+        the same post id again and must not error.
+
+        `status` seeds the row state at create time (drafts record as
+        'draft' so the Borradores panel sees them before any webhook
+        lands); `options_json` snapshots the per-platform extras for
+        the draft re-publish path (migration 033)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT OR IGNORE INTO zernio_publishes "
+            "(post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, options_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                post_id,
+                tenant_id,
+                clip_id,
+                ",".join(platforms),
+                content or None,
+                _now(),
+                status,
+                options_json,
+            ),
+        )
+        await conn.commit()
+
+    async def list_for_tenant(
+        self, limit: int = 25, *, status: str | None = None
+    ) -> list[ZernioPublishRow]:
+        """Newest-first publish history for the bound tenant; `status`
+        narrows to one state (e.g. 'draft' for the Borradores panel)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        where = "tenant_id = ?"
+        params: list[object] = [tenant_id]
+        if status is not None:
+            where += " AND status = ?"
+            params.append(status)
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, platforms_json, updated_at, options_json "
+            f"FROM zernio_publishes WHERE {where} "  # fixed fragments, params bound
+            "ORDER BY created_at DESC LIMIT ?",
+            (*params, int(limit)),
+        )
+        return [
+            ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
+        ]
+
+    async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
+        """Tenant-FREE lookup by Zernio post id.
+
+        Webhook deliveries are server-to-server (no bound tenant); the
+        post id is the join key that RESOLVES the tenant. Same
+        invocation pattern as the tenant-free stream helpers above —
+        callers must treat the returned row's tenant_id as the scope.
+        """
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, platforms_json, updated_at, options_json "
+            "FROM zernio_publishes WHERE post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return ZernioPublishRow.model_validate(dict(row)) if row else None
+
+    async def set_status(
+        self,
+        post_id: str,
+        *,
+        status: str,
+        platforms_json: str | None = None,
+    ) -> None:
+        """Tenant-FREE status update fed by post.* webhooks.
+
+        Keyed by the Zernio post id (PRIMARY KEY); a webhook for a post
+        we never recorded is a silent no-op (e.g. fired from Zernio's
+        dashboard directly, outside the hub)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_publishes SET status = ?, "
+            "platforms_json = COALESCE(?, platforms_json), updated_at = ? "
+            "WHERE post_id = ?",
+            (status, platforms_json, _now(), post_id),
+        )
+        await conn.commit()
+
+
+class ZernioWhatsappNumbersRepo:
+    """WhatsApp number provisioning status (migration 040, phase 12).
+
+    Fed by whatsapp.number.* webhooks; latest status per account wins.
+    Tenant-free at rest (keyed by account_id), resolved at read time."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self, *, account_id: str, status: str, detail: str | None = None
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_whatsapp_numbers "
+            "(account_id, status, detail, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(account_id) DO UPDATE SET "
+            "status = excluded.status, detail = excluded.detail, "
+            "updated_at = excluded.updated_at",
+            (account_id, status, detail, _now()),
+        )
+        await conn.commit()
+
+    async def list_for_accounts(
+        self, account_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, status, detail, updated_at "
+            f"FROM zernio_whatsapp_numbers WHERE account_id IN ({placeholders})",
+            tuple(account_ids),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class ZernioCommunityRepo:
+    """Community-notification settings + notify ledger (migration 039).
+
+    Settings are per-tenant. The ledger is tenant-free at the lookup
+    layer (the webhook processor resolves the tenant) but every row
+    carries tenant_id. `claim_notification` is the once-only + loop
+    guard for announce-on-publish."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def get_settings(self, tenant_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id, enabled, discord_account_id, telegram_account_id, "
+            "brand_name, brand_avatar_url, weekly_digest, updated_at "
+            "FROM zernio_community_settings WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled"))
+        d["weekly_digest"] = bool(d.get("weekly_digest"))
+        return d
+
+    async def upsert_settings(
+        self,
+        tenant_id: str,
+        *,
+        enabled: bool,
+        discord_account_id: str | None,
+        telegram_account_id: str | None,
+        brand_name: str | None,
+        brand_avatar_url: str | None,
+        weekly_digest: bool,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_community_settings "
+            "(tenant_id, enabled, discord_account_id, telegram_account_id, "
+            "brand_name, brand_avatar_url, weekly_digest, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_id) DO UPDATE SET "
+            "enabled = excluded.enabled, "
+            "discord_account_id = excluded.discord_account_id, "
+            "telegram_account_id = excluded.telegram_account_id, "
+            "brand_name = excluded.brand_name, "
+            "brand_avatar_url = excluded.brand_avatar_url, "
+            "weekly_digest = excluded.weekly_digest, "
+            "updated_at = excluded.updated_at",
+            (
+                tenant_id, 1 if enabled else 0, discord_account_id,
+                telegram_account_id, brand_name, brand_avatar_url,
+                1 if weekly_digest else 0, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def list_digest_tenants(self) -> list[dict[str, Any]]:
+        """Settings rows with the weekly digest enabled (for the cron)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id, discord_account_id, telegram_account_id "
+            "FROM zernio_community_settings WHERE weekly_digest = 1 AND enabled = 1",
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def claim_notification(
+        self, *, source_post_id: str, tenant_id: str
+    ) -> bool:
+        """Claim the single announcement for `source_post_id`. False if
+        already claimed (at-least-once redelivery)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_community_notifications "
+            "(source_post_id, tenant_id, sent_at) VALUES (?, ?, ?)",
+            (source_post_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def set_notification_post(
+        self, *, source_post_id: str, notification_post_id: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_community_notifications "
+            "SET notification_post_id = ? WHERE source_post_id = ?",
+            (notification_post_id, source_post_id),
+        )
+        await conn.commit()
+
+    async def is_notification_post(self, post_id: str) -> bool:
+        """True if `post_id` is an announcement WE created — the loop
+        guard so a notification's own post.published doesn't re-announce."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT 1 FROM zernio_community_notifications "
+            "WHERE notification_post_id = ? LIMIT 1",
+            (post_id,),
+        )
+        return (await cur.fetchone()) is not None
+
+
+class ZernioBroadcastLogRepo:
+    """Per-tenant daily broadcast-send log (migration 038) — the
+    anti-spam guardrail. Tenant_id is explicit (the route passes it).
+    A row is written only when a broadcast actually SENDS."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def count_for_day(self, tenant_id: str, *, day: str) -> int:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM zernio_broadcast_log "
+            "WHERE tenant_id = ? AND day = ?",
+            (tenant_id, day),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
+    async def record(
+        self, tenant_id: str, *, broadcast_id: str, day: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_broadcast_log "
+            "(id, tenant_id, broadcast_id, day, sent_at) VALUES (?, ?, ?, ?, ?)",
+            (new_id("bcl"), tenant_id, broadcast_id, day, _now()),
+        )
+        await conn.commit()
+
+
+class ZernioInboxRepo:
+    """Comments + DM conversations/messages + contacts (migration 037).
+
+    Tenant-free at rest — keyed by account_id (inbox webhooks carry no
+    profileId), resolved to a tenant at read time by matching against
+    the tenant's connected accounts. Webhook-first: the event processor
+    writes here, REST is backfill, the UI reads local state."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    # ---- comments ----
+
+    async def upsert_comment(
+        self,
+        *,
+        account_id: str,
+        comment_id: str,
+        post_id: str | None,
+        platform_post_id: str | None,
+        platform: str | None,
+        text: str | None,
+        author_id: str | None,
+        author_name: str | None,
+        author_username: str | None,
+        is_reply: bool,
+        parent_id: str | None,
+        created_at: str | None,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_comments "
+            "(account_id, comment_id, post_id, platform_post_id, platform, text, "
+            "author_id, author_name, author_username, is_reply, parent_id, "
+            "status, created_at, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) "
+            "ON CONFLICT(account_id, comment_id) DO UPDATE SET "
+            "text = excluded.text, status = "
+            "CASE WHEN zernio_comments.status = 'hidden' THEN 'hidden' "
+            "ELSE 'active' END",
+            (
+                account_id, comment_id, post_id, platform_post_id, platform, text,
+                author_id, author_name, author_username, 1 if is_reply else 0,
+                parent_id, created_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def set_comment_status(
+        self, *, account_id: str, comment_id: str, status: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_comments SET status = ? "
+            "WHERE account_id = ? AND comment_id = ?",
+            (status, account_id, comment_id),
+        )
+        await conn.commit()
+
+    async def list_comments(
+        self,
+        account_ids: list[str],
+        *,
+        platform_post_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if platform_post_id:
+            where += " AND platform_post_id = ?"
+            params.append(platform_post_id)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, comment_id, post_id, platform_post_id, platform, "
+            "text, author_id, author_name, author_username, is_reply, parent_id, "
+            "status, created_at FROM zernio_comments "
+            f"WHERE {where} ORDER BY created_at DESC LIMIT ?",  # fixed frags, bound
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    # ---- conversations + messages ----
+
+    async def upsert_conversation(
+        self,
+        *,
+        account_id: str,
+        conversation_id: str,
+        platform: str | None,
+        participant_id: str | None,
+        participant_name: str | None,
+        participant_username: str | None,
+        status: str | None,
+        last_message_at: str | None,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_conversations "
+            "(account_id, conversation_id, platform, participant_id, "
+            "participant_name, participant_username, status, last_message_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id, conversation_id) DO UPDATE SET "
+            "participant_name = COALESCE(excluded.participant_name, "
+            "  zernio_conversations.participant_name), "
+            "participant_username = COALESCE(excluded.participant_username, "
+            "  zernio_conversations.participant_username), "
+            "status = COALESCE(excluded.status, zernio_conversations.status), "
+            "last_message_at = COALESCE(excluded.last_message_at, "
+            "  zernio_conversations.last_message_at), "
+            "updated_at = excluded.updated_at",
+            (
+                account_id, conversation_id, platform, participant_id,
+                participant_name, participant_username, status or "active",
+                last_message_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def set_conversation_status(
+        self, *, account_id: str, conversation_id: str, status: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_conversations SET status = ?, updated_at = ? "
+            "WHERE account_id = ? AND conversation_id = ?",
+            (status, _now(), account_id, conversation_id),
+        )
+        await conn.commit()
+
+    async def list_conversations(
+        self, account_ids: list[str], *, status: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if status:
+            where += " AND status = ?"
+            params.append(status)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, conversation_id, platform, participant_id, "
+            "participant_name, participant_username, status, last_message_at "
+            f"FROM zernio_conversations WHERE {where} "  # fixed frags, bound
+            "ORDER BY last_message_at DESC LIMIT ?",
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def upsert_message(
+        self,
+        *,
+        account_id: str,
+        message_id: str,
+        conversation_id: str | None,
+        platform: str | None,
+        direction: str | None,
+        text: str | None,
+        sent_at: str | None,
+        is_read: bool,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_messages "
+            "(account_id, message_id, conversation_id, platform, direction, text, "
+            "sent_at, is_read, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id, message_id) DO UPDATE SET "
+            "text = excluded.text, is_read = excluded.is_read",
+            (
+                account_id, message_id, conversation_id, platform, direction, text,
+                sent_at, 1 if is_read else 0, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def list_messages(
+        self, account_ids: list[str], *, conversation_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, message_id, conversation_id, platform, direction, "
+            "text, sent_at, is_read FROM zernio_messages "
+            f"WHERE account_id IN ({placeholders}) AND conversation_id = ? "
+            "ORDER BY sent_at ASC LIMIT ?",
+            (*account_ids, conversation_id, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    # ---- contacts (seeded here, managed in phase 10) ----
+
+    async def upsert_contact(
+        self,
+        *,
+        account_id: str,
+        contact_key: str,
+        platform: str | None,
+        name: str | None,
+        username: str | None,
+        tag: str,
+    ) -> None:
+        """Auto-seed/refresh a potential contact from a comment or DM
+        author. Merges the new tag into the existing csv (dedup)."""
+        conn = await self._db.connect()
+        existing = await conn.execute(
+            "SELECT tags FROM zernio_contacts "
+            "WHERE account_id = ? AND contact_key = ?",
+            (account_id, contact_key),
+        )
+        row = await existing.fetchone()
+        tags = {t for t in ((row["tags"] or "").split(",") if row else []) if t}
+        tags.add(tag)
+        if platform:
+            tags.add(platform)
+        tags_csv = ",".join(sorted(tags))
+        if row:
+            await conn.execute(
+                "UPDATE zernio_contacts SET tags = ?, name = COALESCE(?, name), "
+                "username = COALESCE(?, username), last_seen = ? "
+                "WHERE account_id = ? AND contact_key = ?",
+                (tags_csv, name, username, _now(), account_id, contact_key),
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO zernio_contacts "
+                "(account_id, contact_key, platform, name, username, tags, "
+                "first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    account_id, contact_key, platform, name, username, tags_csv,
+                    _now(), _now(),
+                ),
+            )
+        await conn.commit()
+
+    async def list_contacts(
+        self, account_ids: list[str], *, tag: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if tag:
+            where += " AND (',' || tags || ',') LIKE ?"
+            params.append(f"%,{tag},%")
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, contact_key, platform, name, username, tags, "
+            "zernio_contact_id, first_seen, last_seen FROM zernio_contacts "
+            f"WHERE {where} ORDER BY last_seen DESC LIMIT ?",  # fixed frags, bound
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class ZernioCalendarRepo:
+    """External (native) posts for the unified calendar (migration 036).
+
+    Tenant-free at rest — keyed by (account_id, platform-native
+    post_id) because post.external.* carries no profileId. The calendar
+    route resolves to a tenant by matching account_id against the
+    viewing tenant's connected accounts."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self,
+        *,
+        account_id: str,
+        post_id: str,
+        platform: str | None,
+        content: str | None,
+        url: str | None,
+        thumbnail_url: str | None,
+        media_type: str | None,
+        published_at: str | None,
+    ) -> None:
+        """Insert or refresh one external post. Idempotent: the
+        first-sync `created` and any later `updated` both land here, and
+        a re-delivered `created` overwrites identically. Clears any
+        prior 'deleted' status (a post can reappear)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_calendar "
+            "(account_id, post_id, platform, content, url, thumbnail_url, "
+            "media_type, published_at, status, deleted_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?) "
+            "ON CONFLICT(account_id, post_id) DO UPDATE SET "
+            "platform = excluded.platform, content = excluded.content, "
+            "url = excluded.url, thumbnail_url = excluded.thumbnail_url, "
+            "media_type = excluded.media_type, "
+            "published_at = excluded.published_at, "
+            "status = 'active', deleted_at = NULL, "
+            "updated_at = excluded.updated_at",
+            (
+                account_id, post_id, platform, content, url, thumbnail_url,
+                media_type, published_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def mark_deleted(
+        self, *, account_id: str, post_id: str, deleted_at: str | None
+    ) -> None:
+        """Flag an external post removed on the platform. Keeps the row
+        (the calendar greys it out) rather than dropping it."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_calendar SET status = 'deleted', "
+            "deleted_at = ?, updated_at = ? "
+            "WHERE account_id = ? AND post_id = ?",
+            (deleted_at or _now(), _now(), account_id, post_id),
+        )
+        await conn.commit()
+
+    async def list_for_accounts(
+        self,
+        account_ids: list[str],
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        include_deleted: bool = True,
+    ) -> list[dict[str, Any]]:
+        """External posts for a set of account ids (the tenant's), in a
+        date window. Empty list for no accounts (no SQL injection of an
+        empty IN ())."""
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if date_from:
+            where += " AND published_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND published_at <= ?"
+            params.append(date_to)
+        if not include_deleted:
+            where += " AND status = 'active'"
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, post_id, platform, content, url, "
+            "thumbnail_url, media_type, published_at, status, deleted_at "
+            f"FROM zernio_calendar WHERE {where} "  # fixed fragments, params bound
+            "ORDER BY published_at DESC",
+            tuple(params),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+class ZernioPublishSnapshotsRepo:
+    """Per-post daily metric snapshots (migration 035).
+
+    Persist-only history for the future clip-selection feedback loop.
+    tenant_id is explicit (the snapshot job iterates tenants); the
+    UNIQUE (post_id, day) index makes a same-day re-run idempotent."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self,
+        tenant_id: str,
+        *,
+        post_id: str,
+        day: str,
+        metrics_json: str,
+        platforms_json: str | None = None,
+    ) -> None:
+        """Insert or refresh the (post, day) snapshot."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_publish_snapshots "
+            "(id, tenant_id, post_id, day, metrics_json, platforms_json, captured_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(post_id, day) DO UPDATE SET "
+            "metrics_json = excluded.metrics_json, "
+            "platforms_json = excluded.platforms_json, "
+            "captured_at = excluded.captured_at",
+            (
+                new_id("snp"), tenant_id, post_id, day,
+                metrics_json, platforms_json, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def latest_for_tenant(
+        self, tenant_id: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Newest snapshot per post for a tenant (one row per post,
+        most-recent day). Drives the internal analytics endpoint."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, day, metrics_json, platforms_json, captured_at "
+            "FROM zernio_publish_snapshots WHERE tenant_id = ? "
+            "AND day = (SELECT MAX(day) FROM zernio_publish_snapshots s2 "
+            "           WHERE s2.post_id = zernio_publish_snapshots.post_id) "
+            "ORDER BY day DESC LIMIT ?",
+            (tenant_id, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def count_for_tenant(self, tenant_id: str) -> int:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM zernio_publish_snapshots WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+class ZernioAutoRetriesRepo:
+    """Once-only guard for the post.failed auto-retry (migration 034).
+
+    Tenant-free (the webhook boundary has no bound tenant); keyed by
+    Zernio post id. `claim` is the dedup point — it returns False when
+    a retry was already claimed for this post, so an at-least-once
+    redelivery never schedules a second retry.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def claim(self, post_id: str, *, tenant_id: str | None) -> bool:
+        """Atomically claim the single auto-retry for `post_id`. Returns
+        True on a fresh claim, False if one already exists."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_auto_retries "
+            "(post_id, tenant_id, attempted_at, outcome) "
+            "VALUES (?, ?, ?, 'scheduled')",
+            (post_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def set_outcome(self, post_id: str, *, outcome: str) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_auto_retries SET outcome = ? WHERE post_id = ?",
+            (outcome, post_id),
+        )
+        await conn.commit()
+
+    async def get(self, post_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, attempted_at, outcome "
+            "FROM zernio_auto_retries WHERE post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+class ZernioEventsRepo:
+    """Inbound Zernio webhook event log (migration 031).
+
+    Deliveries are at-least-once; `insert_dedup` is the dedup point
+    (PRIMARY KEY on Zernio's stable event id). Rows keep the raw
+    payload verbatim so later phases (calendar, inbox) can backfill
+    their stores without re-asking Zernio. Tenant-free by design —
+    webhooks are a server-to-server boundary and tenant resolution is
+    exactly what the processor derives FROM these rows.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert_dedup(
+        self,
+        *,
+        event_id: str,
+        type: str,  # matches the column name
+        payload: str,
+        profile_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> bool:
+        """Insert one event; return False when event_id already exists
+        (a redelivery — the caller ACKs 200 without reprocessing)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_events "
+            "(event_id, type, payload, profile_id, tenant_id, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, type, payload, profile_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def get(self, event_id: str) -> ZernioEventRow | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT event_id, type, payload, profile_id, tenant_id, "
+            "received_at, processed, processed_at "
+            "FROM zernio_events WHERE event_id = ?",
+            (event_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["processed"] = bool(d.get("processed"))
+        return ZernioEventRow.model_validate(d)
+
+    async def mark_processed(
+        self, event_id: str, *, tenant_id: str | None = None
+    ) -> None:
+        """Flip processed; also persist the resolved tenant when the
+        processor figured one out (NULL stays NULL otherwise)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_events SET processed = 1, processed_at = ?, "
+            "tenant_id = COALESCE(?, tenant_id) WHERE event_id = ?",
+            (_now(), tenant_id, event_id),
+        )
+        await conn.commit()
+
+    async def list_unprocessed(self, limit: int = 100) -> list[ZernioEventRow]:
+        """Oldest-first backlog — lets a sweep retry events whose
+        background task died before mark_processed."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT event_id, type, payload, profile_id, tenant_id, "
+            "received_at, processed, processed_at "
+            "FROM zernio_events WHERE processed = 0 "
+            "ORDER BY received_at ASC LIMIT ?",
+            (int(limit),),
+        )
+        out: list[ZernioEventRow] = []
+        for row in await cur.fetchall():
+            d = dict(row)
+            d["processed"] = bool(d.get("processed"))
+            out.append(ZernioEventRow.model_validate(d))
+        return out
+
+
+_HUB_JOB_COLS = (
+    "job_id, tenant_id, idempotency_key, source, mode, targets, video_url, "
+    "title, caption, scheduled_for, zernio_post_id, status, platforms_json, "
+    "error, created_at, updated_at"
+)
+
+
+class HubPublishJobsRepo:
+    """Internal-API publish jobs (migration 032).
+
+    The service API addresses tenants by id with a service token, so
+    tenant_id is an EXPLICIT first argument here (not the bound-tenant
+    context) — every query still filters on it. The two tenant-free
+    methods are the webhook-processor joins, keyed by Zernio post id.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def create(
+        self,
+        tenant_id: str,
+        *,
+        source: str,
+        mode: str,
+        targets: list[str],
+        video_url: str,
+        title: str | None = None,
+        caption: str | None = None,
+        scheduled_for: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> HubPublishJobRow:
+        job_id = new_id("hpj")
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO hub_publish_jobs "
+            "(job_id, tenant_id, idempotency_key, source, mode, targets, "
+            "video_url, title, caption, scheduled_for, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (
+                job_id, tenant_id, idempotency_key, source, mode,
+                ",".join(targets), video_url, title, caption,
+                scheduled_for, _now(),
+            ),
+        )
+        await conn.commit()
+        job = await self.get(tenant_id, job_id)
+        assert job is not None
+        return job
+
+    async def get(self, tenant_id: str, job_id: str) -> HubPublishJobRow | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_HUB_JOB_COLS} FROM hub_publish_jobs "
+            "WHERE job_id = ? AND tenant_id = ?",
+            (job_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return HubPublishJobRow.model_validate(dict(row)) if row else None
+
+    async def find_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> HubPublishJobRow | None:
+        """The replay path: a repeated key returns the ORIGINAL job."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_HUB_JOB_COLS} FROM hub_publish_jobs "
+            "WHERE tenant_id = ? AND idempotency_key = ?",
+            (tenant_id, idempotency_key),
+        )
+        row = await cur.fetchone()
+        return HubPublishJobRow.model_validate(dict(row)) if row else None
+
+    async def set_zernio_post(
+        self, tenant_id: str, job_id: str, *, post_id: str, status: str
+    ) -> None:
+        """Link the accepted Zernio post and move past 'pending'."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET zernio_post_id = ?, status = ?, "
+            "updated_at = ? WHERE job_id = ? AND tenant_id = ?",
+            (post_id, status, _now(), job_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_error(
+        self, tenant_id: str, job_id: str, *, error: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET status = 'failed', error = ?, "
+            "updated_at = ? WHERE job_id = ? AND tenant_id = ?",
+            (error, _now(), job_id, tenant_id),
+        )
+        await conn.commit()
+
+    async def set_status_by_post_id(
+        self, post_id: str, *, status: str, platforms_json: str | None = None
+    ) -> None:
+        """Tenant-FREE webhook join: post.* events update the hub job
+        the same way they update zernio_publishes. No-op for posts that
+        didn't come through the internal API."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE hub_publish_jobs SET status = ?, "
+            "platforms_json = COALESCE(?, platforms_json), updated_at = ? "
+            "WHERE zernio_post_id = ?",
+            (status, platforms_json, _now(), post_id),
+        )
+        await conn.commit()
+
+    async def get_tenant_for_post(self, post_id: str) -> str | None:
+        """Tenant-FREE reverse lookup for the webhook processor."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id FROM hub_publish_jobs WHERE zernio_post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return str(row["tenant_id"]) if row else None
+
+    async def count_for_day(
+        self, tenant_id: str, *, platform: str, day: str
+    ) -> int:
+        """Hub posts targeting `platform` whose effective date (the
+        scheduled date, or creation date for immediate posts) falls on
+        `day` (YYYY-MM-DD, UTC). Drives the batch anti-spam cap."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM hub_publish_jobs "
+            "WHERE tenant_id = ? "
+            "AND date(COALESCE(scheduled_for, created_at)) = ? "
+            "AND (',' || targets || ',') LIKE ? "
+            "AND status != 'failed'",
+            (tenant_id, day, f"%,{platform},%"),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0

@@ -1,4 +1,4 @@
-"""Tests for the migration runner — the lock-down's first line of defense."""
+﻿"""Tests for the migration runner â€” the lock-down's first line of defense."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import pytest
 from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
-
-_CURRENT_HEAD = 9  # bumped each time we add a migration
+_CURRENT_HEAD = 43  # bumped each time we add a migration (043_channel_poll_schedule)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

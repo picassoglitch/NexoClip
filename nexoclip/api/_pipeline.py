@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING
 from nexoclip.jobs import PipelineKickoff, PipelineRunner
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+
+    from nexoclip.db import Database
 
 _log = logging.getLogger("nexoclip.pipeline.runner")
 
@@ -316,9 +319,313 @@ async def upload_pipeline_runner(
     )
 
 
+# ---- Phase L.2 — auto-clip a live stream once it ends ---------------------
+
+
+def _resolve_recording_file(recording_path: str) -> "Path | None":
+    """Locate the finished MediaMTX recording on disk.
+
+    The live webhook stored `source_video_path` as MediaMTX's record
+    target (e.g. `/data/live/<stream_id>/source`, possibly without an
+    extension). MediaMTX's actual output is deployment-config-dependent,
+    so we resolve defensively:
+      1. the path as-is (if it already names a file),
+      2. `<path>.mp4`,
+      3. otherwise the newest non-trivial `*.mp4` in the same directory.
+
+    Returns None if nothing usable is on disk yet. Size floor (>1 KiB)
+    rejects a just-created empty file MediaMTX hasn't written to.
+    """
+    from pathlib import Path as _Path
+
+    p = _Path(str(recording_path))
+    candidates: list[_Path] = []
+    if p.suffix:
+        candidates.append(p)
+    else:
+        candidates.append(p.with_suffix(".mp4"))
+        candidates.append(_Path(str(p) + ".mp4"))
+    for c in candidates:
+        try:
+            if c.is_file() and c.stat().st_size > 1024:
+                return c
+        except OSError:
+            pass
+    parent = p.parent
+    try:
+        if parent.is_dir():
+            mp4s = [
+                f for f in parent.glob("*.mp4")
+                if f.is_file() and f.stat().st_size > 1024
+            ]
+            if mp4s:
+                return max(mp4s, key=lambda f: f.stat().st_mtime)
+    except OSError:
+        pass
+    return None
+
+
+# How long the live runner waits for the recording to become available
+# after the 'ended' webhook. Generous on purpose: in the Path-B (R2) flow
+# the upload of a multi-hour recording can lag the 'ended' call by minutes,
+# and this runs in the background. The manual "Run pipeline" button is the
+# fallback if the window expires. 60 x 5s = 5 min.
+_LIVE_RECORDING_WAIT_ATTEMPTS = 60
+_LIVE_RECORDING_WAIT_DELAY_S = 5.0
+
+
+async def _acquire_live_recording(
+    *, stream_id: str, recording_path: str, work_dir: "Path"
+) -> "Path | None":
+    """Get the finished live recording onto local disk, polling until it
+    shows up (or the wait budget runs out).
+
+    Two source modes, chosen by config:
+      - Path B (object storage configured): poll R2 under
+        `<prefix>/<stream_id>/` until the live-ingest service's upload
+        appears, download it, return the local path. This is what lets the
+        MediaMTX service run as a separate Railway service — no shared disk.
+      - Path A (no R2): poll the shared `/data` volume for the file MediaMTX
+        wrote in-place.
+
+    Polling (not a single stat) matters either way: MediaMTX may still be
+    flushing, or the R2 upload may still be in flight, when 'ended' fires.
+    Returns None if nothing usable arrives within the budget.
+    """
+    import asyncio
+
+    from nexoclip.integrations.storage import build_recording_store
+    from nexoclip.settings import get_settings
+
+    store = build_recording_store(get_settings())
+    for _ in range(_LIVE_RECORDING_WAIT_ATTEMPTS):
+        if store is not None:
+            got = await store.fetch_latest(stream_id=stream_id, dest_dir=work_dir)
+            if got is not None:
+                return got
+        else:
+            local = _resolve_recording_file(recording_path)
+            if local is not None:
+                return local
+        await asyncio.sleep(_LIVE_RECORDING_WAIT_DELAY_S)
+    # One last attempt after the final sleep.
+    if store is not None:
+        return await store.fetch_latest(stream_id=stream_id, dest_dir=work_dir)
+    return _resolve_recording_file(recording_path)
+
+
+async def live_pipeline_runner(
+    *,
+    tenant_id: str,
+    stream_id: str,
+    persona_id: str,
+    recording_path: str,
+    output_dir: "Path",
+    title: str | None = None,
+    language: str | None = None,
+) -> None:
+    """Phase L.2 — run the full clip pipeline on a finished live recording.
+
+    Triggered automatically by the MediaMTX `live/ended` webhook (see
+    `maybe_autoclip_after_live_end`). The recording is treated exactly like
+    an upload: `ingest_uploaded` moves it into the canonical
+    `<output_dir>/<stream_id>/source/` layout, extracts audio, ffprobes the
+    real duration, and writes `stream.json` — after which `process_vod`
+    reuses that cache and skips any download. So transcribe → detect → cut
+    → score all run identically to the upload path.
+
+    Failure surfacing mirrors the other runners: anything that escapes gets
+    a `pipeline.failed` event (so the live dashboard explains it instead of
+    leaving the stream stuck on 'processing'), then re-raises for the log.
+    """
+    from nexoclip.db import Database, StreamsRepo
+    from nexoclip.db.adapters import stream_to_row
+    from nexoclip.ingest import ingest_uploaded
+    from nexoclip.pipeline import process_vod
+    from nexoclip.settings import get_settings
+    from nexoclip.tenancy import bound_tenant
+
+    db_path = get_settings().db_path
+
+    try:
+        # 1. Acquire the recording locally — pull from R2 (Path B) or read
+        #    the shared volume (Path A), polling until it shows up.
+        work_dir = output_dir / stream_id / "_incoming"
+        source_file = await _acquire_live_recording(
+            stream_id=stream_id,
+            recording_path=recording_path,
+            work_dir=work_dir,
+        )
+        if source_file is None:
+            raise RuntimeError(
+                f"live recording for {stream_id} did not become available "
+                f"(R2 prefix live/{stream_id}/ or disk {recording_path}); "
+                "the upload may have failed or recordPath differs"
+            )
+
+        # 2. Ingest the recording like an upload (audio + duration +
+        #    stream.json + canonical layout). Idempotent on stream_id.
+        stream = await ingest_uploaded(
+            tenant_id=tenant_id,
+            source_path=source_file,
+            output_dir=output_dir,
+            stream_id=stream_id,
+            title=title or f"Live {stream_id[:12]}",
+        )
+
+        # 3. Promote the StreamRow with the real duration/paths, but keep
+        #    it tagged as a live stream (platform + live:// url) so the
+        #    dashboard still groups it with live runs.
+        db = Database(db_path)
+        await db.connect()
+        try:
+            with bound_tenant(tenant_id):
+                row = stream_to_row(stream).model_copy(
+                    update={
+                        "platform": "live",
+                        "vod_url": f"live://rtmp/{stream_id}",
+                    }
+                )
+                await StreamsRepo(db).upsert(row)
+        finally:
+            await db.close()
+
+        # 4. Run the pipeline on the cached stream.json (no re-ingest).
+        await process_vod(
+            tenant_id=tenant_id,
+            vod_url=stream.vod_url,
+            output_dir=output_dir,
+            persona_id=persona_id,
+            stream_id=stream.id,
+            language=language,
+            db_path=db_path,
+        )
+    except Exception as e:
+        try:
+            await _emit_top_level_failure(
+                db_path=db_path,
+                tenant_id=tenant_id,
+                stream_id=stream_id,
+                error=e,
+            )
+        except Exception:
+            _log.exception(
+                "live pipeline.failed event write failed for stream=%s",
+                stream_id,
+            )
+        raise
+
+    # Run succeeded — flip the stream to a terminal status. The autoclip
+    # claim set it to 'processing'; nothing else resets a live stream, so
+    # without this the dashboard shows 'Analyzing…' forever even with clips
+    # on disk. Best-effort: the clips already exist, so a failed status
+    # write isn't worth failing the run.
+    try:
+        from nexoclip.db import Database
+        from nexoclip.db.repos import _streams_repo_set_status
+
+        sdb = Database(db_path)
+        await sdb.connect()
+        try:
+            await _streams_repo_set_status(sdb, stream_id=stream_id, status="done")
+        finally:
+            await sdb.close()
+    except Exception:  # noqa: BLE001 — cosmetic status only
+        _log.warning("live: could not mark stream done for %s", stream_id)
+
+    # Token T2/T3 — run succeeded; charge the base fee + refresh balance.
+    await _refresh_balance_after_run(
+        db_path=db_path, tenant_id=tenant_id, stream_id=stream_id,
+    )
+
+
+async def maybe_autoclip_after_live_end(
+    db: "Database",
+    *,
+    row: object,
+    schedule: "Callable[..., None]",
+) -> bool:
+    """Phase L.2 — decide whether to auto-launch the clip pipeline after a
+    live stream ends, and if so, claim the stream + call `schedule(...)`.
+
+    Separated from the webhook handler so it's testable without HTTP: the
+    caller passes a `schedule` callback (the webhook hands in one that does
+    `background_tasks.add_task(live_pipeline_runner, **kwargs)`; tests pass
+    a collector).
+
+    Skips (returns False) when:
+      - the row is missing or not in 'live_ended' (safety),
+      - auto-clip is disabled (`NEXOCLIP_LIVE_AUTO_CLIP=false`),
+      - the tenant has no persona (emits a `pipeline.failed` so the operator
+        sees why; they can add one + run manually),
+      - another webhook already claimed the stream (idempotency).
+
+    Returns True iff it claimed the stream and scheduled the runner.
+    """
+    from pathlib import Path
+
+    from nexoclip.db import PersonasRepo
+    from nexoclip.db.repos import _streams_repo_try_claim_for_processing
+    from nexoclip.settings import get_settings
+    from nexoclip.tenancy import bound_tenant
+
+    if row is None:
+        return False
+    status = getattr(row, "status", None)
+    if status != "live_ended":
+        return False
+
+    settings = get_settings()
+    if not getattr(settings, "live_auto_clip_enabled", True):
+        return False
+
+    tenant_id = getattr(row, "tenant_id", "")
+    stream_id = getattr(row, "id", "")
+    if not (tenant_id and stream_id):
+        return False
+
+    # Resolve the persona to clip with. Live ingest doesn't capture one at
+    # push time, so we use the tenant's first persona (same default the
+    # /dashboard/start page applies).
+    with bound_tenant(tenant_id):
+        personas = await PersonasRepo(db).list_for_tenant()
+    if not personas:
+        try:
+            await _emit_top_level_failure(
+                db_path=settings.db_path,
+                tenant_id=tenant_id,
+                stream_id=stream_id,
+                error=RuntimeError(
+                    "live stream ended but the tenant has no persona — "
+                    "configure one to auto-clip, or run the pipeline manually"
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            _log.warning("live autoclip: no-persona event failed for %s", stream_id)
+        return False
+    persona_id = personas[0].id
+
+    # Atomic claim — idempotent against duplicate 'ended' webhooks.
+    if not await _streams_repo_try_claim_for_processing(db, stream_id=stream_id):
+        return False
+
+    schedule(
+        tenant_id=tenant_id,
+        stream_id=stream_id,
+        persona_id=persona_id,
+        recording_path=str(getattr(row, "source_video_path", "") or ""),
+        output_dir=Path(settings.default_output_dir),
+        title=getattr(row, "title", None),
+        language=None,
+    )
+    return True
+
+
 __all__ = [
     "PipelineKickoff",
     "PipelineRunner",
     "default_pipeline_runner",
+    "live_pipeline_runner",
+    "maybe_autoclip_after_live_end",
     "upload_pipeline_runner",
 ]

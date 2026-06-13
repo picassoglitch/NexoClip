@@ -61,6 +61,11 @@ drive_app = typer.Typer(
     help="Google Drive folder watches (voice-markers spec slice E.4).",
     no_args_is_help=True,
 )
+channel_app = typer.Typer(
+    name="channel",
+    help="Connected creator channels — auto-ingest new VODs (YouTube/Twitch/Kick).",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
@@ -70,6 +75,7 @@ app.add_typer(mcp_app)
 app.add_typer(queue_app)
 app.add_typer(retention_app)
 app.add_typer(drive_app)
+app.add_typer(channel_app)
 
 
 @queue_app.command("list")
@@ -220,6 +226,147 @@ def webhooks_send_cmd(
                 f"webhooks delivered={outcome.delivered} "
                 f"failed={outcome.failed} disabled={outcome.disabled}"
             )
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
+@webhooks_app.command("register-zernio")
+def webhooks_register_zernio_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Create-or-update the hub's webhook config on Zernio (idempotent).
+
+    Points Zernio at {NEXOCLIP_PUBLIC_URL}/api/webhooks/zernio with the
+    hub's event list, keyed by NEXOCLIP_ZERNIO_WEBHOOK_SECRET. Re-run
+    after changing PUBLIC_URL or the secret — also re-activates a
+    webhook Zernio auto-disabled after delivery failures.
+    """
+    import json
+
+    from nexoclip.integrations.zernio import register_zernio_webhook
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+    secret = (settings.zernio_webhook_secret or "").strip()
+    if not secret:
+        typer.echo(
+            "error: NEXOCLIP_ZERNIO_WEBHOOK_SECRET is not configured "
+            "(the receiver refuses unverifiable events)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    public_url = (settings.public_url or "").rstrip("/")
+    if not public_url or public_url.startswith(("http://localhost", "http://127.")):
+        typer.echo(
+            f"error: NEXOCLIP_PUBLIC_URL ({public_url or 'unset'}) is not a "
+            "publicly reachable origin — Zernio could not deliver to it",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        client = ZernioClient(
+            api_key=settings.zernio_api_key or "",
+            base_url=settings.zernio_base_url,
+        )
+        result = await register_zernio_webhook(
+            client,
+            url=f"{public_url}/api/webhooks/zernio",
+            secret=secret,
+        )
+        if json_out:
+            typer.echo(json.dumps(result))
+        else:
+            typer.echo(
+                f"webhook {result['action']}: id={result['webhook_id']} "
+                f"url={result['url']} events={len(result['events'])}"
+            )
+
+    asyncio.run(_run())
+
+
+@webhooks_app.command("snapshot-analytics")
+def webhooks_snapshot_analytics_cmd(
+    tenant_id: str = typer.Option(
+        "", "--tenant", help="One tenant; omit for all bound tenants."
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Capture today's per-post metric snapshot (Hub phase 7).
+
+    Run daily (cron). Idempotent per (post, UTC day) — a same-day
+    re-run refreshes rows instead of duplicating. Persist-only: no
+    scoring, no ML, just history for the clip-selection feedback loop.
+    """
+    from nexoclip.db import TenantsRepo, apply_migrations
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.publish.analytics_service import snapshot_tenant
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            client = ZernioClient(
+                api_key=settings.zernio_api_key or "",
+                base_url=settings.zernio_base_url,
+            )
+            tenants = (
+                [tenant_id]
+                if tenant_id
+                else [t.id for t in await TenantsRepo(db).list_all()]
+            )
+            total = 0
+            for tid in tenants:
+                total += await snapshot_tenant(db, tid, client=client)
+            typer.echo(f"snapshot tenants={len(tenants)} posts={total}")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
+@webhooks_app.command("community-digest")
+def webhooks_community_digest_cmd(
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Send the weekly community digest to every tenant that opted in
+    (Hub phase 11). Run weekly (cron). Default-off per tenant."""
+    from nexoclip.db import ZernioCommunityRepo, apply_migrations
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.publish.analytics_service import send_weekly_digest
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            client = ZernioClient(
+                api_key=settings.zernio_api_key or "",
+                base_url=settings.zernio_base_url,
+            )
+            rows = await ZernioCommunityRepo(db).list_digest_tenants()
+            sent = 0
+            for row in rows:
+                if await send_weekly_digest(db, row["tenant_id"], client=client):
+                    sent += 1
+            typer.echo(f"community-digest tenants={len(rows)} sent={sent}")
         finally:
             await db.close()
 
@@ -1226,50 +1373,191 @@ def drive_poll_cmd(
         )
 
 
-@app.command("auto-publish")
-def auto_publish_cmd(
-    tenant: str | None = typer.Option(
-        None, "--tenant", help="Restrict dispatch to one tenant. Default: all."
+@channel_app.command("add")
+def channel_add_cmd(
+    channel_url: str = typer.Argument(..., help="Channel / @handle / videos URL to watch."),
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant the watch belongs to."),
+    persona_id: str = typer.Option(
+        ..., "--persona", help="Persona used for variant generation on ingested VODs."
     ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Report what would be enqueued without writing publish_jobs rows.",
+    platform: str | None = typer.Option(
+        None,
+        "--platform",
+        help="youtube | twitch | kick. Auto-detected from the URL when omitted.",
+    ),
+    language: str | None = typer.Option(
+        None, "--language", help="Optional language hint for transcription."
+    ),
+    label: str | None = typer.Option(
+        None, "--label", help="Optional human-readable label for the dashboard."
+    ),
+    max_per_poll: int = typer.Option(
+        3, "--max-per-poll", help="Cap on VODs ingested per poll (and first-poll backfill)."
+    ),
+    polls_per_day: int = typer.Option(
+        1, "--polls-per-day", min=1, max=96,
+        help="How many times a day to poll (1=daily, 4=every 6h, 24=hourly). Saves resources.",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Connect a creator channel so new VODs auto-ingest into NexoClip."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.ingest.service import detect_platform
+    from nexoclip.tenancy import bound_tenant
+
+    resolved_platform = platform or detect_platform(channel_url)
+
+    async def _run() -> str:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                w = await ChannelWatchesRepo(db).create(
+                    platform=resolved_platform,
+                    channel_url=channel_url,
+                    persona_id=persona_id,
+                    channel_label=label,
+                    language=language,
+                    max_per_poll=max_per_poll,
+                    polls_per_day=polls_per_day,
+                )
+            return w.id
+        finally:
+            await db.close()
+
+    new = asyncio.run(_run())
+    typer.echo(
+        f"created channel watch: {new} (platform={resolved_platform}, "
+        f"{polls_per_day}x/day)"
+    )
+
+
+@channel_app.command("schedule")
+def channel_schedule_cmd(
+    watch_id: str = typer.Argument(..., help="Channel watch id (chw_...)."),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    per_day: int = typer.Option(
+        ..., "--per-day", min=1, max=96,
+        help="Times a day to poll (1=daily, 4=every 6h, 24=hourly).",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Change how many times a day a channel is polled."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            if await TenantsRepo(db).get(tenant_id) is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(tenant_id):
+                w = await ChannelWatchesRepo(db).set_polls_per_day(watch_id, per_day)
+            typer.echo(f"{w.id}: now {w.polls_per_day}x/day")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
+@channel_app.command("list")
+def channel_list_cmd(
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """List channel watches for one tenant."""
+    import json as _json
+
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> list[object]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                return list(await ChannelWatchesRepo(db).list_for_tenant())
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for w in rows:
+            typer.echo(_json.dumps(w.model_dump()))  # type: ignore[attr-defined]
+        return
+    if not rows:
+        typer.echo("(no channel watches)")
+        return
+    for w in rows:
+        state = "enabled" if w.enabled else "paused"  # type: ignore[attr-defined]
+        typer.echo(
+            f"  {w.id}  {w.platform}  {w.channel_url}  ({w.channel_label or '—'})  "  # type: ignore[attr-defined]
+            f"{state}  seen={len(w.seen_video_ids)}  "  # type: ignore[attr-defined]
+            f"last_polled_at={w.last_polled_at or 'never'}"  # type: ignore[attr-defined]
+        )
+
+
+@channel_app.command("poll")
+def channel_poll_cmd(
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Restrict polling to one tenant. Default: all."
     ),
     db_path: Path | None = typer.Option(None, "--db-path"),
     json_out: bool = typer.Option(
         False, "--json", help="Emit one JSON object per report instead of text."
     ),
 ) -> None:
-    """Walk auto-publish brand kits and enqueue publish_jobs (slice E.2).
+    """Poll every channel watch for new VODs and report detections.
 
-    Wire as a cron — every 15 minutes is generous for the typical 60-min
-    undo window. Faster dispatch shortens "time-to-publish" on freshly
-    cut clips but doesn't change correctness; scheduled_for honors the
-    clip's created_at + delay_min so the cron's lag is invisible to ops.
+    CLI poll lists new uploads (via yt-dlp) and marks them detected, but
+    does NOT run the heavy pipeline here — the running API server's
+    channel-poll loop performs the real ingest + pipeline dispatch. Use
+    this to verify wiring and see what would be picked up.
     """
     import json as _json
 
+    from nexoclip.channels import poll_channel_watches
     from nexoclip.db import apply_migrations
-    from nexoclip.publish import dispatch_auto_publish
 
     async def _run() -> list[dict[str, object]]:
         db = _open_db(db_path)
         try:
             await apply_migrations(db)
-            reports = await dispatch_auto_publish(
-                db, tenant_id=tenant, dry_run=dry_run
+
+            async def _log_only(
+                tenant_id_: str,
+                vod_url: str,
+                video_id: str,
+                persona_id: str,
+                language: str | None,
+            ) -> None:
+                typer.echo(f"  [{tenant_id_}] detected VOD {video_id}: {vod_url}")
+
+            reports = await poll_channel_watches(
+                db,
+                ingest_callback=_log_only,
+                tenant_id=tenant,
             )
             return [
                 {
+                    "watch_id": r.watch_id,
                     "tenant_id": r.tenant_id,
-                    "jobs_enqueued": r.jobs_enqueued,
-                    "clips_considered": r.clips_considered,
-                    "clips_skipped_no_kit": r.clips_skipped_no_kit,
-                    "clips_skipped_no_variant": r.clips_skipped_no_variant,
-                    "clips_skipped_already_queued": r.clips_skipped_already_queued,
-                    "clips_skipped_no_account": r.clips_skipped_no_account,
-                    "dry_run": r.dry_run,
+                    "channel_url": r.channel_url,
+                    "videos_seen": r.videos_seen,
+                    "videos_ingested": r.videos_ingested,
+                    "videos_failed": r.videos_failed,
+                    "skipped_disabled": r.skipped_disabled,
                 }
                 for r in reports
             ]
@@ -1282,18 +1570,84 @@ def auto_publish_cmd(
             typer.echo(_json.dumps(row))
         return
     if not rows:
-        typer.echo("(no tenants matched the dispatch)")
+        typer.echo("(no channel watches matched)")
         return
-    label = "DRY RUN" if dry_run else "dispatched"
     for r in rows:
+        flag = " (paused)" if r["skipped_disabled"] else ""
         typer.echo(
-            f"  [{label}] {r['tenant_id']}  "
-            f"enqueued={r['jobs_enqueued']}  considered={r['clips_considered']}  "
-            f"skip(no_kit={r['clips_skipped_no_kit']}, "
-            f"no_variant={r['clips_skipped_no_variant']}, "
-            f"queued={r['clips_skipped_already_queued']}, "
-            f"no_account={r['clips_skipped_no_account']})"
+            f"  {r['watch_id']}  tenant={r['tenant_id']}  {r['channel_url']}{flag}  "
+            f"seen={r['videos_seen']}  detected={r['videos_ingested']}  failed={r['videos_failed']}"
         )
+
+
+@channel_app.command("enable")
+def channel_enable_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Resume a paused channel watch."""
+    _channel_set_enabled(watch_id, tenant_id, db_path, enabled=True)
+
+
+@channel_app.command("disable")
+def channel_disable_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Pause a channel watch without losing its seen-set."""
+    _channel_set_enabled(watch_id, tenant_id, db_path, enabled=False)
+
+
+@channel_app.command("remove")
+def channel_remove_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Delete a channel watch."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                await ChannelWatchesRepo(db).delete(watch_id)
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+    typer.echo(f"removed channel watch: {watch_id}")
+
+
+def _channel_set_enabled(
+    watch_id: str, tenant_id: str, db_path: Path | None, *, enabled: bool
+) -> None:
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                await ChannelWatchesRepo(db).set_enabled(watch_id, enabled)
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+    typer.echo(f"{'enabled' if enabled else 'paused'} channel watch: {watch_id}")
 
 
 @tokens_app.command("issue")
@@ -1358,34 +1712,6 @@ def tokens_list_cmd(
     for r in rows:
         last = r.last_used_at or "(never)"
         typer.echo(f"  {r.id}  scope={r.scope}  hash={r.hash[:16]}…  last_used={last}")
-
-
-@app.command("publish")
-def publish_cmd(
-    tenant_id: str = typer.Option(..., "--tenant"),
-    max_jobs: int = typer.Option(50, "--max-jobs"),
-    max_attempts: int = typer.Option(4, "--max-attempts"),
-    db_path: Path | None = typer.Option(None, "--db-path"),
-) -> None:
-    """Drain pending publish_jobs for a tenant. Runs one pass and exits."""
-    from nexoclip.db import apply_migrations
-    from nexoclip.publish import run_publish_jobs
-
-    async def _run() -> None:
-        db = _open_db(db_path)
-        try:
-            await apply_migrations(db)
-            outcome = await run_publish_jobs(
-                tenant_id, db, max_jobs=max_jobs, max_attempts=max_attempts
-            )
-            typer.echo(
-                f"sent={outcome.sent} transient={outcome.transient_failures} "
-                f"failed={outcome.permanent_failures}"
-            )
-        finally:
-            await db.close()
-
-    asyncio.run(_run())
 
 
 if __name__ == "__main__":

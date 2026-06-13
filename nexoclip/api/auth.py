@@ -62,6 +62,10 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     # carries its own HMAC signature check, so the bearer-cookie path
     # would only get in the way (Modal can't carry our cookie).
     "/api/internal/",
+    # Inbound vendor webhooks (Zernio post-status). Server-to-server
+    # callbacks can't carry our cookie; each handler verifies its own
+    # HMAC signature (see routers/zernio_webhooks.py).
+    "/api/webhooks/",
 )
 _COOKIE_NAME = "nexoclip_token"
 

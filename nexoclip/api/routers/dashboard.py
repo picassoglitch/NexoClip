@@ -8,6 +8,7 @@ in addition to the `Authorization` header. The bearer middleware in
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -23,13 +24,20 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from nexoclip.db import (
     ApiTokensRepo,
     BrandKitsRepo,
     CandidatesRepo,
+    ChannelWatchesRepo,
     ClipsRepo,
     ConnectedAccountsRepo,
     Database,
@@ -69,10 +77,10 @@ _COOKIE_NAME = "nexoclip_token"
 async def dashboard_root() -> Response:
     """Slice I.3 follow-up — operators kept hitting /dashboard/ in the
     address bar and getting a bare 404. There's no actual dashboard
-    HOME page (the streams index is the canonical landing); just
-    redirect there. The bearer-auth middleware will bounce them on to
-    /dashboard/login if they're not authenticated."""
-    return RedirectResponse(url="/dashboard/streams", status_code=303)
+    HOME page; the /dashboard/start hero ("New clip") is the canonical
+    landing — same place SSO logins arrive — so redirect there. The
+    bearer-auth middleware bounces unauthenticated hits to nexo-ai."""
+    return RedirectResponse(url="/dashboard/start", status_code=303)
 
 
 @router.get("/_balance/chip", response_class=HTMLResponse, include_in_schema=False)
@@ -209,6 +217,119 @@ def _coerce_balance_to_scalars(bal: object) -> dict | None:
         "report_ok": _report_ok,
         "report_error": _to_str_or_none(bal.get("report_error")),
     }
+
+
+# How old the cached Nexo AI balance may be before an SSE connect kicks a
+# background re-fetch. Admin grants, pack purchases and monthly resets all
+# happen on the nexo-ai side without telling us, so a cookie re-entry that
+# never passes through /auth/sso would otherwise show last session's number.
+_BALANCE_CACHE_TTL_S = 300.0
+# Per-tenant monotonic timestamp of the last refresh attempt — throttles the
+# fetch to once per TTL window even when several tabs open streams at once.
+_balance_refresh_last_attempt: dict[str, float] = {}
+# Strong refs so fire-and-forget tasks aren't GC'd mid-flight.
+_balance_refresh_tasks: set[asyncio.Task] = set()
+
+
+def _maybe_refresh_stale_balance(
+    db: Database, *, tenant_id: str, balance: object
+) -> None:
+    """Kick a background Nexo AI balance fetch when the cache is stale.
+
+    Called once per balance-stream connect (≈ once per full page load).
+    The fresh number lands via TenantsRepo.set_balance_cache → balance_bus,
+    i.e. through the very SSE stream whose connect triggered the fetch.
+    Best-effort: never raises, never blocks the stream.
+    """
+    import datetime as _dt
+    import time as _time
+
+    now = _time.monotonic()
+    last = _balance_refresh_last_attempt.get(tenant_id)
+    if last is not None and (now - last) < _BALANCE_CACHE_TTL_S:
+        return
+
+    stale = True
+    at = balance.get("at") if isinstance(balance, dict) else None
+    if isinstance(at, str) and at:
+        try:
+            cached_at = _dt.datetime.fromisoformat(at)
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=_dt.UTC)
+            age_s = (_dt.datetime.now(_dt.UTC) - cached_at).total_seconds()
+            stale = age_s >= _BALANCE_CACHE_TTL_S
+        except ValueError:
+            stale = True
+    if not stale:
+        return
+
+    _balance_refresh_last_attempt[tenant_id] = now
+    try:
+        from nexoclip.integrations.nexo_ai.balance import fetch_balance_now
+
+        task = asyncio.create_task(fetch_balance_now(db, tenant_id=tenant_id))
+        _balance_refresh_tasks.add(task)
+        task.add_done_callback(_balance_refresh_tasks.discard)
+    except Exception:  # refresh is best-effort
+        pass
+
+
+@router.get("/_balance/stream", include_in_schema=False)
+async def balance_stream(request: Request) -> Response:
+    """SSE push for the token-balance chip — replaces the old 30s HTMX poll.
+
+    The browser opens ONE EventSource here (see base.html). The server emits a
+    `balance` event only when TenantsRepo.set_balance_cache() actually changes
+    the cached numbers (published via balance_bus). The chip then re-fetches
+    /_balance/chip once — so a request fires on change, not on a timer.
+
+    No tenant_binder (same as /_balance/chip): the middleware already populated
+    request.state; the binder would 401-bounce and break the stream. Idle
+    connections cost a ~25s keepalive comment — no DB, no render.
+    """
+    from nexoclip.events.balance_bus import balance_bus
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+
+    # Stale-cache repair: the chip renders from the cached columns, but the
+    # ledger lives on nexo-ai. One throttled background fetch per page load
+    # keeps the two in agreement; the result is pushed down this stream.
+    if tenant_id:
+        _maybe_refresh_stale_balance(
+            request.app.state.db,
+            tenant_id=tenant_id,
+            balance=getattr(request.state, "token_balance", None),
+        )
+
+    async def gen():
+        # Unauthenticated: send one comment and close — EventSource will retry,
+        # and once the session cookie lands the reconnect binds a tenant.
+        if not tenant_id:
+            yield ": no-session\n\n"
+            return
+        q = balance_bus.subscribe(tenant_id)
+        try:
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"event: balance\ndata: {json.dumps(payload)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # keepalive through proxies (Railway)
+        finally:
+            balance_bus.unsubscribe(tenant_id, q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering so events flush
+        },
+    )
 
 
 @router.get("/_balance/refresh", include_in_schema=False)
@@ -688,7 +809,7 @@ async def _merged_personas(db: Database) -> list[object]:
 # Slice O.23 — Login removed entirely. nexo-ai is the only gatekeeper.
 # No GET /login (the page is gone), no POST /login (no token form).
 # Access in: GET /auth/sso?token=<jwt-from-nexo-ai> sets a session
-# cookie + redirects to /dashboard/streams. Anyone hitting any
+# cookie + redirects to /dashboard/start. Anyone hitting any
 # /dashboard/* page without that cookie gets bounced to nexo-ai's
 # login URL by the auth middleware. Roles/tiers come straight from
 # the SSO token's `tier` claim, synced into the tenant row on each
@@ -1149,6 +1270,10 @@ async def start_page(
             "default_persona": default_persona,
             "ffmpeg_ok": is_ffmpeg_available(),
             "live_configured": live_configured,
+            # Real RTMP server URL for the live ingest panel's "Server" row.
+            # The per-tenant stream key is still TODO(ingest) — the template
+            # shows a masked placeholder until that endpoint is wired.
+            "live_rtmp_base_url": (getattr(s, "live_rtmp_base_url", "") or "").strip(),
         },
     )
 
@@ -1537,12 +1662,17 @@ def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
     # a misleading "Analyzing your video…".
     status = (getattr(stream, "status", "") or "").lower()
     has_clips = len(clips) > 0
-    if status in ("running", "processing", "ingesting"):
-        status_kind = "running"
-    elif status == "failed" and not has_clips:
-        status_kind = "failed"
-    elif has_clips or status in ("done", "ingested", "ready"):
+    # CLIPS win: a finished run has clips on disk even if the status column
+    # is stale. Live streams in particular are left at 'processing' by the
+    # auto-clip claim, so checking running-states first would show
+    # 'Analyzing…' forever. Order: complete (clips/terminal) → failed →
+    # running → pending.
+    if has_clips or status in ("done", "ingested", "ready"):
         status_kind = "complete"
+    elif status == "failed":
+        status_kind = "failed"
+    elif status in ("running", "processing", "ingesting"):
+        status_kind = "running"
     else:
         status_kind = "pending"
 
@@ -1753,16 +1883,26 @@ async def stream_detail(
 @router.get("/publish", include_in_schema=False)
 async def publish_view(request: Request) -> Response:
     """Legacy Slice-O.8 Buffer matrix is gone — every publish flow
-    now lives on the upload-post dashboard. Send anyone hitting the
-    old URL straight to the new home so bookmarks / external links
-    keep working.
+    now lives on the Zernio dashboard. Send anyone hitting the old
+    URL straight to the new home so bookmarks / external links keep
+    working.
 
     `/publish/status.json` + `/streams/{id}/publish` + their status
     JSON sibling stay intact for the per-stream Buffer flow that
     still uses them (status polling on existing PublishJobs rows).
     """
     return RedirectResponse(
-        url="/dashboard/publish/upload-post", status_code=303,
+        url="/dashboard/publish/zernio", status_code=303,
+    )
+
+
+@router.get("/publish/upload-post", include_in_schema=False)
+async def publish_upload_post_legacy(request: Request) -> Response:
+    """Permanent redirect from the retired upload-post dashboard URL to
+    its Zernio replacement. 308 (vs 303) so the method is preserved and
+    caches/bookmarks treat it as a permanent move."""
+    return RedirectResponse(
+        url="/dashboard/publish/zernio", status_code=308,
     )
 
 
@@ -1905,7 +2045,7 @@ async def publish_submit(
 @router.get("/streams/{stream_id}/publish", include_in_schema=False)
 async def stream_publish_view(stream_id: str) -> Response:
     """Legacy Slice-O.2 per-stream Buffer matrix is gone — every
-    publish flow now lives on the unified upload-post dashboard.
+    publish flow now lives on the unified Zernio dashboard.
 
     Bookmarks + the "Go to publishing" CTA on the stream page used
     to point here; both keep working via this 303. The
@@ -1914,7 +2054,7 @@ async def stream_publish_view(stream_id: str) -> Response:
     cutover.
     """
     return RedirectResponse(
-        url="/dashboard/publish/upload-post", status_code=303,
+        url="/dashboard/publish/zernio", status_code=303,
     )
 
 
@@ -3248,6 +3388,7 @@ async def clip_overlay_save(
 )
 async def clip_overlay_finalize(
     request: Request,
+    background_tasks: BackgroundTasks,
     clip_id: str,
     title_text: str = Form(""),
     banner_enabled: str = Form(""),
@@ -3365,6 +3506,58 @@ async def clip_overlay_finalize(
                 p.unlink()
     except Exception:  # noqa: BLE001 — invalidation is best-effort
         pass
+
+    # Pre-render the 1080 publish preset in the background now that the
+    # cache is clear. Two payoffs:
+    #   - the operator's next Download is a cache hit (no 30-90s wait);
+    #   - a subsequent Publish finds the edited MP4 already on disk, so
+    #     what ships to social == what they downloaded == the preview.
+    # Best-effort: a pre-render failure must never block approval — the
+    # download/publish paths still lazy-render on demand. Uses the
+    # operator's session cookie to drive the auth-gated /render page.
+    try:
+        from nexoclip.settings import get_settings
+        _settings = get_settings()
+        _original = Path(clip.path)
+        if _original.exists():
+            _rendered_1080 = _original.parent / "clip_render_1080.mp4"
+            _cookie_val = request.cookies.get("nexoclip_token", "") or None
+            _explicit_base = (_settings.public_url or "").strip()
+            if _explicit_base and _explicit_base != "http://localhost:8000":
+                _base_url = _explicit_base
+            else:
+                _scheme = (
+                    request.headers.get("x-forwarded-proto")
+                    or request.url.scheme
+                    or "https"
+                )
+                _host = request.headers.get("host") or request.url.netloc
+                _base_url = f"{_scheme}://{_host}"
+            # Atomic flip to 'rendering' so the download endpoint's poll
+            # shows progress instead of re-dispatching a duplicate task.
+            await repo.mark_render_started(clip_id)
+            from nexoclip.api._clip_render import render_clip_in_background
+            background_tasks.add_task(
+                render_clip_in_background,
+                clip_id=clip_id,
+                tenant_id=tenant_id,
+                duration_s=float(clip.duration_s),
+                audio_source_path=_original,
+                output_path=_rendered_1080,
+                base_url=_base_url,
+                auth_cookie_value=_cookie_val,
+                width=1080,
+                height=1920,
+                db_path=_settings.db_path,
+            )
+    except Exception as e:  # noqa: BLE001 — pre-render must never block approval
+        from structlog import get_logger
+        get_logger(__name__).warning(
+            "clip.finalize.prerender_failed",
+            clip_id=clip_id,
+            reason=str(e),
+        )
+
     await EventsRepo(db).emit(
         type="clip.finalized",
         payload={
@@ -3374,33 +3567,9 @@ async def clip_overlay_finalize(
         },
     )
 
-    # Slice G.5 — fire the per-clip auto-publish trigger as soon as the
-    # operator approves. The periodic sweep ALSO runs, but waiting up
-    # to publish_interval_s (default 60s) for the undo countdown to
-    # appear made the UX feel broken — the operator clicks Complete
-    # and the inbox's "fires in" chip should populate immediately.
-    # Skip rules + idempotence are shared with the sweep so the two
-    # paths can coexist without duplicating jobs.
-    try:
-        from nexoclip.publish.auto import dispatch_for_clip
-        report = await dispatch_for_clip(db, clip_id=clip_id)
-        if report.jobs_enqueued:
-            await EventsRepo(db).emit(
-                type="clip.auto_publish_enqueued",
-                payload={
-                    "clip_id": clip_id,
-                    "jobs": report.jobs_enqueued,
-                    "skipped_no_account": report.clips_skipped_no_account,
-                    "skipped_already_queued": report.clips_skipped_already_queued,
-                },
-            )
-    except Exception as e:  # noqa: BLE001 — auto-publish must never block approval
-        from structlog import get_logger
-        get_logger(__name__).warning(
-            "clip.finalize.auto_publish_failed",
-            clip_id=clip_id,
-            reason=str(e),
-        )
+    # Slice G.5 auto-publish-on-approve removed (Etapa A): it enqueued into
+    # the legacy publish_jobs worker, which is being retired — publishing
+    # now goes through Zernio. Nothing to trigger here on approve.
 
     # Slice N.2 — Approve & continue. After finalize, walk to the
     # NEXT clip on the same stream that's still in the editor queue
@@ -5668,6 +5837,78 @@ def _parse_phrase_list(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+@router.get("/sources", response_class=HTMLResponse)
+async def sources_list(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Connected channels — auto-ingest sources (YouTube/Twitch/Kick)."""
+    watches = await ChannelWatchesRepo(db).list_for_tenant()
+    personas = await PersonasRepo(db).list_for_tenant()
+    return templates.TemplateResponse(
+        request,
+        "sources.html",
+        {"watches": watches, "personas": personas},
+    )
+
+
+@router.post("/sources", dependencies=[Depends(require_full_scope)])
+async def sources_add(
+    request: Request,
+    channel_url: str = Form(...),
+    persona_id: str = Form(...),
+    platform: str = Form(""),
+    language: str = Form(""),
+    label: str = Form(""),
+    max_per_poll: int = Form(3),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    from nexoclip.ingest.service import detect_platform
+
+    resolved = platform.strip() or detect_platform(channel_url)
+    await ChannelWatchesRepo(db).create(
+        platform=resolved,
+        channel_url=channel_url.strip(),
+        persona_id=persona_id,
+        channel_label=label.strip() or None,
+        language=language.strip() or None,
+        max_per_poll=int(max_per_poll),
+    )
+    await EventsRepo(db).emit(
+        type="channel_watch.created",
+        payload={"channel_url": channel_url.strip(), "platform": resolved},
+    )
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
+@router.post("/sources/{watch_id}/toggle", dependencies=[Depends(require_full_scope)])
+async def sources_toggle(
+    request: Request,
+    watch_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    repo = ChannelWatchesRepo(db)
+    existing = await repo.get(watch_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="channel watch not found")
+    await repo.set_enabled(watch_id, not existing.enabled)
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
+@router.post("/sources/{watch_id}/delete", dependencies=[Depends(require_full_scope)])
+async def sources_delete(
+    request: Request,
+    watch_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    await ChannelWatchesRepo(db).delete(watch_id)
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
 @router.get("/brand-kits", response_class=HTMLResponse)
 async def brand_kits_list(
     request: Request,
@@ -5802,15 +6043,34 @@ async def brand_kits_edit_submit(
     auto_publish_delay_min: int = Form(60),
     forward_phrases: str = Form(""),
     retroactive_phrases: str = Form(""),
+    safe_schedule_enabled: str = Form(""),
+    content_timezone: str = Form("UTC"),
+    safety_policy_json: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    import json as _json
+
     from nexoclip.branding.captions import _preset_by_id
 
     repo = BrandKitsRepo(db)
     if await repo.get(kit_id) is None:
         raise HTTPException(status_code=404, detail="brand kit not found")
     caption_style = _preset_by_id(caption_preset).model_dump()
+
+    # Safe trap — advanced per-platform overrides arrive as a JSON blob.
+    # An empty / malformed blob means "fall back to the built-in defaults"
+    # rather than 500ing the settings save.
+    safety_policy: dict[str, object] | None = None
+    blob = safety_policy_json.strip()
+    if blob:
+        try:
+            parsed = _json.loads(blob)
+            if isinstance(parsed, dict):
+                safety_policy = parsed
+        except _json.JSONDecodeError:
+            safety_policy = None
+
     await repo.update(
         kit_id,
         name=name,
@@ -5832,6 +6092,9 @@ async def brand_kits_edit_submit(
             forward=_parse_phrase_list(forward_phrases),
             retroactive=_parse_phrase_list(retroactive_phrases),
         ),
+        safe_schedule_enabled=bool(safe_schedule_enabled),
+        content_timezone=content_timezone or "UTC",
+        safety_policy=safety_policy,
     )
     return RedirectResponse(url=f"/dashboard/brand-kits/{kit_id}", status_code=303)
 

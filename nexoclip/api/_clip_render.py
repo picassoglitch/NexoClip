@@ -423,4 +423,100 @@ async def render_clip_in_background(
             )
 
 
-__all__ = ["render_clip_in_background"]
+async def ensure_clip_rendered(
+    *,
+    db: object,
+    clip: object,
+    tenant_id: str,
+    base_url: str,
+    auth_cookie_value: str | None,
+    db_path: str,
+    width: int = 1080,
+    height: int = 1920,
+    output_name: str = "clip_render_1080.mp4",
+    max_wait_s: float = 240.0,
+) -> Path:
+    """Guarantee the burned-in publish-preset MP4 exists, then return it.
+
+    This is the shared guarantee behind "publish the same video you
+    download". The download endpoint already lazy-renders this exact
+    file (overlays + libass captions burned in via the headless
+    recorder); the publish path calls this so Zernio fetches that same
+    rendered file rather than the raw, unedited source.
+
+    Behaviour:
+      1. Valid cached MP4 on disk → return it (the common case once
+         approve pre-renders).
+      2. A background render already in flight (e.g. from approve) →
+         wait it out (up to `max_wait_s`) instead of starting a
+         duplicate recorder against the same output path.
+      3. Otherwise render synchronously, inline, using the operator's
+         session cookie (the /render page is auth-gated).
+
+    Raises RuntimeError when a servable render can't be produced — the
+    caller turns that into an operator-readable error. We NEVER fall
+    back to the raw source here; shipping the unedited clip is exactly
+    the bug this function exists to close.
+    """
+    from nexoclip.api._render_validation import is_servable_cached_mp4
+    from nexoclip.db import ClipsRepo
+    from nexoclip.tenancy import bound_tenant
+
+    clip_id = getattr(clip, "id")
+    original = Path(getattr(clip, "path"))
+    output = original.parent / output_name
+
+    # 1. Warm cache — instant once approve has pre-rendered.
+    if is_servable_cached_mp4(output):
+        return output
+
+    repo = ClipsRepo(db)
+
+    # 2. Wait out an in-flight background render (approve schedules one)
+    #    rather than racing a second recorder against the same file.
+    waited = 0.0
+    while waited < max_wait_s:
+        with bound_tenant(tenant_id):
+            fresh = await repo.get(clip_id)
+        state = getattr(fresh, "render_state", "idle") if fresh else "idle"
+        if is_servable_cached_mp4(output):
+            return output
+        if state != "rendering":
+            break
+        await asyncio.sleep(1.0)
+        waited += 1.0
+
+    if is_servable_cached_mp4(output):
+        return output
+
+    # 3. Cold (idle / failed / wait exhausted) — render now, inline.
+    #    mark_render_started is atomic on (state != 'rendering') so a
+    #    concurrent publish doesn't double-dispatch.
+    if not original.exists():
+        raise RuntimeError(f"source clip file missing from disk: {original}")
+    with bound_tenant(tenant_id):
+        await repo.mark_render_started(clip_id)
+    await render_clip_in_background(
+        clip_id=clip_id,
+        tenant_id=tenant_id,
+        duration_s=float(getattr(clip, "duration_s")),
+        audio_source_path=original,
+        output_path=output,
+        base_url=base_url,
+        auth_cookie_value=auth_cookie_value,
+        width=width,
+        height=height,
+        db_path=db_path,
+    )
+    if is_servable_cached_mp4(output):
+        return output
+
+    # render_clip_in_background absorbs its own failures onto the clip
+    # row; surface the recorded reason if we have one.
+    with bound_tenant(tenant_id):
+        fresh = await repo.get(clip_id)
+    reason = getattr(fresh, "render_error", None) if fresh else None
+    raise RuntimeError(reason or "clip render did not produce a servable MP4")
+
+
+__all__ = ["render_clip_in_background", "ensure_clip_rendered"]

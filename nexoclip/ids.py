@@ -29,6 +29,7 @@ EntityKind = Literal[
     "vsp",  # vod_speakers — per-VOD speaker resolution
     "brk",  # brand_kits (voice-markers spec slice C.1)
     "drv",  # drive_watches (voice-markers spec slice E.4)
+    "chw",  # channel_watches — auto-ingest from YouTube/Twitch/Kick channels
     "zev",  # zernio_events — inbound webhook rows missing payload.id (Hub phase 2)
     "hpj",  # hub_publish_jobs — internal service API publishes (Hub phase 3)
     "snp",  # zernio_publish_snapshots — daily per-post metrics (Hub phase 7)

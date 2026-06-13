@@ -652,6 +652,15 @@ class BrandKitRow(BaseModel):
     # tenants keep crediting until they explicitly opt out).
     show_nexoclip_credit: bool = True
 
+    # Publishing safe trap (migration 042). When `safe_schedule_enabled`,
+    # auto-publish schedules into the next compliant window and the drain
+    # hard-gates blocked posts; otherwise the trap is advisory only.
+    # `safety_policy` is a {platform: {field: value}} override map overlaid
+    # on the built-in PLATFORM_DEFAULTS; None == pure defaults.
+    safe_schedule_enabled: bool = False
+    safety_policy: dict[str, object] | None = None
+    content_timezone: str = "UTC"
+
     created_at: str
     updated_at: str
 
@@ -674,6 +683,29 @@ class DriveWatchRow(BaseModel):
     last_polled_at: str | None = None
     # Drive file IDs we've already ingested — the dedup key.
     seen_file_ids: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: str
+    updated_at: str
+
+
+class ChannelWatchRow(BaseModel):
+    """One row in `channel_watches` — a creator channel NexoClip polls for
+    new VODs (YouTube / Twitch / Kick). The auto-ingest counterpart to
+    `DriveWatchRow`: instead of a Drive folder it watches a channel URL,
+    and `seen_video_ids` is the per-video dedup key."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    platform: str  # youtube | twitch | kick
+    channel_url: str
+    channel_label: str | None = None
+    persona_id: str
+    language: str | None = None
+    last_polled_at: str | None = None
+    seen_video_ids: list[str] = Field(default_factory=list)
+    max_per_poll: int = 3
     enabled: bool = True
     created_at: str
     updated_at: str

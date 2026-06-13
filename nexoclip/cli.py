@@ -61,6 +61,11 @@ drive_app = typer.Typer(
     help="Google Drive folder watches (voice-markers spec slice E.4).",
     no_args_is_help=True,
 )
+channel_app = typer.Typer(
+    name="channel",
+    help="Connected creator channels — auto-ingest new VODs (YouTube/Twitch/Kick).",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
@@ -70,6 +75,7 @@ app.add_typer(mcp_app)
 app.add_typer(queue_app)
 app.add_typer(retention_app)
 app.add_typer(drive_app)
+app.add_typer(channel_app)
 
 
 @queue_app.command("list")
@@ -1365,6 +1371,245 @@ def drive_poll_cmd(
             f"  {r['watch_id']}  tenant={r['tenant_id']}  folder={r['folder_id']}{flag}  "
             f"seen={r['files_seen']}  ingested={r['files_ingested']}  failed={r['files_failed']}"
         )
+
+
+@channel_app.command("add")
+def channel_add_cmd(
+    channel_url: str = typer.Argument(..., help="Channel / @handle / videos URL to watch."),
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant the watch belongs to."),
+    persona_id: str = typer.Option(
+        ..., "--persona", help="Persona used for variant generation on ingested VODs."
+    ),
+    platform: str | None = typer.Option(
+        None,
+        "--platform",
+        help="youtube | twitch | kick. Auto-detected from the URL when omitted.",
+    ),
+    language: str | None = typer.Option(
+        None, "--language", help="Optional language hint for transcription."
+    ),
+    label: str | None = typer.Option(
+        None, "--label", help="Optional human-readable label for the dashboard."
+    ),
+    max_per_poll: int = typer.Option(
+        3, "--max-per-poll", help="Cap on VODs ingested per poll (and first-poll backfill)."
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Connect a creator channel so new VODs auto-ingest into NexoClip."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.ingest.service import detect_platform
+    from nexoclip.tenancy import bound_tenant
+
+    resolved_platform = platform or detect_platform(channel_url)
+
+    async def _run() -> str:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                w = await ChannelWatchesRepo(db).create(
+                    platform=resolved_platform,
+                    channel_url=channel_url,
+                    persona_id=persona_id,
+                    channel_label=label,
+                    language=language,
+                    max_per_poll=max_per_poll,
+                )
+            return w.id
+        finally:
+            await db.close()
+
+    new = asyncio.run(_run())
+    typer.echo(f"created channel watch: {new} (platform={resolved_platform})")
+
+
+@channel_app.command("list")
+def channel_list_cmd(
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """List channel watches for one tenant."""
+    import json as _json
+
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> list[object]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                return list(await ChannelWatchesRepo(db).list_for_tenant())
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for w in rows:
+            typer.echo(_json.dumps(w.model_dump()))  # type: ignore[attr-defined]
+        return
+    if not rows:
+        typer.echo("(no channel watches)")
+        return
+    for w in rows:
+        state = "enabled" if w.enabled else "paused"  # type: ignore[attr-defined]
+        typer.echo(
+            f"  {w.id}  {w.platform}  {w.channel_url}  ({w.channel_label or '—'})  "  # type: ignore[attr-defined]
+            f"{state}  seen={len(w.seen_video_ids)}  "  # type: ignore[attr-defined]
+            f"last_polled_at={w.last_polled_at or 'never'}"  # type: ignore[attr-defined]
+        )
+
+
+@channel_app.command("poll")
+def channel_poll_cmd(
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Restrict polling to one tenant. Default: all."
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit one JSON object per report instead of text."
+    ),
+) -> None:
+    """Poll every channel watch for new VODs and report detections.
+
+    CLI poll lists new uploads (via yt-dlp) and marks them detected, but
+    does NOT run the heavy pipeline here — the running API server's
+    channel-poll loop performs the real ingest + pipeline dispatch. Use
+    this to verify wiring and see what would be picked up.
+    """
+    import json as _json
+
+    from nexoclip.channels import poll_channel_watches
+    from nexoclip.db import apply_migrations
+
+    async def _run() -> list[dict[str, object]]:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+
+            async def _log_only(
+                tenant_id_: str,
+                vod_url: str,
+                video_id: str,
+                persona_id: str,
+                language: str | None,
+            ) -> None:
+                typer.echo(f"  [{tenant_id_}] detected VOD {video_id}: {vod_url}")
+
+            reports = await poll_channel_watches(
+                db,
+                ingest_callback=_log_only,
+                tenant_id=tenant,
+            )
+            return [
+                {
+                    "watch_id": r.watch_id,
+                    "tenant_id": r.tenant_id,
+                    "channel_url": r.channel_url,
+                    "videos_seen": r.videos_seen,
+                    "videos_ingested": r.videos_ingested,
+                    "videos_failed": r.videos_failed,
+                    "skipped_disabled": r.skipped_disabled,
+                }
+                for r in reports
+            ]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(_run())
+    if json_out:
+        for row in rows:
+            typer.echo(_json.dumps(row))
+        return
+    if not rows:
+        typer.echo("(no channel watches matched)")
+        return
+    for r in rows:
+        flag = " (paused)" if r["skipped_disabled"] else ""
+        typer.echo(
+            f"  {r['watch_id']}  tenant={r['tenant_id']}  {r['channel_url']}{flag}  "
+            f"seen={r['videos_seen']}  detected={r['videos_ingested']}  failed={r['videos_failed']}"
+        )
+
+
+@channel_app.command("enable")
+def channel_enable_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Resume a paused channel watch."""
+    _channel_set_enabled(watch_id, tenant_id, db_path, enabled=True)
+
+
+@channel_app.command("disable")
+def channel_disable_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Pause a channel watch without losing its seen-set."""
+    _channel_set_enabled(watch_id, tenant_id, db_path, enabled=False)
+
+
+@channel_app.command("remove")
+def channel_remove_cmd(
+    watch_id: str = typer.Argument(...),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Delete a channel watch."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                await ChannelWatchesRepo(db).delete(watch_id)
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+    typer.echo(f"removed channel watch: {watch_id}")
+
+
+def _channel_set_enabled(
+    watch_id: str, tenant_id: str, db_path: Path | None, *, enabled: bool
+) -> None:
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            t = await TenantsRepo(db).get(tenant_id)
+            if t is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(t.id):
+                await ChannelWatchesRepo(db).set_enabled(watch_id, enabled)
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+    typer.echo(f"{'enabled' if enabled else 'paused'} channel watch: {watch_id}")
 
 
 @app.command("auto-publish")

@@ -39,6 +39,7 @@ from nexoclip.db import (
 )
 from nexoclip.db.models import ConnectedAccount, PublishJob, VariantRow
 from nexoclip.errors import QuotaExceeded
+from nexoclip.safety import SafetyPolicy, evaluate_post_window, next_safe_slot
 from nexoclip.tenancy import bound_tenant
 
 from .buffer import BufferClient, BufferPublisher
@@ -261,6 +262,16 @@ async def run_publish_jobs(
                     skipped += 1
                     continue
 
+                # Safe trap — hard gate. Jobs enqueued in auto-schedule mode
+                # carry their resolved policy under `safe_gate`. Re-check the
+                # window at post time: if it's now blocked (cadence shifted,
+                # quiet hours, daily cap hit), defer to the next safe slot
+                # instead of risking a shadowban. Advisory-only jobs have no
+                # `safe_gate` and fall straight through.
+                if await _defer_if_unsafe(db, jobs_repo, events_repo, job):
+                    skipped += 1
+                    continue
+
                 account = accounts_index.get(job.account_id)
                 if account is None:
                     await _mark_failed(
@@ -374,6 +385,60 @@ async def run_publish_jobs(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _defer_if_unsafe(
+    db: Database,
+    jobs_repo: PublishJobsRepo,
+    events_repo: EventsRepo,
+    job: PublishJob,
+) -> bool:
+    """Re-check a safe-gated job's posting window; defer it if blocked.
+
+    Returns True iff the job was deferred (rescheduled to the next safe
+    slot) and the drain should skip it this pass. Jobs without a
+    `safe_gate` stamp — i.e. advisory-only or manual — always return False.
+    """
+    meta = job.platform_metadata or {}
+    if not meta.get("safe_gate"):
+        return False
+    raw_policy = meta.get("safety_policy")
+    if not isinstance(raw_policy, dict):
+        return False
+
+    policy = SafetyPolicy.model_validate(raw_policy)
+    verdict = await evaluate_post_window(
+        jobs_repo, platform=job.platform, policy=policy, exclude_job_id=job.id
+    )
+    if verdict.risk != "blocked":
+        return False
+
+    next_slot = await next_safe_slot(
+        jobs_repo,
+        platform=job.platform,
+        policy=policy,
+        earliest=_now(),
+        exclude_job_id=job.id,
+    )
+    moved = await jobs_repo.reschedule(job.id, scheduled_for=next_slot)
+    await events_repo.emit(
+        type="publish.safe_window_deferred",
+        payload={
+            "job_id": job.id,
+            "platform": job.platform,
+            "reason": verdict.reason,
+            "rescheduled_for": next_slot,
+        },
+    )
+    _log.info(
+        "publish.safe_window_deferred",
+        job_id=job.id,
+        platform=job.platform,
+        reason=verdict.reason,
+        rescheduled_for=next_slot,
+        moved=moved,
+    )
+    return True
 
 
 async def _refresh_and_index_accounts(

@@ -32,6 +32,7 @@ from .models import (
     ApiTokenRow,
     BrandKitRow,
     CandidateRow,
+    ChannelWatchRow,
     ClipRow,
     ConnectedAccount,
     CustomTriggerPhrases,
@@ -2060,6 +2061,59 @@ class PublishJobsRepo:
             )
         return [_publish_job_from_row(r) for r in await cur.fetchall()]
 
+    async def reschedule(self, job_id: str, *, scheduled_for: str) -> bool:
+        """Push a still-pending job's `scheduled_for` forward.
+
+        Used by the safe trap (safe-window gate) to defer a job that would
+        post inside a blocked window — it reappears to the worker once the
+        new `scheduled_for` elapses. Only pending jobs move; sent/failed
+        jobs are untouched.
+
+        Returns True iff a pending row owned by the current tenant moved.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "UPDATE publish_jobs SET scheduled_for = ? "
+            "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+            (scheduled_for, job_id, tenant_id),
+        )
+        await conn.commit()
+        return bool(cur.rowcount)
+
+    async def recent_post_times(
+        self,
+        *,
+        platform: str,
+        since: str,
+        exclude_job_id: str | None = None,
+    ) -> list[str]:
+        """Effective post times for `platform` since `since` (ISO, UTC).
+
+        Drives the safe trap's spacing + daily-cap math. We count jobs that
+        already shipped (`sent`) or are still in flight (`pending`, incl.
+        future-scheduled), using `COALESCE(scheduled_for, created_at)` as
+        the moment the post lands. `canceled` / `failed` jobs don't count —
+        they never reach (or no longer occupy) the platform.
+
+        `exclude_job_id` drops the job being evaluated so it doesn't collide
+        with its own scheduled slot.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        sql = (
+            "SELECT COALESCE(scheduled_for, created_at) AS t FROM publish_jobs "
+            "WHERE tenant_id = ? AND platform = ? "
+            "AND status IN ('sent', 'pending') "
+            "AND COALESCE(scheduled_for, created_at) >= ?"
+        )
+        params: list[object] = [tenant_id, platform, since]
+        if exclude_job_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_job_id)
+        cur = await conn.execute(sql, tuple(params))
+        return [str(r[0]) for r in await cur.fetchall()]
+
     async def count_for_tenant_today(self, *, platform: str | None = None) -> int:
         """Today's (UTC) publish_jobs count for the bound tenant.
 
@@ -2768,6 +2822,8 @@ _BRAND_KIT_COLS = (
     "target_platform, "
     # Slice O.1 — pro-tier "show nexoclip credit" toggle (migration 013).
     "show_nexoclip_credit, "
+    # Publishing safe trap (migration 042).
+    "safe_schedule_enabled, safety_policy_json, content_timezone, "
     "created_at, updated_at"
 )
 
@@ -2786,6 +2842,10 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     d["top_hook_enabled_default"] = bool(d.get("top_hook_enabled_default", 0))
     # Slice O.1 — pro-tier credit toggle (migration 013).
     d["show_nexoclip_credit"] = bool(d.get("show_nexoclip_credit", 1))
+    # Safe trap (migration 042).
+    d["safe_schedule_enabled"] = bool(d.get("safe_schedule_enabled", 0))
+    raw_safety = d.pop("safety_policy_json", None)
+    d["safety_policy"] = json.loads(raw_safety) if raw_safety else None
 
     raw_caption = d.pop("caption_style_json", None)
     d["caption_style"] = json.loads(raw_caption) if raw_caption else None
@@ -2843,6 +2903,9 @@ class BrandKitsRepo:
         auto_publish_platforms: list[str] | None = None,
         auto_publish_delay_min: int = 60,
         custom_trigger_phrases: CustomTriggerPhrases | None = None,
+        safe_schedule_enabled: bool = False,
+        safety_policy: dict[str, object] | None = None,
+        content_timezone: str = "UTC",
     ) -> BrandKitRow:
         tenant_id = current_tenant_id()
         kit_id = new_id("brk")
@@ -2854,13 +2917,13 @@ class BrandKitsRepo:
                 "WHERE tenant_id = ? AND is_default = 1",
                 (now, tenant_id),
             )
-        # Slice O.41 — INSERT had 38 ? placeholders for 40 columns
-        # (_BRAND_KIT_COLS lists 40), so every brand-kit create raised
-        # "incorrect number of bindings" → 500. Restore parity at 40.
+        # _BRAND_KIT_COLS lists 43 columns (40 + 3 safe-trap cols from
+        # migration 042) — keep the placeholder count in lockstep or
+        # sqlite raises "incorrect number of bindings".
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -2896,6 +2959,10 @@ class BrandKitsRepo:
                 None,    # target_platform
                 # Slice O.1 — show_nexoclip_credit defaults ON.
                 1,
+                # Safe trap (migration 042) — advisory by default.
+                1 if safe_schedule_enabled else 0,
+                json.dumps(safety_policy) if safety_policy else None,
+                content_timezone,
                 now, now,
             ),
         )
@@ -2996,6 +3063,10 @@ class BrandKitsRepo:
         top_hook_style_default: str | None = None,
         # Slice K.5 — operator's default target platform.
         target_platform: str | None = None,
+        # Safe trap (migration 042).
+        safe_schedule_enabled: bool | None = None,
+        safety_policy: dict[str, object] | None = None,
+        content_timezone: str | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -3093,6 +3164,16 @@ class BrandKitsRepo:
         if target_platform is not None:
             sets.append("target_platform = ?")
             values.append(target_platform if target_platform else None)
+        # Safe trap (migration 042).
+        if safe_schedule_enabled is not None:
+            sets.append("safe_schedule_enabled = ?")
+            values.append(1 if safe_schedule_enabled else 0)
+        if safety_policy is not None:
+            sets.append("safety_policy_json = ?")
+            values.append(json.dumps(safety_policy) if safety_policy else None)
+        if content_timezone is not None:
+            sets.append("content_timezone = ?")
+            values.append(content_timezone)
         if not sets:
             return existing
         sets.append("updated_at = ?")
@@ -3249,6 +3330,141 @@ class DriveWatchesRepo:
         conn = await self._db.connect()
         await conn.execute(
             "DELETE FROM drive_watches WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        await conn.commit()
+
+
+# ---------- Channel watches (auto-ingest from creator channels) ----------
+
+
+_CHANNEL_WATCH_COLS = (
+    "id, tenant_id, platform, channel_url, channel_label, persona_id, "
+    "language, last_polled_at, seen_video_ids_json, max_per_poll, enabled, "
+    "created_at, updated_at"
+)
+
+
+def _channel_watch_from_row(row: aiosqlite.Row) -> ChannelWatchRow:
+    d = dict(row)
+    seen_blob = d.pop("seen_video_ids_json")
+    d["seen_video_ids"] = json.loads(seen_blob) if seen_blob else []
+    d["enabled"] = bool(d["enabled"])
+    return ChannelWatchRow.model_validate(d)
+
+
+class ChannelWatchesRepo:
+    """CRUD for `channel_watches`. Polled by `nexoclip channel poll` and the
+    in-process channel-poll loop to auto-ingest new VODs from a creator's
+    YouTube / Twitch / Kick channel. Mirrors `DriveWatchesRepo`."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    async def create(
+        self,
+        *,
+        platform: str,
+        channel_url: str,
+        persona_id: str,
+        channel_label: str | None = None,
+        language: str | None = None,
+        max_per_poll: int = 3,
+    ) -> ChannelWatchRow:
+        tenant_id = current_tenant_id()
+        watch_id = new_id("chw")
+        now = _now()
+        conn = await self._db.connect()
+        await conn.execute(
+            f"INSERT INTO channel_watches ({_CHANNEL_WATCH_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?)",
+            (
+                watch_id,
+                tenant_id,
+                platform,
+                channel_url,
+                channel_label,
+                persona_id,
+                language,
+                max_per_poll,
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def get(self, watch_id: str) -> ChannelWatchRow | None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_CHANNEL_WATCH_COLS} FROM channel_watches "
+            "WHERE id = ? AND tenant_id = ?",
+            (watch_id, tenant_id),
+        )
+        row = await cur.fetchone()
+        return _channel_watch_from_row(row) if row else None
+
+    async def list_for_tenant(self) -> list[ChannelWatchRow]:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT {_CHANNEL_WATCH_COLS} FROM channel_watches "
+            "WHERE tenant_id = ? ORDER BY created_at",
+            (tenant_id,),
+        )
+        return [_channel_watch_from_row(r) for r in await cur.fetchall()]
+
+    async def mark_polled(
+        self,
+        watch_id: str,
+        *,
+        seen_video_ids: list[str],
+        last_polled_at: str | None,
+    ) -> None:
+        """Persist progress after a poll pass (seen-set + last_polled_at)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET seen_video_ids_json = ?, "
+            "last_polled_at = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (
+                json.dumps(seen_video_ids),
+                last_polled_at,
+                _now(),
+                watch_id,
+                tenant_id,
+            ),
+        )
+        await conn.commit()
+
+    async def set_enabled(
+        self, watch_id: str, enabled: bool
+    ) -> ChannelWatchRow:
+        """Pause / resume a watch without deleting (preserves seen-set)."""
+        existing = await self.get(watch_id)
+        if existing is None:
+            raise NexoClipError(f"channel watch {watch_id!r} not found")
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET enabled = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (1 if enabled else 0, _now(), watch_id, tenant_id),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def delete(self, watch_id: str) -> None:
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM channel_watches WHERE id = ? AND tenant_id = ?",
             (watch_id, tenant_id),
         )
         await conn.commit()

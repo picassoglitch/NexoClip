@@ -246,6 +246,45 @@
     </div>
   </div>
 
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-shield-check" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Safe publishing</span>
+      <small>— anti-shadowban posting windows</small>
+    </div>
+    <div class="nc-panel__body">
+      <label class="nc-checkbox">
+        <input type="checkbox" name="safe_schedule_enabled" value="1"
+               {% if kit and kit.safe_schedule_enabled %}checked{% endif %}>
+        <span>Auto-schedule into safe windows</span>
+      </label>
+      <small style="display: block; margin: 4px 0 10px;">
+        When on, auto-publish spaces posts out to avoid platform spam
+        heuristics and the worker defers any post that lands in a blocked
+        window. When off, the safe trap only surfaces an advisory risk
+        score on the publish screen.
+      </small>
+      <div class="nc-grid-2">
+        <label class="nc-label">Content timezone <small>(IANA, for quiet hours)</small>
+          <input class="nc-input nc-input--mono" type="text" name="content_timezone"
+                 value="{{ kit.content_timezone if kit else 'UTC' }}"
+                 placeholder="America/Mexico_City">
+        </label>
+      </div>
+      <label class="nc-label">Per-platform overrides <small>(advanced — JSON; blank = built-in defaults)</small>
+        <textarea class="nc-input nc-input--mono" name="safety_policy_json" rows="4"
+                  placeholder='{"tiktok": {"min_spacing_min": 180, "daily_cap": 3}}'>{{ kit.safety_policy|tojson if kit and kit.safety_policy else '' }}</textarea>
+      </label>
+      <small style="display: block; margin-top: 4px;">
+        Fields: <span class="nc-mono">min_spacing_min</span>,
+        <span class="nc-mono">daily_cap</span>,
+        <span class="nc-mono">quiet_hours_start</span>,
+        <span class="nc-mono">quiet_hours_end</span>,
+        <span class="nc-mono">jitter_min</span>.
+      </small>
+    </div>
+  </div>
+
   {#- Slice O.1 — NexoClip credit toggle.
 
       Only PAID tenants can disable the bottom-right "nexoclip.com"

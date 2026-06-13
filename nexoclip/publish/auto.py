@@ -43,6 +43,7 @@ from nexoclip.db import (
     VariantsRepo,
 )
 from nexoclip.db.models import BrandKitRow, ConnectedAccount
+from nexoclip.safety import next_safe_slot, policy_for_kit
 from nexoclip.tenancy import bound_tenant
 
 _log = structlog.get_logger(__name__)
@@ -181,9 +182,11 @@ async def _dispatch_one_tenant(
                 if platform in existing_platforms:
                     clips_skipped_already_queued += 1
                     continue
-                scheduled_for = _undo_window_iso(
+                scheduled_for, safe_meta = await _resolve_schedule(
+                    jobs_repo,
+                    kit=kit,
+                    platform=platform,
                     clip_created_at=clip.created_at,
-                    delay_min=kit.auto_publish_delay_min,
                 )
                 if not dry_run:
                     await jobs_repo.enqueue(
@@ -192,6 +195,7 @@ async def _dispatch_one_tenant(
                         account_id=account.id,
                         platform=platform,
                         scheduled_for=scheduled_for,
+                        platform_metadata=safe_meta,
                     )
                 jobs_enqueued += 1
 
@@ -262,6 +266,41 @@ def _undo_window_iso(*, clip_created_at: str, delay_min: int) -> str:
     if base.tzinfo is None:
         base = base.replace(tzinfo=_dt.UTC)
     return (base + _dt.timedelta(minutes=delay_min)).isoformat()
+
+
+async def _resolve_schedule(
+    jobs_repo: PublishJobsRepo,
+    *,
+    kit: BrandKitRow,
+    platform: str,
+    clip_created_at: str,
+) -> tuple[str, dict[str, object] | None]:
+    """Compute `(scheduled_for, platform_metadata)` for one (clip, platform).
+
+    Default — the fixed undo-window offset, exactly as before.
+
+    Safe-schedule mode (`kit.safe_schedule_enabled`) — walk forward from
+    that offset to the next compliant posting window (spacing / daily cap /
+    quiet hours) so the batch staggers itself instead of firing in a burst.
+    We also stamp the resolved policy onto the job's `platform_metadata`
+    under `safe_gate`, so the drain can re-check the window at post time
+    (the world may have shifted between enqueue and send) and defer rather
+    than ghost the account.
+    """
+    base = _undo_window_iso(
+        clip_created_at=clip_created_at, delay_min=kit.auto_publish_delay_min
+    )
+    if not kit.safe_schedule_enabled:
+        return base, None
+    policy = policy_for_kit(kit)
+    scheduled_for = await next_safe_slot(
+        jobs_repo, platform=platform, policy=policy, earliest=base
+    )
+    meta: dict[str, object] = {
+        "safe_gate": True,
+        "safety_policy": policy.model_dump(),
+    }
+    return scheduled_for, meta
 
 
 def auto_publish_enabled_kits(kits: list[BrandKitRow]) -> list[BrandKitRow]:
@@ -349,9 +388,11 @@ async def dispatch_for_clip(
         if platform in existing_platforms:
             skipped_already_queued += 1
             continue
-        scheduled_for = _undo_window_iso(
+        scheduled_for, safe_meta = await _resolve_schedule(
+            jobs_repo,
+            kit=kit,
+            platform=platform,
             clip_created_at=clip.created_at,
-            delay_min=kit.auto_publish_delay_min,
         )
         if not dry_run:
             await jobs_repo.enqueue(
@@ -360,6 +401,7 @@ async def dispatch_for_clip(
                 account_id=account.id,
                 platform=platform,
                 scheduled_for=scheduled_for,
+                platform_metadata=safe_meta,
             )
         enqueued += 1
 

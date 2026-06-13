@@ -23,12 +23,17 @@ Differences from the old upload-post client this replaces:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 import httpx
 
 from nexoclip.errors import NexoClipError
+
+# Structured per-call logging. NEVER logs the api key / Bearer header —
+# only method, path, status, attempt (treat logs as semi-public).
+_log = logging.getLogger("nexoclip.integrations.zernio.client")
 
 
 class ZernioError(NexoClipError):
@@ -153,6 +158,8 @@ class ZernioClient:
         base_url: str = _DEFAULT_BASE_URL,
         http: httpx.AsyncClient | None = None,
         timeout_s: float = 30.0,
+        max_retries: int = 3,
+        sleep: Any = None,
     ) -> None:
         # Strip surrounding whitespace — a trailing newline pasted into
         # the env var would otherwise ride along in the `Bearer <key>`
@@ -164,6 +171,27 @@ class ZernioClient:
         self._base_url = base_url.rstrip("/")
         self._http = http
         self._timeout_s = timeout_s
+        # 429 backoff: retry up to `max_retries` times, honoring a
+        # Retry-After header when present, else exponential backoff.
+        # `sleep` is injectable so tests don't wait in real time.
+        self._max_retries = max_retries
+        if sleep is None:
+            import asyncio
+
+            sleep = asyncio.sleep
+        self._sleep = sleep
+
+    def _backoff_seconds(self, resp: httpx.Response, attempt: int) -> float:
+        """Seconds to wait before retrying a 429. Honors Retry-After
+        (integer seconds) when Zernio sends it; otherwise exponential
+        backoff 0.5·2^attempt capped at 30s."""
+        retry_after = resp.headers.get("retry-after")
+        if retry_after:
+            try:
+                return float(min(float(retry_after), 60.0))
+            except ValueError:
+                pass
+        return float(min(0.5 * (2**attempt), 30.0))
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -197,21 +225,54 @@ class ZernioClient:
             timeout=timeout_s or self._timeout_s,
         )
         try:
-            resp = await client.request(
-                method, url, headers=headers, **request_kwargs,
-            )
-        except httpx.HTTPError as e:
-            # Timeouts / connect errors surface as ZernioError so every
-            # caller's `except ZernioError` degrades gracefully instead
-            # of a raw httpx exception 500ing the page.
-            raise ZernioError(
-                f"zernio {method} {path} request failed: "
-                f"{type(e).__name__}: {e}",
-            ) from e
+            resp = None
+            for attempt in range(self._max_retries + 1):
+                try:
+                    resp = await client.request(
+                        method, url, headers=headers, **request_kwargs,
+                    )
+                except httpx.HTTPError as e:
+                    # Timeouts / connect errors surface as ZernioError so
+                    # every caller's `except ZernioError` degrades
+                    # gracefully instead of a raw httpx exception 500ing.
+                    # Structured log (NEVER the api key / Bearer header).
+                    _log.warning(
+                        "zernio.call.transport_error",
+                        extra={
+                            "zernio_method": method, "zernio_path": path,
+                            "zernio_attempt": attempt,
+                            "zernio_error": type(e).__name__,
+                        },
+                    )
+                    raise ZernioError(
+                        f"zernio {method} {path} request failed: "
+                        f"{type(e).__name__}: {e}",
+                    ) from e
+                # Respect 429 with backoff (Retry-After or exponential).
+                if resp.status_code == 429 and attempt < self._max_retries:
+                    wait = self._backoff_seconds(resp, attempt)
+                    _log.info(
+                        "zernio.call.rate_limited",
+                        extra={
+                            "zernio_method": method, "zernio_path": path,
+                            "zernio_attempt": attempt, "zernio_wait_s": wait,
+                        },
+                    )
+                    await self._sleep(wait)
+                    continue
+                break
+            assert resp is not None
         finally:
             if self._http is None:
                 await client.aclose()
 
+        _log.debug(
+            "zernio.call",
+            extra={
+                "zernio_method": method, "zernio_path": path,
+                "zernio_status": resp.status_code,
+            },
+        )
         if resp.status_code >= 400:
             body: object
             try:

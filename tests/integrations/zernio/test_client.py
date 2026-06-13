@@ -21,12 +21,69 @@ def _client(http: httpx.AsyncClient) -> ZernioClient:
     return ZernioClient(api_key="sk_test_abc", http=http)
 
 
+async def _no_sleep(_seconds: float) -> None:
+    """Injected sleep for backoff tests — never waits in real time."""
+    return None
+
+
 # ---- auth + ctor ----
 
 
 def test_constructor_refuses_empty_api_key() -> None:
     with pytest.raises(ZernioError, match="ZERNIO_API_KEY"):
         ZernioClient(api_key="")
+
+
+# ---- 429 backoff (phase 13 hardening) ----
+
+
+@pytest.mark.asyncio
+async def test_429_retries_then_succeeds() -> None:
+    calls = {"n": 0}
+
+    def _responder(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"retry-after": "0"}, json={"error": "rl"})
+        return httpx.Response(200, json={"accounts": []})
+
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            mock.get(f"{_BASE}/accounts").mock(side_effect=_responder)
+            c = ZernioClient(api_key="sk_test_abc", http=http, sleep=_no_sleep)
+            accts = await c.list_accounts(profile_id="ten_alice")
+    assert accts == []
+    assert calls["n"] == 2  # one 429, one success
+
+
+@pytest.mark.asyncio
+async def test_429_gives_up_after_max_retries() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            route = mock.get(f"{_BASE}/accounts").mock(
+                return_value=httpx.Response(429, json={"error": "rl"})
+            )
+            c = ZernioClient(
+                api_key="sk_test_abc", http=http, sleep=_no_sleep, max_retries=2,
+            )
+            with pytest.raises(ZernioError) as ei:
+                await c.list_accounts(profile_id="ten_alice")
+    assert ei.value.status_code == 429
+    # initial + 2 retries = 3 attempts.
+    assert len(route.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_non_429_error_does_not_retry() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock() as mock:
+            route = mock.get(f"{_BASE}/accounts").mock(
+                return_value=httpx.Response(500, text="boom")
+            )
+            c = ZernioClient(api_key="sk_test_abc", http=http, sleep=_no_sleep)
+            with pytest.raises(ZernioError):
+                await c.list_accounts(profile_id="ten_alice")
+    assert len(route.calls) == 1  # 500 is not retried
 
 
 # ---- create_profile ----

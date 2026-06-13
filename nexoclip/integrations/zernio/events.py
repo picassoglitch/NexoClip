@@ -31,12 +31,17 @@ from nexoclip.db import (
     EventsRepo,
     HubPublishJobsRepo,
     TenantsRepo,
+    ZernioAutoRetriesRepo,
     ZernioEventsRepo,
     ZernioPublishesRepo,
 )
 from nexoclip.tenancy import bound_tenant
 
 _log = logging.getLogger("nexoclip.integrations.zernio.events")
+
+# Strong refs to in-flight auto-retry tasks — asyncio.create_task only
+# keeps a weak reference, so a fire-and-forget task can be GC'd mid-flight.
+_auto_retry_tasks: set[Any] = set()
 
 # Post-level events → the status we persist on zernio_publishes.
 # The payload's own post.status wins when present; this is the
@@ -183,6 +188,16 @@ async def _process(db: Database, event_id: str) -> None:
                 post_id, status=status, platforms_json=platforms_json,
             )
 
+    # --- auto-retry once on a transient failure ---
+    # post.failed / post.partial with ALL failed platforms transient
+    # (platform/infra/velocity) gets ONE automatic retry after a delay.
+    # The ledger claim is the once-only guard against redeliveries.
+    if post_id and row.type in ("post.failed", "post.partial") and post:
+        from .errors import post_is_auto_retryable
+
+        if post_is_auto_retryable(post):
+            await _maybe_auto_retry(db, post_id=post_id, tenant_id=tenant_id)
+
     # --- fan-out: event row + drain the tenant's webhook subscriptions ---
     if tenant_id:
         try:
@@ -206,6 +221,63 @@ async def _process(db: Database, event_id: str) -> None:
         )
 
     await events_repo.mark_processed(event_id, tenant_id=tenant_id)
+
+
+async def _do_auto_retry(db: Database, post_id: str, delay_s: float) -> None:
+    """Sleep `delay_s`, then fire ONE retry. Records the outcome on the
+    ledger. Never raises (background task)."""
+    import asyncio
+
+    from nexoclip.settings import get_settings
+
+    from .client import ZernioClient, ZernioError
+
+    try:
+        if delay_s > 0:
+            await asyncio.sleep(delay_s)
+        settings = get_settings()
+        if not settings.zernio_api_key:
+            return
+        client = ZernioClient(
+            api_key=settings.zernio_api_key, base_url=settings.zernio_base_url,
+        )
+        try:
+            await client.retry_post(post_id)
+            await ZernioAutoRetriesRepo(db).set_outcome(post_id, outcome="ok")
+            _log.info("zernio.auto_retry.ok post_id=%s", post_id)
+        except ZernioError as e:
+            await ZernioAutoRetriesRepo(db).set_outcome(post_id, outcome="failed")
+            _log.info("zernio.auto_retry.failed post_id=%s err=%s", post_id, e)
+    except Exception as e:
+        _log.warning("zernio.auto_retry.crashed post_id=%s err=%s", post_id, e)
+
+
+async def _maybe_auto_retry(
+    db: Database, *, post_id: str, tenant_id: str | None,
+) -> None:
+    """Claim + schedule the once-only auto-retry for a transient
+    failure. The claim is synchronous (so a redelivery loses the race);
+    the retry itself is fire-and-forget after the configured delay.
+
+    With delay 0 (tests / disabled) the retry runs inline so its effect
+    is observable; disabled entirely when the delay knob is negative."""
+    import asyncio
+
+    from nexoclip.settings import get_settings
+
+    delay_s = get_settings().hub_auto_retry_delay_s
+    if delay_s < 0:
+        return  # auto-retry disabled
+    claimed = await ZernioAutoRetriesRepo(db).claim(post_id, tenant_id=tenant_id)
+    if not claimed:
+        return  # already auto-retried this post — once only
+    if delay_s == 0:
+        # Inline: deterministic for tests and for "retry immediately".
+        await _do_auto_retry(db, post_id, 0.0)
+        return
+    task = asyncio.create_task(_do_auto_retry(db, post_id, delay_s))
+    _auto_retry_tasks.add(task)
+    task.add_done_callback(_auto_retry_tasks.discard)
 
 
 async def process_pending(db: Database, *, limit: int = 100) -> int:

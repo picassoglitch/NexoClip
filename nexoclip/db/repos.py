@@ -3495,6 +3495,50 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioAutoRetriesRepo:
+    """Once-only guard for the post.failed auto-retry (migration 034).
+
+    Tenant-free (the webhook boundary has no bound tenant); keyed by
+    Zernio post id. `claim` is the dedup point — it returns False when
+    a retry was already claimed for this post, so an at-least-once
+    redelivery never schedules a second retry.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def claim(self, post_id: str, *, tenant_id: str | None) -> bool:
+        """Atomically claim the single auto-retry for `post_id`. Returns
+        True on a fresh claim, False if one already exists."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_auto_retries "
+            "(post_id, tenant_id, attempted_at, outcome) "
+            "VALUES (?, ?, ?, 'scheduled')",
+            (post_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def set_outcome(self, post_id: str, *, outcome: str) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_auto_retries SET outcome = ? WHERE post_id = ?",
+            (outcome, post_id),
+        )
+        await conn.commit()
+
+    async def get(self, post_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, attempted_at, outcome "
+            "FROM zernio_auto_retries WHERE post_id = ?",
+            (post_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 class ZernioEventsRepo:
     """Inbound Zernio webhook event log (migration 031).
 

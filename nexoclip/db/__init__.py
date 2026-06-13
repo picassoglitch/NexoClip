@@ -34,6 +34,7 @@ from .repos import (
     VodSpeakersRepo,
     WebhookSecretsRepo,
     WebhookSubscriptionsRepo,
+    ZernioAutoRetriesRepo,
     ZernioEventsRepo,
     ZernioPublishesRepo,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "VodSpeakersRepo",
     "WebhookSecretsRepo",
     "WebhookSubscriptionsRepo",
+    "ZernioAutoRetriesRepo",
     "ZernioEventsRepo",
     "ZernioPublishesRepo",
     "apply_migrations",

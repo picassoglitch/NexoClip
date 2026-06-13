@@ -1,0 +1,145 @@
+"""Per-platform publish-error classification + Spanish hints.
+
+Zernio tags each failed platform target with an `errorCategory` (a
+stable enum) and `errorSource` (user/platform/system). This module
+turns that into:
+  - a Spanish operator hint (what to DO about it), and
+  - a `transient` flag: is this worth ONE automatic retry?
+
+Single source of truth for both the dashboard FAILED list and the
+auto-retry policy (phase 6), and the structured error CODES the
+internal API surfaces to NexoOBS / Nexo AI.
+"""
+from __future__ import annotations
+
+from typing import Any, Final
+
+# errorCategory enum from the OpenAPI PlatformTarget schema. New values
+# may appear; anything unmapped falls back to `unknown` handling.
+#   auth_expired      — token expired/revoked → reconnect
+#   user_content      — wrong format / too long → fix the content
+#   user_abuse        — rate limits / spam flags → wait + retry
+#   account_issue     — account config problems
+#   platform_rejected — policy violation
+#   platform_error    — platform 5xx / maintenance → transient
+#   system_error      — Zernio infra → transient
+#   unknown           — unclassified
+
+# Categories worth exactly ONE automatic retry after a delay: the
+# failure is plausibly temporary (platform hiccup, infra blip, a
+# velocity cap that clears). Everything else needs a human (reconnect,
+# fix caption, policy) — auto-retrying those just burns quota.
+TRANSIENT_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {"platform_error", "system_error", "user_abuse"}
+)
+
+# Spanish operator hints, keyed by errorCategory. Action-oriented:
+# every line tells the operator what to do, not just what broke.
+_HINTS_ES: Final[dict[str, str]] = {
+    "auth_expired": "La cuenta perdió la sesión — reconéctala desde los chips de arriba y reintenta.",
+    "user_content": "El contenido no pasó: caption muy larga, formato o duración no soportada. Ajústalo y reintenta.",
+    "user_abuse": "Límite de frecuencia de la plataforma — espera unos minutos y reintenta (no publiques en ráfaga).",
+    "account_issue": "Problema de configuración de la cuenta en la plataforma — revísala y reintenta.",
+    "platform_rejected": "La plataforma rechazó el post por sus políticas — cambia el contenido antes de reintentar.",
+    "platform_error": "Error temporal de la plataforma (caída o mantenimiento) — reintenta en un momento.",
+    "system_error": "Error interno al publicar — reintenta; si persiste, avísanos.",
+    "unknown": "Falló la publicación. Revisa el detalle del error y reintenta.",
+}
+
+# A few keyword nudges for when Zernio gives a message but no (or
+# `unknown`) category — pattern-match the human message to a better
+# hint. Lowercased substring → category.
+_MESSAGE_HINTS: Final[tuple[tuple[str, str], ...]] = (
+    ("token", "auth_expired"),
+    ("reconnect", "auth_expired"),
+    ("expired", "auth_expired"),
+    ("too long", "user_content"),
+    ("caption", "user_content"),
+    ("duration", "user_content"),
+    ("media", "user_content"),
+    ("rate limit", "user_abuse"),
+    ("velocity", "user_abuse"),
+    ("cooldown", "user_abuse"),
+)
+
+
+def classify_category(category: str | None, message: str | None) -> str:
+    """Resolve a usable category: the explicit one when meaningful,
+    otherwise a guess from the human message, else `unknown`."""
+    cat = (category or "").strip().lower()
+    if cat and cat != "unknown" and cat in _HINTS_ES:
+        return cat
+    msg = (message or "").lower()
+    for needle, mapped in _MESSAGE_HINTS:
+        if needle in msg:
+            return mapped
+    return cat if cat in _HINTS_ES else "unknown"
+
+
+def spanish_hint(category: str | None, message: str | None = None) -> str:
+    """Operator-facing Spanish hint for one failed platform target."""
+    return _HINTS_ES[classify_category(category, message)]
+
+
+def is_transient(category: str | None, message: str | None = None) -> bool:
+    """True when this failure is worth ONE automatic retry."""
+    return classify_category(category, message) in TRANSIENT_CATEGORIES
+
+
+def summarize_failed_platforms(post: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a failed post's platform targets into rows the FAILED
+    list renders: {platform, error, category, hint, transient}.
+
+    Only the platforms that actually failed are returned (a `partial`
+    post has some published, some failed)."""
+    out: list[dict[str, Any]] = []
+    platforms = post.get("platforms")
+    if not isinstance(platforms, list):
+        return out
+    for p in platforms:
+        if not isinstance(p, dict):
+            continue
+        status = str(p.get("status") or "").lower()
+        if status not in ("failed", "error"):
+            continue
+        category = p.get("errorCategory")
+        message = p.get("errorMessage") or p.get("error")
+        out.append(
+            {
+                "platform": p.get("platform"),
+                "error": message,
+                "category": classify_category(
+                    category if isinstance(category, str) else None,
+                    message if isinstance(message, str) else None,
+                ),
+                "hint": spanish_hint(
+                    category if isinstance(category, str) else None,
+                    message if isinstance(message, str) else None,
+                ),
+                "transient": is_transient(
+                    category if isinstance(category, str) else None,
+                    message if isinstance(message, str) else None,
+                ),
+            }
+        )
+    return out
+
+
+def post_is_auto_retryable(post: dict[str, Any]) -> bool:
+    """A post qualifies for the once-only auto-retry when AT LEAST one
+    failed platform is transient and NONE need human action — retrying
+    a token-expired or policy-rejected target would just fail again."""
+    rows = summarize_failed_platforms(post)
+    if not rows:
+        return False
+    return all(r["transient"] for r in rows)
+
+
+__all__ = [
+    "TRANSIENT_CATEGORIES",
+    "classify_category",
+    "is_transient",
+    "post_is_auto_retryable",
+    "spanish_hint",
+    "summarize_failed_platforms",
+]

@@ -27,6 +27,12 @@ from .client import (
     ZernioPostStatus,
     ZernioProfile,
 )
+from .errors import (
+    is_transient,
+    post_is_auto_retryable,
+    spanish_hint,
+    summarize_failed_platforms,
+)
 from .events import process_pending, process_zernio_event
 from .profiles import create_profile_for_tenant
 from .webhooks import (
@@ -45,9 +51,13 @@ __all__ = [
     "ZernioPostStatus",
     "ZernioProfile",
     "create_profile_for_tenant",
+    "is_transient",
     "parse_post_event",
+    "post_is_auto_retryable",
     "process_pending",
     "process_zernio_event",
     "register_zernio_webhook",
+    "spanish_hint",
+    "summarize_failed_platforms",
     "verify_zernio_signature",
 ]

@@ -1300,6 +1300,116 @@ async def zernio_delete_queue(
     return JSONResponse({"ok": True})
 
 
+@router.get("/failed.json")
+async def zernio_failed_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Failed posts for this tenant, each with its per-platform error +
+    Spanish hint. Powers the clickable FAILED counter list."""
+    from nexoclip.integrations.zernio.errors import summarize_failed_platforms
+
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if not profile_id or not settings.zernio_api_key:
+        return JSONResponse({"ok": True, "failed": []})
+    client = _build_client()
+    try:
+        rows = await client.list_failed(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning("zernio.failed.list_failed tenant=%s err=%s", tenant_id, e)
+        return JSONResponse({"ok": False, "failed": []}, status_code=502)
+    failed = [
+        {
+            "post_id": p.get("_id") or p.get("id"),
+            "content": (p.get("content") or "")[:80],
+            "created_at": p.get("createdAt") or p.get("scheduledFor"),
+            "platforms": summarize_failed_platforms(p),
+        }
+        for p in rows
+    ]
+    return JSONResponse({"ok": True, "failed": failed})
+
+
+@router.post("/retry/{post_id}")
+async def zernio_retry_one(
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reintentar one failed post (POST /posts/{id}/retry)."""
+    client = _build_client()
+    try:
+        result = await client.retry_post(post_id)
+    except ZernioError as e:
+        if e.status_code == 429:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "Límite de frecuencia — espera unos minutos y reintenta.",
+                },
+                status_code=429,
+            )
+        _log.warning("zernio.retry.failed tenant=%s post=%s err=%s", tenant_id, post_id, e)
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo reintentar: {e}"}, status_code=502,
+        )
+    # Best-effort local status refresh (the post may be ours).
+    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+    if row is not None and row.tenant_id == tenant_id:
+        await ZernioPublishesRepo(db).set_status(post_id, status="publishing")
+    return JSONResponse({"ok": True, "post_id": result.post_id})
+
+
+@router.post("/retry-all")
+async def zernio_retry_all(
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reintentar todos los posts fallidos del tenant. Per-post failures
+    don't abort the batch; each reports ok/error."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id:
+        return JSONResponse({"ok": True, "results": []})
+    client = _build_client()
+    try:
+        rows = await client.list_failed(profile_id=profile_id)
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo listar: {e}"}, status_code=502,
+        )
+    results: list[dict[str, Any]] = []
+    for p in rows:
+        pid = p.get("_id") or p.get("id")
+        if not isinstance(pid, str):
+            continue
+        try:
+            await client.retry_post(pid)
+            results.append({"post_id": pid, "ok": True})
+            row = await ZernioPublishesRepo(db).get_by_post_id(pid)
+            if row is not None and row.tenant_id == tenant_id:
+                await ZernioPublishesRepo(db).set_status(pid, status="publishing")
+        except ZernioError as e:
+            results.append({"post_id": pid, "ok": False, "error": str(e)})
+    _log.info(
+        "zernio.retry_all tenant=%s tried=%d ok=%d",
+        tenant_id, len(results), sum(1 for r in results if r["ok"]),
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "results": results,
+            "retried": sum(1 for r in results if r["ok"]),
+        }
+    )
+
+
 @router.get("/best-time.json")
 async def zernio_best_time_json(
     platform: str = "",

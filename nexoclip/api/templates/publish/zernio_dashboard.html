@@ -253,7 +253,9 @@
     <div class="nc-pc-stat__n">{{ stats.published }}</div>
     <div class="nc-pc-stat__label">Published</div>
   </div>
-  <div class="nc-pc-stat nc-pc-stat--fail">
+  <div class="nc-pc-stat nc-pc-stat--fail js-open-failed"
+       style="cursor:pointer;" title="Ver y reintentar publicaciones fallidas"
+       role="button" tabindex="0">
     <div class="nc-pc-stat__n">{{ stats.failed }}</div>
     <div class="nc-pc-stat__label">Failed</div>
   </div>
@@ -644,6 +646,24 @@
       <strong style="font-size:13px;">Próximas publicaciones</strong>
       <div id="zn-upcoming" style="margin-top:8px;"></div>
     </div>
+  </div>
+</div>
+{% endif %}
+
+{# ========== FAILED list — clickable from the Failed counter. Loads
+   from /failed.json with per-platform error + Spanish hint; Reintentar
+   per post + Reintentar todos. Hidden until the counter is clicked. #}
+{% if profile_id %}
+<div class="nc-panel" id="zn-failed-panel" style="margin-bottom: 16px; display:none; border-color:#ff7575;">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-alert-triangle" aria-hidden="true" style="color:#ff7575;"></i>
+    Publicaciones fallidas
+    <button type="button" class="nc-btn" id="zn-retry-all" style="margin-left:auto; padding:4px 12px; font-size:12px;">
+      <i class="ti ti-refresh" aria-hidden="true"></i> Reintentar todos
+    </button>
+  </div>
+  <div class="nc-panel__body" id="zn-failed-list" style="padding:12px 16px;">
+    <span class="nc-text--muted">Cargando…</span>
   </div>
 </div>
 {% endif %}
@@ -1163,6 +1183,98 @@
         cpMsg.style.color = "#ff7575";
         cpMsg.textContent = "Couldn't create profile: " + err.message;
       }
+    });
+  }
+
+  // ---- FAILED list + retry ----
+  var failedPanel = document.getElementById("zn-failed-panel");
+  if (failedPanel) {
+    var failedList = document.getElementById("zn-failed-list");
+
+    function renderFailed(items) {
+      if (!items.length) {
+        failedList.innerHTML =
+          '<span class="nc-text--muted">No hay publicaciones fallidas. 🎉</span>';
+        return;
+      }
+      failedList.innerHTML = "";
+      items.forEach(function (p) {
+        var card = document.createElement("div");
+        card.style.cssText =
+          "padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05);";
+        var plats = (p.platforms || [])
+          .map(function (pl) {
+            return '<div style="margin:4px 0;">' +
+              '<span class="nc-chip nc-chip--code">' + (pl.platform || "?") + "</span> " +
+              '<span style="color:#ff7575; font-size:12px;">' + (pl.error || "error") + "</span>" +
+              '<div class="nc-text--muted" style="font-size:12px; margin-top:2px;">💡 ' +
+              (pl.hint || "") + "</div></div>";
+          })
+          .join("");
+        card.innerHTML =
+          '<div style="display:flex; align-items:center; gap:10px;">' +
+          '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
+          (p.content || "(sin caption)") + "</span></div>" + plats;
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "nc-btn";
+        retry.style.cssText = "padding:4px 12px; font-size:12px; margin-top:6px;";
+        retry.innerHTML = '<i class="ti ti-refresh"></i> Reintentar';
+        retry.addEventListener("click", function () {
+          retry.disabled = true;
+          fetch("/dashboard/publish/zernio/retry/" + encodeURIComponent(p.post_id), {
+            method: "POST", credentials: "same-origin",
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (!res.ok) { throw new Error(res.error || "fallo"); }
+              card.style.opacity = "0.4";
+              retry.innerHTML = '<i class="ti ti-check"></i> Reintentado';
+            })
+            .catch(function (e) { retry.disabled = false; alert(e.message); });
+        });
+        card.appendChild(retry);
+        failedList.appendChild(card);
+      });
+    }
+
+    function loadFailed() {
+      fetch("/dashboard/publish/zernio/failed.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderFailed(b.failed || []); })
+        .catch(function () {
+          failedList.innerHTML =
+            '<span class="nc-text--muted">No se pudo cargar.</span>';
+        });
+    }
+
+    function openFailed() {
+      failedPanel.style.display = "block";
+      loadFailed();
+      failedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    document.querySelectorAll(".js-open-failed").forEach(function (el) {
+      el.addEventListener("click", openFailed);
+      el.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openFailed(); }
+      });
+    });
+
+    document.getElementById("zn-retry-all").addEventListener("click", function () {
+      var btn = this;
+      if (!window.confirm("¿Reintentar todas las publicaciones fallidas?")) { return; }
+      btn.disabled = true;
+      fetch("/dashboard/publish/zernio/retry-all", {
+        method: "POST", credentials: "same-origin",
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.error || "fallo"); }
+          alert((res.retried || 0) + " reintentadas. Recargando lista…");
+          loadFailed();
+        })
+        .catch(function (e) { alert("No se pudo: " + e.message); })
+        .finally(function () { btn.disabled = false; });
     });
   }
 

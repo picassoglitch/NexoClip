@@ -360,6 +360,11 @@ class Settings(BaseSettings):
     # next day's window. Env: NEXOCLIP_HUB_MAX_POSTS_PER_PLATFORM_PER_DAY.
     hub_max_posts_per_platform_per_day: int = 4
 
+    # On a post.failed with a transient error class, the hub fires ONE
+    # automatic retry after this delay (seconds), then stops. Set to 0
+    # to disable auto-retry. Env: NEXOCLIP_HUB_AUTO_RETRY_DELAY_S.
+    hub_auto_retry_delay_s: float = 600.0
+
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.
 

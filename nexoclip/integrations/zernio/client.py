@@ -729,16 +729,25 @@ class ZernioClient:
             raise ZernioError("posts list response is not an object", body=body)
         return body
 
-    async def list_failed(self) -> list[dict[str, Any]]:
-        """GET /posts/failed — posts that failed to publish, for the
-        retry affordance. Returns the raw array."""
-        body = await self._request("GET", "/posts/failed")
-        if isinstance(body, list):
-            return body
+    async def list_failed(
+        self, *, profile_id: str | None = None, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Posts that failed to publish, for the retry affordance.
+
+        There is NO /posts/failed endpoint — the spec lists failed
+        posts via GET /posts?status=failed (confirmed against the
+        OpenAPI; the old path 404'd). Scoped by profileId so a tenant
+        only sees their own failures. Returns the raw array."""
+        params: dict[str, Any] = {"status": "failed", "limit": limit}
+        if profile_id:
+            params["profileId"] = profile_id
+        body = await self._request("GET", "/posts", params=params)
         if isinstance(body, dict):
             posts = body.get("posts")
             if isinstance(posts, list):
-                return posts
+                return [p for p in posts if isinstance(p, dict)]
+        if isinstance(body, list):
+            return [p for p in body if isinstance(p, dict)]
         raise ZernioError("failed-posts response shape unexpected", body=body)
 
     async def retry_post(self, post_id: str) -> ZernioPostResult:

@@ -574,3 +574,37 @@ async def test_delete_queue_passes_ids() -> None:
     sent = route.calls.last.request
     assert sent.url.params.get("profileId") == "ten_alice"
     assert sent.url.params.get("queueId") == "q1"
+
+
+# ---- failed posts + retry ----
+
+
+@pytest.mark.asyncio
+async def test_list_failed_uses_status_query_not_missing_path() -> None:
+    """Regression: there is NO /posts/failed endpoint — failed posts
+    come from GET /posts?status=failed (the old path 404'd)."""
+    body = {"posts": [{"_id": "pf1", "status": "failed"}, "skip-non-dict"]}
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/posts").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            failed = await _client(http).list_failed(profile_id="ten_alice")
+    assert [p["_id"] for p in failed] == ["pf1"]
+    sent = route.calls.last.request
+    assert sent.url.params.get("status") == "failed"
+    assert sent.url.params.get("profileId") == "ten_alice"
+
+
+@pytest.mark.asyncio
+async def test_retry_post_posts_to_retry_endpoint() -> None:
+    body = {"message": "Post published successfully",
+            "post": {"_id": "pf1", "status": "published"}}
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/posts/pf1/retry").mock(
+                return_value=httpx.Response(200, json=body)
+            )
+            result = await _client(http).retry_post("pf1")
+    assert result.post_id == "pf1"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk_test_abc"

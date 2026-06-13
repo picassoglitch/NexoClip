@@ -52,6 +52,12 @@ class SsoTokenPayload(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     tenant_id: str = Field(min_length=1, max_length=64)
     tier: str | None = Field(default=None, max_length=32)
+    # Optional. When Nexo AI knows the user's Zernio profileId (it
+    # provisions the Zernio profile per user), it includes it here so
+    # NexoClip auto-links it on login — the streamer never has to paste
+    # a profileId into the Publish Center. Back-compat: older tokens
+    # without it still validate.
+    zernio_profile_id: str | None = Field(default=None, max_length=64)
     exp: int = Field(gt=0)
 
 
@@ -79,6 +85,7 @@ def sign_sso_token(
     tenant_id: str,
     secret: str,
     tier: str | None = None,
+    zernio_profile_id: str | None = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
 ) -> str:
     """Mint a token. Used by tests + as a reference for the Nexo AI side."""
@@ -92,6 +99,8 @@ def sign_sso_token(
     }
     if tier:
         payload["tier"] = tier
+    if zernio_profile_id:
+        payload["zernio_profile_id"] = zernio_profile_id
     payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     sig = hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), sha256).digest()
     return f"{payload_b64}.{_b64url_encode(sig)}"

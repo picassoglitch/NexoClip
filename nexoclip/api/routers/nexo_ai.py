@@ -549,6 +549,22 @@ async def sso_finalize(
         except Exception:  # noqa: BLE001 — never break login on a tier sync
             pass
 
+    # Auto-link the Zernio profile (so the Publish Center tabs appear
+    # without the streamer pasting a profileId). Nexo AI provisions the
+    # Zernio profile per user and sends its id in the token. Only set
+    # it when the tenant has NONE — never clobber a manual link/unlink
+    # the operator made in the dashboard.
+    if payload.zernio_profile_id:
+        try:
+            from nexoclip.db import TenantsRepo
+            _zt = await TenantsRepo(db).get(payload.tenant_id)
+            if _zt is not None and not _zt.zernio_profile_id:
+                await TenantsRepo(db).set_zernio_profile(
+                    payload.tenant_id, profile_id=payload.zernio_profile_id,
+                )
+        except Exception:  # never break login on the auto-link
+            pass
+
     # Sync external_user_id on every login (B2 reconciliation layer).
     # CLI-era tenants land here with external_user_id = NULL, which silently
     # breaks the usage reporter (it skips tenants without an external id).

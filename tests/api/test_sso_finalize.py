@@ -70,6 +70,62 @@ async def test_sso_honors_relative_next(
     assert r.headers["location"] == "/dashboard/streams"
 
 
+async def test_sso_auto_links_zernio_profile(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    sso_env: str,
+) -> None:
+    """When the token carries a zernio_profile_id and the tenant has
+    none, SSO auto-links it — so the Publish Center tabs appear without
+    pasting a profileId."""
+    tid = tenants["alice"]["id"]
+    token = sign_sso_token(
+        user_id="nexo_user_1", email="alice@example.com", tenant_id=tid,
+        secret=_SECRET, zernio_profile_id="prof_from_nexo_ai",
+    )
+    r = await client.get(f"/auth/sso?token={token}", follow_redirects=False)
+    assert r.status_code == 303
+    tenant = await TenantsRepo(db).get(tid)
+    assert tenant is not None
+    assert tenant.zernio_profile_id == "prof_from_nexo_ai"
+
+
+async def test_sso_does_not_clobber_existing_profile(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    sso_env: str,
+) -> None:
+    """A manual link/unlink the operator made in the dashboard wins —
+    SSO only fills an EMPTY profile, never overwrites."""
+    tid = tenants["alice"]["id"]
+    await TenantsRepo(db).set_zernio_profile(tid, profile_id="prof_manual")
+    token = sign_sso_token(
+        user_id="nexo_user_1", email="alice@example.com", tenant_id=tid,
+        secret=_SECRET, zernio_profile_id="prof_from_nexo_ai",
+    )
+    await client.get(f"/auth/sso?token={token}", follow_redirects=False)
+    tenant = await TenantsRepo(db).get(tid)
+    assert tenant is not None
+    assert tenant.zernio_profile_id == "prof_manual"  # not clobbered
+
+
+async def test_sso_without_profile_id_is_backcompat(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    sso_env: str,
+) -> None:
+    """Older tokens without zernio_profile_id still validate + log in."""
+    token = sign_sso_token(
+        user_id="nexo_user_1", email="alice@example.com",
+        tenant_id=tenants["alice"]["id"], secret=_SECRET,
+    )
+    r = await client.get(f"/auth/sso?token={token}", follow_redirects=False)
+    assert r.status_code == 303
+
+
 @pytest.mark.parametrize(
     "evil_next",
     [

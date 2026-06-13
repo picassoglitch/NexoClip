@@ -776,6 +776,56 @@ class ZernioClient:
             json={"accountId": account_id, "status": status}, parse_json=False,
         )
 
+    # ---- Ads (phase 12, feature-flagged: read-only + boost) ----
+
+    async def list_ad_campaigns(
+        self, *, profile_id: str, limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """GET /ads/campaigns — campaigns for the profile (read-only)."""
+        body = await self._request(
+            "GET", "/ads/campaigns",
+            params={"profileId": profile_id, "limit": limit},
+        )
+        rows = body.get("campaigns") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            rows = body.get("data") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def ad_analytics(self, ad_id: str) -> dict[str, Any]:
+        """GET /ads/{adId}/analytics — performance for one ad."""
+        body = await self._request("GET", f"/ads/{ad_id}/analytics")
+        return body if isinstance(body, dict) else {}
+
+    async def boost_post(
+        self,
+        *,
+        account_id: str,
+        ad_account_id: str,
+        name: str,
+        goal: str,
+        budget_amount: float,
+        budget_type: str,
+        post_id: str | None = None,
+        platform_post_id: str | None = None,
+        currency: str = "USD",
+    ) -> dict[str, Any]:
+        """POST /ads/boost — turn a published post into a paid ad.
+        Behind a confirmation in the UI; flag-gated route."""
+        payload: dict[str, Any] = {
+            "accountId": account_id,
+            "adAccountId": ad_account_id,
+            "name": name,
+            "goal": goal,
+            "budget": {"amount": budget_amount, "type": budget_type},
+            "currency": currency,
+        }
+        if post_id:
+            payload["postId"] = post_id
+        elif platform_post_id:
+            payload["platformPostId"] = platform_post_id
+        body = await self._request("POST", "/ads/boost", json=payload, timeout_s=60.0)
+        return body if isinstance(body, dict) else {}
+
     # ---- Community notifications (Discord / Telegram) ----
 
     async def create_community_post(

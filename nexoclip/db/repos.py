@@ -3495,6 +3495,44 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioWhatsappNumbersRepo:
+    """WhatsApp number provisioning status (migration 040, phase 12).
+
+    Fed by whatsapp.number.* webhooks; latest status per account wins.
+    Tenant-free at rest (keyed by account_id), resolved at read time."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self, *, account_id: str, status: str, detail: str | None = None
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_whatsapp_numbers "
+            "(account_id, status, detail, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(account_id) DO UPDATE SET "
+            "status = excluded.status, detail = excluded.detail, "
+            "updated_at = excluded.updated_at",
+            (account_id, status, detail, _now()),
+        )
+        await conn.commit()
+
+    async def list_for_accounts(
+        self, account_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, status, detail, updated_at "
+            f"FROM zernio_whatsapp_numbers WHERE account_id IN ({placeholders})",
+            tuple(account_ids),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 class ZernioCommunityRepo:
     """Community-notification settings + notify ledger (migration 039).
 

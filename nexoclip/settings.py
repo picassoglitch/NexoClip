@@ -371,6 +371,14 @@ class Settings(BaseSettings):
     # Env: NEXOCLIP_HUB_MAX_BROADCASTS_PER_DAY.
     hub_max_broadcasts_per_day: int = 1
 
+    # Phase-12 feature flags (default OFF). These carry extra cost /
+    # complexity (Meta ad spend, WhatsApp per-number + per-message
+    # fees), so the seams are built but the routes 404 and the UI is
+    # hidden until a flag is turned on.
+    # Env: NEXOCLIP_FEATURE_WHATSAPP, NEXOCLIP_FEATURE_ADS.
+    feature_whatsapp: bool = False
+    feature_ads: bool = False
+
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.
 

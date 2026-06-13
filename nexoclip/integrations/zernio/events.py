@@ -203,6 +203,8 @@ async def _process(db: Database, event_id: str) -> None:
         await _process_message(db, payload)
     elif row.type == "conversation.started":
         await _process_conversation(db, payload)
+    elif row.type.startswith("whatsapp.number."):
+        await _process_whatsapp_number(db, row.type, payload)
 
     # --- auto-retry once on a transient failure ---
     # post.failed / post.partial with ALL failed platforms transient
@@ -402,6 +404,34 @@ async def _process_conversation(db: Database, payload: dict[str, Any]) -> None:
             username=_s(conv.get("participantUsername")),
             tag="dm-lead",
         )
+
+
+async def _process_whatsapp_number(
+    db: Database, event_type: str, payload: dict[str, Any]
+) -> None:
+    """whatsapp.number.* → record the latest provisioning status for
+    the account (phase 12 seam; surfaced only when FEATURE_WHATSAPP is
+    on). status is the bit after 'whatsapp.number.'."""
+    from nexoclip.db import ZernioWhatsappNumbersRepo
+
+    status = event_type.rsplit(".", 1)[-1]  # activated / declined / ...
+    account = payload.get("account")
+    account_id = None
+    if isinstance(account, dict):
+        account_id = account.get("id") or account.get("accountId")
+    if not isinstance(account_id, str):
+        # Some number events nest the id under a `number`/`phoneNumber`.
+        number = payload.get("number") or payload.get("phoneNumber")
+        if isinstance(number, dict):
+            account_id = number.get("accountId") or number.get("id")
+    if not isinstance(account_id, str) or not account_id:
+        return
+    detail = payload.get("reason") or payload.get("message")
+    await ZernioWhatsappNumbersRepo(db).upsert(
+        account_id=account_id,
+        status=status,
+        detail=detail if isinstance(detail, str) else None,
+    )
 
 
 async def _maybe_notify_community(

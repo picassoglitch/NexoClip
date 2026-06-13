@@ -769,3 +769,37 @@ async def test_broadcast_create_recipients_send_flow() -> None:
     assert out["status"] == "sending"
     create_body = json.loads(create.calls.last.request.content.decode())
     assert create_body["message"] == {"text": "¡Nuevo clip!"}
+
+
+# ---- ads (phase 12) ----
+
+
+@pytest.mark.asyncio
+async def test_boost_post_body() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/ads/boost").mock(
+                return_value=httpx.Response(200, json={"campaignId": "c1"})
+            )
+            await _client(http).boost_post(
+                account_id="acc1", ad_account_id="act_1", name="Boost",
+                goal="engagement", budget_amount=20.0, budget_type="daily",
+                platform_post_id="pp1",
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload["adAccountId"] == "act_1"
+    assert payload["budget"] == {"amount": 20.0, "type": "daily"}
+    assert payload["platformPostId"] == "pp1"
+    assert "postId" not in payload
+
+
+@pytest.mark.asyncio
+async def test_list_ad_campaigns() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.get(f"{_BASE}/ads/campaigns").mock(
+                return_value=httpx.Response(200, json={"campaigns": [{"id": "c1"}]})
+            )
+            out = await _client(http).list_ad_campaigns(profile_id="prof")
+    assert out[0]["id"] == "c1"
+    assert route.calls.last.request.url.params.get("profileId") == "prof"

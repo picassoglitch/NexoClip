@@ -42,6 +42,7 @@ from .repos import (
     ZernioInboxRepo,
     ZernioPublishesRepo,
     ZernioPublishSnapshotsRepo,
+    ZernioWhatsappNumbersRepo,
 )
 from .session import db_session
 
@@ -81,6 +82,7 @@ __all__ = [
     "ZernioInboxRepo",
     "ZernioPublishSnapshotsRepo",
     "ZernioPublishesRepo",
+    "ZernioWhatsappNumbersRepo",
     "apply_migrations",
     "db_session",
     "schema_version",

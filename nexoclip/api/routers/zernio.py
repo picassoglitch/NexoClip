@@ -678,6 +678,10 @@ async def zernio_dashboard(
             "community_connected": sorted(
                 connected_set & _COMMUNITY_PLATFORM_IDS
             ),
+            # Phase 12 — feature flags (default OFF) gate the ads +
+            # whatsapp UI; the controls don't render until turned on.
+            "feature_ads": get_settings().feature_ads,
+            "feature_whatsapp": get_settings().feature_whatsapp,
         },
     )
 
@@ -1349,6 +1353,107 @@ async def _tenant_account_ids(db: Database, tenant_id: str) -> list[str]:
     except ZernioError:
         return []
     return [a.account_id for a in accounts]
+
+
+# ---------- Feature-flagged extras: Ads + WhatsApp (phase 12) ----------
+# Both default OFF (extra cost/complexity). Routes 404 when the flag is
+# off so the surface is invisible; the UI hides the controls too.
+
+
+def _require_feature_ads() -> None:
+    if not get_settings().feature_ads:
+        raise HTTPException(status_code=404, detail="ads feature is disabled")
+
+
+def _require_feature_whatsapp() -> None:
+    if not get_settings().feature_whatsapp:
+        raise HTTPException(status_code=404, detail="whatsapp feature is disabled")
+
+
+@router.get("/ads/campaigns.json")
+async def zernio_ads_campaigns_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Read-only ad campaigns (404 when FEATURE_ADS is off). Shown next
+    to organic metrics in Rendimiento."""
+    _require_feature_ads()
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not get_settings().zernio_api_key:
+        return JSONResponse({"ok": True, "campaigns": []})
+    try:
+        campaigns = await _build_client().list_ad_campaigns(profile_id=profile_id)
+    except ZernioError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, "campaigns": campaigns})
+
+
+@router.post("/ads/boost")
+async def zernio_ads_boost(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Boost a published clip into a paid ad (404 when FEATURE_ADS off).
+    Behind a confirmation. Body: {account_id, ad_account_id, name, goal,
+    budget_amount, budget_type, post_id?/platform_post_id?, confirm}."""
+    _require_feature_ads()
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    if not data.get("confirm"):
+        return JSONResponse(
+            {"ok": False, "error": "Confirmación requerida (esto gasta dinero)."},
+            status_code=400,
+        )
+    account_id = str(data.get("account_id") or "")
+    ad_account_id = str(data.get("ad_account_id") or "")
+    name = str(data.get("name") or "").strip()
+    goal = str(data.get("goal") or "").strip()
+    try:
+        budget_amount = float(data.get("budget_amount") or 0)
+    except (TypeError, ValueError):
+        budget_amount = 0.0
+    budget_type = str(data.get("budget_type") or "daily")
+    if not (account_id and ad_account_id and name and goal and budget_amount > 0):
+        return JSONResponse(
+            {"ok": False, "error": "Faltan campos (cuenta, ad account, nombre, goal, presupuesto)."},
+            status_code=400,
+        )
+    if account_id not in await _tenant_account_ids(db, tenant_id):
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    try:
+        result = await _build_client().boost_post(
+            account_id=account_id, ad_account_id=ad_account_id, name=name,
+            goal=goal, budget_amount=budget_amount, budget_type=budget_type,
+            post_id=str(data.get("post_id") or "") or None,
+            platform_post_id=str(data.get("platform_post_id") or "") or None,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo crear el anuncio: {e}"},
+            status_code=502,
+        )
+    _log.info("zernio.ads.boost tenant=%s account=%s", tenant_id, account_id)
+    return JSONResponse({"ok": True, "result": result})
+
+
+@router.get("/whatsapp/status.json")
+async def zernio_whatsapp_status_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """WhatsApp number provisioning status (404 when FEATURE_WHATSAPP
+    off). Fed by whatsapp.number.* webhooks."""
+    _require_feature_whatsapp()
+    from nexoclip.db import ZernioWhatsappNumbersRepo
+
+    account_ids = await _tenant_account_ids(db, tenant_id)
+    rows = await ZernioWhatsappNumbersRepo(db).list_for_accounts(account_ids)
+    return JSONResponse({"ok": True, "numbers": rows})
 
 
 # ---------- Comunidad: Discord/Telegram notifications (phase 11) ----------

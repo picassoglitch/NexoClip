@@ -893,6 +893,13 @@
   <div class="nc-panel__body">
     <div id="zn-perf-totals" class="nc-text--muted" style="font-size:14px; margin-bottom:12px;">Cargando…</div>
     <div id="zn-perf-table"></div>
+    {% if feature_ads %}
+    {# Phase 12 — ads next to organic (read-only), feature-flagged. #}
+    <div style="margin-top:16px;">
+      <strong style="font-size:13px;"><i class="ti ti-ad" aria-hidden="true"></i> Anuncios</strong>
+      <div id="zn-ads-table" class="nc-text--muted" style="margin-top:8px;">Cargando…</div>
+    </div>
+    {% endif %}
   </div>
 </div>
 </div>
@@ -1015,6 +1022,12 @@
         <input class="nc-input" id="zn-bc-name" placeholder="Promo de la semana"></label>
       <label class="nc-label">Mensaje
         <textarea class="nc-input" id="zn-bc-message" rows="2" placeholder="¡Nuevo clip publicado! 🎬"></textarea></label>
+      {% if feature_whatsapp %}
+      <p class="nc-text--muted" style="font-size:12px; margin:6px 0 0;">
+        <i class="ti ti-brand-whatsapp" aria-hidden="true"></i>
+        WhatsApp tiene costo extra (tarifa por número + uso de Meta por mensaje) y usa plantillas aprobadas.
+      </p>
+      {% endif %}
       <button type="button" class="nc-btn nc-btn--primary" id="zn-bc-send" style="margin-top:8px;">
         <i class="ti ti-send"></i> Enviar broadcast</button>
     </div>
@@ -1507,11 +1520,29 @@
       });
     });
 
+    // Phase 12 — ads table (only present when FEATURE_ADS is on).
+    function loadAds() {
+      var host = document.getElementById("zn-ads-table");
+      if (!host) { return; }
+      fetch("/dashboard/publish/zernio/ads/campaigns.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var items = b.campaigns || [];
+          host.innerHTML = items.length
+            ? items.map(function (c) {
+                return '<div style="padding:4px 0;">' + (c.name || c.id || "") +
+                  ' <span class="nc-chip nc-chip--code">' + (c.status || "") + "</span></div>";
+              }).join("")
+            : "Sin campañas de anuncios.";
+        })
+        .catch(function () { host.textContent = "No se pudo cargar anuncios."; });
+    }
+
     // Lazy-load when the Rendimiento tab is first opened.
     var perfLoaded = false;
     document.querySelectorAll('.nc-pc-tab[data-tab="rendimiento"]').forEach(function (tab) {
       tab.addEventListener("click", function () {
-        if (!perfLoaded) { perfLoaded = true; loadPerf(); }
+        if (!perfLoaded) { perfLoaded = true; loadPerf(); loadAds(); }
       });
     });
   }

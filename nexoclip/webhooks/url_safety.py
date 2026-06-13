@@ -49,9 +49,7 @@ def _is_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         return True
     if isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET:
         return True
-    if str(ip) in _METADATA_IPS:
-        return True
-    return False
+    return str(ip) in _METADATA_IPS
 
 
 def _has_reserved_test_tld(host: str) -> bool:
@@ -117,6 +115,7 @@ def assert_webhook_url_safe(url: str, *, allow_unresolvable: bool = False) -> No
         raise UnsafeWebhookUrlError(f"url hostname does not resolve: {e}") from e
 
     for family, _socktype, _proto, _canon, sockaddr in infos:
+        ip: ipaddress.IPv4Address | ipaddress.IPv6Address
         if family == socket.AF_INET:
             ip = ipaddress.IPv4Address(sockaddr[0])
         elif family == socket.AF_INET6:

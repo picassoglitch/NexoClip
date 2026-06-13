@@ -80,8 +80,9 @@ def create_app(
         # in this state (see nexoclip/api/routers/nexo_ai.py) — surfacing
         # it here so operators see it in boot logs, not just when a user
         # tries to log in.
-        from nexoclip.settings import get_settings as _get_settings
         import structlog as _structlog
+
+        from nexoclip.settings import get_settings as _get_settings
         _boot_log = _structlog.get_logger("nexoclip.api.boot")
         if not _get_settings().nexo_ai_sso_secret:
             _boot_log.warning(

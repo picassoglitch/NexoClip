@@ -374,6 +374,10 @@
     <i class="ti ti-calendar" aria-hidden="true"></i>
     Calendario
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="programacion">
+    <i class="ti ti-calendar-clock" aria-hidden="true"></i>
+    Programación
+  </button>
   <button type="button" class="nc-pc-tab" data-tab="comentarios">
     <i class="ti ti-message-circle" aria-hidden="true"></i>
     Comentarios
@@ -385,6 +389,10 @@
   <button type="button" class="nc-pc-tab" data-tab="crecimiento">
     <i class="ti ti-rocket" aria-hidden="true"></i>
     Crecimiento
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="comunidad">
+    <i class="ti ti-speakerphone" aria-hidden="true"></i>
+    Comunidad
   </button>
 </div>
 
@@ -602,6 +610,7 @@
 {# ========== Programación — recurring queue slots + Hora óptima +
    upcoming (scheduled/queued) list with cancel. All data loads from
    /schedule.json + /best-time.json; vanilla JS, no reload. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="programacion">
 {% if profile_id %}
 <div class="nc-panel" id="zn-schedule-panel" style="margin-bottom: 16px;">
   <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
@@ -669,9 +678,11 @@
   </div>
 </div>
 {% endif %}
+</div>
 
 {# ========== Comunidad — Discord/Telegram connect + announce-on-publish
    toggle + brand identity + weekly digest (phase 11). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="comunidad">
 {% if profile_id %}
 <div class="nc-panel" id="zn-community-panel" style="margin-bottom: 16px;">
   <div class="nc-panel__header">
@@ -725,10 +736,12 @@
   </div>
 </div>
 {% endif %}
+</div>
 
 {# ========== FAILED list — clickable from the Failed counter. Loads
    from /failed.json with per-platform error + Spanish hint; Reintentar
    per post + Reintentar todos. Hidden until the counter is clicked. #}
+<div class="nc-pc-tab-body" data-tab-body="published">
 {% if profile_id %}
 <div class="nc-panel" id="zn-failed-panel" style="margin-bottom: 16px; display:none; border-color:#ff7575;">
   <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
@@ -743,10 +756,12 @@
   </div>
 </div>
 {% endif %}
+</div>
 
 {# ========== Borradores — drafts saved via "Guardar como borrador".
    Local zernio_publishes rows with status='draft'; also the agency
    client-approval flow: stage → review → Publicar ahora / Programar. #}
+<div class="nc-pc-tab-body" data-tab-body="published">
 {% if drafts %}
 <div class="nc-panel" style="margin-bottom: 16px;">
   <div class="nc-panel__header">
@@ -803,6 +818,7 @@
   </div>
 </div>
 {% endif %}
+</div>
 
 {# ========== Tab: Published (this tenant's publish history; local
    zernio_publishes rows + live status joined by post id) ========== #}
@@ -2049,6 +2065,7 @@
     }
 
     function openFailed() {
+      activateTab("published");
       failedPanel.style.display = "block";
       loadFailed();
       failedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });

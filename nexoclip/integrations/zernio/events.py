@@ -32,6 +32,7 @@ from nexoclip.db import (
     HubPublishJobsRepo,
     TenantsRepo,
     ZernioAutoRetriesRepo,
+    ZernioCalendarRepo,
     ZernioEventsRepo,
     ZernioPublishesRepo,
 )
@@ -188,6 +189,12 @@ async def _process(db: Database, event_id: str) -> None:
                 post_id, status=status, platforms_json=platforms_json,
             )
 
+    # --- external posts feed the unified calendar (phase 8) ---
+    # No profileId on these — keyed by the social account id, resolved
+    # to a tenant at read time. created/updated upsert; deleted flags.
+    if row.type.startswith("post.external.") and post:
+        await _process_external_post(db, row.type, post)
+
     # --- auto-retry once on a transient failure ---
     # post.failed / post.partial with ALL failed platforms transient
     # (platform/infra/velocity) gets ONE automatic retry after a delay.
@@ -221,6 +228,47 @@ async def _process(db: Database, event_id: str) -> None:
         )
 
     await events_repo.mark_processed(event_id, tenant_id=tenant_id)
+
+
+async def _process_external_post(
+    db: Database, event_type: str, post: dict[str, Any]
+) -> None:
+    """Upsert / delete an external post into the calendar store.
+
+    `post.id` is the platform-native id, `post.accountId` the Zernio
+    social account (the tenant link). Tolerant of missing fields — a
+    sparse payload still records the entry."""
+    post_id = post.get("id") or post.get("_id")
+    account_id = post.get("accountId")
+    if not (isinstance(post_id, str) and post_id and isinstance(account_id, str)):
+        return
+    repo = ZernioCalendarRepo(db)
+    if event_type == "post.external.deleted":
+        deleted_at = post.get("deletedAt")
+        await repo.mark_deleted(
+            account_id=account_id,
+            post_id=post_id,
+            deleted_at=deleted_at if isinstance(deleted_at, str) else None,
+        )
+        return
+    await repo.upsert(
+        account_id=account_id,
+        post_id=post_id,
+        platform=post.get("platform") if isinstance(post.get("platform"), str) else None,
+        content=post.get("content") if isinstance(post.get("content"), str) else None,
+        url=post.get("url") if isinstance(post.get("url"), str) else None,
+        thumbnail_url=(
+            post.get("thumbnailUrl")
+            if isinstance(post.get("thumbnailUrl"), str) else None
+        ),
+        media_type=(
+            post.get("mediaType") if isinstance(post.get("mediaType"), str) else None
+        ),
+        published_at=(
+            post.get("publishedAt")
+            if isinstance(post.get("publishedAt"), str) else None
+        ),
+    )
 
 
 async def _do_auto_retry(db: Database, post_id: str, delay_s: float) -> None:

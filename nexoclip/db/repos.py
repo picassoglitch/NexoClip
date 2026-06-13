@@ -3495,6 +3495,102 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioCalendarRepo:
+    """External (native) posts for the unified calendar (migration 036).
+
+    Tenant-free at rest — keyed by (account_id, platform-native
+    post_id) because post.external.* carries no profileId. The calendar
+    route resolves to a tenant by matching account_id against the
+    viewing tenant's connected accounts."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def upsert(
+        self,
+        *,
+        account_id: str,
+        post_id: str,
+        platform: str | None,
+        content: str | None,
+        url: str | None,
+        thumbnail_url: str | None,
+        media_type: str | None,
+        published_at: str | None,
+    ) -> None:
+        """Insert or refresh one external post. Idempotent: the
+        first-sync `created` and any later `updated` both land here, and
+        a re-delivered `created` overwrites identically. Clears any
+        prior 'deleted' status (a post can reappear)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_calendar "
+            "(account_id, post_id, platform, content, url, thumbnail_url, "
+            "media_type, published_at, status, deleted_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?) "
+            "ON CONFLICT(account_id, post_id) DO UPDATE SET "
+            "platform = excluded.platform, content = excluded.content, "
+            "url = excluded.url, thumbnail_url = excluded.thumbnail_url, "
+            "media_type = excluded.media_type, "
+            "published_at = excluded.published_at, "
+            "status = 'active', deleted_at = NULL, "
+            "updated_at = excluded.updated_at",
+            (
+                account_id, post_id, platform, content, url, thumbnail_url,
+                media_type, published_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def mark_deleted(
+        self, *, account_id: str, post_id: str, deleted_at: str | None
+    ) -> None:
+        """Flag an external post removed on the platform. Keeps the row
+        (the calendar greys it out) rather than dropping it."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_calendar SET status = 'deleted', "
+            "deleted_at = ?, updated_at = ? "
+            "WHERE account_id = ? AND post_id = ?",
+            (deleted_at or _now(), _now(), account_id, post_id),
+        )
+        await conn.commit()
+
+    async def list_for_accounts(
+        self,
+        account_ids: list[str],
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        include_deleted: bool = True,
+    ) -> list[dict[str, Any]]:
+        """External posts for a set of account ids (the tenant's), in a
+        date window. Empty list for no accounts (no SQL injection of an
+        empty IN ())."""
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if date_from:
+            where += " AND published_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND published_at <= ?"
+            params.append(date_to)
+        if not include_deleted:
+            where += " AND status = 'active'"
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, post_id, platform, content, url, "
+            "thumbnail_url, media_type, published_at, status, deleted_at "
+            f"FROM zernio_calendar WHERE {where} "  # fixed fragments, params bound
+            "ORDER BY published_at DESC",
+            tuple(params),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 class ZernioPublishSnapshotsRepo:
     """Per-post daily metric snapshots (migration 035).
 

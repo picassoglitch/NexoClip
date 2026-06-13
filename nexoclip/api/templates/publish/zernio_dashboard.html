@@ -370,6 +370,10 @@
     <i class="ti ti-chart-bar" aria-hidden="true"></i>
     Rendimiento
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="calendario">
+    <i class="ti ti-calendar" aria-hidden="true"></i>
+    Calendario
+  </button>
 </div>
 
 {# ========== Tab: Single Publish ========== #}
@@ -821,6 +825,32 @@
   <div class="nc-panel__body">
     <div id="zn-perf-totals" class="nc-text--muted" style="font-size:14px; margin-bottom:12px;">Cargando…</div>
     <div id="zn-perf-table"></div>
+  </div>
+</div>
+</div>
+
+{# ========== Tab: Calendario — unified, 3 sources (hub / scheduled /
+   external), color-coded. Month grid; click a day to see its entries.
+   Loads from /calendar.json. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="calendario">
+<div class="nc-panel">
+  <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
+    <i class="ti ti-calendar" aria-hidden="true"></i>
+    <span class="nc-panel__title">Calendario</span>
+    <span style="margin-left:auto; display:inline-flex; gap:8px; align-items:center;">
+      <button type="button" class="nc-btn" id="zn-cal-prev" style="padding:3px 10px; font-size:12px;"><i class="ti ti-chevron-left"></i></button>
+      <span id="zn-cal-month" style="font-weight:600; min-width:140px; text-align:center;"></span>
+      <button type="button" class="nc-btn" id="zn-cal-next" style="padding:3px 10px; font-size:12px;"><i class="ti ti-chevron-right"></i></button>
+    </span>
+  </div>
+  <div class="nc-panel__body">
+    <div style="display:flex; gap:14px; margin-bottom:10px; font-size:12px;" class="nc-text--muted">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c5f82a;"></span> Hub</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#00e5ff;"></span> Programado</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ff2d95;"></span> Externo</span>
+    </div>
+    <div id="zn-cal-grid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px;"></div>
+    <div id="zn-cal-detail" style="margin-top:14px;"></div>
   </div>
 </div>
 </div>
@@ -1281,6 +1311,109 @@
     document.querySelectorAll('.nc-pc-tab[data-tab="rendimiento"]').forEach(function (tab) {
       tab.addEventListener("click", function () {
         if (!perfLoaded) { perfLoaded = true; loadPerf(); }
+      });
+    });
+  }
+
+  // ---- Calendario tab ----
+  var calGrid = document.getElementById("zn-cal-grid");
+  if (calGrid) {
+    var SRC_COLOR = { hub: "#c5f82a", scheduled: "#00e5ff", external: "#ff2d95" };
+    var calRef = new Date();
+    calRef.setDate(1);
+    var calEntries = [];
+    var calLoadedMonth = null;
+
+    function ymd(d) {
+      return d.getFullYear() + "-" +
+        ("0" + (d.getMonth() + 1)).slice(-2) + "-" +
+        ("0" + d.getDate()).slice(-2);
+    }
+
+    function renderCalendar() {
+      var year = calRef.getFullYear(), month = calRef.getMonth();
+      document.getElementById("zn-cal-month").textContent =
+        calRef.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      // Bucket entries by YYYY-MM-DD.
+      var byDay = {};
+      calEntries.forEach(function (e) {
+        if (!e.date) { return; }
+        var day = e.date.slice(0, 10);
+        (byDay[day] = byDay[day] || []).push(e);
+      });
+      calGrid.innerHTML = "";
+      ["L", "M", "X", "J", "V", "S", "D"].forEach(function (d) {
+        var h = document.createElement("div");
+        h.className = "nc-text--muted";
+        h.style.cssText = "text-align:center; font-size:11px; padding:2px;";
+        h.textContent = d;
+        calGrid.appendChild(h);
+      });
+      var first = new Date(year, month, 1);
+      // Monday-based offset.
+      var lead = (first.getDay() + 6) % 7;
+      for (var i = 0; i < lead; i++) { calGrid.appendChild(document.createElement("div")); }
+      var daysInMonth = new Date(year, month + 1, 0).getDate();
+      for (var day = 1; day <= daysInMonth; day++) {
+        var cell = document.createElement("div");
+        cell.style.cssText =
+          "min-height:54px; border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:4px; cursor:pointer;";
+        var key = ymd(new Date(year, month, day));
+        var items = byDay[key] || [];
+        var dots = items.slice(0, 4).map(function (e) {
+          var deleted = e.status === "deleted";
+          return '<span title="' + (e.source || "") + '" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px;background:' +
+            (SRC_COLOR[e.source] || "#888") + ";" + (deleted ? "opacity:0.3;" : "") + '"></span>';
+        }).join("");
+        cell.innerHTML =
+          '<div style="font-size:11px;" class="nc-text--muted">' + day + "</div>" + dots +
+          (items.length > 4 ? '<div style="font-size:10px;" class="nc-text--muted">+' + (items.length - 4) + "</div>" : "");
+        if (items.length) {
+          cell.addEventListener("click", (function (dayItems, label) {
+            return function () { showDayDetail(label, dayItems); };
+          })(items, key));
+        }
+        calGrid.appendChild(cell);
+      }
+    }
+
+    function showDayDetail(day, items) {
+      var host = document.getElementById("zn-cal-detail");
+      host.innerHTML = "<h4 style='margin:0 0 8px;'>" + day + "</h4>" +
+        items.map(function (e) {
+          var deleted = e.status === "deleted";
+          var link = e.url ? ' · <a href="' + e.url + '" target="_blank" rel="noopener">ver</a>' : "";
+          return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);' +
+            (deleted ? "opacity:0.45;text-decoration:line-through;" : "") + '">' +
+            '<span class="nc-chip" style="background:' + (SRC_COLOR[e.source] || "#888") + ';color:#000;">' +
+            e.source + "</span> " +
+            (e.platforms || []).map(function (p) { return '<span class="nc-chip nc-chip--code">' + p + "</span>"; }).join(" ") +
+            " " + (e.content || "(sin caption)") + link + "</div>";
+        }).join("");
+    }
+
+    function loadCalendar() {
+      var year = calRef.getFullYear(), month = calRef.getMonth();
+      var from = ymd(new Date(year, month, 1));
+      var to = ymd(new Date(year, month + 1, 0));
+      fetch("/dashboard/publish/zernio/calendar.json?date_from=" + from + "&date_to=" + to,
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { calEntries = b.entries || []; renderCalendar(); })
+        .catch(function () { calEntries = []; renderCalendar(); });
+    }
+
+    document.getElementById("zn-cal-prev").addEventListener("click", function () {
+      calRef.setMonth(calRef.getMonth() - 1); loadCalendar();
+    });
+    document.getElementById("zn-cal-next").addEventListener("click", function () {
+      calRef.setMonth(calRef.getMonth() + 1); loadCalendar();
+    });
+
+    document.querySelectorAll('.nc-pc-tab[data-tab="calendario"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var m = calRef.getFullYear() + "-" + calRef.getMonth();
+        if (calLoadedMonth !== m) { calLoadedMonth = m; loadCalendar(); }
       });
     });
   }

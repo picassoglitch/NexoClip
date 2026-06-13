@@ -35,7 +35,13 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from nexoclip.db import ClipsRepo, Database, TenantsRepo, ZernioPublishesRepo
+from nexoclip.db import (
+    ClipsRepo,
+    Database,
+    TenantsRepo,
+    ZernioCalendarRepo,
+    ZernioPublishesRepo,
+)
 from nexoclip.integrations.zernio import (
     ZernioAccount,
     ZernioClient,
@@ -1298,6 +1304,88 @@ async def zernio_delete_queue(
             status_code=502,
         )
     return JSONResponse({"ok": True})
+
+
+@router.get("/calendar.json")
+async def zernio_calendar_json(
+    date_from: str = "",
+    date_to: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Unified content calendar: entries from THREE sources merged and
+    labeled —
+      - `hub`: clips published through NexoClip (zernio_publishes)
+      - `scheduled`: hub posts with a future scheduled_for
+      - `external`: posts the streamer authored natively, detected via
+        post.external.* webhooks (zernio_calendar), resolved to this
+        tenant by matching the social account id against their
+        connected accounts
+
+    Each entry: {date, source, platform(s), content, status, url,
+    post_id, clip_id?}. Deleted external posts are included with
+    status='deleted' so the UI can grey them out. Date bounds are
+    ISO-8601 (YYYY-MM-DD); omitted = no bound."""
+    df = (date_from or "").strip() or None
+    dt = (date_to or "").strip() or None
+    entries: list[dict[str, Any]] = []
+
+    # Sources 1 + 2: local hub/scheduled publishes (already tenant-scoped).
+    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=200)
+    for p in publishes:
+        if p.status in ("draft", "deleted"):
+            continue
+        # zernio_publishes has no scheduled_for column (that's
+        # hub_publish_jobs); created_at is the publish moment.
+        date = p.created_at
+        if df and date and date[:10] < df:
+            continue
+        if dt and date and date[:10] > dt:
+            continue
+        entries.append(
+            {
+                "date": date,
+                "source": "scheduled" if p.status == "scheduled" else "hub",
+                "platforms": [pl for pl in p.platforms.split(",") if pl],
+                "content": (p.content or "")[:120],
+                "status": p.status or "published",
+                "post_id": p.post_id,
+                "clip_id": p.clip_id,
+                "url": None,
+            }
+        )
+
+    # Source 3: external posts — resolve via the tenant's connected
+    # account ids (the isolation boundary for the tenant-free store).
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    settings = get_settings()
+    if profile_id and settings.zernio_api_key:
+        try:
+            accounts = await _build_client().list_accounts(profile_id=profile_id)
+            account_ids = [a.account_id for a in accounts]
+        except ZernioError:
+            account_ids = []
+        if account_ids:
+            for e in await ZernioCalendarRepo(db).list_for_accounts(
+                account_ids, date_from=df, date_to=dt,
+            ):
+                entries.append(
+                    {
+                        "date": e.get("published_at"),
+                        "source": "external",
+                        "platforms": [e["platform"]] if e.get("platform") else [],
+                        "content": (e.get("content") or "")[:120],
+                        "status": e.get("status") or "active",
+                        "post_id": e.get("post_id"),
+                        "clip_id": None,
+                        "url": e.get("url"),
+                        "thumbnail_url": e.get("thumbnail_url"),
+                    }
+                )
+
+    entries.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
+    return JSONResponse({"ok": True, "entries": entries})
 
 
 @router.get("/rendimiento.json")

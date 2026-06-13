@@ -1,0 +1,182 @@
+"""calendar.json route — merges hub/scheduled/external (phase 8)."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import httpx
+import pytest
+import pytest_asyncio
+import respx
+
+from nexoclip.db import (
+    Database,
+    TenantsRepo,
+    ZernioCalendarRepo,
+    ZernioPublishesRepo,
+)
+from nexoclip.integrations.nexo_ai.service import sync_tenant_tier
+from nexoclip.settings import get_settings
+
+from .conftest import auth
+
+_ZBASE = "https://zernio.com/api/v1"
+
+
+@pytest.fixture
+def zernio_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("NEXOCLIP_ZERNIO_API_KEY", "sk_test_cal")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest_asyncio.fixture
+async def alice(
+    db: Database, tenants: dict[str, dict[str, str]]
+) -> dict[str, str]:
+    tid = tenants["alice"]["id"]
+    await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
+    await TenantsRepo(db).set_zernio_profile(
+        tid, profile_id="prof_alice", profile_name="Alice",
+    )
+    return tenants["alice"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_merges_three_sources(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # Source 1+2: a hub publish + a scheduled one.
+    await ZernioPublishesRepo(db).record(
+        post_id="post_hub", tenant_id=alice["id"], clip_id="clp_1",
+        platforms=["tiktok"], content="Publicado por el hub", status=None,
+    )
+    await ZernioPublishesRepo(db).record(
+        post_id="post_sched", tenant_id=alice["id"], clip_id="clp_2",
+        platforms=["youtube"], content="Programado", status="scheduled",
+    )
+    # Source 3: an external post on Alice's connected account.
+    await ZernioCalendarRepo(db).upsert(
+        account_id="acct_tiktok", post_id="ext1", platform="tiktok",
+        content="Posteado nativo", url="https://tiktok.com/ext1",
+        thumbnail_url=None, media_type="video", published_at="2026-06-05T10:00:00Z",
+    )
+
+    with respx.mock() as mock:
+        # The route resolves external posts via the tenant's accounts.
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(
+                200,
+                json={"accounts": [
+                    {"platform": "tiktok", "_id": "acct_tiktok",
+                     "profileId": "prof_alice"}
+                ]},
+            )
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json", headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+    entries = resp.json()["entries"]
+    by_source: dict[str, list] = {}
+    for e in entries:
+        by_source.setdefault(e["source"], []).append(e)
+    assert {"hub", "scheduled", "external"} <= set(by_source)
+    assert by_source["external"][0]["post_id"] == "ext1"
+    assert by_source["external"][0]["url"] == "https://tiktok.com/ext1"
+    assert by_source["scheduled"][0]["post_id"] == "post_sched"
+
+
+@pytest.mark.asyncio
+async def test_calendar_excludes_drafts(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    await ZernioPublishesRepo(db).record(
+        post_id="post_draft", tenant_id=alice["id"], clip_id="clp_d",
+        platforms=["tiktok"], content="Borrador", status="draft",
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json", headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+    assert all(e["post_id"] != "post_draft" for e in resp.json()["entries"])
+
+
+@pytest.mark.asyncio
+async def test_calendar_external_isolation_by_account(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # An external post on an account Alice does NOT own must not show.
+    await ZernioCalendarRepo(db).upsert(
+        account_id="acct_someone_else", post_id="ext_x", platform="tiktok",
+        content="No es de Alice", url=None, thumbnail_url=None,
+        media_type=None, published_at="2026-06-05T10:00:00Z",
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(
+                200,
+                json={"accounts": [
+                    {"platform": "tiktok", "_id": "acct_alice_only",
+                     "profileId": "prof_alice"}
+                ]},
+            )
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json", headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+    assert all(e.get("post_id") != "ext_x" for e in resp.json()["entries"])
+
+
+@pytest.mark.asyncio
+async def test_calendar_date_range_filter(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    await ZernioCalendarRepo(db).upsert(
+        account_id="acct_tiktok", post_id="june", platform="tiktok",
+        content="junio", url=None, thumbnail_url=None, media_type=None,
+        published_at="2026-06-15T10:00:00Z",
+    )
+    await ZernioCalendarRepo(db).upsert(
+        account_id="acct_tiktok", post_id="july", platform="tiktok",
+        content="julio", url=None, thumbnail_url=None, media_type=None,
+        published_at="2026-07-15T10:00:00Z",
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(
+                200,
+                json={"accounts": [
+                    {"platform": "tiktok", "_id": "acct_tiktok",
+                     "profileId": "prof_alice"}
+                ]},
+            )
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json"
+            "?date_from=2026-06-01&date_to=2026-06-30",
+            headers=auth(alice["token"]),
+        )
+    posts = {e["post_id"] for e in resp.json()["entries"]}
+    assert "june" in posts
+    assert "july" not in posts

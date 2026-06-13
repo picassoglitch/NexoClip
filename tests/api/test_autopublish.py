@@ -79,9 +79,9 @@ async def test_autopublish_save_persists(
     resp = await client.post(
         "/dashboard/publish/zernio/autopublish/save",
         json={
-            "enabled": True, "mode": "on_approve",
+            "enabled": True, "mode": "hands_free",
             "targets": ["tiktok", "instagram"], "post_mode": "queue",
-            "daily_cap": 5,
+            "daily_cap": 5, "score_threshold": 0.75,
         },
         headers=auth(alice["token"]),
     )
@@ -89,10 +89,11 @@ async def test_autopublish_save_persists(
     s = await AutopublishSettingsRepo(db).get(alice["id"])
     assert s is not None
     assert s["enabled"] is True
-    assert s["mode"] == "on_approve"
+    assert s["mode"] == "hands_free"
     assert s["targets"] == "tiktok,instagram"
     assert s["post_mode"] == "queue"
     assert s["daily_cap"] == 5
+    assert s["score_threshold"] == 0.75
 
 
 @pytest.mark.asyncio

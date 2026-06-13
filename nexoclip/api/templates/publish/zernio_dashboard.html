@@ -734,6 +734,10 @@
       <label class="nc-label" style="margin:0;">Tope diario
         <input class="nc-input" id="zn-ap-cap" type="number" min="0" value="10" style="width:90px;">
       </label>
+      <label class="nc-label" style="margin:0;">Umbral de score <small>(manos libres)</small>
+        <input class="nc-input" id="zn-ap-threshold" type="number" min="0" max="1" step="0.05"
+               value="0.6" style="width:90px;">
+      </label>
       <span class="nc-text--muted" style="font-size:12px;" id="zn-ap-used"></span>
     </div>
 
@@ -2052,6 +2056,7 @@
           });
           document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
           document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
+          document.getElementById("zn-ap-threshold").value = (s.score_threshold == null ? 0.6 : s.score_threshold);
           var selected = (s.targets || "").split(",").filter(function (t) { return t; });
           renderApTargets(b.platforms || [], selected);
           var used = document.getElementById("zn-ap-used");
@@ -2082,6 +2087,7 @@
           targets: targets,
           post_mode: document.getElementById("zn-ap-postmode").value,
           daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
+          score_threshold: parseFloat(document.getElementById("zn-ap-threshold").value) || 0,
         }),
       })
         .then(function (r) { return r.json(); })

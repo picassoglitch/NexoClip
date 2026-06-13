@@ -1559,7 +1559,7 @@ async def zernio_autopublish_json(
 
     s = await AutopublishSettingsRepo(db).get(tenant_id) or {
         "enabled": False, "mode": "on_approve", "targets": None,
-        "post_mode": "queue", "daily_cap": 10,
+        "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
     }
     platforms: list[str] = []
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -1610,6 +1610,10 @@ async def zernio_autopublish_save(
         daily_cap = max(0, int(data.get("daily_cap", 10)))
     except (TypeError, ValueError):
         daily_cap = 10
+    try:
+        score_threshold = min(1.0, max(0.0, float(data.get("score_threshold", 0.6))))
+    except (TypeError, ValueError):
+        score_threshold = 0.6
     await AutopublishSettingsRepo(db).upsert(
         tenant_id,
         enabled=bool(data.get("enabled")),
@@ -1617,6 +1621,7 @@ async def zernio_autopublish_save(
         targets=targets,
         post_mode=post_mode,
         daily_cap=daily_cap,
+        score_threshold=score_threshold,
     )
     return JSONResponse({"ok": True})
 

@@ -327,6 +327,26 @@ class ZernioClient:
             name=str(profile.get("name") or name),
         )
 
+    async def list_profiles(self) -> list[ZernioProfile]:
+        """GET /profiles — every profile under the company key. Lets the
+        auto-provisioner find an existing profile by name (idempotent
+        re-link) instead of duplicating it."""
+        body = await self._request("GET", "/profiles")
+        rows = body.get("profiles") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            rows = body if isinstance(body, list) else None
+        out: list[ZernioProfile] = []
+        if isinstance(rows, list):
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                pid = r.get("_id") or r.get("id")
+                if isinstance(pid, str) and pid:
+                    out.append(
+                        ZernioProfile(profile_id=pid, name=str(r.get("name") or ""))
+                    )
+        return out
+
     # ---- Account connection ----
 
     async def connect_url(

@@ -62,6 +62,40 @@ async def alice(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_autoprovisions_profile_so_tabs_appear(
+    zernio_env: None, client: httpx.AsyncClient, db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """A tenant with NO Zernio profile opens the Publish Center → the
+    profile is auto-provisioned and the tabs render (no manual step)."""
+    tid = tenants["alice"]["id"]  # no set_zernio_profile → profile_id is None
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(f"{_ZBASE}/profiles").mock(
+            return_value=httpx.Response(200, json={"profiles": []})
+        )
+        mock.post(f"{_ZBASE}/profiles").mock(
+            return_value=httpx.Response(
+                201, json={"profile": {"_id": "prof_auto", "name": f"NexoClip {tid}"}}
+            )
+        )
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        mock.get(f"{_ZBASE}/posts").mock(
+            return_value=httpx.Response(200, json={"posts": []})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio", headers=auth(tenants["alice"]["token"]),
+        )
+    assert resp.status_code == 200
+    # Tabs render now (gated on profile_id, which auto-provision filled).
+    assert 'data-tab="single"' in resp.text
+    # And it persisted.
+    tenant = await TenantsRepo(db).get(tid)
+    assert tenant is not None and tenant.zernio_profile_id == "prof_auto"
+
+
+@pytest.mark.asyncio
 async def test_connect_facebook_is_headless_with_platform_in_redirect(
     zernio_env: None, client: httpx.AsyncClient, alice: dict[str, str]
 ) -> None:

@@ -505,6 +505,18 @@ async def zernio_dashboard(
 
     tenant = await TenantsRepo(db).get(tenant_id)
     profile_id = tenant.zernio_profile_id if tenant else None
+
+    # Self-heal: a tenant with no Zernio profile sees ZERO tabs (every
+    # surface gates on profile_id). Auto-provision one on first open of
+    # the Publish Center so the tabs just appear — no manual "Create
+    # profile" step. Idempotent (find-or-create by deterministic name);
+    # best-effort, so a Zernio hiccup falls back to the manual form.
+    if configured and tenant is not None and not profile_id:
+        from nexoclip.integrations.zernio import ensure_zernio_profile_for_tenant
+        with contextlib.suppress(Exception):
+            profile_id = await ensure_zernio_profile_for_tenant(
+                db=db, tenant_id=tenant_id, client=_build_client(),
+            )
     profile_name = tenant.zernio_profile_name if tenant else None
 
     # Per-tenant publish history comes from OUR table (migration 030) —

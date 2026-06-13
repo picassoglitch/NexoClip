@@ -61,4 +61,68 @@ async def create_profile_for_tenant(
     return profile
 
 
-__all__ = ["create_profile_for_tenant"]
+def _auto_profile_name(tenant_id: str) -> str:
+    """Deterministic name for an auto-provisioned profile, so the
+    ensure step can find-or-create idempotently (survives DB resets and
+    concurrent first-loads without duplicating)."""
+    return f"NexoClip {tenant_id}"
+
+
+async def ensure_zernio_profile_for_tenant(
+    *,
+    db: Database,
+    tenant_id: str,
+    client: ZernioClient,
+) -> str | None:
+    """Guarantee the tenant has a Zernio profile, creating one if not,
+    and return its profileId. Idempotent + safe:
+
+      1. tenant already linked → return the stored id (no Zernio call).
+      2. else look for an existing profile named `NexoClip <tenant_id>`
+         (a prior auto-create whose local link was lost) → re-link it.
+      3. else create one with that deterministic name → link it.
+
+    This is what makes the Publish Center tabs appear automatically —
+    every gate is on tenants.zernio_profile_id. It does NOT touch a
+    profile the operator manually created/connected accounts under
+    (different name); that path stays the manual "Link existing"
+    claim. Best-effort: returns None on any Zernio error (the caller
+    falls back to the manual create/link form). Never raises.
+    """
+    repo = TenantsRepo(db)
+    tenant = await repo.get(tenant_id)
+    if tenant is None:
+        return None
+    if tenant.zernio_profile_id:
+        return tenant.zernio_profile_id
+
+    wanted = _auto_profile_name(tenant_id)
+    try:
+        for existing in await client.list_profiles():
+            if existing.name == wanted:
+                await repo.set_zernio_profile(
+                    tenant_id, profile_id=existing.profile_id,
+                    profile_name=existing.name,
+                )
+                _log.info(
+                    "zernio.profile_relinked tenant=%s profile_id=%s",
+                    tenant_id, existing.profile_id,
+                )
+                return existing.profile_id
+        profile = await client.create_profile(name=wanted)
+    except ZernioError as e:
+        _log.warning(
+            "zernio.profile_autocreate_failed tenant=%s err=%s", tenant_id, e,
+        )
+        return None
+    await repo.set_zernio_profile(
+        tenant_id, profile_id=profile.profile_id, profile_name=profile.name,
+    )
+    _log.info(
+        "zernio.profile_autocreated tenant=%s profile_id=%s",
+        tenant_id, profile.profile_id,
+    )
+    return profile.profile_id
+
+
+__all__ = ["create_profile_for_tenant", "ensure_zernio_profile_for_tenant"]

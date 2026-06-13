@@ -41,7 +41,7 @@ from .errors import (
     summarize_failed_platforms,
 )
 from .events import process_pending, process_zernio_event
-from .profiles import create_profile_for_tenant
+from .profiles import create_profile_for_tenant, ensure_zernio_profile_for_tenant
 from .webhooks import (
     parse_post_event,
     register_zernio_webhook,
@@ -60,6 +60,7 @@ __all__ = [
     "can_hide_comment",
     "can_send_attachment",
     "create_profile_for_tenant",
+    "ensure_zernio_profile_for_tenant",
     "is_transient",
     "normalize_list",
     "normalize_metrics",

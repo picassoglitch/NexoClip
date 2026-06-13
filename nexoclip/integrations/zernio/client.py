@@ -776,6 +776,48 @@ class ZernioClient:
             json={"accountId": account_id, "status": status}, parse_json=False,
         )
 
+    # ---- Community notifications (Discord / Telegram) ----
+
+    async def create_community_post(
+        self,
+        *,
+        profile_id: str,
+        content: str,
+        platforms: list[tuple[str, str]],
+        platform_specific_data: dict[str, dict[str, Any]] | None = None,
+    ) -> ZernioPostResult:
+        """POST /posts for a community NOTIFICATION — text + embeds,
+        NO video media (unlike create_post). Used to announce a fresh
+        clip to the streamer's Discord/Telegram community channel.
+
+        `content` is the plain-text fallback; `platform_specific_data`
+        carries the Discord embed + webhook identity. publishNow."""
+        platform_entries: list[dict[str, Any]] = []
+        for p, account_id in platforms:
+            entry: dict[str, Any] = {"platform": p, "accountId": account_id}
+            if platform_specific_data and p in platform_specific_data:
+                entry["platformSpecificData"] = platform_specific_data[p]
+            platform_entries.append(entry)
+        payload: dict[str, Any] = {
+            "content": content,
+            "platforms": platform_entries,
+            "publishNow": True,
+        }
+        body = await self._request("POST", "/posts", json=payload, timeout_s=60.0)
+        if not isinstance(body, dict):
+            raise ZernioError("community post response is not an object", body=body)
+        post = _unwrap_post(body)
+        post_id = post.get("_id") or post.get("id") or body.get("_id")
+        if not isinstance(post_id, str) or not post_id:
+            raise ZernioError("community post response missing _id", body=body)
+        return ZernioPostResult(
+            success=bool(body.get("success", True)),
+            post_id=post_id,
+            message=(
+                str(body["message"]) if isinstance(body.get("message"), str) else None
+            ),
+        )
+
     # ---- Growth layer: contacts ----
 
     async def list_contacts(

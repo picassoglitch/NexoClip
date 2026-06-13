@@ -331,6 +331,42 @@ def webhooks_snapshot_analytics_cmd(
     asyncio.run(_run())
 
 
+@webhooks_app.command("community-digest")
+def webhooks_community_digest_cmd(
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Send the weekly community digest to every tenant that opted in
+    (Hub phase 11). Run weekly (cron). Default-off per tenant."""
+    from nexoclip.db import ZernioCommunityRepo, apply_migrations
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.publish.analytics_service import send_weekly_digest
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            client = ZernioClient(
+                api_key=settings.zernio_api_key or "",
+                base_url=settings.zernio_base_url,
+            )
+            rows = await ZernioCommunityRepo(db).list_digest_tenants()
+            sent = 0
+            for row in rows:
+                if await send_weekly_digest(db, row["tenant_id"], client=client):
+                    sent += 1
+            typer.echo(f"community-digest tenants={len(rows)} sent={sent}")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
 @app.callback()
 def _root(
     log_level: str | None = typer.Option(

@@ -158,9 +158,56 @@ async def internal_analytics(
     }
 
 
+async def send_weekly_digest(
+    db: Database,
+    tenant_id: str,
+    *,
+    client: ZernioClient,
+    now: _dt.datetime | None = None,
+) -> bool:
+    """Post a weekly metrics digest to the tenant's community channel,
+    if the digest toggle is on. Reuses the phase-7 headline totals.
+    Returns True when a digest was sent. Best-effort."""
+    from nexoclip.db import TenantsRepo, ZernioCommunityRepo
+    from nexoclip.integrations.zernio.client import ZernioError
+    from nexoclip.integrations.zernio.community import build_weekly_digest_text
+
+    community = ZernioCommunityRepo(db)
+    settings_row = await community.get_settings(tenant_id)
+    if not settings_row or not settings_row.get("weekly_digest"):
+        return False
+    discord_id = settings_row.get("discord_account_id")
+    telegram_id = settings_row.get("telegram_account_id")
+    if not (discord_id or telegram_id):
+        return False
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id:
+        return False
+    view = await performance_for_tenant(
+        db, tenant_id, days=7, client=client, now=now,
+    )
+    text = build_weekly_digest_text(view.totals, days=7)
+    platforms: list[tuple[str, str]] = []
+    if discord_id:
+        platforms.append(("discord", discord_id))
+    if telegram_id:
+        platforms.append(("telegram", telegram_id))
+    try:
+        await client.create_community_post(
+            profile_id=profile_id, content=text, platforms=platforms,
+        )
+    except ZernioError as e:
+        _log.warning("analytics.digest_failed tenant=%s err=%s", tenant_id, e)
+        return False
+    _log.info("analytics.digest_sent tenant=%s", tenant_id)
+    return True
+
+
 __all__ = [
     "PerformanceView",
     "internal_analytics",
     "performance_for_tenant",
+    "send_weekly_digest",
     "snapshot_tenant",
 ]

@@ -3495,6 +3495,112 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioCommunityRepo:
+    """Community-notification settings + notify ledger (migration 039).
+
+    Settings are per-tenant. The ledger is tenant-free at the lookup
+    layer (the webhook processor resolves the tenant) but every row
+    carries tenant_id. `claim_notification` is the once-only + loop
+    guard for announce-on-publish."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def get_settings(self, tenant_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id, enabled, discord_account_id, telegram_account_id, "
+            "brand_name, brand_avatar_url, weekly_digest, updated_at "
+            "FROM zernio_community_settings WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled"))
+        d["weekly_digest"] = bool(d.get("weekly_digest"))
+        return d
+
+    async def upsert_settings(
+        self,
+        tenant_id: str,
+        *,
+        enabled: bool,
+        discord_account_id: str | None,
+        telegram_account_id: str | None,
+        brand_name: str | None,
+        brand_avatar_url: str | None,
+        weekly_digest: bool,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_community_settings "
+            "(tenant_id, enabled, discord_account_id, telegram_account_id, "
+            "brand_name, brand_avatar_url, weekly_digest, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_id) DO UPDATE SET "
+            "enabled = excluded.enabled, "
+            "discord_account_id = excluded.discord_account_id, "
+            "telegram_account_id = excluded.telegram_account_id, "
+            "brand_name = excluded.brand_name, "
+            "brand_avatar_url = excluded.brand_avatar_url, "
+            "weekly_digest = excluded.weekly_digest, "
+            "updated_at = excluded.updated_at",
+            (
+                tenant_id, 1 if enabled else 0, discord_account_id,
+                telegram_account_id, brand_name, brand_avatar_url,
+                1 if weekly_digest else 0, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def list_digest_tenants(self) -> list[dict[str, Any]]:
+        """Settings rows with the weekly digest enabled (for the cron)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT tenant_id, discord_account_id, telegram_account_id "
+            "FROM zernio_community_settings WHERE weekly_digest = 1 AND enabled = 1",
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def claim_notification(
+        self, *, source_post_id: str, tenant_id: str
+    ) -> bool:
+        """Claim the single announcement for `source_post_id`. False if
+        already claimed (at-least-once redelivery)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "INSERT OR IGNORE INTO zernio_community_notifications "
+            "(source_post_id, tenant_id, sent_at) VALUES (?, ?, ?)",
+            (source_post_id, tenant_id, _now()),
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
+    async def set_notification_post(
+        self, *, source_post_id: str, notification_post_id: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_community_notifications "
+            "SET notification_post_id = ? WHERE source_post_id = ?",
+            (notification_post_id, source_post_id),
+        )
+        await conn.commit()
+
+    async def is_notification_post(self, post_id: str) -> bool:
+        """True if `post_id` is an announcement WE created — the loop
+        guard so a notification's own post.published doesn't re-announce."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT 1 FROM zernio_community_notifications "
+            "WHERE notification_post_id = ? LIMIT 1",
+            (post_id,),
+        )
+        return (await cur.fetchone()) is not None
+
+
 class ZernioBroadcastLogRepo:
     """Per-tenant daily broadcast-send log (migration 038) — the
     anti-spam guardrail. Tenant_id is explicit (the route passes it).

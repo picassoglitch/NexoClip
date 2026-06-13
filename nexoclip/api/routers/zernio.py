@@ -125,6 +125,16 @@ _SUPPORTED_PLATFORMS = [
 # checkbox group on the publish path.
 _SUPPORTED_PLATFORM_IDS = frozenset(p[0] for p in _SUPPORTED_PLATFORMS)
 
+# Community channels — connectable like any platform, but NOT clip
+# targets (phase 11): they get Connect buttons + a notification toggle,
+# never publish chips.
+_COMMUNITY_PLATFORMS = [
+    ("discord",  "Discord",  "ti-brand-discord"),
+    ("telegram", "Telegram", "ti-brand-telegram"),
+]
+_COMMUNITY_PLATFORM_IDS = frozenset(p[0] for p in _COMMUNITY_PLATFORMS)
+_CONNECTABLE_PLATFORM_IDS = _SUPPORTED_PLATFORM_IDS | _COMMUNITY_PLATFORM_IDS
+
 # Platforms whose OAuth needs a post-selection step (pick ONE page /
 # board) that we render ourselves via Zernio's headless connect mode.
 # Facebook is implemented; Pinterest boards follow the same pattern
@@ -662,6 +672,12 @@ async def zernio_dashboard(
             # Phase 10 growth layer is Pro-gated — the tab shows the
             # panels for paid tiers, an upsell card otherwise.
             "is_pro": _is_paid_tier(request),
+            # Phase 11 — Discord/Telegram connect chips (community
+            # channels, not clip targets).
+            "community_platforms": _COMMUNITY_PLATFORMS,
+            "community_connected": sorted(
+                connected_set & _COMMUNITY_PLATFORM_IDS
+            ),
         },
     )
 
@@ -766,7 +782,7 @@ async def zernio_connect(
         form = await request.form()
         platform = str(form.get("platform") or "")
     platform = platform.strip().lower()
-    if platform not in _SUPPORTED_PLATFORM_IDS:
+    if platform not in _CONNECTABLE_PLATFORM_IDS:
         return JSONResponse(
             {"ok": False, "error": f"Unsupported platform: {platform!r}"},
             status_code=400,
@@ -1333,6 +1349,73 @@ async def _tenant_account_ids(db: Database, tenant_id: str) -> list[str]:
     except ZernioError:
         return []
     return [a.account_id for a in accounts]
+
+
+# ---------- Comunidad: Discord/Telegram notifications (phase 11) ----------
+
+
+@router.get("/community/settings.json")
+async def zernio_community_settings_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Current community-notification settings + the connected
+    Discord/Telegram accounts the operator can pick as the channel."""
+    from nexoclip.db import ZernioCommunityRepo
+
+    settings_row = await ZernioCommunityRepo(db).get_settings(tenant_id) or {
+        "enabled": False, "discord_account_id": None, "telegram_account_id": None,
+        "brand_name": None, "brand_avatar_url": None, "weekly_digest": False,
+    }
+    # Offer the tenant's connected discord/telegram accounts.
+    channels: list[dict[str, str]] = []
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if profile_id and get_settings().zernio_api_key:
+        try:
+            for a in await _build_client().list_accounts(profile_id=profile_id):
+                if a.platform.lower() in ("discord", "telegram"):
+                    channels.append(
+                        {"platform": a.platform.lower(), "account_id": a.account_id}
+                    )
+        except ZernioError:
+            pass
+    return JSONResponse({"ok": True, "settings": settings_row, "channels": channels})
+
+
+@router.post("/community/settings")
+async def zernio_community_save_settings(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Save the "Avisar a mi comunidad" toggle + channel + brand
+    identity + weekly-digest toggle. Body: {enabled, discord_account_id?,
+    telegram_account_id?, brand_name?, brand_avatar_url?, weekly_digest?}."""
+    from nexoclip.db import ZernioCommunityRepo
+
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    # Validate the chosen channels are ones the tenant actually owns.
+    owned = set(await _tenant_account_ids(db, tenant_id))
+    discord_id = str(data.get("discord_account_id") or "") or None
+    telegram_id = str(data.get("telegram_account_id") or "") or None
+    for chosen in (discord_id, telegram_id):
+        if chosen and chosen not in owned:
+            raise HTTPException(status_code=403, detail="account not owned by tenant")
+    await ZernioCommunityRepo(db).upsert_settings(
+        tenant_id,
+        enabled=bool(data.get("enabled")),
+        discord_account_id=discord_id,
+        telegram_account_id=telegram_id,
+        brand_name=str(data.get("brand_name") or "") or None,
+        brand_avatar_url=str(data.get("brand_avatar_url") or "") or None,
+        weekly_digest=bool(data.get("weekly_digest")),
+    )
+    return JSONResponse({"ok": True})
 
 
 # ---------- Crecimiento: funnel machine (phase 10, Pro-gated) ----------

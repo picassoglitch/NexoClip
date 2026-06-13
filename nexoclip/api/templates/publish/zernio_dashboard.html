@@ -670,6 +670,62 @@
 </div>
 {% endif %}
 
+{# ========== Comunidad — Discord/Telegram connect + announce-on-publish
+   toggle + brand identity + weekly digest (phase 11). ========== #}
+{% if profile_id %}
+<div class="nc-panel" id="zn-community-panel" style="margin-bottom: 16px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-speakerphone" aria-hidden="true"></i>
+    Comunidad
+    <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">
+      Avisa a tu Discord / Telegram cuando publicas
+    </span>
+  </div>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:12px;">
+    <div class="nc-pc-acct-row" style="padding:0;">
+      {% for key, label, icon in community_platforms %}
+        {% if key in community_connected %}
+        <span class="nc-pc-acct-chip is-connected">
+          <i class="ti {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
+          <i class="ti ti-check" aria-hidden="true"></i>
+        </span>
+        {% else %}
+        <button type="button" class="nc-pc-connect-btn js-zn-connect" data-platform="{{ key }}"
+                title="Conectar {{ label }}">
+          <i class="ti {{ icon }}" aria-hidden="true"></i><span>Conectar {{ label }}</span>
+        </button>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" id="zn-comm-enabled"> Avisar a mi comunidad al publicar
+    </label>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      <label class="nc-label" style="margin:0;">Canal Discord
+        <select class="nc-input" id="zn-comm-discord" style="width:auto;"><option value="">—</option></select></label>
+      <label class="nc-label" style="margin:0;">Canal Telegram
+        <select class="nc-input" id="zn-comm-telegram" style="width:auto;"><option value="">—</option></select></label>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Nombre de marca (Discord)
+        <input class="nc-input" id="zn-comm-brand" placeholder="Mi canal" maxlength="80"></label>
+      <label class="nc-label" style="margin:0; flex:1; min-width:160px;">Avatar (URL)
+        <input class="nc-input" id="zn-comm-avatar" placeholder="https://…/avatar.png"></label>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" id="zn-comm-digest"> Resumen semanal de métricas (opcional)
+    </label>
+    <div>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-comm-save" style="padding:6px 14px;">
+        <i class="ti ti-device-floppy"></i> Guardar
+      </button>
+      <span class="nc-text--muted" id="zn-comm-msg" style="font-size:12px; margin-left:8px;"></span>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ========== FAILED list — clickable from the Failed counter. Loads
    from /failed.json with per-platform error + Spanish hint; Reintentar
    per post + Reintentar todos. Hidden until the counter is clicked. #}
@@ -1846,6 +1902,57 @@
         loadGrowthAccounts(); loadAutomations(); loadContacts(); loadSequences();
       });
     });
+  }
+
+  // ---- Comunidad settings ----
+  var commPanel = document.getElementById("zn-community-panel");
+  if (commPanel) {
+    function fillChannelSelect(sel, channels, platform, current) {
+      sel.innerHTML = '<option value="">—</option>';
+      channels.filter(function (c) { return c.platform === platform; }).forEach(function (c) {
+        var o = document.createElement("option");
+        o.value = c.account_id; o.textContent = c.account_id.slice(-8);
+        if (c.account_id === current) { o.selected = true; }
+        sel.appendChild(o);
+      });
+    }
+    function loadCommunity() {
+      fetch("/dashboard/publish/zernio/community/settings.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var s = b.settings || {};
+          document.getElementById("zn-comm-enabled").checked = !!s.enabled;
+          document.getElementById("zn-comm-digest").checked = !!s.weekly_digest;
+          document.getElementById("zn-comm-brand").value = s.brand_name || "";
+          document.getElementById("zn-comm-avatar").value = s.brand_avatar_url || "";
+          fillChannelSelect(document.getElementById("zn-comm-discord"), b.channels || [], "discord", s.discord_account_id);
+          fillChannelSelect(document.getElementById("zn-comm-telegram"), b.channels || [], "telegram", s.telegram_account_id);
+        })
+        .catch(function () {});
+    }
+    document.getElementById("zn-comm-save").addEventListener("click", function () {
+      var msg = document.getElementById("zn-comm-msg");
+      msg.textContent = "Guardando…";
+      fetch("/dashboard/publish/zernio/community/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          enabled: document.getElementById("zn-comm-enabled").checked,
+          weekly_digest: document.getElementById("zn-comm-digest").checked,
+          discord_account_id: document.getElementById("zn-comm-discord").value || null,
+          telegram_account_id: document.getElementById("zn-comm-telegram").value || null,
+          brand_name: document.getElementById("zn-comm-brand").value || null,
+          brand_avatar_url: document.getElementById("zn-comm-avatar").value || null,
+        }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          msg.style.color = res.ok ? "var(--nc-green, #48bb78)" : "#ff7575";
+          msg.textContent = res.ok ? "Guardado ✓" : ("Error: " + (res.error || res.detail || ""));
+        })
+        .catch(function (e) { msg.style.color = "#ff7575"; msg.textContent = "Error: " + e.message; });
+    });
+    loadCommunity();
   }
 
   // ---- FAILED list + retry ----

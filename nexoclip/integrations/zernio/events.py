@@ -214,6 +214,12 @@ async def _process(db: Database, event_id: str) -> None:
         if post_is_auto_retryable(post):
             await _maybe_auto_retry(db, post_id=post_id, tenant_id=tenant_id)
 
+    # --- community announce-on-publish (phase 11) ---
+    if post_id and row.type == "post.published" and tenant_id and post:
+        await _maybe_notify_community(
+            db, tenant_id=tenant_id, post_id=post_id, post=post,
+        )
+
     # --- fan-out: event row + drain the tenant's webhook subscriptions ---
     if tenant_id:
         try:
@@ -395,6 +401,95 @@ async def _process_conversation(db: Database, payload: dict[str, Any]) -> None:
             name=_s(conv.get("participantName")),
             username=_s(conv.get("participantUsername")),
             tag="dm-lead",
+        )
+
+
+async def _maybe_notify_community(
+    db: Database, *, tenant_id: str, post_id: str, post: dict[str, Any]
+) -> None:
+    """Announce a freshly published clip to the tenant's Discord/
+    Telegram community channel, if "Avisar a mi comunidad" is on.
+
+    Guards: (1) skip if THIS post is itself a community announcement we
+    created (loop guard); (2) claim the source post id so an
+    at-least-once redelivery announces at most once. Never raises."""
+    from nexoclip.db import ZernioCommunityRepo, ZernioPublishesRepo
+    from nexoclip.settings import get_settings
+
+    from .client import ZernioClient, ZernioError
+    from .community import build_notification_payload
+
+    try:
+        community = ZernioCommunityRepo(db)
+        # Loop guard: a notification's own post.published must not announce.
+        if await community.is_notification_post(post_id):
+            return
+        settings_row = await community.get_settings(tenant_id)
+        if not settings_row or not settings_row.get("enabled"):
+            return
+        discord_id = settings_row.get("discord_account_id")
+        telegram_id = settings_row.get("telegram_account_id")
+        if not (discord_id or telegram_id):
+            return
+        # Once-only claim (at-least-once redelivery → announce once).
+        if not await community.claim_notification(
+            source_post_id=post_id, tenant_id=tenant_id,
+        ):
+            return
+
+        settings = get_settings()
+        if not settings.zernio_api_key:
+            return
+        tenant = await TenantsRepo(db).get(tenant_id)
+        profile_id = tenant.zernio_profile_id if tenant else None
+        if not profile_id:
+            return
+
+        # Thumbnail: the local publish row's clip thumbnail, if any.
+        thumbnail_url = None
+        pub = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+        if pub is not None:
+            base = (settings.public_url or "").rstrip("/")
+            if base and pub.clip_id:
+                thumbnail_url = f"{base}/dashboard/clips/{pub.clip_id}/thumbnail"
+
+        platforms, psd, _text = build_notification_payload(
+            post,
+            discord_account_id=discord_id,
+            telegram_account_id=telegram_id,
+            brand_name=settings_row.get("brand_name"),
+            brand_avatar_url=settings_row.get("brand_avatar_url"),
+            thumbnail_url=thumbnail_url,
+        )
+        if not platforms:
+            return
+        client = ZernioClient(
+            api_key=settings.zernio_api_key, base_url=settings.zernio_base_url,
+        )
+        try:
+            result = await client.create_community_post(
+                profile_id=profile_id,
+                content=_text,
+                platforms=platforms,
+                platform_specific_data=psd or None,
+            )
+        except ZernioError as e:
+            _log.warning(
+                "zernio.community.notify_failed tenant=%s post=%s err=%s",
+                tenant_id, post_id, e,
+            )
+            return
+        await community.set_notification_post(
+            source_post_id=post_id, notification_post_id=result.post_id,
+        )
+        _log.info(
+            "zernio.community.notified tenant=%s source=%s notif=%s",
+            tenant_id, post_id, result.post_id,
+        )
+    except Exception as e:  # best-effort, never break event processing
+        _log.warning(
+            "zernio.community.notify_crashed tenant=%s post=%s err=%s",
+            tenant_id, post_id, e,
         )
 
 

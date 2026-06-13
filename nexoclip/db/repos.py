@@ -3495,6 +3495,267 @@ class ZernioPublishesRepo:
         await conn.commit()
 
 
+class ZernioInboxRepo:
+    """Comments + DM conversations/messages + contacts (migration 037).
+
+    Tenant-free at rest — keyed by account_id (inbox webhooks carry no
+    profileId), resolved to a tenant at read time by matching against
+    the tenant's connected accounts. Webhook-first: the event processor
+    writes here, REST is backfill, the UI reads local state."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    # ---- comments ----
+
+    async def upsert_comment(
+        self,
+        *,
+        account_id: str,
+        comment_id: str,
+        post_id: str | None,
+        platform_post_id: str | None,
+        platform: str | None,
+        text: str | None,
+        author_id: str | None,
+        author_name: str | None,
+        author_username: str | None,
+        is_reply: bool,
+        parent_id: str | None,
+        created_at: str | None,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_comments "
+            "(account_id, comment_id, post_id, platform_post_id, platform, text, "
+            "author_id, author_name, author_username, is_reply, parent_id, "
+            "status, created_at, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) "
+            "ON CONFLICT(account_id, comment_id) DO UPDATE SET "
+            "text = excluded.text, status = "
+            "CASE WHEN zernio_comments.status = 'hidden' THEN 'hidden' "
+            "ELSE 'active' END",
+            (
+                account_id, comment_id, post_id, platform_post_id, platform, text,
+                author_id, author_name, author_username, 1 if is_reply else 0,
+                parent_id, created_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def set_comment_status(
+        self, *, account_id: str, comment_id: str, status: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_comments SET status = ? "
+            "WHERE account_id = ? AND comment_id = ?",
+            (status, account_id, comment_id),
+        )
+        await conn.commit()
+
+    async def list_comments(
+        self,
+        account_ids: list[str],
+        *,
+        platform_post_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if platform_post_id:
+            where += " AND platform_post_id = ?"
+            params.append(platform_post_id)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, comment_id, post_id, platform_post_id, platform, "
+            "text, author_id, author_name, author_username, is_reply, parent_id, "
+            "status, created_at FROM zernio_comments "
+            f"WHERE {where} ORDER BY created_at DESC LIMIT ?",  # fixed frags, bound
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    # ---- conversations + messages ----
+
+    async def upsert_conversation(
+        self,
+        *,
+        account_id: str,
+        conversation_id: str,
+        platform: str | None,
+        participant_id: str | None,
+        participant_name: str | None,
+        participant_username: str | None,
+        status: str | None,
+        last_message_at: str | None,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_conversations "
+            "(account_id, conversation_id, platform, participant_id, "
+            "participant_name, participant_username, status, last_message_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id, conversation_id) DO UPDATE SET "
+            "participant_name = COALESCE(excluded.participant_name, "
+            "  zernio_conversations.participant_name), "
+            "participant_username = COALESCE(excluded.participant_username, "
+            "  zernio_conversations.participant_username), "
+            "status = COALESCE(excluded.status, zernio_conversations.status), "
+            "last_message_at = COALESCE(excluded.last_message_at, "
+            "  zernio_conversations.last_message_at), "
+            "updated_at = excluded.updated_at",
+            (
+                account_id, conversation_id, platform, participant_id,
+                participant_name, participant_username, status or "active",
+                last_message_at, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def set_conversation_status(
+        self, *, account_id: str, conversation_id: str, status: str
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE zernio_conversations SET status = ?, updated_at = ? "
+            "WHERE account_id = ? AND conversation_id = ?",
+            (status, _now(), account_id, conversation_id),
+        )
+        await conn.commit()
+
+    async def list_conversations(
+        self, account_ids: list[str], *, status: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if status:
+            where += " AND status = ?"
+            params.append(status)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, conversation_id, platform, participant_id, "
+            "participant_name, participant_username, status, last_message_at "
+            f"FROM zernio_conversations WHERE {where} "  # fixed frags, bound
+            "ORDER BY last_message_at DESC LIMIT ?",
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def upsert_message(
+        self,
+        *,
+        account_id: str,
+        message_id: str,
+        conversation_id: str | None,
+        platform: str | None,
+        direction: str | None,
+        text: str | None,
+        sent_at: str | None,
+        is_read: bool,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO zernio_messages "
+            "(account_id, message_id, conversation_id, platform, direction, text, "
+            "sent_at, is_read, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id, message_id) DO UPDATE SET "
+            "text = excluded.text, is_read = excluded.is_read",
+            (
+                account_id, message_id, conversation_id, platform, direction, text,
+                sent_at, 1 if is_read else 0, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def list_messages(
+        self, account_ids: list[str], *, conversation_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, message_id, conversation_id, platform, direction, "
+            "text, sent_at, is_read FROM zernio_messages "
+            f"WHERE account_id IN ({placeholders}) AND conversation_id = ? "
+            "ORDER BY sent_at ASC LIMIT ?",
+            (*account_ids, conversation_id, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    # ---- contacts (seeded here, managed in phase 10) ----
+
+    async def upsert_contact(
+        self,
+        *,
+        account_id: str,
+        contact_key: str,
+        platform: str | None,
+        name: str | None,
+        username: str | None,
+        tag: str,
+    ) -> None:
+        """Auto-seed/refresh a potential contact from a comment or DM
+        author. Merges the new tag into the existing csv (dedup)."""
+        conn = await self._db.connect()
+        existing = await conn.execute(
+            "SELECT tags FROM zernio_contacts "
+            "WHERE account_id = ? AND contact_key = ?",
+            (account_id, contact_key),
+        )
+        row = await existing.fetchone()
+        tags = {t for t in ((row["tags"] or "").split(",") if row else []) if t}
+        tags.add(tag)
+        if platform:
+            tags.add(platform)
+        tags_csv = ",".join(sorted(tags))
+        if row:
+            await conn.execute(
+                "UPDATE zernio_contacts SET tags = ?, name = COALESCE(?, name), "
+                "username = COALESCE(?, username), last_seen = ? "
+                "WHERE account_id = ? AND contact_key = ?",
+                (tags_csv, name, username, _now(), account_id, contact_key),
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO zernio_contacts "
+                "(account_id, contact_key, platform, name, username, tags, "
+                "first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    account_id, contact_key, platform, name, username, tags_csv,
+                    _now(), _now(),
+                ),
+            )
+        await conn.commit()
+
+    async def list_contacts(
+        self, account_ids: list[str], *, tag: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        where = f"account_id IN ({placeholders})"
+        params: list[object] = list(account_ids)
+        if tag:
+            where += " AND (',' || tags || ',') LIKE ?"
+            params.append(f"%,{tag},%")
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT account_id, contact_key, platform, name, username, tags, "
+            "zernio_contact_id, first_seen, last_seen FROM zernio_contacts "
+            f"WHERE {where} ORDER BY last_seen DESC LIMIT ?",  # fixed frags, bound
+            (*params, int(limit)),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 class ZernioCalendarRepo:
     """External (native) posts for the unified calendar (migration 036).
 

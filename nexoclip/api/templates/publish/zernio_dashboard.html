@@ -374,6 +374,14 @@
     <i class="ti ti-calendar" aria-hidden="true"></i>
     Calendario
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="comentarios">
+    <i class="ti ti-message-circle" aria-hidden="true"></i>
+    Comentarios
+  </button>
+  <button type="button" class="nc-pc-tab" data-tab="dms">
+    <i class="ti ti-mail" aria-hidden="true"></i>
+    DMs
+  </button>
 </div>
 
 {# ========== Tab: Single Publish ========== #}
@@ -851,6 +859,38 @@
     </div>
     <div id="zn-cal-grid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px;"></div>
     <div id="zn-cal-detail" style="margin-top:14px;"></div>
+  </div>
+</div>
+</div>
+
+{# ========== Tab: Comentarios — unified comment feed on the streamer's
+   clips; reply / like / hide (where supported). ========== #}
+<div class="nc-pc-tab-body" data-tab-body="comentarios">
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-message-circle" aria-hidden="true"></i>
+    <span class="nc-panel__title">Comentarios</span>
+  </div>
+  <div class="nc-panel__body" id="zn-comments-list">
+    <span class="nc-text--muted">Cargando…</span>
+  </div>
+</div>
+</div>
+
+{# ========== Tab: DMs — conversation list + thread + reply / archive. #}
+<div class="nc-pc-tab-body" data-tab-body="dms">
+<div class="nc-panel">
+  <div class="nc-panel__header">
+    <i class="ti ti-mail" aria-hidden="true"></i>
+    <span class="nc-panel__title">Mensajes directos</span>
+  </div>
+  <div class="nc-panel__body" style="display:grid; grid-template-columns:280px 1fr; gap:14px; min-height:320px;">
+    <div id="zn-dm-list" style="border-right:1px solid rgba(255,255,255,0.08); padding-right:12px; overflow-y:auto; max-height:480px;">
+      <span class="nc-text--muted">Cargando…</span>
+    </div>
+    <div id="zn-dm-thread">
+      <span class="nc-text--muted">Elige una conversación.</span>
+    </div>
   </div>
 </div>
 </div>
@@ -1414,6 +1454,163 @@
       tab.addEventListener("click", function () {
         var m = calRef.getFullYear() + "-" + calRef.getMonth();
         if (calLoadedMonth !== m) { calLoadedMonth = m; loadCalendar(); }
+      });
+    });
+  }
+
+  // ---- Comentarios tab ----
+  var commentsHost = document.getElementById("zn-comments-list");
+  if (commentsHost) {
+    var commentsLoaded = false;
+    function esc(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+    function renderComments(items) {
+      if (!items.length) {
+        commentsHost.innerHTML = '<span class="nc-text--muted">Aún no hay comentarios en tus clips.</span>';
+        return;
+      }
+      commentsHost.innerHTML = "";
+      items.forEach(function (c) {
+        var hidden = c.status === "hidden";
+        var card = document.createElement("div");
+        card.style.cssText = "padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05);" + (hidden ? "opacity:0.5;" : "");
+        card.innerHTML =
+          '<div style="display:flex; gap:8px; align-items:center;">' +
+          '<span class="nc-chip nc-chip--code">' + esc(c.platform) + "</span>" +
+          "<strong>" + esc(c.author_name || c.author_username || "anónimo") + "</strong>" +
+          (hidden ? ' <span class="nc-chip nc-chip--muted">oculto</span>' : "") + "</div>" +
+          '<div style="margin:4px 0;">' + esc(c.text) + "</div>";
+        var actions = document.createElement("div");
+        actions.style.cssText = "display:flex; gap:6px;";
+        function act(label, icon, fn) {
+          var b = document.createElement("button");
+          b.type = "button"; b.className = "nc-btn"; b.style.cssText = "padding:3px 10px; font-size:12px;";
+          b.innerHTML = '<i class="ti ' + icon + '"></i> ' + label;
+          b.addEventListener("click", fn);
+          return b;
+        }
+        actions.appendChild(act("Responder", "ti-arrow-back-up", function () {
+          var msg = window.prompt("Tu respuesta:");
+          if (!msg) { return; }
+          postJSON("/dashboard/publish/zernio/inbox/comments/reply", {
+            account_id: c.account_id, post_id: c.platform_post_id || c.post_id,
+            comment_id: c.comment_id, message: msg,
+          }, function () { alert("Respuesta enviada."); });
+        }));
+        actions.appendChild(act("Like", "ti-heart", function () {
+          postJSON("/dashboard/publish/zernio/inbox/comments/like", {
+            account_id: c.account_id, post_id: c.platform_post_id || c.post_id, comment_id: c.comment_id,
+          }, function () {});
+        }));
+        if (c.can_hide && !hidden) {
+          actions.appendChild(act("Ocultar", "ti-eye-off", function () {
+            postJSON("/dashboard/publish/zernio/inbox/comments/hide", {
+              account_id: c.account_id, post_id: c.platform_post_id || c.post_id,
+              comment_id: c.comment_id, platform: c.platform,
+            }, function () { card.style.opacity = "0.5"; });
+          }));
+        }
+        card.appendChild(actions);
+        commentsHost.appendChild(card);
+      });
+    }
+
+    function postJSON(url, body, ok) {
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                   credentials: "same-origin", body: JSON.stringify(body) })
+        .then(function (r) { return r.json(); })
+        .then(function (res) { if (!res.ok) { throw new Error(res.error || "fallo"); } ok(res); })
+        .catch(function (e) { alert("Error: " + e.message); });
+    }
+    window._znPostJSON = postJSON;
+
+    function loadComments() {
+      fetch("/dashboard/publish/zernio/inbox/comments.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderComments(b.comments || []); })
+        .catch(function () { commentsHost.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>'; });
+    }
+    document.querySelectorAll('.nc-pc-tab[data-tab="comentarios"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!commentsLoaded) { commentsLoaded = true; loadComments(); }
+      });
+    });
+  }
+
+  // ---- DMs tab ----
+  var dmList = document.getElementById("zn-dm-list");
+  if (dmList) {
+    var dmLoaded = false;
+    var dmThread = document.getElementById("zn-dm-thread");
+    function escD(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+    function openThread(conv) {
+      dmThread.innerHTML = '<span class="nc-text--muted">Cargando…</span>';
+      fetch("/dashboard/publish/zernio/inbox/messages.json?conversation_id=" + encodeURIComponent(conv.conversation_id),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var msgs = (b.messages || []).map(function (m) {
+            var mine = m.direction === "outgoing";
+            return '<div style="text-align:' + (mine ? "right" : "left") + '; margin:4px 0;">' +
+              '<span style="display:inline-block; padding:6px 10px; border-radius:10px; max-width:80%;' +
+              "background:" + (mine ? "var(--nc-green,#48bb78); color:#000;" : "rgba(255,255,255,0.08);") + '">' +
+              escD(m.text) + "</span></div>";
+          }).join("");
+          dmThread.innerHTML =
+            "<div style='display:flex; align-items:center; gap:8px; margin-bottom:8px;'>" +
+            "<strong>" + escD(conv.participant_name || conv.participant_username || "contacto") + "</strong>" +
+            '<span class="nc-chip nc-chip--code">' + escD(conv.platform) + "</span>" +
+            "<button type='button' class='nc-btn' id='zn-dm-archive' style='margin-left:auto; padding:3px 10px; font-size:12px;'>" +
+            "<i class='ti ti-archive'></i> Archivar</button></div>" +
+            "<div style='max-height:320px; overflow-y:auto;'>" + (msgs || "<span class='nc-text--muted'>Sin mensajes.</span>") + "</div>" +
+            "<div style='display:flex; gap:6px; margin-top:10px;'>" +
+            "<input class='nc-input' id='zn-dm-input' placeholder='Escribe una respuesta…' style='flex:1;'>" +
+            "<button type='button' class='nc-btn nc-btn--primary' id='zn-dm-send'>Enviar</button></div>";
+          document.getElementById("zn-dm-send").addEventListener("click", function () {
+            var inp = document.getElementById("zn-dm-input");
+            if (!inp.value.trim()) { return; }
+            window._znPostJSON("/dashboard/publish/zernio/inbox/conversations/reply", {
+              account_id: conv.account_id, conversation_id: conv.conversation_id,
+              message: inp.value.trim(), platform: conv.platform,
+            }, function () { inp.value = ""; openThread(conv); });
+          });
+          document.getElementById("zn-dm-archive").addEventListener("click", function () {
+            window._znPostJSON("/dashboard/publish/zernio/inbox/conversations/archive", {
+              account_id: conv.account_id, conversation_id: conv.conversation_id,
+            }, function () { loadConversations(); dmThread.innerHTML = '<span class="nc-text--muted">Conversación archivada.</span>'; });
+          });
+        });
+    }
+
+    function loadConversations() {
+      fetch("/dashboard/publish/zernio/inbox/conversations.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var convs = b.conversations || [];
+          if (!convs.length) {
+            dmList.innerHTML = '<span class="nc-text--muted">Sin conversaciones.</span>';
+            return;
+          }
+          dmList.innerHTML = "";
+          convs.forEach(function (c) {
+            var item = document.createElement("div");
+            item.style.cssText = "padding:8px; border-radius:6px; cursor:pointer;";
+            item.innerHTML =
+              "<strong>" + escD(c.participant_name || c.participant_username || "contacto") + "</strong>" +
+              ' <span class="nc-chip nc-chip--code">' + escD(c.platform) + "</span>" +
+              (c.status === "archived" ? ' <span class="nc-chip nc-chip--muted">archivada</span>' : "");
+            item.addEventListener("click", function () { openThread(c); });
+            item.addEventListener("mouseenter", function () { item.style.background = "rgba(255,255,255,0.04)"; });
+            item.addEventListener("mouseleave", function () { item.style.background = "transparent"; });
+            dmList.appendChild(item);
+          });
+        })
+        .catch(function () { dmList.innerHTML = '<span class="nc-text--muted">No se pudo cargar.</span>'; });
+    }
+    document.querySelectorAll('.nc-pc-tab[data-tab="dms"]').forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        if (!dmLoaded) { dmLoaded = true; loadConversations(); }
       });
     });
   }

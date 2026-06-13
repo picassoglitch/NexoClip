@@ -37,6 +37,7 @@ from .repos import (
     ZernioAutoRetriesRepo,
     ZernioCalendarRepo,
     ZernioEventsRepo,
+    ZernioInboxRepo,
     ZernioPublishesRepo,
     ZernioPublishSnapshotsRepo,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "ZernioAutoRetriesRepo",
     "ZernioCalendarRepo",
     "ZernioEventsRepo",
+    "ZernioInboxRepo",
     "ZernioPublishSnapshotsRepo",
     "ZernioPublishesRepo",
     "apply_migrations",

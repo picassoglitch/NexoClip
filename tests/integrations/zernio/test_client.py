@@ -640,3 +640,49 @@ async def test_post_analytics_one_passes_post_id() -> None:
             )
             await _client(http).post_analytics_one("p1")
     assert route.calls.last.request.url.params.get("postId") == "p1"
+
+
+# ---- inbox ----
+
+
+@pytest.mark.asyncio
+async def test_reply_to_comment_body() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/inbox/comments/pp1").mock(
+                return_value=httpx.Response(200, json={"success": True})
+            )
+            await _client(http).reply_to_comment(
+                "pp1", account_id="acc1", message="hi", comment_id="c1",
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload == {"accountId": "acc1", "message": "hi", "commentId": "c1"}
+
+
+@pytest.mark.asyncio
+async def test_send_message_with_and_without_attachment() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{_BASE}/inbox/conversations/conv1/messages").mock(
+                return_value=httpx.Response(200, json={"success": True})
+            )
+            await _client(http).send_message(
+                "conv1", account_id="acc1", message="hola",
+                attachment_url="https://x/y.jpg",
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload["attachmentUrl"] == "https://x/y.jpg"
+
+
+@pytest.mark.asyncio
+async def test_set_conversation_status_archives() -> None:
+    async with httpx.AsyncClient() as http:
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.put(f"{_BASE}/inbox/conversations/conv1").mock(
+                return_value=httpx.Response(200, json={"success": True})
+            )
+            await _client(http).set_conversation_status(
+                "conv1", account_id="acc1", status="archived",
+            )
+    payload = json.loads(route.calls.last.request.content.decode())
+    assert payload == {"accountId": "acc1", "status": "archived"}

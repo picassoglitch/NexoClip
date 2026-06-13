@@ -661,6 +661,121 @@ class ZernioClient:
             raise ZernioError("analytics response is not an object", body=body)
         return body
 
+    # ---- Inbox: comments ----
+
+    async def list_post_comments(
+        self, post_id: str, *, account_id: str, limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """GET /inbox/comments/{postId}?accountId= — comments on one
+        post (REST backfill; the UI reads the local webhook store
+        first). Returns the raw comment array."""
+        body = await self._request(
+            "GET", f"/inbox/comments/{post_id}",
+            params={"accountId": account_id, "limit": limit},
+        )
+        rows = body.get("comments") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def reply_to_comment(
+        self,
+        post_id: str,
+        *,
+        account_id: str,
+        message: str,
+        comment_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /inbox/comments/{postId} — reply to a post or a
+        specific comment. `comment_id` set → threaded reply."""
+        json_body: dict[str, Any] = {"accountId": account_id, "message": message}
+        if comment_id:
+            json_body["commentId"] = comment_id
+        body = await self._request(
+            "POST", f"/inbox/comments/{post_id}", json=json_body,
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def like_comment(
+        self, post_id: str, comment_id: str, *, account_id: str,
+    ) -> None:
+        """POST /inbox/comments/{postId}/{commentId}/like."""
+        await self._request(
+            "POST", f"/inbox/comments/{post_id}/{comment_id}/like",
+            json={"accountId": account_id}, parse_json=False,
+        )
+
+    async def hide_comment(
+        self, post_id: str, comment_id: str, *, account_id: str,
+    ) -> None:
+        """POST /inbox/comments/{postId}/{commentId}/hide — Facebook,
+        Instagram, Threads, X only (the route gates by platform)."""
+        await self._request(
+            "POST", f"/inbox/comments/{post_id}/{comment_id}/hide",
+            json={"accountId": account_id}, parse_json=False,
+        )
+
+    # ---- Inbox: DM conversations + messages ----
+
+    async def list_conversations(
+        self,
+        *,
+        profile_id: str,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """GET /inbox/conversations — DM threads across the profile's
+        accounts (REST backfill). Returns the raw conversation array."""
+        params: dict[str, Any] = {"profileId": profile_id, "limit": limit}
+        if status:
+            params["status"] = status
+        body = await self._request("GET", "/inbox/conversations", params=params)
+        rows = body.get("conversations") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            rows = body.get("data") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def list_conversation_messages(
+        self, conversation_id: str, *, account_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """GET /inbox/conversations/{id}/messages?accountId=."""
+        body = await self._request(
+            "GET", f"/inbox/conversations/{conversation_id}/messages",
+            params={"accountId": account_id, "limit": limit},
+        )
+        rows = body.get("messages") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            rows = body.get("data") if isinstance(body, dict) else None
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    async def send_message(
+        self,
+        conversation_id: str,
+        *,
+        account_id: str,
+        message: str,
+        attachment_url: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /inbox/conversations/{id}/messages — send a DM reply.
+        `attachment_url` only where the platform supports it (the route
+        gates: e.g. Bluesky DMs are text-only)."""
+        json_body: dict[str, Any] = {"accountId": account_id, "message": message}
+        if attachment_url:
+            json_body["attachmentUrl"] = attachment_url
+        body = await self._request(
+            "POST", f"/inbox/conversations/{conversation_id}/messages",
+            json=json_body,
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def set_conversation_status(
+        self, conversation_id: str, *, account_id: str, status: str,
+    ) -> None:
+        """PUT /inbox/conversations/{id} — archive (status=archived) or
+        re-activate (status=active) a conversation."""
+        await self._request(
+            "PUT", f"/inbox/conversations/{conversation_id}",
+            json={"accountId": account_id, "status": status}, parse_json=False,
+        )
+
     # ---- Queue (recurring schedule slots) ----
     # NOTE: a queue SLOT's dayOfWeek is 0=Sunday..6=Saturday — NOT the
     # best-time convention (0=Monday). Don't mix the two.

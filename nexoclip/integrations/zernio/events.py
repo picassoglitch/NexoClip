@@ -34,6 +34,7 @@ from nexoclip.db import (
     ZernioAutoRetriesRepo,
     ZernioCalendarRepo,
     ZernioEventsRepo,
+    ZernioInboxRepo,
     ZernioPublishesRepo,
 )
 from nexoclip.tenancy import bound_tenant
@@ -195,6 +196,14 @@ async def _process(db: Database, event_id: str) -> None:
     if row.type.startswith("post.external.") and post:
         await _process_external_post(db, row.type, post)
 
+    # --- inbox: comments + DMs feed the inbox store (phase 9) ---
+    if row.type == "comment.received":
+        await _process_comment(db, payload)
+    elif row.type in ("message.received", "message.sent"):
+        await _process_message(db, payload)
+    elif row.type == "conversation.started":
+        await _process_conversation(db, payload)
+
     # --- auto-retry once on a transient failure ---
     # post.failed / post.partial with ALL failed platforms transient
     # (platform/infra/velocity) gets ONE automatic retry after a delay.
@@ -269,6 +278,124 @@ async def _process_external_post(
             if isinstance(post.get("publishedAt"), str) else None
         ),
     )
+
+
+def _s(value: Any) -> str | None:
+    """A string value or None — keeps the inbox writes type-clean."""
+    return value if isinstance(value, str) and value else None
+
+
+async def _process_comment(db: Database, payload: dict[str, Any]) -> None:
+    """comment.received → store the comment + seed the author as a
+    potential contact (feeds phase 10)."""
+    comment = payload.get("comment")
+    account = payload.get("account")
+    if not isinstance(comment, dict) or not isinstance(account, dict):
+        return
+    account_id = _s(account.get("id"))
+    comment_id = _s(comment.get("id"))
+    if not (account_id and comment_id):
+        return
+    _author = comment.get("author")
+    author: dict[str, Any] = _author if isinstance(_author, dict) else {}
+    inbox = ZernioInboxRepo(db)
+    await inbox.upsert_comment(
+        account_id=account_id,
+        comment_id=comment_id,
+        post_id=_s(comment.get("postId")),
+        platform_post_id=_s(comment.get("platformPostId")),
+        platform=_s(comment.get("platform")),
+        text=_s(comment.get("text")),
+        author_id=_s(author.get("id")),
+        author_name=_s(author.get("name")),
+        author_username=_s(author.get("username")),
+        is_reply=bool(comment.get("isReply")),
+        parent_id=_s(comment.get("parentCommentId")),
+        created_at=_s(comment.get("createdAt")),
+    )
+    author_key = _s(author.get("id"))
+    if author_key:
+        await inbox.upsert_contact(
+            account_id=account_id,
+            contact_key=author_key,
+            platform=_s(comment.get("platform")),
+            name=_s(author.get("name")),
+            username=_s(author.get("username")),
+            tag="comment-lead",
+        )
+
+
+async def _process_message(db: Database, payload: dict[str, Any]) -> None:
+    """message.received / message.sent → store the message + bump the
+    conversation's last_message_at."""
+    message = payload.get("message")
+    account = payload.get("account")
+    if not isinstance(message, dict) or not isinstance(account, dict):
+        return
+    account_id = _s(account.get("id"))
+    message_id = _s(message.get("id"))
+    if not (account_id and message_id):
+        return
+    conversation_id = _s(message.get("conversationId"))
+    sent_at = _s(message.get("sentAt"))
+    inbox = ZernioInboxRepo(db)
+    await inbox.upsert_message(
+        account_id=account_id,
+        message_id=message_id,
+        conversation_id=conversation_id,
+        platform=_s(message.get("platform")),
+        direction=_s(message.get("direction")),
+        text=_s(message.get("text")),
+        sent_at=sent_at,
+        is_read=bool(message.get("isRead")),
+    )
+    # Keep the conversation row fresh (an incoming message may precede
+    # any conversation.started we saw).
+    if conversation_id:
+        await inbox.upsert_conversation(
+            account_id=account_id,
+            conversation_id=conversation_id,
+            platform=_s(message.get("platform")),
+            participant_id=None,
+            participant_name=None,
+            participant_username=None,
+            status=None,
+            last_message_at=sent_at,
+        )
+
+
+async def _process_conversation(db: Database, payload: dict[str, Any]) -> None:
+    """conversation.started → upsert the conversation + seed the
+    participant as a potential DM-lead contact."""
+    conv = payload.get("conversation")
+    account = payload.get("account")
+    if not isinstance(conv, dict) or not isinstance(account, dict):
+        return
+    account_id = _s(account.get("id"))
+    conversation_id = _s(conv.get("platformConversationId")) or _s(conv.get("id"))
+    if not (account_id and conversation_id):
+        return
+    inbox = ZernioInboxRepo(db)
+    await inbox.upsert_conversation(
+        account_id=account_id,
+        conversation_id=conversation_id,
+        platform=_s(conv.get("platform")),
+        participant_id=_s(conv.get("participantId")),
+        participant_name=_s(conv.get("participantName")),
+        participant_username=_s(conv.get("participantUsername")),
+        status=_s(conv.get("status")) or "active",
+        last_message_at=_s(payload.get("startedAt")),
+    )
+    participant_key = _s(conv.get("participantId"))
+    if participant_key:
+        await inbox.upsert_contact(
+            account_id=account_id,
+            contact_key=participant_key,
+            platform=_s(conv.get("platform")),
+            name=_s(conv.get("participantName")),
+            username=_s(conv.get("participantUsername")),
+            tag="dm-lead",
+        )
 
 
 async def _do_auto_retry(db: Database, post_id: str, delay_s: float) -> None:

@@ -40,6 +40,7 @@ from nexoclip.db import (
     Database,
     TenantsRepo,
     ZernioCalendarRepo,
+    ZernioInboxRepo,
     ZernioPublishesRepo,
 )
 from nexoclip.integrations.zernio import (
@@ -1303,6 +1304,250 @@ async def zernio_delete_queue(
             {"ok": False, "error": f"Couldn't delete the queue: {e}"},
             status_code=502,
         )
+    return JSONResponse({"ok": True})
+
+
+async def _tenant_account_ids(db: Database, tenant_id: str) -> list[str]:
+    """The Zernio social-account ids the tenant owns — the isolation
+    boundary for the tenant-free inbox/calendar stores. Empty on no
+    profile / no key / Zernio error (caller renders an empty state)."""
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not get_settings().zernio_api_key:
+        return []
+    try:
+        accounts = await _build_client().list_accounts(profile_id=profile_id)
+    except ZernioError:
+        return []
+    return [a.account_id for a in accounts]
+
+
+# ---------- Inbox: comentarios + DMs (phase 9) ----------
+# Webhook-first: the event processor writes the local store; these
+# routes read it (REST is backfill). Stores are tenant-free (keyed by
+# account_id), resolved to the tenant via _tenant_account_ids.
+
+
+@router.get("/inbox/comments.json")
+async def zernio_inbox_comments_json(
+    platform_post_id: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Comments on the tenant's clips — unified feed, or one post when
+    `platform_post_id` is set. Reads the local webhook store."""
+    from nexoclip.integrations.zernio.capabilities import can_hide_comment
+
+    account_ids = await _tenant_account_ids(db, tenant_id)
+    rows = await ZernioInboxRepo(db).list_comments(
+        account_ids, platform_post_id=(platform_post_id or None),
+    )
+    for r in rows:
+        r["can_hide"] = can_hide_comment(r.get("platform"))
+    return JSONResponse({"ok": True, "comments": rows})
+
+
+@router.post("/inbox/comments/reply")
+async def zernio_inbox_comment_reply(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reply to a comment. Body: {account_id, post_id, comment_id?,
+    message}. account_id must be one the tenant owns (checked)."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    post_id = str(data.get("post_id") or "")
+    message = str(data.get("message") or "").strip()
+    if not (account_id and post_id and message):
+        return JSONResponse(
+            {"ok": False, "error": "account_id, post_id y message son obligatorios"},
+            status_code=400,
+        )
+    if account_id not in await _tenant_account_ids(db, tenant_id):
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    client = _build_client()
+    try:
+        result = await client.reply_to_comment(
+            post_id, account_id=account_id, message=message,
+            comment_id=str(data.get("comment_id") or "") or None,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo responder: {e}"}, status_code=502,
+        )
+    return JSONResponse({"ok": True, "result": result})
+
+
+@router.post("/inbox/comments/{comment_action}")
+async def zernio_inbox_comment_action(
+    comment_action: str,
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Like or hide a comment. comment_action ∈ {like, hide}. Body:
+    {account_id, post_id, comment_id, platform?}. Hide is gated to the
+    platforms that support it."""
+    from nexoclip.integrations.zernio.capabilities import can_hide_comment
+
+    if comment_action not in ("like", "hide"):
+        raise HTTPException(status_code=404, detail="unknown comment action")
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    post_id = str(data.get("post_id") or "")
+    comment_id = str(data.get("comment_id") or "")
+    if not (account_id and post_id and comment_id):
+        return JSONResponse(
+            {"ok": False, "error": "account_id, post_id y comment_id obligatorios"},
+            status_code=400,
+        )
+    if account_id not in await _tenant_account_ids(db, tenant_id):
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    if comment_action == "hide" and not can_hide_comment(data.get("platform")):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Ocultar comentarios no está soportado en esta plataforma.",
+            },
+            status_code=409,
+        )
+    client = _build_client()
+    try:
+        if comment_action == "like":
+            await client.like_comment(post_id, comment_id, account_id=account_id)
+        else:
+            await client.hide_comment(post_id, comment_id, account_id=account_id)
+            await ZernioInboxRepo(db).set_comment_status(
+                account_id=account_id, comment_id=comment_id, status="hidden",
+            )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo: {e}"}, status_code=502,
+        )
+    return JSONResponse({"ok": True})
+
+
+@router.get("/inbox/conversations.json")
+async def zernio_inbox_conversations_json(
+    status: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """DM conversations across the tenant's accounts (local store)."""
+    account_ids = await _tenant_account_ids(db, tenant_id)
+    rows = await ZernioInboxRepo(db).list_conversations(
+        account_ids, status=(status or None),
+    )
+    return JSONResponse({"ok": True, "conversations": rows})
+
+
+@router.get("/inbox/messages.json")
+async def zernio_inbox_messages_json(
+    conversation_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Messages in one conversation (local store)."""
+    account_ids = await _tenant_account_ids(db, tenant_id)
+    rows = await ZernioInboxRepo(db).list_messages(
+        account_ids, conversation_id=conversation_id,
+    )
+    return JSONResponse({"ok": True, "messages": rows})
+
+
+@router.post("/inbox/conversations/reply")
+async def zernio_inbox_send_message(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Send a DM reply. Body: {account_id, conversation_id, message,
+    attachment_url?}. Attachments gated per platform capability."""
+    from nexoclip.integrations.zernio.capabilities import can_send_attachment
+
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    conversation_id = str(data.get("conversation_id") or "")
+    message = str(data.get("message") or "").strip()
+    if not (account_id and conversation_id and message):
+        return JSONResponse(
+            {"ok": False, "error": "account_id, conversation_id y message obligatorios"},
+            status_code=400,
+        )
+    if account_id not in await _tenant_account_ids(db, tenant_id):
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    attachment_url = str(data.get("attachment_url") or "") or None
+    if attachment_url and not can_send_attachment(data.get("platform")):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Esta plataforma solo admite texto en los DMs.",
+            },
+            status_code=409,
+        )
+    client = _build_client()
+    try:
+        result = await client.send_message(
+            conversation_id, account_id=account_id, message=message,
+            attachment_url=attachment_url,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo enviar: {e}"}, status_code=502,
+        )
+    return JSONResponse({"ok": True, "result": result})
+
+
+@router.post("/inbox/conversations/archive")
+async def zernio_inbox_archive(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Archive (or re-activate) a conversation. Body: {account_id,
+    conversation_id, status?}. status defaults to 'archived'."""
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    account_id = str(data.get("account_id") or "")
+    conversation_id = str(data.get("conversation_id") or "")
+    new_status = str(data.get("status") or "archived")
+    if new_status not in ("archived", "active"):
+        return JSONResponse({"ok": False, "error": "status inválido"}, status_code=400)
+    if not (account_id and conversation_id):
+        return JSONResponse(
+            {"ok": False, "error": "account_id y conversation_id obligatorios"},
+            status_code=400,
+        )
+    if account_id not in await _tenant_account_ids(db, tenant_id):
+        raise HTTPException(status_code=403, detail="account not owned by tenant")
+    client = _build_client()
+    try:
+        await client.set_conversation_status(
+            conversation_id, account_id=account_id, status=new_status,
+        )
+    except ZernioError as e:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo archivar: {e}"}, status_code=502,
+        )
+    await ZernioInboxRepo(db).set_conversation_status(
+        account_id=account_id, conversation_id=conversation_id, status=new_status,
+    )
     return JSONResponse({"ok": True})
 
 

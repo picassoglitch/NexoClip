@@ -17,6 +17,13 @@ Replaces the upload-post.com integration (commit history under
 `integrations/upload_post/`).
 """
 
+from .analytics import (
+    normalize_list,
+    normalize_metrics,
+    normalize_post,
+    sum_headline,
+)
+from .capabilities import can_hide_comment, can_send_attachment
 from .client import (
     ZernioAccount,
     ZernioClient,
@@ -26,12 +33,6 @@ from .client import (
     ZernioPostResult,
     ZernioPostStatus,
     ZernioProfile,
-)
-from .analytics import (
-    normalize_list,
-    normalize_metrics,
-    normalize_post,
-    sum_headline,
 )
 from .errors import (
     is_transient,
@@ -56,6 +57,8 @@ __all__ = [
     "ZernioPostResult",
     "ZernioPostStatus",
     "ZernioProfile",
+    "can_hide_comment",
+    "can_send_attachment",
     "create_profile_for_tenant",
     "is_transient",
     "normalize_list",

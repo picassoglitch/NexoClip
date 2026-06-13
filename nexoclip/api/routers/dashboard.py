@@ -3229,9 +3229,23 @@ async def clip_overlay_finalize(
         },
     )
 
-    # Slice G.5 auto-publish-on-approve removed (Etapa A): it enqueued into
-    # the legacy publish_jobs worker, which is being retired — publishing
-    # now goes through Zernio. Nothing to trigger here on approve.
+    # Auto-publish ("Piloto automático"): if the tenant turned it on with
+    # mode=on_approve, the approve we just did auto-enqueues the clip to
+    # Zernio with its burned-in render. Best-effort — never blocks approval
+    # (the helper swallows its own errors). Routed through the Zernio publish
+    # core, NOT the retired publish_jobs worker.
+    try:
+        from nexoclip.api.routers.zernio import maybe_autopublish_on_approve
+
+        await maybe_autopublish_on_approve(
+            request=request, db=db, tenant_id=tenant_id, clip_id=clip_id
+        )
+    except Exception as e:  # auto-publish must never block the approve flow
+        from structlog import get_logger
+
+        get_logger(__name__).warning(
+            "clip.finalize.autopublish_hook_failed", clip_id=clip_id, reason=str(e)
+        )
 
     # Slice N.2 — Approve & continue. After finalize, walk to the
     # NEXT clip on the same stream that's still in the editor queue

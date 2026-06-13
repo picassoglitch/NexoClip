@@ -378,6 +378,10 @@
     <i class="ti ti-calendar-clock" aria-hidden="true"></i>
     Programación
   </button>
+  <button type="button" class="nc-pc-tab" data-tab="autopublish">
+    <i class="ti ti-robot" aria-hidden="true"></i>
+    Piloto automático
+  </button>
   <button type="button" class="nc-pc-tab" data-tab="comentarios">
     <i class="ti ti-message-circle" aria-hidden="true"></i>
     Comentarios
@@ -682,6 +686,68 @@
 
 {# ========== Comunidad — Discord/Telegram connect + announce-on-publish
    toggle + brand identity + weekly digest (phase 11). ========== #}
+{# ========== Tab: Piloto automático — auto-publish settings (per-tenant).
+   Auto-encola clips aprobados a Zernio con su render (hooks quemados).
+   on_approve dispara desde el Ship del editor; hands_free es fase 2. ========== #}
+<div class="nc-pc-tab-body" data-tab-body="autopublish">
+{% if profile_id %}
+<div class="nc-panel" id="zn-autopublish-panel" style="margin-bottom:16px;">
+  <div class="nc-panel__header">
+    <i class="ti ti-robot" aria-hidden="true"></i>
+    Piloto automático
+    <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">
+      Publica tus clips solo, con los hooks ya quemados
+    </span>
+  </div>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:14px;">
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" id="zn-ap-enabled"> <strong>Activar auto-publicación</strong>
+    </label>
+
+    <div>
+      <div style="font-size:13px; margin-bottom:6px;"><strong>¿Cuándo publica?</strong></div>
+      <label style="display:block; margin-bottom:4px; cursor:pointer;">
+        <input type="radio" name="zn-ap-mode" value="on_approve" checked>
+        Al aprobar — vos das “Ship” y el clip se publica solo
+      </label>
+      <label style="display:block; cursor:pointer;">
+        <input type="radio" name="zn-ap-mode" value="hands_free">
+        Manos libres — cada clip generado, sin revisión
+        <span class="nc-text--muted" style="font-size:12px;">(próximamente)</span>
+      </label>
+    </div>
+
+    <div>
+      <div style="font-size:13px; margin-bottom:6px;"><strong>Plataformas destino</strong></div>
+      <div id="zn-ap-targets" style="display:flex; flex-wrap:wrap; gap:6px;">
+        <span class="nc-text--muted" style="font-size:12px;">Cargando…</span>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+      <label class="nc-label" style="margin:0;">Modo de posteo
+        <select class="nc-input" id="zn-ap-postmode" style="width:auto;">
+          <option value="queue">Cola (usa los slots de Programación)</option>
+          <option value="now">Ahora (inmediato)</option>
+        </select>
+      </label>
+      <label class="nc-label" style="margin:0;">Tope diario
+        <input class="nc-input" id="zn-ap-cap" type="number" min="0" value="10" style="width:90px;">
+      </label>
+      <span class="nc-text--muted" style="font-size:12px;" id="zn-ap-used"></span>
+    </div>
+
+    <div>
+      <button type="button" class="nc-btn nc-btn--primary" id="zn-ap-save" style="padding:6px 14px;">
+        <i class="ti ti-device-floppy"></i> Guardar
+      </button>
+      <span class="nc-text--muted" id="zn-ap-msg" style="font-size:12px; margin-left:8px;"></span>
+    </div>
+  </div>
+</div>
+{% endif %}
+</div>
+
 <div class="nc-pc-tab-body" data-tab-body="comunidad">
 {% if profile_id %}
 <div class="nc-panel" id="zn-community-panel" style="margin-bottom: 16px;">
@@ -1949,6 +2015,85 @@
         loadGrowthAccounts(); loadAutomations(); loadContacts(); loadSequences();
       });
     });
+  }
+
+  // ---- Piloto automático (auto-publish) settings ----
+  var apPanel = document.getElementById("zn-autopublish-panel");
+  if (apPanel) {
+    function renderApTargets(platforms, selected) {
+      var host = document.getElementById("zn-ap-targets");
+      host.innerHTML = "";
+      if (!platforms.length) {
+        host.innerHTML = '<span class="nc-text--muted" style="font-size:12px;">'
+          + 'Conectá una cuenta en el compositor para elegir destinos.</span>';
+        return;
+      }
+      var sel = {}; (selected || []).forEach(function (p) { sel[p] = true; });
+      platforms.forEach(function (p) {
+        var chip = document.createElement("label");
+        chip.className = "nc-pc-acct-chip"; chip.style.cursor = "pointer";
+        var cb = document.createElement("input");
+        cb.type = "checkbox"; cb.value = p; cb.checked = !!sel[p];
+        cb.className = "zn-ap-target";
+        var span = document.createElement("span"); span.textContent = " " + p;
+        chip.appendChild(cb); chip.appendChild(span);
+        host.appendChild(chip);
+      });
+    }
+    function loadAutopublish() {
+      fetch("/dashboard/publish/zernio/autopublish.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          var s = b.settings || {};
+          document.getElementById("zn-ap-enabled").checked = !!s.enabled;
+          var mode = s.mode || "on_approve";
+          document.querySelectorAll('input[name="zn-ap-mode"]').forEach(function (r) {
+            r.checked = (r.value === mode);
+          });
+          document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
+          document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
+          var selected = (s.targets || "").split(",").filter(function (t) { return t; });
+          renderApTargets(b.platforms || [], selected);
+          var used = document.getElementById("zn-ap-used");
+          if (used) {
+            used.textContent = "Hoy: " + (b.used_today || 0)
+              + (s.daily_cap ? (" / " + s.daily_cap) : "");
+          }
+        })
+        .catch(function () {});
+    }
+    document.getElementById("zn-ap-save").addEventListener("click", function () {
+      var msg = document.getElementById("zn-ap-msg");
+      msg.textContent = "Guardando…"; msg.style.color = "";
+      var targets = Array.prototype.slice
+        .call(document.querySelectorAll(".zn-ap-target"))
+        .filter(function (cb) { return cb.checked; })
+        .map(function (cb) { return cb.value; });
+      var mode = "on_approve";
+      document.querySelectorAll('input[name="zn-ap-mode"]').forEach(function (r) {
+        if (r.checked) { mode = r.value; }
+      });
+      fetch("/dashboard/publish/zernio/autopublish/save", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          enabled: document.getElementById("zn-ap-enabled").checked,
+          mode: mode,
+          targets: targets,
+          post_mode: document.getElementById("zn-ap-postmode").value,
+          daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
+        }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          msg.style.color = res.ok ? "var(--nc-green, #48bb78)" : "#ff7575";
+          msg.textContent = res.ok ? "Guardado ✓"
+            : ("Error: " + (res.error || res.detail || ""));
+          if (res.ok) { loadAutopublish(); }
+        })
+        .catch(function (e) { msg.style.color = "#ff7575"; msg.textContent = "Error: " + e.message; });
+    });
+    loadAutopublish();
   }
 
   // ---- Comunidad settings ----

@@ -5,7 +5,7 @@
 <div class="nc-page-header">
   <div>
     <h2>Brand kits</h2>
-    <small>One visual identity per kit — colors, fonts, custom trigger phrases, auto-publish defaults.</small>
+    <small>One visual identity per kit — colors, fonts, custom trigger phrases.</small>
   </div>
   <div class="nc-page-summary">
     <a href="/dashboard/brand-kits/new" class="nc-btn nc-btn--primary nc-btn--sm">
@@ -29,7 +29,6 @@
           <th>Colors</th>
           <th>Layout</th>
           <th>Trigger phrases</th>
-          <th>Auto-publish</th>
           <th>Default?</th>
           <th class="nc-cell-actions"></th>
         </tr>
@@ -56,18 +55,6 @@
               +{{ kit.custom_trigger_phrases.forward|length }} fwd
               · +{{ kit.custom_trigger_phrases.retroactive|length }} retro
             </span>
-          </td>
-          <td>
-            {% if kit.auto_publish_enabled %}
-            <span class="nc-chip nc-chip--success">
-              <span class="nc-status-dot nc-status-dot--success"></span>
-              <span>ON</span>
-            </span>
-            <small style="display: block; margin-top: 2px;">{{ kit.auto_publish_platforms|join(', ') or '(no platforms set)' }}</small>
-            {% else %}
-            <span class="nc-chip nc-chip--muted">off</span>
-            <small style="display: block; margin-top: 2px;">review-first</small>
-            {% endif %}
           </td>
           <td>
             {% if kit.is_default %}

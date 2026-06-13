@@ -1535,6 +1535,176 @@ async def zernio_community_save_settings(
     return JSONResponse({"ok": True})
 
 
+# ---------- Auto-publish: "Piloto automático" (Publish Center tab) ----------
+# Per-tenant. When enabled, approved clips auto-enqueue to Zernio with their
+# burned-in render (hooks + captions already composited) — no manual platform
+# picking. mode=on_approve fires from the editor's Ship/approve; hands_free
+# (every generated clip, no review) is phase 2. post_mode queue|now is the
+# Zernio publish mode (queue → publish_now=False → the profile's recurring
+# slots). daily_cap is an anti-spam ceiling per UTC day. Routed through
+# `_publish_clip` (renders first) — the legacy publish_jobs worker is gone.
+
+_AUTOPUBLISH_MODES = ("on_approve", "hands_free")
+_AUTOPUBLISH_POST_MODES = ("queue", "now")
+
+
+@router.get("/autopublish.json")
+async def zernio_autopublish_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Auto-publish settings + the connected platforms the operator can
+    target + today's post count (for the daily-cap meter)."""
+    from nexoclip.db import AutopublishSettingsRepo
+
+    s = await AutopublishSettingsRepo(db).get(tenant_id) or {
+        "enabled": False, "mode": "on_approve", "targets": None,
+        "post_mode": "queue", "daily_cap": 10,
+    }
+    platforms: list[str] = []
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if profile_id and get_settings().zernio_api_key:
+        with contextlib.suppress(ZernioError):
+            platforms = sorted(
+                _connected_platforms(
+                    await _build_client().list_accounts(profile_id=profile_id)
+                )
+            )
+    return JSONResponse({
+        "ok": True,
+        "settings": s,
+        "platforms": platforms,
+        "used_today": await _autopublish_count_today(db, tenant_id),
+    })
+
+
+@router.post("/autopublish/save")
+async def zernio_autopublish_save(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Save auto-publish settings. Body: {enabled, mode, targets:[...],
+    post_mode, daily_cap}. `hands_free` is accepted but does not fire yet
+    (phase 2 — the pipeline hook isn't wired)."""
+    from nexoclip.db import AutopublishSettingsRepo
+
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    mode = str(data.get("mode") or "on_approve")
+    if mode not in _AUTOPUBLISH_MODES:
+        mode = "on_approve"
+    post_mode = str(data.get("post_mode") or "queue")
+    if post_mode not in _AUTOPUBLISH_POST_MODES:
+        post_mode = "queue"
+    raw_targets = data.get("targets")
+    targets = (
+        ",".join(str(t).strip().lower() for t in raw_targets if str(t).strip())
+        if isinstance(raw_targets, list)
+        else None
+    )
+    try:
+        daily_cap = max(0, int(data.get("daily_cap", 10)))
+    except (TypeError, ValueError):
+        daily_cap = 10
+    await AutopublishSettingsRepo(db).upsert(
+        tenant_id,
+        enabled=bool(data.get("enabled")),
+        mode=mode,
+        targets=targets,
+        post_mode=post_mode,
+        daily_cap=daily_cap,
+    )
+    return JSONResponse({"ok": True})
+
+
+async def _autopublish_count_today(db: Database, tenant_id: str) -> int:
+    """Posts this tenant has published so far in the current UTC day — the
+    anti-spam daily-cap counter. Reads the local `zernio_publishes` ledger."""
+    import datetime as _dt
+
+    day = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d")
+    conn = await db.connect()
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM zernio_publishes "
+        "WHERE tenant_id = ? AND substr(created_at, 1, 10) = ?",
+        (tenant_id, day),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def maybe_autopublish_on_approve(
+    *, request: Request, db: Database, tenant_id: str, clip_id: str
+) -> str | None:
+    """Best-effort auto-publish of a just-approved clip. Returns the Zernio
+    post_id on success, or None when it didn't fire (disabled, wrong mode,
+    daily cap hit, no connected targets, no profile). NEVER raises — it must
+    not block the approve flow.
+
+    Goes through `_publish_clip`, which renders the edited clip (hooks +
+    captions burned in) before posting, so what auto-publishes is exactly
+    what the operator would have downloaded."""
+    import structlog
+
+    log = structlog.get_logger("nexoclip.api.zernio")
+    try:
+        from nexoclip.db import AutopublishSettingsRepo, VariantsRepo
+
+        s = await AutopublishSettingsRepo(db).get(tenant_id)
+        if not s or not s["enabled"] or s["mode"] != "on_approve":
+            return None
+        cap = int(s.get("daily_cap") or 0)
+        if cap > 0 and await _autopublish_count_today(db, tenant_id) >= cap:
+            log.info("autopublish.cap_reached", tenant_id=tenant_id, cap=cap)
+            return None
+        if not get_settings().zernio_api_key:
+            return None
+        tenant = await TenantsRepo(db).get(tenant_id)
+        profile_id = tenant.zernio_profile_id if tenant else None
+        if not profile_id:
+            return None
+        client = _build_client()
+        accounts = await client.list_accounts(profile_id=profile_id)
+        connected = _connected_platforms(accounts)
+        want = [t for t in (s["targets"] or "").split(",") if t.strip()]
+        targets = [t for t in want if t in connected]
+        if not targets:
+            log.info(
+                "autopublish.no_connected_targets",
+                tenant_id=tenant_id, want=want, connected=sorted(connected),
+            )
+            return None
+        variants = await VariantsRepo(db).list_for_clip(clip_id)
+        content = (variants[0].caption if variants else "") or ""
+        post_id = await _publish_clip(
+            client=client,
+            db=db,
+            request=request,
+            tenant_id=tenant_id,
+            profile_id=profile_id,
+            account_map=_account_map(accounts),
+            clip_id=clip_id,
+            platforms=targets,
+            content=content,
+            mode=s["post_mode"],
+        )
+        log.info(
+            "autopublish.posted",
+            tenant_id=tenant_id, clip_id=clip_id, post_id=post_id,
+            mode=s["post_mode"], targets=targets,
+        )
+        return post_id
+    except Exception as e:  # auto-publish must never block the approve flow
+        log.warning(
+            "autopublish.failed", tenant_id=tenant_id, clip_id=clip_id, error=str(e)
+        )
+        return None
+
+
 # ---------- Crecimiento: funnel machine (phase 10, Pro-gated) ----------
 # Automations (IG/FB only), contacts, sequences, broadcasts. All
 # mutating routes carry require_paid_tier (non-Pro → 402, the JS shows

@@ -23,7 +23,6 @@ from nexoclip.db import (
     Database,
     LLMCallsRepo,
     PersonasRepo,
-    PublishJobsRepo,
     StreamsRepo,
     TenantsRepo,
     VariantsRepo,
@@ -48,7 +47,6 @@ from nexoclip.mcp_server.server import (
     tool_list_llm_calls,
     tool_list_personas,
     tool_list_streams,
-    tool_publish_clip,
     tool_update_clip_status,
 )
 from nexoclip.tenancy import bound_tenant, hash_token, mint_token
@@ -322,51 +320,6 @@ async def test_update_clip_status_requires_full_scope(db: Database) -> None:
         )
 
 
-async def test_publish_clip_enqueues_one_job_per_account(db: Database) -> None:
-    seeded = await _seed_basic(db)
-    out = await tool_publish_clip(
-        db,
-        seeded["tenant_id"],
-        scope="full",
-        clip_id="clp_a",
-        variant_id="var_a",
-    )
-    assert len(out) == 1
-    assert out[0]["platform"] == "buffer"
-    assert out[0]["status"] == "pending"
-
-    # Persisted.
-    with bound_tenant(seeded["tenant_id"]):
-        rows = await PublishJobsRepo(db).list_for_clip("clp_a")
-    assert len(rows) == 1
-
-
-async def test_publish_clip_with_account_filter(db: Database) -> None:
-    """account_ids filters; unknown ids raise NexoClipError."""
-    seeded = await _seed_basic(db)
-    with pytest.raises(NexoClipError, match="unknown account ids"):
-        await tool_publish_clip(
-            db,
-            seeded["tenant_id"],
-            scope="full",
-            clip_id="clp_a",
-            variant_id="var_a",
-            account_ids=["acc_does_not_exist"],
-        )
-
-
-async def test_publish_clip_requires_full_scope(db: Database) -> None:
-    seeded = await _seed_basic(db)
-    with pytest.raises(TenancyError, match="scope=full"):
-        await tool_publish_clip(
-            db,
-            seeded["tenant_id"],
-            scope="read",
-            clip_id="clp_a",
-            variant_id="var_a",
-        )
-
-
 # ---- FastMCP server registration shape ----
 
 
@@ -387,7 +340,6 @@ async def test_build_server_registers_expected_tool_names(db: Database) -> None:
         "get_cost_projection",
         "get_calibration",
         "update_clip_status",
-        "publish_clip",
     }
 
 

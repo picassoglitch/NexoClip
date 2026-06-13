@@ -3341,7 +3341,7 @@ class DriveWatchesRepo:
 _CHANNEL_WATCH_COLS = (
     "id, tenant_id, platform, channel_url, channel_label, persona_id, "
     "language, last_polled_at, seen_video_ids_json, max_per_poll, enabled, "
-    "created_at, updated_at"
+    "created_at, updated_at, polls_per_day"
 )
 
 
@@ -3370,6 +3370,7 @@ class ChannelWatchesRepo:
         channel_label: str | None = None,
         language: str | None = None,
         max_per_poll: int = 3,
+        polls_per_day: int = 1,
     ) -> ChannelWatchRow:
         tenant_id = current_tenant_id()
         watch_id = new_id("chw")
@@ -3377,7 +3378,7 @@ class ChannelWatchesRepo:
         conn = await self._db.connect()
         await conn.execute(
             f"INSERT INTO channel_watches ({_CHANNEL_WATCH_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?, ?)",
             (
                 watch_id,
                 tenant_id,
@@ -3389,7 +3390,27 @@ class ChannelWatchesRepo:
                 max_per_poll,
                 now,
                 now,
+                max(polls_per_day, 1),
             ),
+        )
+        await conn.commit()
+        out = await self.get(watch_id)
+        assert out is not None
+        return out
+
+    async def set_polls_per_day(
+        self, watch_id: str, polls_per_day: int
+    ) -> ChannelWatchRow:
+        """Change the poll cadence (times/day). Clamped to >= 1."""
+        existing = await self.get(watch_id)
+        if existing is None:
+            raise NexoClipError(f"channel watch {watch_id!r} not found")
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE channel_watches SET polls_per_day = ?, updated_at = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (max(polls_per_day, 1), _now(), watch_id, tenant_id),
         )
         await conn.commit()
         out = await self.get(watch_id)

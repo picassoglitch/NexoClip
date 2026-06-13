@@ -1394,6 +1394,10 @@ def channel_add_cmd(
     max_per_poll: int = typer.Option(
         3, "--max-per-poll", help="Cap on VODs ingested per poll (and first-poll backfill)."
     ),
+    polls_per_day: int = typer.Option(
+        1, "--polls-per-day", min=1, max=96,
+        help="How many times a day to poll (1=daily, 4=every 6h, 24=hourly). Saves resources.",
+    ),
     db_path: Path | None = typer.Option(None, "--db-path"),
 ) -> None:
     """Connect a creator channel so new VODs auto-ingest into NexoClip."""
@@ -1419,13 +1423,47 @@ def channel_add_cmd(
                     channel_label=label,
                     language=language,
                     max_per_poll=max_per_poll,
+                    polls_per_day=polls_per_day,
                 )
             return w.id
         finally:
             await db.close()
 
     new = asyncio.run(_run())
-    typer.echo(f"created channel watch: {new} (platform={resolved_platform})")
+    typer.echo(
+        f"created channel watch: {new} (platform={resolved_platform}, "
+        f"{polls_per_day}x/day)"
+    )
+
+
+@channel_app.command("schedule")
+def channel_schedule_cmd(
+    watch_id: str = typer.Argument(..., help="Channel watch id (chw_...)."),
+    tenant_id: str = typer.Option(..., "--tenant"),
+    per_day: int = typer.Option(
+        ..., "--per-day", min=1, max=96,
+        help="Times a day to poll (1=daily, 4=every 6h, 24=hourly).",
+    ),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+) -> None:
+    """Change how many times a day a channel is polled."""
+    from nexoclip.db import ChannelWatchesRepo, TenantsRepo, apply_migrations
+    from nexoclip.tenancy import bound_tenant
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            if await TenantsRepo(db).get(tenant_id) is None:
+                typer.echo(f"unknown tenant: {tenant_id}", err=True)
+                raise typer.Exit(code=1)
+            with bound_tenant(tenant_id):
+                w = await ChannelWatchesRepo(db).set_polls_per_day(watch_id, per_day)
+            typer.echo(f"{w.id}: now {w.polls_per_day}x/day")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
 
 
 @channel_app.command("list")

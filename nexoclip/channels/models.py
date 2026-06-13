@@ -23,3 +23,6 @@ class ChannelPollReport(NamedTuple):
     videos_ingested: int
     videos_failed: int
     skipped_disabled: bool
+    # True when the watch was skipped because its scheduled cadence
+    # (polls_per_day) hasn't elapsed yet — no yt-dlp call was made.
+    skipped_not_due: bool = False

@@ -38,6 +38,11 @@ _log = structlog.get_logger(__name__)
 # polls is still caught (deduped against the seen-set).
 _DEFAULT_LIST_WINDOW = 10
 
+# Slack on the due-check so the loop's tick granularity doesn't push each
+# day's polls progressively later (a 1/day watch becomes due a touch
+# before the full 24h rather than always just after).
+_DUE_SLACK = _dt.timedelta(minutes=5)
+
 
 ChannelIngestCallback = Callable[[str, str, str, str, str | None], Awaitable[None]]
 """(tenant_id, vod_url, video_id, persona_id, language) -> None.
@@ -116,12 +121,33 @@ async def list_channel_vods(
 # ---- public entry ----
 
 
+def _is_due(watch: ChannelWatchRow, now: _dt.datetime) -> bool:
+    """Has this watch's scheduled cadence elapsed since its last poll?
+
+    `polls_per_day` derives the interval (24h / N); a small slack absorbs
+    the loop's tick granularity so the cadence doesn't drift later each
+    day. A never-polled watch is always due."""
+    if watch.last_polled_at is None:
+        return True
+    ppd = max(watch.polls_per_day, 1)
+    interval = _dt.timedelta(hours=24 / ppd)
+    try:
+        last = _dt.datetime.fromisoformat(watch.last_polled_at)
+    except ValueError:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=_dt.UTC)
+    return (now - last) >= (interval - _DUE_SLACK)
+
+
 async def poll_channel_watches(
     db: Database,
     *,
     ingest_callback: ChannelIngestCallback,
     list_vods: ChannelVODLister = list_channel_vods,
     tenant_id: str | None = None,
+    respect_schedule: bool = False,
+    now: _dt.datetime | None = None,
 ) -> list[ChannelPollReport]:
     """Poll every enabled channel watch for new VODs.
 
@@ -133,10 +159,15 @@ async def poll_channel_watches(
             in tests.
         tenant_id: When set, restricts to that tenant; otherwise polls
             every tenant.
+        respect_schedule: When True (the background loop), skip watches
+            whose `polls_per_day` cadence hasn't elapsed — no yt-dlp call.
+            When False (manual `channel poll` / tests), poll regardless.
+        now: Clock override for the due-check (tests).
 
     Returns:
-        One report per watch row scanned.
+        One report per watch row scanned (including schedule-skips).
     """
+    now_dt = now or _dt.datetime.now(_dt.UTC)
     tenants_repo = TenantsRepo(db)
     if tenant_id is not None:
         t = await tenants_repo.get(tenant_id)
@@ -149,6 +180,24 @@ async def poll_channel_watches(
         with bound_tenant(t.id):
             watches = await ChannelWatchesRepo(db).list_for_tenant()
             for watch in watches:
+                if (
+                    respect_schedule
+                    and watch.enabled
+                    and not _is_due(watch, now_dt)
+                ):
+                    reports.append(
+                        ChannelPollReport(
+                            watch_id=watch.id,
+                            tenant_id=watch.tenant_id,
+                            channel_url=watch.channel_url,
+                            videos_seen=0,
+                            videos_ingested=0,
+                            videos_failed=0,
+                            skipped_disabled=False,
+                            skipped_not_due=True,
+                        )
+                    )
+                    continue
                 report = await _poll_one_watch(
                     db=db,
                     watch=watch,

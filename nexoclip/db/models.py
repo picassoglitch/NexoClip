@@ -707,6 +707,10 @@ class ChannelWatchRow(BaseModel):
     seen_video_ids: list[str] = Field(default_factory=list)
     max_per_poll: int = 3
     enabled: bool = True
+    # How many times a day to poll this channel. The loop only runs the
+    # yt-dlp listing once ≥ 24h/polls_per_day has elapsed since the last
+    # poll (1 = once a day, 4 = every 6h, 24 = hourly). Default 1.
+    polls_per_day: int = 1
     created_at: str
     updated_at: str
 

@@ -9,7 +9,7 @@ import pytest
 from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
-_CURRENT_HEAD = 42  # bumped each time we add a migration (042_brand_kit_safety)
+_CURRENT_HEAD = 43  # bumped each time we add a migration (043_channel_poll_schedule)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

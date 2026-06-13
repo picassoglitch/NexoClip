@@ -4,6 +4,7 @@ pipeline)."""
 
 from __future__ import annotations
 
+import datetime as _dt
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -11,8 +12,9 @@ import pytest
 import pytest_asyncio
 
 from nexoclip.channels import ChannelVOD, poll_channel_watches
-from nexoclip.channels.service import _poll_one_watch
+from nexoclip.channels.service import _is_due, _poll_one_watch
 from nexoclip.db import ChannelWatchesRepo, Database, TenantsRepo, apply_migrations
+from nexoclip.db.models import ChannelWatchRow
 from nexoclip.tenancy import bound_tenant
 
 
@@ -174,6 +176,129 @@ async def test_ingest_failure_keeps_video_unseen_for_retry(
     # last_polled_at from advancing.
     assert "b" not in refreshed.seen_video_ids
     assert {"a", "c"} <= set(refreshed.seen_video_ids)
+
+
+# ---- poll schedule (polls_per_day) ----
+
+
+def _watch(last_polled_at: str | None, polls_per_day: int) -> ChannelWatchRow:
+    return ChannelWatchRow(
+        id="chw_1", tenant_id="ten_1", platform="youtube",
+        channel_url="https://yt/@me", persona_id="per_1",
+        last_polled_at=last_polled_at, seen_video_ids=[], max_per_poll=3,
+        enabled=True, polls_per_day=polls_per_day,
+        created_at="2026-06-10T00:00:00+00:00", updated_at="2026-06-10T00:00:00+00:00",
+    )
+
+
+def test_is_due_never_polled() -> None:
+    now = _dt.datetime(2026, 6, 10, 12, 0, tzinfo=_dt.UTC)
+    assert _is_due(_watch(None, 1), now) is True
+
+
+def test_is_due_daily_respects_24h() -> None:
+    now = _dt.datetime(2026, 6, 10, 12, 0, tzinfo=_dt.UTC)
+    # polled 2h ago, 1/day → not due
+    assert _is_due(_watch("2026-06-10T10:00:00+00:00", 1), now) is False
+    # polled 25h ago → due
+    assert _is_due(_watch("2026-06-09T11:00:00+00:00", 1), now) is True
+
+
+def test_is_due_four_per_day_is_every_6h() -> None:
+    now = _dt.datetime(2026, 6, 10, 12, 0, tzinfo=_dt.UTC)
+    # polled 3h ago, 4/day (6h interval) → not due
+    assert _is_due(_watch("2026-06-10T09:00:00+00:00", 4), now) is False
+    # polled 7h ago → due
+    assert _is_due(_watch("2026-06-10T05:00:00+00:00", 4), now) is True
+
+
+@pytest.mark.asyncio
+async def test_respect_schedule_skips_recently_polled(
+    db: Database, watch_tenant: str
+) -> None:
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me",
+            persona_id="per_1", polls_per_day=1,
+        )
+        # Polled 1h ago → with 1/day cadence, not due yet.
+        await repo.mark_polled(
+            watch.id, seen_video_ids=[],
+            last_polled_at=(_dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=1)).isoformat(),
+        )
+    rec = _Recorder()
+    reports = await poll_channel_watches(
+        db, ingest_callback=rec, list_vods=_lister(_vods("a")),
+        tenant_id=watch_tenant, respect_schedule=True,
+    )
+    assert len(reports) == 1
+    assert reports[0].skipped_not_due is True
+    assert rec.ingested == []  # lister never ran — resource saved
+
+
+@pytest.mark.asyncio
+async def test_respect_schedule_polls_when_due(
+    db: Database, watch_tenant: str
+) -> None:
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me",
+            persona_id="per_1", polls_per_day=1,
+        )
+        await repo.mark_polled(
+            watch.id, seen_video_ids=[],
+            last_polled_at=(_dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=25)).isoformat(),
+        )
+    rec = _Recorder()
+    reports = await poll_channel_watches(
+        db, ingest_callback=rec, list_vods=_lister(_vods("a")),
+        tenant_id=watch_tenant, respect_schedule=True,
+    )
+    assert reports[0].skipped_not_due is False
+    assert rec.ingested == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_manual_poll_ignores_schedule(
+    db: Database, watch_tenant: str
+) -> None:
+    """`channel poll` (respect_schedule=False) forces a poll regardless
+    of cadence."""
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me",
+            persona_id="per_1", polls_per_day=1,
+        )
+        await repo.mark_polled(
+            watch.id, seen_video_ids=[],
+            last_polled_at=_dt.datetime.now(_dt.UTC).isoformat(),  # just now
+        )
+    rec = _Recorder()
+    reports = await poll_channel_watches(
+        db, ingest_callback=rec, list_vods=_lister(_vods("a")),
+        tenant_id=watch_tenant,  # respect_schedule defaults False
+    )
+    assert reports[0].skipped_not_due is False
+    assert rec.ingested == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_set_polls_per_day_clamps_and_persists(
+    db: Database, watch_tenant: str
+) -> None:
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me", persona_id="per_1",
+        )
+        assert watch.polls_per_day == 1  # default
+        updated = await repo.set_polls_per_day(watch.id, 4)
+        assert updated.polls_per_day == 4
+        clamped = await repo.set_polls_per_day(watch.id, 0)  # < 1 clamps to 1
+        assert clamped.polls_per_day == 1
 
 
 @pytest.mark.asyncio

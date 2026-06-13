@@ -108,7 +108,9 @@ async def _channel_poll_loop(
     while True:
         try:
             await asyncio.sleep(interval_s)
-            await poll_channel_watches(db, ingest_callback=ingest_callback)
+            await poll_channel_watches(
+                db, ingest_callback=ingest_callback, respect_schedule=True,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:

@@ -357,9 +357,15 @@ async def refresh_balance(
         # Tell the user what's actually wrong instead of silently bouncing.
         return RedirectResponse(url="/dashboard/_diag/nexo_ai", status_code=303)
     # Bounce back to wherever the user clicked from. Falls back to streams
-    # list if no Referer (direct hit, curl, etc).
-    referer = request.headers.get("referer") or "/dashboard/streams"
-    return RedirectResponse(url=referer, status_code=303)
+    # list if no Referer (direct hit, curl, etc). Validate against the
+    # whitelisted dashboard prefix so this can't be used as an open
+    # redirect — an attacker page that links here would otherwise be
+    # able to redirect the user back to itself for phishing. Mirrors
+    # the safe_redirect pattern used by /connected-accounts/create
+    # (lines 5432-5437 below).
+    referer = request.headers.get("referer") or ""
+    safe_target = referer if referer.startswith("/dashboard/") else "/dashboard/streams"
+    return RedirectResponse(url=safe_target, status_code=303)
 
 
 @router.get("/_estimate", include_in_schema=False)

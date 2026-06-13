@@ -747,12 +747,19 @@ class StreamsRepo:
         )
         return _model(StreamRow, await cur.fetchone())
 
-    async def list_for_tenant(self) -> list[StreamRow]:
+    async def list_for_tenant(self, *, limit: int = 10_000) -> list[StreamRow]:
+        """List a tenant's streams, hard-capped to `limit` rows (default 10k).
+
+        Bound for the same reason as CandidatesRepo / ClipsRepo .list_for_stream:
+        a tenant with many years of streams would otherwise pull the whole
+        history into memory on every dashboard render.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM streams WHERE tenant_id = ? ORDER BY created_at DESC",
-            (tenant_id,),
+            "SELECT * FROM streams WHERE tenant_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (tenant_id, int(limit)),
         )
         return [StreamRow.model_validate(dict(r)) for r in await cur.fetchall()]
 
@@ -885,6 +892,24 @@ class LLMCallsRepo:
         return int(row[0]) if row else 0
 
 
+async def _resolve_tenant_for_stream(
+    db: "Database", *, stream_id: str
+) -> str | None:
+    """Read the tenant_id of a stream row by id, or None if no such row.
+
+    Used by the MediaMTX-webhook helpers below so each UPDATE can be
+    tenant-scoped (CLAUDE.md rule #1) even though the webhook has no
+    bound tenant of its own. If the lookup returns None the helper
+    refuses the mutation rather than running an unbounded UPDATE.
+    """
+    conn = await db.connect()
+    cur = await conn.execute(
+        "SELECT tenant_id FROM streams WHERE id = ?", (stream_id,)
+    )
+    row = await cur.fetchone()
+    return str(row["tenant_id"]) if row else None
+
+
 async def _streams_repo_mark_live_started(
     db: "Database", *, stream_id: str
 ) -> StreamRow | None:
@@ -896,8 +921,18 @@ async def _streams_repo_mark_live_started(
     the webhook handler can call it directly without going through
     the full tenant-binding ceremony.
 
+    Tenant scope is derived from the row itself (lookup-then-update);
+    the UPDATE includes WHERE tenant_id = ? so an attacker with the
+    NEXOCLIP_INTERNAL_SIGNING_SECRET cannot mutate a stream they
+    cannot also enumerate (defense in depth — the row lookup is the
+    real ownership gate, the WHERE clause is the safety net).
+
     Idempotent: calling twice for the same stream_id is a no-op past
-    the first call (since the row already has is_live=1)."""
+    the first call (since the row already has is_live=1).
+    """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return None
     now = _now()
     conn = await db.connect()
     await conn.execute(
@@ -905,11 +940,14 @@ async def _streams_repo_mark_live_started(
         "SET is_live = 1, "
         "    live_started_at = COALESCE(live_started_at, ?), "
         "    status = 'live' "
-        "WHERE id = ?",
-        (now, stream_id),
+        "WHERE id = ? AND tenant_id = ?",
+        (now, stream_id, tenant_id),
     )
     await conn.commit()
-    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    cur = await conn.execute(
+        "SELECT * FROM streams WHERE id = ? AND tenant_id = ?",
+        (stream_id, tenant_id),
+    )
     row = await cur.fetchone()
     return StreamRow.model_validate(dict(row)) if row else None
 
@@ -919,10 +957,13 @@ async def _streams_repo_mark_live_ended(
 ) -> StreamRow | None:
     """Phase L.1 — flip a stream from 'live' to 'live_ended'.
 
-    Same tenant-free invocation contract as `_streams_repo_mark_live_started`.
+    Same tenant-derived-from-row contract as `_streams_repo_mark_live_started`.
     Optionally accepts the final duration from MediaMTX's
     runOnNotReady webhook payload so the streams row stops showing 0.
     """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return None
     now = _now()
     conn = await db.connect()
     if duration_s is not None:
@@ -932,8 +973,8 @@ async def _streams_repo_mark_live_ended(
             "    live_ended_at = ?, "
             "    status = 'live_ended', "
             "    duration_s = ? "
-            "WHERE id = ?",
-            (now, float(duration_s), stream_id),
+            "WHERE id = ? AND tenant_id = ?",
+            (now, float(duration_s), stream_id, tenant_id),
         )
     else:
         await conn.execute(
@@ -941,11 +982,14 @@ async def _streams_repo_mark_live_ended(
             "SET is_live = 0, "
             "    live_ended_at = ?, "
             "    status = 'live_ended' "
-            "WHERE id = ?",
-            (now, stream_id),
+            "WHERE id = ? AND tenant_id = ?",
+            (now, stream_id, tenant_id),
         )
     await conn.commit()
-    cur = await conn.execute("SELECT * FROM streams WHERE id = ?", (stream_id,))
+    cur = await conn.execute(
+        "SELECT * FROM streams WHERE id = ? AND tenant_id = ?",
+        (stream_id, tenant_id),
+    )
     row = await cur.fetchone()
     return StreamRow.model_validate(dict(row)) if row else None
 
@@ -963,14 +1007,17 @@ async def _streams_repo_try_claim_for_processing(
     launch the (paid) pipeline twice. The first webhook claims and
     schedules; every later one gets False and skips.
 
-    Tenant-free invocation contract, same as the mark_live_* helpers — the
-    webhook runs without a bound tenant and updates by id.
+    Tenant scope derived from the row itself (lookup-then-update),
+    matching the contract of the mark_live_* helpers above.
     """
+    tenant_id = await _resolve_tenant_for_stream(db, stream_id=stream_id)
+    if tenant_id is None:
+        return False
     conn = await db.connect()
     cur = await conn.execute(
         "UPDATE streams SET status = 'processing' "
-        "WHERE id = ? AND status = ?",
-        (stream_id, from_status),
+        "WHERE id = ? AND tenant_id = ? AND status = ?",
+        (stream_id, tenant_id, from_status),
     )
     await conn.commit()
     return (cur.rowcount or 0) == 1
@@ -1254,12 +1301,22 @@ class CandidatesRepo:
         await conn.commit()
         return len(rows)
 
-    async def list_for_stream(self, stream_id: str) -> list[CandidateRow]:
+    async def list_for_stream(
+        self, stream_id: str, *, limit: int = 10_000
+    ) -> list[CandidateRow]:
+        """List candidates for a stream, hard-capped to `limit` rows.
+
+        Default of 10 000 protects against OOM when a long stream
+        produces a runaway candidate set (~5 000 is already a busy
+        90-minute show). Callers that need higher can opt in
+        explicitly; nothing in the dashboard currently does.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM candidates WHERE tenant_id = ? AND stream_id = ? ORDER BY ts",
-            (tenant_id, stream_id),
+            "SELECT * FROM candidates WHERE tenant_id = ? AND stream_id = ? "
+            "ORDER BY ts LIMIT ?",
+            (tenant_id, stream_id, int(limit)),
         )
         return [_candidate_from_row(r) for r in await cur.fetchall()]
 
@@ -1351,12 +1408,20 @@ class ClipsRepo:
         row = await cur.fetchone()
         return _clip_from_row(row) if row else None
 
-    async def list_for_stream(self, stream_id: str) -> list[ClipRow]:
+    async def list_for_stream(
+        self, stream_id: str, *, limit: int = 10_000
+    ) -> list[ClipRow]:
+        """List clips for a stream, hard-capped to `limit` rows.
+
+        Default 10 000 mirrors CandidatesRepo.list_for_stream; protects
+        against the dashboard rendering with an unbounded result set.
+        """
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         cur = await conn.execute(
-            "SELECT * FROM clips WHERE tenant_id = ? AND stream_id = ? ORDER BY created_at",
-            (tenant_id, stream_id),
+            "SELECT * FROM clips WHERE tenant_id = ? AND stream_id = ? "
+            "ORDER BY created_at LIMIT ?",
+            (tenant_id, stream_id, int(limit)),
         )
         return [_clip_from_row(r) for r in await cur.fetchall()]
 

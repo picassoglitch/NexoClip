@@ -95,14 +95,18 @@ def _schedule_balance_refresh(db: Database, *, tenant_id: str) -> None:
 
 
 def _decode_sso_payload_unsigned(token: str):
-    """Slice O.22 — lax-mode SSO. Decode the payload without HMAC verify.
+    """Decode an SSO token's payload WITHOUT verifying the HMAC.
 
-    The wire format is the same `{payload_b64}.{sig_b64}` shape that
-    `verify_sso_token` produces — we just skip the signature check + run
-    a relaxed expiry leeway (7 days) so the operator isn't blocked by
-    the 5-minute strict TTL while they're still wiring up SSO between
-    deployments. Strict mode (with HMAC) resumes when
-    NEXO_AI_SSO_SECRET is set; this path is the "no walls" opt-in.
+    DIAGNOSTIC ONLY. The only legitimate caller is `/api/admin/sso-diag`,
+    which is gated by the NexoClip admin bearer token and uses this to
+    show the operator what a failing link claims (tenant_id, expiry)
+    alongside the strict-verify result — collapsing "stale link vs.
+    wrong secret" to one answer.
+
+    DO NOT use this to mint a session. The previous "lax mode" SSO path
+    did exactly that and was removed as a critical vulnerability — any
+    attacker could craft a payload with an arbitrary tenant_id and get
+    auto-provisioned into it.
     """
     import base64
     import json
@@ -418,18 +422,14 @@ async def sso_finalize(
     token: str | None = None,
     next_path: str | None = Query(default=None, alias="next"),
 ) -> RedirectResponse | HTMLResponse:
-    """Verify a Nexo AI-signed token (or trust it unsigned), set the
-    session cookie, redirect home.
+    """Verify a Nexo AI-signed token, set the session cookie, redirect home.
 
-    Slice O.22 — when `NEXO_AI_SSO_SECRET` is unset on this NexoClip
-    instance, we treat that as "no wall" mode: decode the payload
-    without HMAC verification and trust the tenant_id it claims.
-    This is the explicit-opt-in lax mode — operator's call. With the
-    secret set, strict HMAC verify resumes (production hardening).
-
-    Expiry check is also relaxed in lax mode (7-day leeway) so a token
-    minted by nexo-ai a few minutes ago still works if the user opens
-    NexoClip later from the same tab.
+    HMAC verification is unconditional. When `NEXO_AI_SSO_SECRET` is unset
+    we return 503 so the misconfiguration is loud — *never* mint a session
+    from an unverified payload. (Previously, an "operator-opt-in lax mode"
+    decoded the payload without verifying and trusted the claimed
+    tenant_id, which let an unauthenticated attacker take over or
+    auto-provision any tenant. Removed.)
     """
     settings = get_settings()
     secret = settings.nexo_ai_sso_secret
@@ -440,34 +440,35 @@ async def sso_finalize(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    if secret:
-        # Strict mode: HMAC-verified.
-        try:
-            payload = verify_sso_token(token, secret=secret)
-        except SsoTokenError as e:
-            # Slice O.25 — surface the SsoTokenError message verbatim
-            # (it's already operator-readable: "bad signature", "token
-            # expired", "payload missing required fields", etc).
-            return HTMLResponse(
-                _render_sso_failure(
-                    request,
-                    reason=f"Strict SSO verify failed: {e}",
+    if not secret:
+        # No silent fallback: an unverified payload must never mint a
+        # session. Operator must configure NEXO_AI_SSO_SECRET before
+        # SSO can complete.
+        return HTMLResponse(
+            _render_sso_failure(
+                request,
+                reason=(
+                    "NEXO_AI_SSO_SECRET is not configured on this NexoClip "
+                    "instance. SSO refuses to mint a session without HMAC "
+                    "verification. Configure the shared secret and retry."
                 ),
-                status_code=status.HTTP_401_UNAUTHORIZED,
-            )
-    else:
-        # Lax mode: parse-only. The operator chose not to configure
-        # a shared secret; we trust the token as-issued by nexo-ai.
-        try:
-            payload = _decode_sso_payload_unsigned(token)
-        except SsoTokenError as e:
-            return HTMLResponse(
-                _render_sso_failure(
-                    request,
-                    reason=f"Lax SSO decode failed: {e}",
-                ),
-                status_code=status.HTTP_401_UNAUTHORIZED,
-            )
+            ),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        payload = verify_sso_token(token, secret=secret)
+    except SsoTokenError as e:
+        # Surface the SsoTokenError message verbatim — operator-readable:
+        # "bad signature", "token expired", "payload missing required
+        # fields", etc.
+        return HTMLResponse(
+            _render_sso_failure(
+                request,
+                reason=f"SSO verify failed: {e}",
+            ),
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     # Mint a fresh per-session token. We DON'T reuse the api_token we
     # returned at provisioning time — that one is held by Nexo AI as

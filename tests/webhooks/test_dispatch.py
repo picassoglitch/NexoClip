@@ -64,14 +64,14 @@ async def test_drain_delivers_signed_post_for_each_pending_event(
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://hook.example/x",
+            url="https://example.com/x",
             types=[],
             secret="sekret",
         )
         await EventsRepo(db).emit(type="clip.published", payload={"clip_id": "c1"})
         await EventsRepo(db).emit(type="clip.approved", payload={"clip_id": "c2"})
 
-    route = respx.post("https://hook.example/x").mock(
+    route = respx.post("https://example.com/x").mock(
         return_value=httpx.Response(200, text="ok")
     )
     outcome = await run_webhook_dispatch(tenant.id, db)
@@ -102,7 +102,7 @@ async def test_drain_filters_by_subscribed_types(db: Database) -> None:
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         await WebhookSubscriptionsRepo(db).create(
-            url="https://hook.example/c",
+            url="https://example.com/c",
             types=["clip.*"],
             secret="s",
         )
@@ -110,7 +110,7 @@ async def test_drain_filters_by_subscribed_types(db: Database) -> None:
         await EventsRepo(db).emit(type="publish_job.failed", payload={})
         await EventsRepo(db).emit(type="clip.approved", payload={})
 
-    route = respx.post("https://hook.example/c").mock(
+    route = respx.post("https://example.com/c").mock(
         return_value=httpx.Response(200)
     )
     outcome = await run_webhook_dispatch(tenant.id, db)
@@ -124,13 +124,13 @@ async def test_drain_5xx_increments_failure_count(db: Database) -> None:
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://broken.example/x",
+            url="https://example.com/broken/x",
             types=[],
             secret="s",
         )
         await EventsRepo(db).emit(type="clip.published", payload={})
 
-    respx.post("https://broken.example/x").mock(
+    respx.post("https://example.com/broken/x").mock(
         return_value=httpx.Response(503)
     )
     outcome = await run_webhook_dispatch(tenant.id, db)
@@ -150,7 +150,7 @@ async def test_drain_disables_after_max_failures(db: Database) -> None:
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://broken.example/x",
+            url="https://example.com/broken/x",
             types=[],
             secret="s",
         )
@@ -159,7 +159,7 @@ async def test_drain_disables_after_max_failures(db: Database) -> None:
             await WebhookSubscriptionsRepo(db).record_failure(sub.id)
         await EventsRepo(db).emit(type="clip.published", payload={})
 
-    respx.post("https://broken.example/x").mock(return_value=httpx.Response(500))
+    respx.post("https://example.com/broken/x").mock(return_value=httpx.Response(500))
     outcome = await run_webhook_dispatch(tenant.id, db)
     assert outcome.disabled == 1
     with bound_tenant(tenant.id):
@@ -174,7 +174,7 @@ async def test_drain_skips_disabled_subscriptions(db: Database) -> None:
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://hook.example/x",
+            url="https://example.com/x",
             types=[],
             secret="s",
         )
@@ -187,7 +187,7 @@ async def test_drain_skips_disabled_subscriptions(db: Database) -> None:
         await conn.commit()
         await EventsRepo(db).emit(type="clip.published", payload={})
 
-    route = respx.post("https://hook.example/x").mock(
+    route = respx.post("https://example.com/x").mock(
         return_value=httpx.Response(200)
     )
     outcome = await run_webhook_dispatch(tenant.id, db)
@@ -203,13 +203,13 @@ async def test_drain_only_sends_events_after_last_dispatch_ts(
     tenant = await TenantsRepo(db).create(name="A")
     with bound_tenant(tenant.id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://hook.example/x",
+            url="https://example.com/x",
             types=[],
             secret="s",
         )
         await EventsRepo(db).emit(type="clip.published", payload={"n": 1})
 
-    respx.post("https://hook.example/x").mock(return_value=httpx.Response(200))
+    respx.post("https://example.com/x").mock(return_value=httpx.Response(200))
     out1 = await run_webhook_dispatch(tenant.id, db)
     assert out1.delivered == 1
 

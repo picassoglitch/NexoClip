@@ -189,6 +189,15 @@ async def _stash_upload_to_tmp(file: UploadFile, output_dir: Path) -> Path:
     suffix = Path(file.filename).suffix or ".mp4"
     tmp_path = uploads_dir / f"upl_{uuid.uuid4().hex}{suffix}"
 
+    # Hard cap to protect disk against runaway uploads (DoS / accident).
+    # Read from settings so a tight environment can lower it. Default
+    # 5 GiB — enough for a multi-hour VOD; everything bigger should be
+    # registered as a vod_url and pulled via yt-dlp anyway. `getattr`
+    # so test stubs that monkeypatch get_settings with a minimal object
+    # still work without needing this field declared.
+    from nexoclip.settings import get_settings as _get_settings
+    max_bytes = getattr(_get_settings(), "max_upload_bytes", 5 * 1024 * 1024 * 1024)
+
     chunk_size = 1024 * 1024
     bytes_written = 0
     with tmp_path.open("wb") as out:
@@ -198,6 +207,18 @@ async def _stash_upload_to_tmp(file: UploadFile, output_dir: Path) -> Path:
                 break
             out.write(chunk)
             bytes_written += len(chunk)
+            if bytes_written > max_bytes:
+                # Stop the write + delete the partial file so we don't
+                # leak disk on the rejection.
+                out.close()
+                tmp_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"upload exceeds maximum size of {max_bytes} bytes "
+                        f"(NEXOCLIP_MAX_UPLOAD_BYTES)"
+                    ),
+                )
 
     if bytes_written == 0:
         tmp_path.unlink(missing_ok=True)

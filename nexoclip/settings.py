@@ -300,6 +300,14 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         validation_alias="NEXOCLIP_PUBLIC_URL",
     )
+    # Hard cap on a single stream upload's body size, in bytes. Default
+    # 5 GiB — generous for a multi-hour VOD MP4. Streamed-chunk read
+    # enforces this; anything over the cap raises 413 mid-upload so the
+    # disk write stops immediately. Set lower on tight environments.
+    max_upload_bytes: int = Field(
+        default=5 * 1024 * 1024 * 1024,
+        validation_alias="NEXOCLIP_MAX_UPLOAD_BYTES",
+    )
 
     # Slice O.9 — admin tenant allowlist. Comma-separated tenant IDs that
     # see operator-only nav items (LLM spend + LLM settings). All other

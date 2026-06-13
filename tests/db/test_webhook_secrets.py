@@ -23,7 +23,7 @@ def _now() -> str:
 async def _seed_subscription(db: Database, tenant_id: str, *, secret: str = "old_secret") -> str:
     with bound_tenant(tenant_id):
         sub = await WebhookSubscriptionsRepo(db).create(
-            url="https://hook.example/x", types=[], secret=secret
+            url="https://example.com/x", types=[], secret=secret
         )
     return sub.id
 

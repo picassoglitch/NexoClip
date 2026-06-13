@@ -10,13 +10,14 @@ from __future__ import annotations
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nexoclip.db import (
     Database,
     WebhookSecretsRepo,
     WebhookSubscriptionsRepo,
 )
+from nexoclip.webhooks import UnsafeWebhookUrlError, assert_webhook_url_safe
 
 from ..deps import get_db, require_full_scope, tenant_binder
 
@@ -29,8 +30,19 @@ _DEFAULT_ROTATION_GRACE_S = 86400.0  # 24h
 
 class WebhookCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    url: str = Field(min_length=1)
+    url: str = Field(min_length=1, max_length=2048)
     types: list[str] = Field(default_factory=list)
+
+    @field_validator("url")
+    @classmethod
+    def _ssrf_safe(cls, v: str) -> str:
+        # First line of SSRF defense: reject at registration time. The
+        # dispatcher re-checks at send time too (DNS rebinding defense).
+        try:
+            assert_webhook_url_safe(v)
+        except UnsafeWebhookUrlError as e:
+            raise ValueError(str(e)) from e
+        return v
 
 
 class WebhookCreateResponse(BaseModel):

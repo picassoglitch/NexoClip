@@ -42,13 +42,13 @@ from .models import (
     HubPublishJobRow,
     LiveStreamKeyRow,
     LLMCallRow,
-    ProviderSpend,
-    StreamSpend,
     PersonaRow,
+    ProviderSpend,
     PublishJob,
     PublishMetric,
     SpeakerRow,
     StreamRow,
+    StreamSpend,
     Tenant,
     TranscriptRow,
     User,
@@ -823,7 +823,7 @@ class LLMCallsRepo:
         )
         await conn.commit()
 
-    async def cost_for_stream(self, stream_id: str) -> "StreamSpend":
+    async def cost_for_stream(self, stream_id: str) -> StreamSpend:
         """Token T3 — actual spend for ONE stream's run: total tokens +
         total USD cost, plus a per-provider breakdown. Drives the
         'what did this video actually cost' panel (vs the estimate)."""
@@ -893,7 +893,7 @@ class LLMCallsRepo:
 
 
 async def _resolve_tenant_for_stream(
-    db: "Database", *, stream_id: str
+    db: Database, *, stream_id: str
 ) -> str | None:
     """Read the tenant_id of a stream row by id, or None if no such row.
 
@@ -911,7 +911,7 @@ async def _resolve_tenant_for_stream(
 
 
 async def _streams_repo_mark_live_started(
-    db: "Database", *, stream_id: str
+    db: Database, *, stream_id: str
 ) -> StreamRow | None:
     """Phase L.1 — flip a stream into the 'live' status.
 
@@ -953,7 +953,7 @@ async def _streams_repo_mark_live_started(
 
 
 async def _streams_repo_mark_live_ended(
-    db: "Database", *, stream_id: str, duration_s: float | None = None
+    db: Database, *, stream_id: str, duration_s: float | None = None
 ) -> StreamRow | None:
     """Phase L.1 — flip a stream from 'live' to 'live_ended'.
 
@@ -995,7 +995,7 @@ async def _streams_repo_mark_live_ended(
 
 
 async def _streams_repo_try_claim_for_processing(
-    db: "Database", *, stream_id: str, from_status: str = "live_ended"
+    db: Database, *, stream_id: str, from_status: str = "live_ended"
 ) -> bool:
     """Phase L.2 — atomically claim a just-ended live stream for the
     auto-clip pipeline.
@@ -1024,7 +1024,7 @@ async def _streams_repo_try_claim_for_processing(
 
 
 async def _streams_repo_set_status(
-    db: "Database", *, stream_id: str, status: str
+    db: Database, *, stream_id: str, status: str
 ) -> None:
     """Phase L.2 — tenant-free stream status update (same invocation
     contract as the mark_live_* / claim helpers). The live runner calls
@@ -3862,7 +3862,7 @@ class AutopublishSettingsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, updated_at FROM autopublish_settings "
+            "score_threshold, tag_suffix, updated_at FROM autopublish_settings "
             "WHERE tenant_id = ?",
             (tenant_id,),
         )
@@ -3883,22 +3883,24 @@ class AutopublishSettingsRepo:
         post_mode: str,
         daily_cap: int,
         score_threshold: float = 0.6,
+        tag_suffix: str = "",
     ) -> None:
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO autopublish_settings "
             "(tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "score_threshold, tag_suffix, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(tenant_id) DO UPDATE SET "
             "enabled = excluded.enabled, mode = excluded.mode, "
             "targets = excluded.targets, post_mode = excluded.post_mode, "
             "daily_cap = excluded.daily_cap, "
             "score_threshold = excluded.score_threshold, "
+            "tag_suffix = excluded.tag_suffix, "
             "updated_at = excluded.updated_at",
             (
                 tenant_id, 1 if enabled else 0, mode, targets, post_mode,
-                daily_cap, score_threshold, _now(),
+                daily_cap, score_threshold, tag_suffix, _now(),
             ),
         )
         await conn.commit()

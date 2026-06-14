@@ -533,6 +533,18 @@
       </details>
 
       <input type="hidden" name="mode" id="zn-mode" value="now">
+
+      {# Auto-fill: ask the server to compose the hook + caption + hashtags +
+         fixed handles for this clip and drop them into Title/Caption. #}
+      <div style="margin-top: 12px;">
+        <button type="button" class="nc-btn" id="zn-autofill-btn"
+                title="Genera el hook viral, caption, hashtags y tus handles para este clip">
+          <i class="ti ti-sparkles" aria-hidden="true"></i>
+          <span>Auto-rellenar (hook + caption + tags)</span>
+        </button>
+        <span class="nc-text--muted" id="zn-autofill-msg" style="font-size:12px; margin-left:8px;"></span>
+      </div>
+
       <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center;">
         <button type="submit" class="nc-btn nc-btn--primary" data-mode="now">
           <i class="ti ti-send" aria-hidden="true"></i>
@@ -543,15 +555,29 @@
           <i class="ti ti-file-pencil" aria-hidden="true"></i>
           <span>Guardar como borrador</span>
         </button>
-        <span style="display: inline-flex; gap: 6px; align-items: center;">
-          <input class="nc-input" type="datetime-local" name="scheduled_for"
-                 id="zn-schedule-at" style="width: auto; padding: 6px 8px;">
-          <button type="submit" class="nc-btn" data-mode="schedule"
-                  title="Programa la publicación para la fecha elegida (UTC)">
-            <i class="ti ti-calendar-event" aria-hidden="true"></i>
-            <span>Programar</span>
-          </button>
-        </span>
+      </div>
+
+      {# Schedule row on its own line so the calendar is obvious. The native
+         datetime-local pops a calendar on click; min blocks past dates. #}
+      <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
+        <label class="nc-label" style="margin:0;">
+          <i class="ti ti-calendar-event" aria-hidden="true"></i> Programar para (tu hora local)
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:4px;">
+            <input class="nc-input" type="datetime-local" name="scheduled_for"
+                   id="zn-schedule-at" style="width:auto; padding:6px 8px;">
+            <button type="button" class="nc-btn" id="zn-besttime-fill"
+                    title="Rellena con tu próxima mejor hora según el engagement">
+              <i class="ti ti-clock-bolt" aria-hidden="true"></i>
+              <span>Sugerir mejor hora</span>
+            </button>
+            <button type="submit" class="nc-btn nc-btn--primary" data-mode="schedule"
+                    title="Programa la publicación para la fecha elegida">
+              <i class="ti ti-calendar-plus" aria-hidden="true"></i>
+              <span>Programar</span>
+            </button>
+            <span class="nc-text--muted" id="zn-besttime-msg" style="font-size:12px;"></span>
+          </div>
+        </label>
       </div>
     </form>
   </div>
@@ -625,6 +651,27 @@
     </span>
   </div>
   <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:16px;">
+
+    {# --- Auto-program (one-click whole-queue scheduler) --- #}
+    <div style="border:1px solid var(--nc-green, #48bb78); border-radius:10px; padding:14px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+        <i class="ti ti-wand" aria-hidden="true" style="color:var(--nc-green);"></i>
+        <strong style="font-size:14px;">Auto-programar todo</strong>
+      </div>
+      <p class="nc-text--muted" style="font-size:13px; margin:0 0 10px 0;">
+        Reparte tus clips aprobados en tus mejores horas (según el engagement),
+        sin pasarte del tope diario, y le pone a cada uno su hook, caption,
+        hashtags y tus handles fijos. Configura plataformas, tope y handles en
+        <strong>Piloto automático</strong>.
+      </p>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="nc-btn nc-btn--primary" id="zn-autoprog-btn" style="padding:8px 16px;">
+          <i class="ti ti-calendar-bolt" aria-hidden="true"></i>
+          <span>Auto-programar <span id="zn-autoprog-count">{{ publishable_clips|length if publishable_clips else 0 }}</span> clip(s)</span>
+        </button>
+        <span class="nc-text--muted" id="zn-autoprog-msg" style="font-size:13px;"></span>
+      </div>
+    </div>
 
     {# --- Recurring slots editor --- #}
     <div>
@@ -740,6 +787,15 @@
       </label>
       <span class="nc-text--muted" style="font-size:12px;" id="zn-ap-used"></span>
     </div>
+
+    <label class="nc-label" style="margin:0;">
+      Handles y hashtags fijos
+      <span class="nc-text--muted" style="font-size:12px;">
+        Se añaden al final de cada publicación automática (tus @ y hashtags de marca).
+      </span>
+      <textarea class="nc-input" id="zn-ap-tagsuffix" rows="2" maxlength="500"
+                placeholder="@minombre · seguime en Kick · #gaming #clips"></textarea>
+    </label>
 
     <div>
       <button type="button" class="nc-btn nc-btn--primary" id="zn-ap-save" style="padding:6px 14px;">
@@ -1293,6 +1349,72 @@
       hidden.type = "hidden"; hidden.name = "platforms";
       hidden.value = selected.join(",");
       form.appendChild(hidden);
+    });
+  }
+
+  // ---- Schedule helpers (calendar prefill + auto-fill) ----
+  function znToLocalInput(d) {
+    // datetime-local wants YYYY-MM-DDTHH:mm in the operator's LOCAL time.
+    var local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+  }
+  function znCurrentClipId() {
+    var a = (form && (form.getAttribute("action") || form.action)) || "";
+    var m = a.match(/\/post\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : "";
+  }
+  var schedAt = document.getElementById("zn-schedule-at");
+  if (schedAt) {
+    // Block past dates — the picker can't go before "now".
+    schedAt.min = znToLocalInput(new Date(Date.now() + 5 * 60000));
+  }
+  var bestFill = document.getElementById("zn-besttime-fill");
+  if (bestFill && schedAt) {
+    bestFill.addEventListener("click", function () {
+      var msg = document.getElementById("zn-besttime-msg");
+      msg.style.color = "var(--nc-text--muted)";
+      msg.textContent = "Buscando…";
+      fetch("/dashboard/publish/zernio/schedule/next-best.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          if (!b.ok || !b.iso) { throw new Error("sin datos"); }
+          schedAt.value = znToLocalInput(new Date(b.iso));  // ISO is UTC → local
+          msg.style.color = "var(--nc-green, #48bb78)";
+          msg.textContent = "Listo ✓";
+        })
+        .catch(function () { msg.style.color = "#ff7575"; msg.textContent = "Sin datos aún."; });
+    });
+  }
+  var autofillBtn = document.getElementById("zn-autofill-btn");
+  if (autofillBtn && form) {
+    autofillBtn.addEventListener("click", function () {
+      var msg = document.getElementById("zn-autofill-msg");
+      var clipId = znCurrentClipId();
+      if (!clipId) {
+        msg.style.color = "#ff7575"; msg.textContent = "Elige un clip primero.";
+        return;
+      }
+      autofillBtn.disabled = true;
+      msg.style.color = "var(--nc-text--muted)";
+      msg.textContent = "Generando…";
+      fetch("/dashboard/publish/zernio/compose/" + encodeURIComponent(clipId), {
+        method: "POST", credentials: "same-origin",
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (b) {
+          if (!b.ok) { throw new Error(b.error || b.detail || "fallo"); }
+          var titleEl = form.querySelector('[name="title"]');
+          var capEl = form.querySelector('[name="description"]');
+          if (titleEl && b.title) { titleEl.value = b.title; }
+          if (capEl && b.caption) { capEl.value = b.caption; }
+          msg.style.color = "var(--nc-green, #48bb78)";
+          msg.textContent = "Hook + caption + tags listos ✓";
+        })
+        .catch(function (e) {
+          msg.style.color = "#ff7575";
+          msg.textContent = "No se pudo generar: " + e.message;
+        })
+        .finally(function () { autofillBtn.disabled = false; });
     });
   }
 
@@ -2057,6 +2179,7 @@
           document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
           document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
           document.getElementById("zn-ap-threshold").value = (s.score_threshold == null ? 0.6 : s.score_threshold);
+          document.getElementById("zn-ap-tagsuffix").value = s.tag_suffix || "";
           var selected = (s.targets || "").split(",").filter(function (t) { return t; });
           renderApTargets(b.platforms || [], selected);
           var used = document.getElementById("zn-ap-used");
@@ -2088,6 +2211,7 @@
           post_mode: document.getElementById("zn-ap-postmode").value,
           daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
           score_threshold: parseFloat(document.getElementById("zn-ap-threshold").value) || 0,
+          tag_suffix: document.getElementById("zn-ap-tagsuffix").value || "",
         }),
       })
         .then(function (r) { return r.json(); })
@@ -2401,6 +2525,42 @@
             .join("");
         })
         .catch(function () {});
+    }
+
+    // ---- Auto-program (whole-queue scheduler) ----
+    var autoprogBtn = document.getElementById("zn-autoprog-btn");
+    if (autoprogBtn) {
+      autoprogBtn.addEventListener("click", function () {
+        var msg = document.getElementById("zn-autoprog-msg");
+        var count = parseInt(
+          (document.getElementById("zn-autoprog-count") || {}).textContent || "0", 10
+        ) || 0;
+        if (count <= 0) {
+          msg.style.color = "var(--nc-text--muted)";
+          msg.textContent = "No hay clips aprobados para programar.";
+          return;
+        }
+        if (!window.confirm("Programar " + count + " clip(s) en tus mejores horas?")) { return; }
+        autoprogBtn.disabled = true;
+        msg.style.color = "var(--nc-text--muted)";
+        msg.textContent = "Programando…";
+        fetch("/dashboard/publish/zernio/schedule/auto", {
+          method: "POST", credentials: "same-origin",
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (b) {
+            if (!b.ok) { throw new Error(b.error || b.detail || "fallo"); }
+            msg.style.color = "var(--nc-green, #48bb78)";
+            msg.textContent = "Programados " + b.scheduled + " clip(s)"
+              + (b.skipped ? (" · " + b.skipped + " omitido(s)") : "") + " ✓";
+            loadSchedule();  // refresh "Próximas publicaciones"
+          })
+          .catch(function (e) {
+            msg.style.color = "#ff7575";
+            msg.textContent = "No se pudo programar: " + e.message;
+          })
+          .finally(function () { autoprogBtn.disabled = false; });
+      });
     }
 
     loadSchedule();

@@ -1560,6 +1560,7 @@ async def zernio_autopublish_json(
     s = await AutopublishSettingsRepo(db).get(tenant_id) or {
         "enabled": False, "mode": "on_approve", "targets": None,
         "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
+        "tag_suffix": "",
     }
     platforms: list[str] = []
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -1614,6 +1615,9 @@ async def zernio_autopublish_save(
         score_threshold = min(1.0, max(0.0, float(data.get("score_threshold", 0.6))))
     except (TypeError, ValueError):
         score_threshold = 0.6
+    # Fixed @handles + brand hashtags appended to every auto-published /
+    # auto-programmed caption. Capped so a runaway paste can't bloat posts.
+    tag_suffix = str(data.get("tag_suffix") or "").strip()[:500]
     await AutopublishSettingsRepo(db).upsert(
         tenant_id,
         enabled=bool(data.get("enabled")),
@@ -1622,6 +1626,7 @@ async def zernio_autopublish_save(
         post_mode=post_mode,
         daily_cap=daily_cap,
         score_threshold=score_threshold,
+        tag_suffix=tag_suffix,
     )
     return JSONResponse({"ok": True})
 
@@ -1657,7 +1662,8 @@ async def maybe_autopublish_on_approve(
 
     log = structlog.get_logger("nexoclip.api.zernio")
     try:
-        from nexoclip.db import AutopublishSettingsRepo, VariantsRepo
+        from nexoclip.db import AutopublishSettingsRepo
+        from nexoclip.publish.compose import build_post
 
         s = await AutopublishSettingsRepo(db).get(tenant_id)
         if not s or not s["enabled"] or s["mode"] != "on_approve":
@@ -1683,8 +1689,12 @@ async def maybe_autopublish_on_approve(
                 tenant_id=tenant_id, want=want, connected=sorted(connected),
             )
             return None
-        variants = await VariantsRepo(db).list_for_clip(clip_id)
-        content = (variants[0].caption if variants else "") or ""
+        # Enrich: viral hook (variant title card) + caption + AI hashtags +
+        # the tenant's fixed @handles/hashtags suffix — so auto-publish ships
+        # a complete, swipe-stopping post, not a bare caption.
+        composed = await build_post(
+            db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
+        )
         post_id = await _publish_clip(
             client=client,
             db=db,
@@ -1694,7 +1704,8 @@ async def maybe_autopublish_on_approve(
             account_map=_account_map(accounts),
             clip_id=clip_id,
             platforms=targets,
-            content=content,
+            content=composed.caption,
+            title=composed.title,
             mode=s["post_mode"],
         )
         log.info(
@@ -1733,7 +1744,8 @@ async def autopublish_hands_free_sweep(
             mint_signed_clip_url,
             sign_render_query,
         )
-        from nexoclip.db import AutopublishSettingsRepo, ClipsRepo, VariantsRepo
+        from nexoclip.db import AutopublishSettingsRepo, ClipsRepo
+        from nexoclip.publish.compose import build_post
         from nexoclip.tenancy import bound_tenant
 
         s = await AutopublishSettingsRepo(db).get(tenant_id)
@@ -1778,8 +1790,10 @@ async def autopublish_hands_free_sweep(
                     clip = await ClipsRepo(db).get(clip_id)
                     if clip is None:
                         continue
-                    variants = await VariantsRepo(db).list_for_clip(clip_id)
-                content = (variants[0].caption if variants else "") or ""
+                    composed = await build_post(
+                        db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
+                    )
+                content = composed.caption
                 await ensure_clip_rendered(
                     db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                     auth_cookie_value=None, db_path=settings.db_path,
@@ -1792,6 +1806,7 @@ async def autopublish_hands_free_sweep(
                 result = await client.create_post(
                     profile_id=profile_id, content=content, media_url=media_url,
                     platforms=post_targets, publish_now=(post_mode == "now"),
+                    title=composed.title,
                 )
                 with bound_tenant(tenant_id):
                     await pubs.record(
@@ -2678,6 +2693,175 @@ async def zernio_best_time_json(
         # Analytics add-on missing / not enough history → no data.
         return JSONResponse({"ok": True, "slots": []})
     return JSONResponse({"ok": True, "slots": slots})
+
+
+@router.get("/schedule/next-best.json")
+async def zernio_next_best_json(
+    platform: str = "",
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """The single next best posting datetime (UTC ISO) — backs the
+    "Sugerir mejor hora" button on Programar. Uses the tenant's best-time
+    analytics when available, else the sane fallback spread."""
+    import datetime as _dt
+
+    from nexoclip.publish.hub import _next_fallback_hour, next_best_time
+
+    now_dt = _dt.datetime.now(_dt.UTC)
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    slots: list[dict[str, Any]] = []
+    if profile_id and get_settings().zernio_api_key:
+        with contextlib.suppress(ZernioError):
+            slots = await _build_client().best_time_slots(
+                profile_id=profile_id, platform=(platform or None),
+            )
+    best = next_best_time(slots, now=now_dt) or _next_fallback_hour(now_dt)
+    return JSONResponse({"ok": True, "iso": best.isoformat()})
+
+
+@router.post("/compose/{clip_id}")
+async def zernio_compose_clip(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Generate the title + caption auto-publish would post for this clip —
+    backs the Single Publish "Auto-rellenar" button. Stitches the viral
+    hook + caption + AI hashtags + the tenant's fixed handle/hashtag
+    suffix; generates a fresh hook when the variant doesn't carry one."""
+    from nexoclip.db import AutopublishSettingsRepo
+    from nexoclip.publish.compose import build_post, generate_hook_line
+
+    s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+    handle_suffix = str(s.get("tag_suffix") or "")
+    composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
+    if not composed.hook:
+        hook = await generate_hook_line(db, tenant_id, clip_id)
+        if hook:
+            composed = await build_post(
+                db, clip_id, handle_suffix=handle_suffix, hook_override=hook,
+            )
+    return JSONResponse({
+        "ok": True,
+        "title": composed.title or "",
+        "caption": composed.caption,
+        "hashtags": composed.hashtags,
+    })
+
+
+@router.post("/schedule/auto")
+async def zernio_schedule_auto(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Auto-program every approved clip across the tenant's best posting
+    times.
+
+    Spreads the available clips with `plan_batch_times` — best-engagement
+    hours when analytics exist, the sane fallback spread otherwise, never
+    more than the daily cap per UTC day — and enriches each post (viral
+    hook + caption + AI hashtags + the fixed handle/hashtag suffix). One
+    clip's failure is collected, not fatal. Targets the autopublish target
+    platforms ∩ connected, else all connected accounts."""
+    import datetime as _dt
+
+    from nexoclip.db import AutopublishSettingsRepo
+    from nexoclip.publish.compose import build_post
+    from nexoclip.publish.hub import plan_batch_times
+
+    settings = get_settings()
+    tenant = await TenantsRepo(db).get(tenant_id)
+    profile_id = tenant.zernio_profile_id if tenant else None
+    if not profile_id or not settings.zernio_api_key:
+        return JSONResponse(
+            {"ok": False, "error": "Conecta tus redes primero."}, status_code=409,
+        )
+
+    clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
+    if not clips:
+        return JSONResponse({
+            "ok": True, "scheduled": 0, "skipped": 0, "results": [],
+            "message": "No hay clips aprobados para programar.",
+        })
+
+    client = _build_client()
+    try:
+        accounts = await client.list_accounts(profile_id=profile_id)
+    except ZernioError as e:
+        _log.warning("zernio.autoprogram.accounts_failed tenant=%s err=%s", tenant_id, e)
+        return JSONResponse(
+            {"ok": False, "error": f"Couldn't read your accounts: {e}"},
+            status_code=502,
+        )
+    account_map = _account_map(accounts)
+    connected = _connected_platforms(accounts)
+    if not connected:
+        return JSONResponse(
+            {"ok": False, "error": "No tienes redes conectadas."}, status_code=409,
+        )
+
+    # Target platforms: the autopublish targets ∩ connected, else all
+    # connected. The per-tier account cap also caps platforms-per-post.
+    s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+    want = [t for t in str(s.get("targets") or "").split(",") if t.strip()]
+    targets = [t for t in want if t in connected] or sorted(connected)
+    limit = _account_limit(request)
+    if limit is not None:
+        targets = targets[:limit]
+    handle_suffix = str(s.get("tag_suffix") or "")
+    try:
+        cap = max(1, int(s.get("daily_cap") or 10))
+    except (TypeError, ValueError):
+        cap = 10
+
+    # Best-time slots feed the planner; empty (no analytics) → fallback spread.
+    best_slots: list[dict[str, Any]] = []
+    with contextlib.suppress(ZernioError):
+        best_slots = await client.best_time_slots(profile_id=profile_id)
+
+    now_dt = _dt.datetime.now(_dt.UTC)
+    existing_today = await _autopublish_count_today(db, tenant_id)
+    times = plan_batch_times(
+        len(clips), now=now_dt, cap_per_day=cap,
+        existing_today=existing_today, best_slots=best_slots or None,
+    )
+
+    results: list[dict[str, Any]] = []
+    scheduled = 0
+    for clip, when in zip(clips, times, strict=False):
+        try:
+            composed = await build_post(db, clip.id, handle_suffix=handle_suffix)
+            post_id = await _publish_clip(
+                client=client, db=db, request=request, tenant_id=tenant_id,
+                profile_id=profile_id, account_map=account_map, clip_id=clip.id,
+                platforms=targets, content=composed.caption, title=composed.title,
+                mode="schedule", scheduled_for=when.isoformat(),
+            )
+            scheduled += 1
+            results.append({
+                "clip_id": clip.id, "ok": True, "post_id": post_id,
+                "scheduled_for": when.isoformat(),
+            })
+        except HTTPException as e:
+            results.append({"clip_id": clip.id, "ok": False, "error": str(e.detail)})
+        except Exception as e:  # one clip's failure must not abort the batch
+            results.append({"clip_id": clip.id, "ok": False, "error": str(e)})
+
+    skipped = len(clips) - scheduled
+    _log.info(
+        "zernio.autoprogram tenant=%s clips=%d scheduled=%d skipped=%d targets=%s",
+        tenant_id, len(clips), scheduled, skipped, ",".join(targets),
+    )
+    return JSONResponse({
+        "ok": True, "scheduled": scheduled, "skipped": skipped, "results": results,
+    })
 
 
 @router.post("/schedule/cancel/{post_id}")

@@ -262,6 +262,77 @@ async def test_schedule_auto_no_clips_is_clean_ok(
     assert body["scheduled"] == 0
 
 
+# ---- hands-free best-time spread ----
+
+
+@pytest.mark.asyncio
+async def test_handsfree_queue_spreads_and_enriches(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """A finished VOD's clips, in hands_free + queue mode, schedule across
+    best-time slots (scheduledFor set, not immediate) with enriched text."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="queue", daily_cap=10, score_threshold=0.5,
+        tag_suffix="@minombre #marca",
+    )
+    posted: list[str] = []
+
+    def _create(request: httpx.Request) -> httpx.Response:
+        pid = f"post_hf_{len(posted)}"
+        posted.append(pid)
+        return httpx.Response(201, json={"success": True, "post": {"_id": pid}})
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        mock.get(f"{_ZBASE}/analytics/best-time").mock(
+            return_value=httpx.Response(403, json={"error": "addon"})
+        )
+        post_route = mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_1", 0.9), ("clp_2", 0.8)],
+        )
+
+    assert n == 2
+    assert post_route.call_count == 2
+    payloads = [json.loads(c.request.content.decode()) for c in post_route.calls]
+    for p in payloads:
+        assert p.get("scheduledFor")  # queue mode → spread, not immediate
+        assert p.get("publishNow") in (None, False)
+    assert any("@minombre #marca" in p["content"] for p in payloads)
+
+
+@pytest.mark.asyncio
+async def test_handsfree_now_mode_posts_immediately(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """now mode keeps firing immediately — no scheduledFor."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="now", daily_cap=10, score_threshold=0.5, tag_suffix="",
+    )
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        post_route = mock.post(f"{_ZBASE}/posts").mock(
+            side_effect=lambda r: httpx.Response(
+                201, json={"success": True, "post": {"_id": "post_now"}}
+            )
+        )
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_1", 0.9)],
+        )
+    assert n == 1
+    payload = json.loads(post_route.calls.last.request.content.decode())
+    assert payload["publishNow"] is True
+    assert "scheduledFor" not in payload
+
+
 # ---- tag_suffix round-trip ----
 
 

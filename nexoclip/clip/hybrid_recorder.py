@@ -79,6 +79,7 @@ async def record_clip_hybrid(
     base_url: str,
     auth_cookie_name: str = "nexoclip_token",
     auth_cookie_value: str | None = None,
+    auth_query: str = "",
     width: int = 1080,
     height: int = 1920,
     fps: int = DEFAULT_FPS,
@@ -109,9 +110,12 @@ async def record_clip_hybrid(
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # `auth_query` (signed-URL params) authenticates the render without a
+    # cookie — used by background auto-publish. When set, no cookie is added.
     record_url = (
         f"{base_url.rstrip('/')}/dashboard/clips/{clip_id}/render"
         f"?capture=alpha"
+        + (f"&{auth_query}" if auth_query else "")
     )
 
     with tempfile.TemporaryDirectory(prefix="nexoclip_hybrid_") as tmpdir:

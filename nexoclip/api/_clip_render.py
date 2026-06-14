@@ -163,6 +163,7 @@ async def render_clip_in_background(
     width: int,
     height: int,
     db_path: str,
+    auth_query: str = "",
 ) -> None:
     """Run the headless-Chromium recorder and update clip.render_state.
 
@@ -261,6 +262,7 @@ async def render_clip_in_background(
                 output_path=output_path,
                 base_url=base_url,
                 auth_cookie_value=auth_cookie_value,
+                auth_query=auth_query,
                 width=width,
                 height=height,
                 progress_callback=_on_progress,
@@ -318,6 +320,7 @@ async def render_clip_in_background(
                     output_path=output_path,
                     base_url=base_url,
                     auth_cookie_value=auth_cookie_value,
+                    auth_query=auth_query,
                     width=width,
                     height=height,
                     progress_callback=_on_progress,
@@ -435,6 +438,7 @@ async def ensure_clip_rendered(
     height: int = 1920,
     output_name: str = "clip_render_1080.mp4",
     max_wait_s: float = 240.0,
+    auth_query: str = "",
 ) -> Path:
     """Guarantee the burned-in publish-preset MP4 exists, then return it.
 
@@ -507,6 +511,7 @@ async def ensure_clip_rendered(
         width=width,
         height=height,
         db_path=db_path,
+        auth_query=auth_query,
     )
     if is_servable_cached_mp4(output):
         return output

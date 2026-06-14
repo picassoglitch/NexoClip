@@ -128,3 +128,37 @@ async def test_engine_no_op_when_disabled(
         db=db, tenant_id=tid, clip_id="clp_x",
     )
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_handsfree_sweep_no_op_when_disabled(
+    db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """The hands-free sweep returns 0 and never raises when auto-publish is
+    off — the pipeline calls it unconditionally and must not be affected."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    n = await autopublish_hands_free_sweep(
+        db=db, tenant_id=tenants["alice"]["id"], base_url="https://x.test",
+        clip_scores=[("clp_a", 0.9)],
+    )
+    assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_handsfree_sweep_no_op_in_on_approve_mode(
+    db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """Enabled but mode=on_approve → the hands-free sweep stays out of it."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    tid = tenants["alice"]["id"]
+    await AutopublishSettingsRepo(db).upsert(
+        tid, enabled=True, mode="on_approve", targets="tiktok",
+        post_mode="queue", daily_cap=10, score_threshold=0.5,
+    )
+    n = await autopublish_hands_free_sweep(
+        db=db, tenant_id=tid, base_url="https://x.test",
+        clip_scores=[("clp_a", 0.9)],
+    )
+    assert n == 0

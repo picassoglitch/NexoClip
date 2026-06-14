@@ -1053,6 +1053,30 @@ async def _run_pipeline(
                     },
                 )
 
+    # Auto-publish "manos libres" (Fase 2): fire-and-forget post of every
+    # clip above the tenant's score threshold. Best-effort — must NEVER fail
+    # the pipeline. No-op unless auto-publish is enabled in hands_free mode.
+    if db is not None:
+        try:
+            from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+            from nexoclip.settings import get_settings as _get_settings
+
+            _cand_score = {
+                c.id: float(getattr(c, "score", 0.0) or 0.0) for c in candidates
+            }
+            _clip_scores = [
+                (e.clip.id, _cand_score.get(getattr(e.clip, "candidate_id", ""), 0.0))
+                for e in clip_entries
+            ]
+            await autopublish_hands_free_sweep(
+                db=db,
+                tenant_id=tenant_id,
+                base_url=(_get_settings().public_url or "").rstrip("/"),
+                clip_scores=_clip_scores,
+            )
+        except Exception as e:  # never break the pipeline on a publish hiccup
+            _log.warning("pipeline.autopublish_handsfree_failed", error=str(e))
+
     # 6) manifest
     manifest = StreamManifest(
         started_at=started_at,

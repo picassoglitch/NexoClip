@@ -95,6 +95,25 @@ def mint_signed_clip_url(
     )
 
 
+def sign_render_query(
+    *, clip_id: str, tenant_id: str, ttl_seconds: int = 600
+) -> str:
+    """Just the signed query string (`tenant=..&exp=..&sig=..`) for the
+    `/render` page — the `auth_query` the background recorder appends to
+    authenticate without a cookie. Same HMAC scheme as the signed clip URL."""
+    settings = get_settings()
+    secret = (settings.internal_signing_secret or "").strip()
+    if not secret:
+        raise RuntimeError(
+            "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured; cannot sign "
+            "a render URL for background auto-publish"
+        )
+    exp = int(time.time()) + int(ttl_seconds)
+    msg = f"{clip_id}|{tenant_id}|{exp}".encode()
+    sig = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    return f"tenant={tenant_id}&exp={exp}&sig={sig}"
+
+
 def mint_signed_render_url(
     *,
     clip_id: str,

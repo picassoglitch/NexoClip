@@ -3757,6 +3757,17 @@ class ZernioPublishesRepo:
             ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
         ]
 
+    async def exists_for_clip(self, tenant_id: str, clip_id: str) -> bool:
+        """True if this clip already has a publish record — the idempotency
+        guard for hands-free auto-publish (don't re-post on pipeline re-runs)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT 1 FROM zernio_publishes "
+            "WHERE tenant_id = ? AND clip_id = ? LIMIT 1",
+            (tenant_id, clip_id),
+        )
+        return await cur.fetchone() is not None
+
     async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
         """Tenant-FREE lookup by Zernio post id.
 

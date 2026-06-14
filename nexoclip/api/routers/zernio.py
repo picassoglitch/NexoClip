@@ -1710,6 +1710,113 @@ async def maybe_autopublish_on_approve(
         return None
 
 
+async def autopublish_hands_free_sweep(
+    *,
+    db: Database,
+    tenant_id: str,
+    base_url: str,
+    clip_scores: list[tuple[str, float]],
+) -> int:
+    """Hands-free auto-publish: post every clip whose score >= the tenant's
+    threshold, when auto-publish is enabled in `hands_free` mode. Renders each
+    clip via a signed URL (no cookie — runs in the background pipeline) and
+    posts through Zernio. Returns how many were published. NEVER raises — the
+    pipeline must not fail because publishing did. Idempotent per clip (skips
+    clips already in zernio_publishes); honours the daily cap."""
+    import structlog
+
+    log = structlog.get_logger("nexoclip.api.zernio")
+    published = 0
+    try:
+        from nexoclip.api._clip_render import ensure_clip_rendered
+        from nexoclip.api.routers.internal import (
+            mint_signed_clip_url,
+            sign_render_query,
+        )
+        from nexoclip.db import AutopublishSettingsRepo, ClipsRepo, VariantsRepo
+        from nexoclip.tenancy import bound_tenant
+
+        s = await AutopublishSettingsRepo(db).get(tenant_id)
+        if not s or not s["enabled"] or s["mode"] != "hands_free":
+            return 0
+        settings = get_settings()
+        if not settings.zernio_api_key or not base_url:
+            return 0
+        tenant = await TenantsRepo(db).get(tenant_id)
+        profile_id = tenant.zernio_profile_id if tenant else None
+        if not profile_id:
+            return 0
+
+        client = _build_client()
+        accounts = await client.list_accounts(profile_id=profile_id)
+        account_map = _account_map(accounts)
+        connected = _connected_platforms(accounts)
+        want = [t for t in (s["targets"] or "").split(",") if t.strip()]
+        post_targets = [
+            (p, account_map[p]) for p in want if p in connected and p in account_map
+        ]
+        if not post_targets:
+            log.info("autopublish.handsfree.no_targets", tenant_id=tenant_id, want=want)
+            return 0
+
+        threshold = float(s.get("score_threshold") or 0.6)
+        cap = int(s.get("daily_cap") or 0)
+        post_mode = s["post_mode"]
+        used = await _autopublish_count_today(db, tenant_id)
+        pubs = ZernioPublishesRepo(db)
+
+        for clip_id, score in clip_scores:
+            if cap and used >= cap:
+                log.info("autopublish.handsfree.cap_reached", tenant_id=tenant_id, cap=cap)
+                break
+            if score < threshold:
+                continue
+            if await pubs.exists_for_clip(tenant_id, clip_id):
+                continue
+            try:
+                with bound_tenant(tenant_id):
+                    clip = await ClipsRepo(db).get(clip_id)
+                    if clip is None:
+                        continue
+                    variants = await VariantsRepo(db).list_for_clip(clip_id)
+                content = (variants[0].caption if variants else "") or ""
+                await ensure_clip_rendered(
+                    db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
+                    auth_cookie_value=None, db_path=settings.db_path,
+                    auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
+                )
+                media_url = mint_signed_clip_url(
+                    clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
+                    ttl_seconds=3600,
+                )
+                result = await client.create_post(
+                    profile_id=profile_id, content=content, media_url=media_url,
+                    platforms=post_targets, publish_now=(post_mode == "now"),
+                )
+                with bound_tenant(tenant_id):
+                    await pubs.record(
+                        post_id=result.post_id, tenant_id=tenant_id, clip_id=clip_id,
+                        platforms=[p for p, _ in post_targets], content=content,
+                    )
+                    await ClipsRepo(db).update_status(clip_id, status="published")
+                used += 1
+                published += 1
+                log.info(
+                    "autopublish.handsfree.posted",
+                    tenant_id=tenant_id, clip_id=clip_id, post_id=result.post_id,
+                    score=score, mode=post_mode,
+                )
+            except Exception as e:  # one clip's failure must not stop the sweep
+                log.warning(
+                    "autopublish.handsfree.clip_failed",
+                    tenant_id=tenant_id, clip_id=clip_id, error=str(e),
+                )
+                continue
+    except Exception as e:  # the sweep must never break the pipeline
+        log.warning("autopublish.handsfree.failed", tenant_id=tenant_id, error=str(e))
+    return published
+
+
 # ---------- Crecimiento: funnel machine (phase 10, Pro-gated) ----------
 # Automations (IG/FB only), contacts, sequences, broadcasts. All
 # mutating routes carry require_paid_tier (non-Pro → 402, the JS shows

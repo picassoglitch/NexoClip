@@ -106,6 +106,7 @@ async def record_clip_to_mp4(
     base_url: str,
     auth_cookie_name: str = "nexoclip_token",
     auth_cookie_value: str | None = None,
+    auth_query: str = "",
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     fps: int = DEFAULT_FPS,
@@ -148,8 +149,12 @@ async def record_clip_to_mp4(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # Capture mode: ?capture=1 tells the render page to NOT autoplay
     # the <video>. We'll drive currentTime ourselves per frame.
+    # `auth_query` (e.g. "tenant=..&exp=..&sig=..") authenticates the render
+    # via a signed URL instead of a cookie — used by background auto-publish,
+    # which has no operator session. When set, no cookie is added below.
     record_url = (
         f"{base_url.rstrip('/')}/dashboard/clips/{clip_id}/render?capture=1"
+        + (f"&{auth_query}" if auth_query else "")
     )
 
     # Slice O.55 — canonical-duration reconciliation. The caller passes

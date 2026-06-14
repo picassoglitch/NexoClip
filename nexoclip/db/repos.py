@@ -3757,6 +3757,17 @@ class ZernioPublishesRepo:
             ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
         ]
 
+    async def exists_for_clip(self, tenant_id: str, clip_id: str) -> bool:
+        """True if this clip already has a publish record — the idempotency
+        guard for hands-free auto-publish (don't re-post on pipeline re-runs)."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT 1 FROM zernio_publishes "
+            "WHERE tenant_id = ? AND clip_id = ? LIMIT 1",
+            (tenant_id, clip_id),
+        )
+        return await cur.fetchone() is not None
+
     async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
         """Tenant-FREE lookup by Zernio post id.
 
@@ -3851,7 +3862,8 @@ class AutopublishSettingsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "updated_at FROM autopublish_settings WHERE tenant_id = ?",
+            "score_threshold, updated_at FROM autopublish_settings "
+            "WHERE tenant_id = ?",
             (tenant_id,),
         )
         row = await cur.fetchone()
@@ -3870,19 +3882,23 @@ class AutopublishSettingsRepo:
         targets: str | None,
         post_mode: str,
         daily_cap: int,
+        score_threshold: float = 0.6,
     ) -> None:
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO autopublish_settings "
-            "(tenant_id, enabled, mode, targets, post_mode, daily_cap, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "(tenant_id, enabled, mode, targets, post_mode, daily_cap, "
+            "score_threshold, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(tenant_id) DO UPDATE SET "
             "enabled = excluded.enabled, mode = excluded.mode, "
             "targets = excluded.targets, post_mode = excluded.post_mode, "
-            "daily_cap = excluded.daily_cap, updated_at = excluded.updated_at",
+            "daily_cap = excluded.daily_cap, "
+            "score_threshold = excluded.score_threshold, "
+            "updated_at = excluded.updated_at",
             (
                 tenant_id, 1 if enabled else 0, mode, targets, post_mode,
-                daily_cap, _now(),
+                daily_cap, score_threshold, _now(),
             ),
         )
         await conn.commit()

@@ -95,6 +95,57 @@ def mint_signed_clip_url(
     )
 
 
+def sign_render_query(
+    *, clip_id: str, tenant_id: str, ttl_seconds: int = 600
+) -> str:
+    """Just the signed query string (`tenant=..&exp=..&sig=..`) for the
+    `/render` page — the `auth_query` the background recorder appends to
+    authenticate without a cookie. Same HMAC scheme as the signed clip URL."""
+    settings = get_settings()
+    secret = (settings.internal_signing_secret or "").strip()
+    if not secret:
+        raise RuntimeError(
+            "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured; cannot sign "
+            "a render URL for background auto-publish"
+        )
+    exp = int(time.time()) + int(ttl_seconds)
+    msg = f"{clip_id}|{tenant_id}|{exp}".encode()
+    sig = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    return f"tenant={tenant_id}&exp={exp}&sig={sig}"
+
+
+def mint_signed_render_url(
+    *,
+    clip_id: str,
+    tenant_id: str,
+    base_url: str,
+    ttl_seconds: int = 600,
+) -> str:
+    """Build a signed `/dashboard/clips/{id}/render` URL the headless
+    recorder can open when there is NO operator cookie — i.e. auto-publish
+    hands-free, which renders from the background pipeline.
+
+    Same HMAC scheme as `mint_signed_clip_url` (binds clip_id, tenant_id,
+    exp). Short TTL by default — the render starts within seconds. The
+    `/render` handler verifies it via `_verify_signed_params` and binds
+    that tenant, an alternative to the cookie path."""
+    settings = get_settings()
+    secret = (settings.internal_signing_secret or "").strip()
+    if not secret:
+        raise RuntimeError(
+            "NEXOCLIP_INTERNAL_SIGNING_SECRET is not configured; cannot mint "
+            "a signed render URL for background auto-publish"
+        )
+    exp = int(time.time()) + int(ttl_seconds)
+    msg = f"{clip_id}|{tenant_id}|{exp}".encode()
+    sig = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    base = base_url.rstrip("/")
+    return (
+        f"{base}/dashboard/clips/{clip_id}/render"
+        f"?capture=1&tenant={tenant_id}&exp={exp}&sig={sig}"
+    )
+
+
 @router.get("/audio/{stream_id}")
 async def fetch_audio_for_transcribe(
     stream_id: str,

@@ -70,6 +70,42 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
 _COOKIE_NAME = "nexoclip_token"
 
 
+def _verify_render_signature(request: Request) -> str | None:
+    """Return the signed tenant id when this is a
+    `/dashboard/clips/{id}/render` request carrying a valid HMAC-signed URL
+    (tenant/exp/sig query params, minted by `mint_signed_render_url`);
+    otherwise None — the caller falls back to cookie/bearer auth.
+
+    This lets the background auto-publish pipeline (hands-free) render a clip
+    without an operator cookie. The signature binds clip_id+tenant+exp, so a
+    leaked URL exposes only one clip's render page for a short TTL.
+    """
+    parts = request.url.path.strip("/").split("/")
+    if (
+        len(parts) != 4
+        or parts[0] != "dashboard"
+        or parts[1] != "clips"
+        or parts[3] != "render"
+    ):
+        return None
+    qp = request.query_params
+    tenant = qp.get("tenant", "")
+    sig = qp.get("sig", "")
+    exp = qp.get("exp", "")
+    if not (tenant and sig and exp):
+        return None
+    try:
+        from nexoclip.api.routers.internal import _verify_signed_params
+
+        _verify_signed_params(
+            resource_id=parts[2], tenant=tenant, exp=int(exp), sig=sig,
+            max_ttl_s=900,
+        )
+    except Exception:  # invalid / expired sig → fall back to cookie auth
+        return None
+    return tenant
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Authenticate every non-public request with a bearer API token.
 
@@ -100,21 +136,30 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        raw = _extract_token(request)
-        if not raw:
-            return _unauthorized(request, "missing bearer token")
+        # Auto-publish hands-free: a background render carries a signed URL
+        # (mint_signed_render_url) instead of a cookie. A valid signature
+        # binds the tenant and skips the bearer/cookie requirement — scoped
+        # to one clip's render page, short TTL. No valid sig → normal auth.
+        signed_tenant = _verify_render_signature(request)
+        if signed_tenant is not None:
+            request.state.tenant_id = signed_tenant
+            request.state.token_scope = "read"
+        else:
+            raw = _extract_token(request)
+            if not raw:
+                return _unauthorized(request, "missing bearer token")
 
-        try:
-            token_hash = hash_token(raw)
-        except Exception:
-            return _unauthorized(request, "invalid token")
+            try:
+                token_hash = hash_token(raw)
+            except Exception:
+                return _unauthorized(request, "invalid token")
 
-        token_row = await ApiTokensRepo(self._db).lookup_by_hash(token_hash)
-        if token_row is None:
-            return _unauthorized(request, "unknown token")
+            token_row = await ApiTokensRepo(self._db).lookup_by_hash(token_hash)
+            if token_row is None:
+                return _unauthorized(request, "unknown token")
 
-        request.state.tenant_id = token_row.tenant_id
-        request.state.token_scope = token_row.scope
+            request.state.tenant_id = token_row.tenant_id
+            request.state.token_scope = token_row.scope
 
         # Slice O.1 — also resolve the tenant's subscription tier here
         # so dashboard templates can render the tier chip via
@@ -131,7 +176,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         try:
             from nexoclip.db import TenantsRepo
             from nexoclip.tiers import normalize_tier
-            tenant = await TenantsRepo(self._db).get(token_row.tenant_id)
+            tenant = await TenantsRepo(self._db).get(request.state.tenant_id)
             # Normalize at the read choke point so EVERY downstream gate
             # (require_paid_tier, require_top_tier, export resolution)
             # sees a canonical tier. This also upgrades any tenant whose

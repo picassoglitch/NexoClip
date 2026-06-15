@@ -734,8 +734,9 @@
 {# ========== Comunidad — Discord/Telegram connect + announce-on-publish
    toggle + brand identity + weekly digest (phase 11). ========== #}
 {# ========== Tab: Piloto automático — auto-publish settings (per-tenant).
-   Auto-encola clips aprobados a Zernio con su render (hooks quemados).
-   on_approve dispara desde el Ship del editor; hands_free es fase 2. ========== #}
+   Auto-encola clips a Zernio con su render (hooks quemados).
+   hands_free (default) publica cada clip generado sin revisión, desde el
+   pipeline del VOD; on_approve dispara desde el Ship del editor. ========== #}
 <div class="nc-pc-tab-body" data-tab-body="autopublish">
 {% if profile_id %}
 <div class="nc-panel" id="zn-autopublish-panel" style="margin-bottom:16px;">
@@ -754,13 +755,13 @@
     <div>
       <div style="font-size:13px; margin-bottom:6px;"><strong>¿Cuándo publica?</strong></div>
       <label style="display:block; margin-bottom:4px; cursor:pointer;">
-        <input type="radio" name="zn-ap-mode" value="on_approve" checked>
-        Al aprobar — vos das “Ship” y el clip se publica solo
+        <input type="radio" name="zn-ap-mode" value="hands_free" checked>
+        <strong>Manos libres</strong> — cada clip generado se publica solo, sin que toques nada
+        <span class="nc-text--muted" style="font-size:12px;">(publicá mientras dormís)</span>
       </label>
       <label style="display:block; cursor:pointer;">
-        <input type="radio" name="zn-ap-mode" value="hands_free">
-        Manos libres — cada clip generado, sin revisión
-        <span class="nc-text--muted" style="font-size:12px;">(próximamente)</span>
+        <input type="radio" name="zn-ap-mode" value="on_approve">
+        Al aprobar — solo se publica cuando vos das “Ship” a un clip
       </label>
     </div>
 
@@ -2172,7 +2173,7 @@
         .then(function (b) {
           var s = b.settings || {};
           document.getElementById("zn-ap-enabled").checked = !!s.enabled;
-          var mode = s.mode || "on_approve";
+          var mode = s.mode || "hands_free";
           document.querySelectorAll('input[name="zn-ap-mode"]').forEach(function (r) {
             r.checked = (r.value === mode);
           });

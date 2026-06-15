@@ -41,12 +41,22 @@
           <input class="nc-input" type="number" name="max_per_poll" min="1" max="25" value="3">
         </label>
       </div>
-      <div class="nc-grid-2">
+      <div class="nc-grid-3">
         <label class="nc-label">Label <small>(optional)</small>
           <input class="nc-input" type="text" name="label" placeholder="e.g. Main YouTube">
         </label>
         <label class="nc-label">Language <small>(optional hint)</small>
           <input class="nc-input nc-input--mono" type="text" name="language" placeholder="es">
+        </label>
+        <label class="nc-label">Polls per day <small>(how often we check)</small>
+          <select class="nc-input" name="polls_per_day">
+            <option value="1" selected>1 — once a day</option>
+            <option value="2">2 — every 12h</option>
+            <option value="4">4 — every 6h</option>
+            <option value="6">6 — every 4h</option>
+            <option value="12">12 — every 2h</option>
+            <option value="24">24 — hourly</option>
+          </select>
         </label>
       </div>
       <div style="margin-top: 12px;">
@@ -78,6 +88,7 @@
           <th>Channel</th>
           <th>Platform</th>
           <th>State</th>
+          <th>Schedule</th>
           <th>Seen</th>
           <th>Last polled</th>
           <th class="nc-cell-actions"></th>
@@ -100,6 +111,19 @@
             {% else %}
             <span class="nc-chip nc-chip--muted">paused</span>
             {% endif %}
+          </td>
+          <td>
+            <form action="/dashboard/sources/{{ w.id }}/schedule" method="post" style="margin: 0;">
+              <select class="nc-input nc-input--sm" name="polls_per_day"
+                      onchange="this.form.submit()" aria-label="Polls per day">
+                <option value="1"{{ " selected" if w.polls_per_day == 1 else "" }}>1×/day</option>
+                <option value="2"{{ " selected" if w.polls_per_day == 2 else "" }}>2×/day</option>
+                <option value="4"{{ " selected" if w.polls_per_day == 4 else "" }}>4×/day</option>
+                <option value="6"{{ " selected" if w.polls_per_day == 6 else "" }}>6×/day</option>
+                <option value="12"{{ " selected" if w.polls_per_day == 12 else "" }}>12×/day</option>
+                <option value="24"{{ " selected" if w.polls_per_day == 24 else "" }}>24×/day</option>
+              </select>
+            </form>
           </td>
           <td><span class="nc-mono">{{ w.seen_video_ids|length }}</span></td>
           <td><span class="nc-mono" style="font-size: 11px;">{{ w.last_polled_at or 'never' }}</span></td>
@@ -131,5 +155,4 @@
   </div>
 </div>
 {% endif %}
-{% endblock %}
 {% endblock %}

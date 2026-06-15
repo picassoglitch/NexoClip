@@ -5216,6 +5216,7 @@ async def sources_add(
     language: str = Form(""),
     label: str = Form(""),
     max_per_poll: int = Form(3),
+    polls_per_day: int = Form(1),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
@@ -5229,6 +5230,7 @@ async def sources_add(
         channel_label=label.strip() or None,
         language=language.strip() or None,
         max_per_poll=int(max_per_poll),
+        polls_per_day=int(polls_per_day),
     )
     await EventsRepo(db).emit(
         type="channel_watch.created",
@@ -5260,6 +5262,22 @@ async def sources_delete(
     db: Database = Depends(get_db),
 ) -> Response:
     await ChannelWatchesRepo(db).delete(watch_id)
+    return RedirectResponse(url="/dashboard/sources", status_code=303)
+
+
+@router.post("/sources/{watch_id}/schedule", dependencies=[Depends(require_full_scope)])
+async def sources_schedule(
+    request: Request,
+    watch_id: str,
+    polls_per_day: int = Form(...),
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Change a channel's poll cadence (times/day). Clamped to 1-96."""
+    repo = ChannelWatchesRepo(db)
+    if await repo.get(watch_id) is None:
+        raise HTTPException(status_code=404, detail="channel watch not found")
+    await repo.set_polls_per_day(watch_id, max(1, min(int(polls_per_day), 96)))
     return RedirectResponse(url="/dashboard/sources", status_code=303)
 
 

@@ -64,6 +64,8 @@
         {{ side_link("/dashboard/personas", t("nav.personas"), "user") }}
         {{ side_link("/dashboard/brand-kits", t("nav.brand_kits"), "palette") }}
         {{ side_link("/dashboard/publish/zernio", t("nav.publish"), "send") }}
+        {#- Connected channels — auto-ingest a creator's VODs on a schedule. -#}
+        {{ side_link("/dashboard/sources", t("nav.sources"), "plug-connected", prefix="/dashboard/sources") }}
         {#- Slice O.9 — operator-only surfaces, gated by NEXOCLIP_ADMIN_TENANT_IDS. -#}
         {%- set _is_admin = (request.state.is_admin if request and request.state else False) -%}
         {% if _is_admin %}

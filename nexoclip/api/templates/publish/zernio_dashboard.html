@@ -744,65 +744,96 @@
     <i class="ti ti-robot" aria-hidden="true"></i>
     Piloto automático
     <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">
-      Publica tus clips solo, con los hooks ya quemados
+      Publicá solo — hasta mientras dormís
     </span>
   </div>
-  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:14px;">
-    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-      <input type="checkbox" id="zn-ap-enabled"> <strong>Activar auto-publicación</strong>
-    </label>
+  <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:18px;">
 
-    <div>
-      <div style="font-size:13px; margin-bottom:6px;"><strong>¿Cuándo publica?</strong></div>
-      <label style="display:block; margin-bottom:4px; cursor:pointer;">
-        <input type="radio" name="zn-ap-mode" value="hands_free" checked>
-        <strong>Manos libres</strong> — cada clip generado se publica solo, sin que toques nada
-        <span class="nc-text--muted" style="font-size:12px;">(publicá mientras dormís)</span>
-      </label>
-      <label style="display:block; cursor:pointer;">
-        <input type="radio" name="zn-ap-mode" value="on_approve">
-        Al aprobar — solo se publica cuando vos das “Ship” a un clip
-      </label>
-    </div>
-
-    <div>
-      <div style="font-size:13px; margin-bottom:6px;"><strong>Plataformas destino</strong></div>
-      <div id="zn-ap-targets" style="display:flex; flex-wrap:wrap; gap:6px;">
-        <span class="nc-text--muted" style="font-size:12px;">Cargando…</span>
-      </div>
-    </div>
-
-    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
-      <label class="nc-label" style="margin:0;">Modo de posteo
-        <select class="nc-input" id="zn-ap-postmode" style="width:auto;">
-          <option value="queue">Cola (usa los slots de Programación)</option>
-          <option value="now">Ahora (inmediato)</option>
-        </select>
-      </label>
-      <label class="nc-label" style="margin:0;">Tope diario
-        <input class="nc-input" id="zn-ap-cap" type="number" min="0" value="10" style="width:90px;">
-      </label>
-      <label class="nc-label" style="margin:0;">Umbral de score <small>(manos libres)</small>
-        <input class="nc-input" id="zn-ap-threshold" type="number" min="0" max="1" step="0.05"
-               value="0.6" style="width:90px;">
-      </label>
-      <span class="nc-text--muted" style="font-size:12px;" id="zn-ap-used"></span>
-    </div>
-
-    <label class="nc-label" style="margin:0;">
-      Handles y hashtags fijos
-      <span class="nc-text--muted" style="font-size:12px;">
-        Se añaden al final de cada publicación automática (tus @ y hashtags de marca).
+    {# 1 · Master switch — big, plain, with the promise spelled out. #}
+    <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
+      <input type="checkbox" id="zn-ap-enabled" style="margin-top:4px; transform:scale(1.3);">
+      <span>
+        <strong style="font-size:15px;">Encender el piloto automático</strong>
+        <div class="nc-text--muted" style="font-size:13px; margin-top:2px;">
+          Cuando está encendido, cada clip nuevo se publica solo en tus redes —
+          con su gancho, su texto, sus hashtags y tu firma. Vos no tocás nada.
+        </div>
       </span>
-      <textarea class="nc-input" id="zn-ap-tagsuffix" rows="2" maxlength="500"
-                placeholder="@minombre · seguime en Kick · #gaming #clips"></textarea>
     </label>
 
-    <div>
-      <button type="button" class="nc-btn nc-btn--primary" id="zn-ap-save" style="padding:6px 14px;">
-        <i class="ti ti-device-floppy"></i> Guardar
-      </button>
-      <span class="nc-text--muted" id="zn-ap-msg" style="font-size:12px; margin-left:8px;"></span>
+    <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;
+                display:flex; flex-direction:column; gap:18px;">
+
+      {# 2 · Review? #}
+      <div>
+        <div style="font-size:14px; margin-bottom:8px;"><strong>1. ¿Reviso antes de publicar?</strong></div>
+        <label style="display:block; margin-bottom:6px; cursor:pointer;">
+          <input type="radio" name="zn-ap-mode" value="hands_free" checked>
+          <strong>No, publicá todo solo</strong>
+          <span class="nc-text--muted" style="font-size:13px;"> — lo más automático, ideal para no estar encima.</span>
+        </label>
+        <label style="display:block; cursor:pointer;">
+          <input type="radio" name="zn-ap-mode" value="on_approve">
+          <strong>Sí, yo elijo cada clip</strong>
+          <span class="nc-text--muted" style="font-size:13px;"> — se publica recién cuando vos le das “Ship”.</span>
+        </label>
+      </div>
+
+      {# 3 · When #}
+      <div>
+        <div style="font-size:14px; margin-bottom:8px;"><strong>2. ¿Cuándo salen?</strong></div>
+        <select class="nc-input" id="zn-ap-postmode" style="max-width:360px;">
+          <option value="queue">En mis mejores horarios (recomendado)</option>
+          <option value="now">Apenas el clip está listo</option>
+        </select>
+        <div class="nc-text--muted" style="font-size:12px; margin-top:4px;">
+          “Mejores horarios” reparte los clips en las horas con más enganche, sin amontonarlos.
+        </div>
+      </div>
+
+      {# 4 · Where #}
+      <div>
+        <div style="font-size:14px; margin-bottom:8px;"><strong>3. ¿Dónde publico?</strong></div>
+        <div id="zn-ap-targets" style="display:flex; flex-wrap:wrap; gap:6px;">
+          <span class="nc-text--muted" style="font-size:12px;">Cargando…</span>
+        </div>
+      </div>
+
+      {# 5 · How many + which #}
+      <div style="display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start;">
+        <label class="nc-label" style="margin:0;">
+          <strong style="font-size:14px;">4. ¿Cuántos por día?</strong>
+          <span class="nc-text--muted" style="font-size:12px;">Para no spamear.</span>
+          <input class="nc-input" id="zn-ap-cap" type="number" min="0" value="10" style="width:90px;">
+        </label>
+        <label class="nc-label" style="margin:0;">
+          <strong style="font-size:14px;">5. ¿Qué clips publico?</strong>
+          <span class="nc-text--muted" style="font-size:12px;">Qué tan exigente sos.</span>
+          <select class="nc-input" id="zn-ap-threshold" style="width:auto;">
+            <option value="0.3">Todos los clips</option>
+            <option value="0.6">Solo los buenos</option>
+            <option value="0.8">Solo los mejores</option>
+          </select>
+        </label>
+      </div>
+      <div class="nc-text--muted" style="font-size:13px;" id="zn-ap-used"></div>
+
+      {# 6 · Signature #}
+      <label class="nc-label" style="margin:0;">
+        <strong style="font-size:14px;">6. Tu firma en cada post</strong>
+        <span class="nc-text--muted" style="font-size:12px;">
+          Se agrega al final de cada publicación: tus @ y tus hashtags de siempre.
+        </span>
+        <textarea class="nc-input" id="zn-ap-tagsuffix" rows="2" maxlength="500"
+                  placeholder="@minombre · seguime en Kick · #gaming #clips"></textarea>
+      </label>
+
+      <div>
+        <button type="button" class="nc-btn nc-btn--primary" id="zn-ap-save" style="padding:9px 20px; font-size:14px;">
+          <i class="ti ti-device-floppy"></i> Guardar
+        </button>
+        <span class="nc-text--muted" id="zn-ap-msg" style="font-size:13px; margin-left:8px;"></span>
+      </div>
     </div>
   </div>
 </div>
@@ -2179,14 +2210,19 @@
           });
           document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
           document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
-          document.getElementById("zn-ap-threshold").value = (s.score_threshold == null ? 0.6 : s.score_threshold);
+          // Threshold is a 3-option select now — snap the stored float to the
+          // nearest bucket so old precise values still land somewhere sane.
+          var thr = (s.score_threshold == null ? 0.6 : s.score_threshold);
+          var bucket = thr <= 0.45 ? "0.3" : (thr >= 0.7 ? "0.8" : "0.6");
+          document.getElementById("zn-ap-threshold").value = bucket;
           document.getElementById("zn-ap-tagsuffix").value = s.tag_suffix || "";
           var selected = (s.targets || "").split(",").filter(function (t) { return t; });
           renderApTargets(b.platforms || [], selected);
           var used = document.getElementById("zn-ap-used");
           if (used) {
-            used.textContent = "Hoy: " + (b.used_today || 0)
-              + (s.daily_cap ? (" / " + s.daily_cap) : "");
+            used.textContent = s.daily_cap
+              ? ("Hoy llevás " + (b.used_today || 0) + " de " + s.daily_cap + " posts.")
+              : ("Hoy llevás " + (b.used_today || 0) + " posts.");
           }
         })
         .catch(function () {});

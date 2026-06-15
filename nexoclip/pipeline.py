@@ -430,6 +430,21 @@ async def _maybe_db_session(
             yield db
 
 
+def _handsfree_clip_scores(clip_entries: list) -> list[tuple[str, float]]:
+    """(clip_id, fused candidate score) pairs for the hands-free sweep.
+
+    The fused detector score lives on each clip's source ``Candidate``
+    (``clip.candidate.score``). We read it straight off the clip — the
+    detect ``Candidate`` has no ``.id`` and the domain ``Clip`` has no
+    ``.candidate_id`` (that's only on the DB row), so the earlier
+    candidates-list join crashed with ``'Candidate' object has no
+    attribute 'id'`` and silently blocked all hands-free auto-publish.
+    """
+    return [
+        (e.clip.id, float(e.clip.candidate.score or 0.0)) for e in clip_entries
+    ]
+
+
 async def _run_pipeline(
     *,
     tenant_id: str,
@@ -1061,13 +1076,7 @@ async def _run_pipeline(
             from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
             from nexoclip.settings import get_settings as _get_settings
 
-            _cand_score = {
-                c.id: float(getattr(c, "score", 0.0) or 0.0) for c in candidates
-            }
-            _clip_scores = [
-                (e.clip.id, _cand_score.get(getattr(e.clip, "candidate_id", ""), 0.0))
-                for e in clip_entries
-            ]
+            _clip_scores = _handsfree_clip_scores(clip_entries)
             await autopublish_hands_free_sweep(
                 db=db,
                 tenant_id=tenant_id,

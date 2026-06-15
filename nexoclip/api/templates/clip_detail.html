@@ -4079,21 +4079,85 @@
       {# ---- Slice I.1 — Top hook title box ----
          The white rounded headline that sits above the subject's face
          on viral repost-page clips. Two lines max, big bold text. #}
-      {# Sections "4. Caja de hook arriba" and "5. Avanzado" were removed from
-         the editor UI (product decision). We keep their current values as
-         hidden inputs so saving the clip doesn't wipe the existing config —
-         top-hook + advanced settings still come from the brand kit / prior
-         saves; operators just no longer tune them per clip here. #}
-      {% if top_hook.get('enabled', False) %}
-      <input type="hidden" name="top_hook_enabled" value="1">
-      {% endif %}
-      <input type="hidden" name="top_hook_text" value="{{ top_hook.get('text', '') }}">
-      <input type="hidden" name="top_hook_style" value="{{ top_hook.get('style') or 'white_rounded' }}">
-      <input type="hidden" name="captions_lead_ms" value="{{ captions.get('lead_ms', 120) }}">
-      {% if comments.get('show_overlay', False) %}
-      <input type="hidden" name="comments_show" value="1">
-      {% endif %}
-      <input type="hidden" name="comments_fake_likes" value="{{ comments.get('fake_likes', 8) }}">
+      {# Sections "4. Caja de hook arriba" and "5. Avanzado" are hidden from the
+         editor UI (product decision) but kept in the DOM: the live-preview JS
+         wires listeners to their control IDs (ctl-top-hook-*, ctl-comments-*,
+         ctl-captions-lead-ms). Removing the elements made getElementById return
+         null and threw, killing all editor JS (audio, captions, watermark).
+         display:none keeps them functional + their values saved, just unseen. #}
+      <div style="display: none;" aria-hidden="true">
+      <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="top-hook">
+        <div class="nc-panel__header nc-panel__header--editor">
+          <span class="nc-panel__step">4</span>
+          <span class="nc-panel__title">Caja de hook arriba</span>
+          <small>— título blanco redondeado encima de la cara</small>
+        </div>
+        <div class="nc-panel__body">
+          <label class="nc-checkbox">
+            <input type="checkbox" name="top_hook_enabled" value="1" id="ctl-top-hook-on"
+                   {% if top_hook.get('enabled', False) %}checked{% endif %}>
+            <span>Mostrar la caja de hook arriba del clip</span>
+          </label>
+          <label class="nc-label">Texto del título
+            <textarea class="nc-textarea"
+                      name="top_hook_text"
+                      id="ctl-top-hook-text"
+                      rows="2"
+                      maxlength="120"
+                      placeholder="ej. Adin Ross le pidió RETA a Clav después de engordar otra vez 😭💀">{{ top_hook.get('text', '') }}</textarea>
+          </label>
+          <label class="nc-label">Estilo de la caja
+            <select class="nc-select" name="top_hook_style" id="ctl-top-hook-style">
+              {% set _cur_hook_style = top_hook.get('style') or 'white_rounded' %}
+              {% for opt_id, opt_label in [
+                ('white_rounded', 'Blanco redondeado — el viral de siempre'),
+                ('black_solid',   'Negro sólido — serio / con dramatismo'),
+                ('subtle',        'Discreto — translúcido'),
+              ] %}
+              <option value="{{ opt_id }}" {% if _cur_hook_style == opt_id %}selected{% endif %}>{{ opt_label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <details class="nc-panel" id="advanced-section">
+        <summary class="nc-panel__header nc-panel__header--editor"
+                 style="cursor: pointer; list-style: none;">
+          <span class="nc-panel__step">5</span>
+          <span class="nc-panel__title">Avanzado</span>
+          <small>— tiempo de subtítulos · barra de reacciones · ajustes que casi no se tocan</small>
+          <i class="ti ti-chevron-down" aria-hidden="true" style="margin-left: auto; color: var(--nc-text-muted);"></i>
+        </summary>
+        <div class="nc-panel__body">
+          <label class="nc-label">Adelanto de subtítulos (ms antes de decirlo)
+            <input class="nc-input"
+                   type="number"
+                   min="0" max="500" step="10"
+                   name="captions_lead_ms"
+                   id="ctl-captions-lead-ms"
+                   value="{{ captions.get('lead_ms', 120) }}">
+            <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
+              0 = aparece justo al decir la palabra · 120ms = se adelanta un poco (recomendado) · 250ms+ = se adelanta mucho
+            </small>
+          </label>
+
+          <label class="nc-checkbox" style="margin-top: 10px;">
+            <input type="checkbox" name="comments_show" value="1" id="ctl-comments-on"
+                   {% if comments.get('show_overlay', False) %}checked{% endif %}>
+            <span>Mostrar barra de reacciones estilo app</span>
+          </label>
+          <label class="nc-label">Número de likes visible <small>(solo decorativo)</small>
+            <input class="nc-input"
+                   type="number"
+                   name="comments_fake_likes"
+                   id="ctl-comments-likes"
+                   min="0" max="999999"
+                   value="{{ comments.get('fake_likes', 8) }}">
+          </label>
+        </div>
+      </details>
+      </div>
 
       <div class="nc-editor-actions">
         {# Slice I.3 — Export checklist + status-aware Ship button.

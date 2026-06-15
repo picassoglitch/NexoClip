@@ -2550,6 +2550,19 @@
           .then(function (r) { return r.json(); })
           .then(function (b) {
             if (!b.ok) { throw new Error(b.error || b.detail || "fallo"); }
+            // Clear the scheduled clips from the To-publish + Bulk grids live —
+            // the backend already flipped them out of the approved list.
+            (b.results || []).forEach(function (r) {
+              if (!r.ok || !r.clip_id) { return; }
+              document
+                .querySelectorAll('[data-clip-id="' + r.clip_id + '"]')
+                .forEach(function (row) { row.remove(); });
+            });
+            var countEl = document.getElementById("zn-autoprog-count");
+            if (countEl) {
+              var left = Math.max(0, (parseInt(countEl.textContent, 10) || 0) - b.scheduled);
+              countEl.textContent = left;
+            }
             msg.style.color = "var(--nc-green, #48bb78)";
             msg.textContent = "Programados " + b.scheduled + " clip(s)"
               + (b.skipped ? (" · " + b.skipped + " omitido(s)") : "") + " ✓";

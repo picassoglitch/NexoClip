@@ -1777,14 +1777,43 @@ async def autopublish_hands_free_sweep(
         used = await _autopublish_count_today(db, tenant_id)
         pubs = ZernioPublishesRepo(db)
 
+        # Eligible clips: above threshold, not already posted, in the order
+        # given. Honour the daily cap up front so we only take what we can
+        # actually post today.
+        eligible: list[str] = []
         for clip_id, score in clip_scores:
-            if cap and used >= cap:
-                log.info("autopublish.handsfree.cap_reached", tenant_id=tenant_id, cap=cap)
-                break
             if score < threshold:
                 continue
             if await pubs.exists_for_clip(tenant_id, clip_id):
                 continue
+            eligible.append(clip_id)
+        if cap:
+            eligible = eligible[: max(0, cap - used)]
+        if not eligible:
+            return 0
+
+        # Queue mode → spread the VOD's clips across best-time slots
+        # (analytics, else the fallback spread), capped per UTC day — the
+        # SAME planner the Auto-program button uses. Now mode → fire
+        # immediately.
+        schedule_times: list[Any] = []
+        if post_mode != "now":
+            import datetime as _dt
+
+            from nexoclip.publish.hub import plan_batch_times
+
+            best_slots: list[dict[str, Any]] = []
+            with contextlib.suppress(ZernioError):
+                best_slots = await client.best_time_slots(profile_id=profile_id)
+            schedule_times = plan_batch_times(
+                len(eligible),
+                now=_dt.datetime.now(_dt.UTC),
+                cap_per_day=(max(cap, 1) if cap else 10),
+                existing_today=used,
+                best_slots=best_slots or None,
+            )
+
+        for i, clip_id in enumerate(eligible):
             try:
                 with bound_tenant(tenant_id):
                     clip = await ClipsRepo(db).get(clip_id)
@@ -1803,23 +1832,30 @@ async def autopublish_hands_free_sweep(
                     clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
                     ttl_seconds=3600,
                 )
+                when = (
+                    schedule_times[i].isoformat()
+                    if post_mode != "now" and i < len(schedule_times)
+                    else None
+                )
                 result = await client.create_post(
                     profile_id=profile_id, content=content, media_url=media_url,
                     platforms=post_targets, publish_now=(post_mode == "now"),
                     title=composed.title,
+                    scheduled_for=when,
+                    timezone="UTC" if when else None,
                 )
                 with bound_tenant(tenant_id):
                     await pubs.record(
                         post_id=result.post_id, tenant_id=tenant_id, clip_id=clip_id,
                         platforms=[p for p, _ in post_targets], content=content,
+                        status="scheduled" if when else None,
                     )
                     await ClipsRepo(db).update_status(clip_id, status="published")
-                used += 1
                 published += 1
                 log.info(
                     "autopublish.handsfree.posted",
                     tenant_id=tenant_id, clip_id=clip_id, post_id=result.post_id,
-                    score=score, mode=post_mode,
+                    mode=post_mode, scheduled_for=when,
                 )
             except Exception as e:  # one clip's failure must not stop the sweep
                 log.warning(

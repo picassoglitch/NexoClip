@@ -87,6 +87,21 @@ async def test_streams_page_renders_with_cookie_auth(
     assert "Advanced: process from a VOD URL" in r.text
 
 
+async def test_dashboard_html_is_no_store(
+    client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
+) -> None:
+    # Per-tenant dashboard pages must never be cached — a stale browser /
+    # bfcache / edge copy makes freshly uploaded streams and generated clips
+    # appear to "not show up". The auth middleware stamps no-store on
+    # authenticated HTML responses.
+    r = await client.get(
+        "/dashboard/streams",
+        headers={"Authorization": f"Bearer {tenants['alice']['token']}"},
+    )
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "")
+
+
 async def test_personas_page_renders_and_creates(
     client: httpx.AsyncClient, tenants: dict[str, dict[str, str]]
 ) -> None:

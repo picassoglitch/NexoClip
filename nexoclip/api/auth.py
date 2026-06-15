@@ -229,7 +229,21 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         except Exception:  # noqa: BLE001 — best-effort
             request.state.is_admin = False
 
-        return await call_next(request)
+        response = await call_next(request)
+
+        # Per-tenant dashboard pages render live DB state on every request,
+        # but without an explicit Cache-Control the browser's heuristic +
+        # back/forward (bfcache) caches — and any edge in front of us — are
+        # free to serve a stale copy, so freshly uploaded streams / generated
+        # clips appear to "not show up" until a hard refresh. Mark every
+        # authenticated HTML response no-store. Scoped to text/html so video /
+        # file downloads and JSON keep their own caching behavior.
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/html") and "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+
+        return response
 
 
 def _extract_token(request: Request) -> str:

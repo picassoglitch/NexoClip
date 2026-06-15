@@ -29,7 +29,8 @@
     background: rgba(230, 80, 80, 0.12); color: #ff7575;
     border: 1px solid rgba(230, 80, 80, 0.3);
   }
-  .nc-pj-status-pill[data-s="UNKNOWN"] {
+  .nc-pj-status-pill[data-s="UNKNOWN"],
+  .nc-pj-status-pill[data-s="UNAVAILABLE"] {
     background: rgba(255,255,255,0.04); color: var(--nc-text--muted, #888);
     border: 1px solid rgba(255,255,255,0.08);
   }
@@ -78,7 +79,7 @@
   <div style="display:flex; align-items:center; gap: 10px;">
     <span id="zn-job-status-pill" class="nc-pj-status-pill" data-s="{{ overall_status }}">
       <span id="zn-job-status-spinner" class="nc-pj-spinner"
-            style="{% if overall_status in ['PUBLISHED','FINISHED','SUCCESS','FAILED','ERROR'] %}display:none;{% endif %}"></span>
+            style="{% if overall_status in ['PUBLISHED','FINISHED','SUCCESS','FAILED','ERROR','UNAVAILABLE'] %}display:none;{% endif %}"></span>
       <span id="zn-job-status-text">{{ overall_status }}</span>
     </span>
     <button type="button" id="zn-job-refresh-btn" class="nc-btn"
@@ -122,7 +123,9 @@
   // defensive about field names.
   var POST_ID = {{ post_id|tojson }};
   var INITIAL_PLATFORMS = {{ per_platform|tojson }};
-  var TERMINAL = { PUBLISHED: 1, FINISHED: 1, SUCCESS: 1, FAILED: 1, ERROR: 1 };
+  // UNAVAILABLE = Zernio 404'd the post and we have no local record;
+  // terminal so the poller settles instead of looping every 3s.
+  var TERMINAL = { PUBLISHED: 1, FINISHED: 1, SUCCESS: 1, FAILED: 1, ERROR: 1, UNAVAILABLE: 1 };
   var pollTimer = null;
 
   function normalize(s) { return String(s || "UNKNOWN").toUpperCase(); }
@@ -172,10 +175,41 @@
     });
   }
 
-  function renderGrid(raw) {
+  // Replace the loading panel with a settled message (post gone / failed
+  // with no per-platform detail) so the page doesn't sit on "Cargando…".
+  function renderMessage(status) {
+    var n = normalize(status);
+    var icon = "ti-cloud-off", title, body;
+    if (n === "UNAVAILABLE") {
+      title = "Esta publicación ya no está disponible";
+      body = "No se encontró en Zernio. Puede que se haya borrado o que se " +
+        "publicara desde otro espacio de trabajo. Vuelve al Centro de Publicación.";
+    } else if (/(FAILED|ERROR)/.test(n)) {
+      icon = "ti-alert-triangle";
+      title = "La publicación falló";
+      body = "Zernio no devolvió resultados por red para este post.";
+    } else {
+      title = "Sin resultados por red";
+      body = "Zernio no devolvió el detalle por red de esta publicación.";
+    }
+    var grid = document.getElementById("zn-job-grid");
+    grid.innerHTML = '<div class="nc-panel" style="grid-column: 1 / -1;">' +
+      '<div class="nc-empty">' +
+        '<div class="nc-empty__icon"><i class="ti ' + icon + '" aria-hidden="true"></i></div>' +
+        '<div class="nc-empty__title">' + escapeHtml(title) + '</div>' +
+        '<p class="nc-empty__body">' + escapeHtml(body) + '</p>' +
+      '</div></div>';
+  }
+
+  function renderGrid(raw, status) {
     var grid = document.getElementById("zn-job-grid");
     var rows = normalizePlatforms(raw);
-    if (!rows.length) return;  // keep the loading state until we have data
+    if (!rows.length) {
+      // No per-platform data: settle to a message once terminal, else
+      // keep the loading state and wait for the next poll.
+      if (isTerminal(status)) renderMessage(status);
+      return;
+    }
     var html = "";
     rows.forEach(function (r) {
       var statusPill = r.ok
@@ -221,18 +255,20 @@
       if (!resp.ok) return;
       var body = await resp.json();
       setStatus(body.status);
-      if (body.platforms) renderGrid(body.platforms);
+      // Always call renderGrid so a terminal post with no per-platform
+      // data settles into a message instead of looping on "Cargando…".
+      renderGrid(body.platforms, body.status);
     } catch (e) { /* swallow — next tick retries */ }
   }
 
   // Initial paint from the server-rendered payload, then poll if needed.
-  if (INITIAL_PLATFORMS) renderGrid(INITIAL_PLATFORMS);
   var initialStatus = document.getElementById("zn-job-status-pill").getAttribute("data-s");
+  renderGrid(INITIAL_PLATFORMS, initialStatus);
   if (!isTerminal(initialStatus)) {
     pollTimer = setInterval(refresh, 3000);
+    // One immediate fetch so a freshly-queued post fills in fast.
+    refresh();
   }
-  // Always do one fetch on load so a freshly-queued post fills in fast.
-  refresh();
 
   var refreshBtn = document.getElementById("zn-job-refresh-btn");
   if (refreshBtn) {

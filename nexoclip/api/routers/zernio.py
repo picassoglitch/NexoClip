@@ -585,6 +585,16 @@ async def zernio_dashboard(
             continue
         manual = row.post_id.startswith("manual_")
         live = status_by_post.get(row.post_id, {})
+        # Status precedence: live company-key feed (freshest) → our local
+        # row.status (fed by post.* webhooks) → "queued". The webhook
+        # fallback is what keeps a post truthful when Zernio's feed misses
+        # it — deleted on Zernio (the GET /posts/{id} 404), beyond page 1,
+        # or created from a different workspace. Without it, an already
+        # published/failed post would read "queued" forever.
+        status = (
+            "published" if manual
+            else str(live.get("status") or row.status or "queued")
+        )
         history.append(
             {
                 "post_id": row.post_id,
@@ -594,10 +604,7 @@ async def zernio_dashboard(
                 "platforms": [p for p in row.platforms.split(",") if p],
                 "content": row.content,
                 "created_at": row.created_at,
-                "status": (
-                    "published" if manual
-                    else str(live.get("status") or "queued")
-                ),
+                "status": status,
             }
         )
     # Fallback entries: published clips with no record at all (clips
@@ -3583,11 +3590,50 @@ async def zernio_feed(
     return JSONResponse({"history": history, "configured": True, "connected": True})
 
 
+def _parse_platforms_json(raw: str | None) -> Any:
+    """Decode the per-platform results we snapshot from post.* webhooks
+    (`zernio_publishes.platforms_json`). Returns None on absent/invalid
+    JSON so callers fall through cleanly."""
+    if not raw:
+        return None
+    import json as _json
+
+    try:
+        return _json.loads(raw)
+    except ValueError:
+        return None
+
+
+async def _local_post_status(
+    db: Database, tenant_id: str, post_id: str,
+) -> tuple[str, Any] | None:
+    """Last-known (status, per_platform) for a post from OUR webhook-fed
+    record, scoped to the requesting tenant.
+
+    Zernio's GET /posts/{id} can 404 a post the company key created
+    (deleted/expired on Zernio's side, or published from a different
+    workspace) — but the post.* webhooks already wrote the real status +
+    per-platform results into zernio_publishes. Falling back to that lets
+    the job page + poll degrade to data we have instead of spinning on a
+    raw 404 forever. Returns None when there's no row for this tenant."""
+    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+    if row is None or row.tenant_id != tenant_id:
+        return None
+    return (row.status or "UNKNOWN").upper(), _parse_platforms_json(row.platforms_json)
+
+
+# A post Zernio 404s AND we have no local record for. Terminal in the
+# poller (the JS stops refreshing) so the page settles into a clean
+# "no longer available" state instead of looping every 3s.
+_STATUS_UNAVAILABLE = "UNAVAILABLE"
+
+
 @router.get("/job/{post_id}", response_class=HTMLResponse)
 async def zernio_job_detail(
     request: Request,
     post_id: str,
     tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
 ) -> Response:
     """Per-post detail page.
 
@@ -3595,6 +3641,10 @@ async def zernio_job_detail(
     Renders the per-platform result of one Zernio post. Auto-polls
     /status/{post_id}.json while the post is still in a non-terminal
     state, then halts once settled.
+
+    When Zernio can't serve the post we fall back to the webhook-fed
+    local record (see _local_post_status); only a genuine 404 with no
+    local row surfaces an operator-facing "no longer available" state.
     """
     client = _build_client()
     overall_status = "UNKNOWN"
@@ -3606,10 +3656,25 @@ async def zernio_job_detail(
         per_platform = status.platforms
     except ZernioError as e:
         _log.warning(
-            "zernio.job.status_fetch_failed tenant=%s post_id=%s err=%s",
-            tenant_id, post_id, e,
+            "zernio.job.status_fetch_failed tenant=%s post_id=%s status=%s err=%s",
+            tenant_id, post_id, e.status_code, e,
         )
-        fetch_error = f"Couldn't load status from Zernio: {e}"
+        local = await _local_post_status(db, tenant_id, post_id)
+        if local is not None:
+            overall_status, per_platform = local
+            fetch_error = (
+                "Live status from Zernio is unavailable right now — showing "
+                "the last result we recorded for this post."
+            )
+        elif e.status_code == 404:
+            overall_status = _STATUS_UNAVAILABLE
+            fetch_error = (
+                "This post is no longer available on Zernio. It may have been "
+                "deleted, or it was published from a different workspace — "
+                "there's nothing more to load here."
+            )
+        else:
+            fetch_error = f"Couldn't load status from Zernio: {e}"
 
     return templates.TemplateResponse(
         request,
@@ -3628,18 +3693,41 @@ async def zernio_status(
     request: Request,
     post_id: str,
     tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
 ) -> Response:
     """Poll a single post by post_id. Used by the toast that surfaces
     right after a publish click — flips from PUBLISHING → PUBLISHED in
-    the UI without a full page reload."""
+    the UI without a full page reload.
+
+    Mirrors the job page's fallback: a Zernio fetch failure tries the
+    webhook-fed local record first; a genuine 404 with no local row
+    settles the poller (200 + terminal UNAVAILABLE) so the page stops
+    refreshing instead of looping on a 502 forever."""
     client = _build_client()
     try:
         status = await client.get_post(post_id)
     except ZernioError as e:
         _log.warning(
-            "zernio.status.failed tenant=%s post_id=%s err=%s",
-            tenant_id, post_id, e,
+            "zernio.status.failed tenant=%s post_id=%s status=%s err=%s",
+            tenant_id, post_id, e.status_code, e,
         )
+        local = await _local_post_status(db, tenant_id, post_id)
+        if local is not None:
+            st, platforms = local
+            return JSONResponse(
+                {"post_id": post_id, "status": st, "platforms": platforms}
+            )
+        if e.status_code == 404:
+            # Nothing to wait for. 200 (not 502) so the poller's resp.ok
+            # check passes and it settles on the terminal status.
+            return JSONResponse(
+                {
+                    "post_id": post_id,
+                    "status": _STATUS_UNAVAILABLE,
+                    "error": "post not found on Zernio",
+                }
+            )
+        # Transient/other error — 502 lets the poller retry silently.
         return JSONResponse({"status": "ERROR", "error": str(e)}, status_code=502)
     return JSONResponse(
         {

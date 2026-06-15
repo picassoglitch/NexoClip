@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Publish job · {{ post_id[:18] }}… - NexoClip{% endblock %}
+{% block title %}Publicación · {{ post_id[:18] }}… - NexoClip{% endblock %}
 {% block content %}
 
 <style>
@@ -66,13 +66,13 @@
 
 <div class="nc-pj-header">
   <a href="/dashboard/publish/zernio" class="nc-pj-back">
-    <i class="ti ti-arrow-left" aria-hidden="true"></i> Back to Publish Center
+    <i class="ti ti-arrow-left" aria-hidden="true"></i> Volver al Centro de Publicación
   </a>
 </div>
 
 <div class="nc-page-header">
   <div>
-    <h2>Publish job</h2>
+    <h2>Tu publicación</h2>
     <small class="nc-mono nc-mono--muted">{{ post_id }}</small>
   </div>
   <div style="display:flex; align-items:center; gap: 10px;">
@@ -82,10 +82,10 @@
       <span id="zn-job-status-text">{{ overall_status }}</span>
     </span>
     <button type="button" id="zn-job-refresh-btn" class="nc-btn"
-            title="Force a status fetch even if the auto-poll stopped"
+            title="Revisa el estado ahora mismo, aunque el refresco automático ya se haya detenido"
             style="padding: 4px 10px; font-size: 12px;">
       <i class="ti ti-refresh" aria-hidden="true"></i>
-      <span>Refresh</span>
+      <span>Actualizar</span>
     </button>
   </div>
 </div>
@@ -103,10 +103,10 @@
   <div class="nc-panel" style="grid-column: 1 / -1;">
     <div class="nc-empty">
       <div class="nc-empty__icon"><i class="ti ti-clock" aria-hidden="true"></i></div>
-      <div class="nc-empty__title">Loading per-platform results…</div>
+      <div class="nc-empty__title">Cargando los resultados de cada red…</div>
       <p class="nc-empty__body">
-        Each platform's result shows up here as Zernio dispatches it.
-        This page auto-refreshes every 3 seconds — no need to reload.
+        Aquí ves cómo va tu clip en cada red conforme se va publicando.
+        La página se actualiza sola cada 3 segundos — no toques nada.
       </p>
     </div>
   </div>
@@ -179,16 +179,16 @@
     var html = "";
     rows.forEach(function (r) {
       var statusPill = r.ok
-        ? '<span class="nc-pj-status-pill" data-s="PUBLISHED"><i class="ti ti-check"></i> Published</span>'
+        ? '<span class="nc-pj-status-pill" data-s="PUBLISHED"><i class="ti ti-check"></i> Publicado</span>'
         : (/(FAILED|ERROR)/i.test(r.status || "")
-            ? '<span class="nc-pj-status-pill" data-s="FAILED"><i class="ti ti-x"></i> Failed</span>'
+            ? '<span class="nc-pj-status-pill" data-s="FAILED"><i class="ti ti-x"></i> Falló</span>'
             : '<span class="nc-pj-status-pill" data-s="PUBLISHING"><i class="ti ti-clock"></i> ' + escapeHtml(normalize(r.status)) + '</span>');
       var linkBlock = r.url
-        ? '<div class="nc-pj-card__link"><i class="ti ti-external-link"></i> <a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">View post →</a></div>'
+        ? '<div class="nc-pj-card__link"><i class="ti ti-external-link"></i> <a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">Ver publicación →</a></div>'
         : "";
-      var idBlock = r.postId ? '<div class="nc-pj-meta">Post id: ' + escapeHtml(r.postId) + '</div>' : "";
+      var idBlock = r.postId ? '<div class="nc-pj-meta">ID de publicación: ' + escapeHtml(r.postId) + '</div>' : "";
       var errBlock = r.error ? '<div class="nc-pj-card__error">' + escapeHtml(r.error) + '</div>' : "";
-      var label = r.platform ? r.platform.charAt(0).toUpperCase() + r.platform.slice(1) : "Platform";
+      var label = r.platform ? r.platform.charAt(0).toUpperCase() + r.platform.slice(1) : "Red social";
       html += '<div class="nc-pj-card" data-platform="' + escapeHtml(r.platform) + '">' +
         '<div class="nc-pj-card__head">' +
           '<i class="ti ' + platformIconClass(r.platform) + '"></i>' +

@@ -2824,10 +2824,10 @@
 } %}
 {% set caption_style = caption_style|default(_caption_default, true) %}
 {% set caption_preset_choices = caption_preset_choices|default([
-    ('karaoke_pop',  'Karaoke pop — word-by-word highlight, scale bounce'),
-    ('typewriter',   'Typewriter — char-by-char reveal'),
-    ('bold_block',   'Bold block — 2-3 word chunks, hard cut'),
-    ('subtle',       'Subtle — single line bottom, no animation'),
+    ('karaoke_pop',  'Karaoke — resalta palabra por palabra con rebote'),
+    ('typewriter',   'Máquina de escribir — aparece letra por letra'),
+    ('bold_block',   'Bloque grueso — de 2 a 3 palabras, corte seco'),
+    ('subtle',       'Discreto — una línea abajo, sin animación'),
 ], true) %}
 {% set brand_kit = brand_kit|default(none) %}
 
@@ -2848,7 +2848,7 @@
 
 <div class="nc-page-header">
   <div>
-    <h2>Clip editor</h2>
+    <h2>Editor del clip</h2>
     <div class="nc-row" style="margin-top: 4px;">
       <span class="nc-chip nc-chip--{{ {'cut':'muted','approved':'success','rejected':'danger','published':'success','ready_for_review':'warn'}.get(clip.status, 'muted') }}"
             id="clip-status">
@@ -2863,7 +2863,7 @@
   <div class="nc-page-summary">
     <a href="/dashboard/streams/{{ clip.stream_id }}" class="nc-btn nc-btn--sm">
       <i class="ti ti-arrow-left" aria-hidden="true"></i>
-      <span>Back to stream</span>
+      <span>Volver al stream</span>
     </a>
   </div>
 </div>
@@ -2888,10 +2888,10 @@
   else '✅'
 ) %}
 {% set _headline_text = (
-  'HIGH VIRAL POTENTIAL'      if publishability.status == 'publish_ready' and _viral_score >= 75
-  else 'READY TO POST'        if publishability.status == 'publish_ready'
-  else 'NEEDS A QUICK FIX'    if publishability.status == 'needs_edit'
-  else 'NOT READY FOR AUTO-PUBLISH'
+  'ESTE SE PUEDE VOLVER VIRAL' if publishability.status == 'publish_ready' and _viral_score >= 75
+  else 'LISTO PARA PUBLICAR'    if publishability.status == 'publish_ready'
+  else 'LE FALTA UN AJUSTE'     if publishability.status == 'needs_edit'
+  else 'AÚN NO ESTÁ PARA PUBLICAR SOLO'
 ) %}
 <div class="nc-verdict nc-verdict--{{ publishability.status }}">
   <div class="nc-verdict__top">
@@ -2899,8 +2899,8 @@
       <span class="nc-verdict__headline-emoji">{{ _headline_emoji }}</span>
       <span class="nc-verdict__headline-text">{{ _headline_text }}</span>
     </div>
-    <div class="nc-verdict__retention" title="Publish confidence — based on hook, captions, face, safezones, dead-air, audio">
-      <span class="nc-verdict__retention-label">Est. retention</span>
+    <div class="nc-verdict__retention" title="Qué tan seguro está de que jala — mira hook, subtítulos, cara, zonas seguras, silencios y audio">
+      <span class="nc-verdict__retention-label">Retención estimada</span>
       <span class="nc-verdict__retention-pct">{{ publishability.score }}%</span>
     </div>
   </div>
@@ -2916,7 +2916,7 @@
     <div class="nc-verdict__target" id="verdict-target-badge"
          data-platform-id="{{ _vt[0] }}">
       <span class="nc-verdict__target-emoji" aria-hidden="true">{{ _vt[1] }}</span>
-      <span>Optimized for {{ _vt[2] }}</span>
+      <span>Listo para {{ _vt[2] }}</span>
     </div>
   {%- endif -%}
 
@@ -2931,12 +2931,12 @@
     <span class="nc-verdict__trigger-icon">🎯</span>
     <div class="nc-verdict__trigger-body">
       <div class="nc-verdict__trigger-line">
-        <span class="nc-verdict__trigger-label">AI heard you say</span>
+        <span class="nc-verdict__trigger-label">La IA te escuchó decir</span>
         <span class="nc-verdict__trigger-phrase">"{{ candidate_trigger.phrase }}"</span>
         {% if candidate_trigger.kind == 'retroactive' %}
-        <span class="nc-verdict__trigger-kind" title="Phrase fired retroactively — clip extends BACKWARD from the moment you said it">↶ retroactive</span>
+        <span class="nc-verdict__trigger-kind" title="La frase activó hacia atrás — el clip arranca ANTES del momento en que lo dijiste">↶ hacia atrás</span>
         {% else %}
-        <span class="nc-verdict__trigger-kind" title="Phrase fired forward — clip extends FORWARD from the moment you said it">↷ forward</span>
+        <span class="nc-verdict__trigger-kind" title="La frase activó hacia adelante — el clip sigue DESPUÉS del momento en que lo dijiste">↷ hacia adelante</span>
         {% endif %}
       </div>
       {% if candidate_trigger.snippet %}
@@ -2964,18 +2964,18 @@
     {% endfor %}
   {% endif %}
   {% if face_zone == 'top' and (not ai_decisions or 'Face' not in (ai_decisions.intel_lines|join(' '))) %}
-    {% set _ = _ai_evidence_lines.append('Face high in frame — hook pushed below it') %}
+    {% set _ = _ai_evidence_lines.append('Tu cara va arriba del cuadro — el hook se bajó para no taparla') %}
   {% elif face_zone == 'lower' and (not ai_decisions or 'Face' not in (ai_decisions.intel_lines|join(' '))) %}
-    {% set _ = _ai_evidence_lines.append('Face low in frame — captions lifted above it') %}
+    {% set _ = _ai_evidence_lines.append('Tu cara va abajo del cuadro — los subtítulos se subieron para no taparla') %}
   {% endif %}
   {% if breakdown.heuristic_reason and breakdown.heuristic_reason != 'unknown' %}
-    {% set _ = _ai_evidence_lines.append('Detected: ' ~ breakdown.heuristic_reason|replace('_', ' ')) %}
+    {% set _ = _ai_evidence_lines.append('Detectamos: ' ~ breakdown.heuristic_reason|replace('_', ' ')) %}
   {% endif %}
   {% if breakdown.reaction_confidence is not none and breakdown.reaction_confidence >= 0.6 %}
-    {% set _ = _ai_evidence_lines.append('Strong on-screen reaction at the anchor') %}
+    {% set _ = _ai_evidence_lines.append('Hay una reacción fuerte en pantalla justo en el momento clave') %}
   {% endif %}
   {% if breakdown.face_presence is not none and breakdown.face_presence >= 0.55 %}
-    {% set _ = _ai_evidence_lines.append('Subject visible ' ~ (breakdown.face_presence * 100)|int ~ '% of the clip') %}
+    {% set _ = _ai_evidence_lines.append('Se te ve en pantalla el ' ~ (breakdown.face_presence * 100)|int ~ '% del clip') %}
   {% endif %}
   {% if _ai_evidence_lines %}
   <div class="nc-verdict__intel">
@@ -3017,17 +3017,17 @@
     <div style="flex: 1; min-width: 180px;">
       <div style="font-size: 13px; font-weight: 600; color: var(--nc-text);">
         {%- if _trimmed -%}
-          Clip was trimmed
+          Recortamos el clip
         {%- else -%}
-          Integrity issue{{ "s" if _issues|length != 1 else "" }} detected
+          {{ "Encontramos un detalle" if _issues|length == 1 else "Encontramos unos detalles" }}
         {%- endif -%}
       </div>
       <div style="font-size: 11px; color: var(--nc-text-muted); margin-top: 2px;">
         {%- if _trimmed -%}
-          Original bounds: {{ "%.1f"|format(clip.original_start_s) }}s &rarr; {{ "%.1f"|format(clip.original_end_s) }}s.
-          Revert to restore.
+          Límites originales: {{ "%.1f"|format(clip.original_start_s) }}s &rarr; {{ "%.1f"|format(clip.original_end_s) }}s.
+          Toca Deshacer para regresarlos.
         {%- else -%}
-          Auto-trim shrinks the clip to its longest clean window. Revert is one click.
+          Recortar solo deja la mejor parte limpia del clip. Lo deshaces con un clic.
         {%- endif -%}
       </div>
     </div>
@@ -3035,7 +3035,7 @@
     <form action="/dashboard/clips/{{ clip.id }}/auto-trim" method="post" style="margin: 0;">
       <button type="submit" class="nc-btn nc-btn--sm">
         <i class="ti ti-cut" aria-hidden="true"></i>
-        <span>Auto-trim</span>
+        <span>Recortar</span>
       </button>
     </form>
     {%- endif -%}
@@ -3043,7 +3043,7 @@
     <form action="/dashboard/clips/{{ clip.id }}/revert-trim" method="post" style="margin: 0;">
       <button type="submit" class="nc-btn nc-btn--sm">
         <i class="ti ti-arrow-back-up" aria-hidden="true"></i>
-        <span>Revert</span>
+        <span>Deshacer</span>
       </button>
     </form>
     {%- endif -%}
@@ -3057,12 +3057,12 @@
               {% elif _trim_flash == 'no_issues' or _trim_flash == 'noop' %}background: rgba(120,140,180,0.08); color: var(--nc-text-muted); border: 1px solid rgba(120,140,180,0.25);
               {% elif _trim_flash == 'no_clean_window' %}background: rgba(255,184,0,0.08); color: var(--nc-warn); border: 1px solid rgba(255,184,0,0.3);
               {% else %}background: rgba(229,72,77,0.08); color: var(--nc-danger); border: 1px solid rgba(229,72,77,0.3);{% endif %}">
-    {% if _trim_flash == 'trimmed' %}Trimmed around integrity issues.
-    {% elif _trim_flash == 'reverted' %}Restored original bounds.
-    {% elif _trim_flash == 'no_issues' %}No integrity issues to trim.
-    {% elif _trim_flash == 'noop' %}Clip was never trimmed — nothing to revert.
-    {% elif _trim_flash == 'no_clean_window' %}Couldn't find a clean window of at least 5s — try editing manually or rejecting the clip.
-    {% else %}Trim failed — check the server logs.{% endif %}
+    {% if _trim_flash == 'trimmed' %}Listo, recortamos alrededor del detalle.
+    {% elif _trim_flash == 'reverted' %}Listo, regresamos los límites originales.
+    {% elif _trim_flash == 'no_issues' %}No hay nada que recortar.
+    {% elif _trim_flash == 'noop' %}Este clip nunca se recortó, no hay nada que deshacer.
+    {% elif _trim_flash == 'no_clean_window' %}No encontramos un tramo limpio de al menos 5s. Edítalo a mano o descártalo.
+    {% else %}No se pudo recortar. Revisa los logs del servidor.{% endif %}
   </div>
   {%- endif -%}
   {%- endif -%}
@@ -3073,7 +3073,7 @@
             id="apply-ai-fixes-btn"
             data-clip-id="{{ clip.id }}">
       <i class="ti ti-wand" aria-hidden="true"></i>
-      <span>Auto fix &amp; optimize</span>
+      <span>Arreglar y mejorar solo</span>
     </button>
     {# Slice N.2 — CTA renamed from "Review & publish" / "Publish
        now" to "Approve & continue". The button is no longer a raw
@@ -3087,7 +3087,7 @@
             data-verdict-status="{{ publishability.status }}"
             data-form-id="overlay-form">
       <i class="ti ti-circle-check" aria-hidden="true"></i>
-      <span>Approve &amp; continue</span>
+      <span>Aprobar y seguir</span>
     </button>
   </div>
   <div id="apply-ai-fixes-feedback" class="nc-verdict__feedback"></div>
@@ -3106,14 +3106,14 @@
       <div class="nc-approve-modal__head">
         <span class="nc-approve-modal__icon">⚠</span>
         <span class="nc-approve-modal__title">
-          This clip isn't quite ready
+          Este clip todavía no está al cien
         </span>
       </div>
       <div class="nc-approve-modal__body">
-        <p>The AI scored this clip
-          <strong id="approve-modal-score">{{ publishability.score }}%</strong> for publish readiness.
-          You can ship it anyway, let the AI auto-fix what it can, or
-          keep editing.</p>
+        <p>La IA le dio
+          <strong id="approve-modal-score">{{ publishability.score }}%</strong> de listo para publicar.
+          Puedes publicarlo así, dejar que la IA arregle lo que pueda, o
+          seguir editando.</p>
         <ul id="approve-modal-issues" class="nc-approve-modal__issues">
           {%- for b in publishability.blocking -%}
           <li class="nc-approve-modal__issues-row nc-approve-modal__issues-row--block">
@@ -3132,19 +3132,19 @@
                 class="nc-btn nc-approve-modal__cancel"
                 id="approve-modal-cancel">
           <i class="ti ti-arrow-left" aria-hidden="true"></i>
-          <span>Keep editing</span>
+          <span>Seguir editando</span>
         </button>
         <button type="button"
                 class="nc-btn nc-approve-modal__autofix"
                 id="approve-modal-autofix">
           <i class="ti ti-wand" aria-hidden="true"></i>
-          <span>AI auto-fix all</span>
+          <span>Que la IA lo arregle</span>
         </button>
         <button type="button"
                 class="nc-btn nc-btn--primary nc-approve-modal__force"
                 id="approve-modal-force">
           <i class="ti ti-rocket" aria-hidden="true"></i>
-          <span>Ship anyway</span>
+          <span>Publicar así</span>
         </button>
       </div>
     </div>
@@ -3164,33 +3164,33 @@
 <div class="nc-framing">
   <div class="nc-framing__head">
     <i class="ti ti-crop-1-1" aria-hidden="true"></i>
-    <span>Framing</span>
+    <span>Encuadre</span>
     <span class="nc-framing__pill nc-framing__pill--{{ _framing.recommended_output }}">
-      {% if _framing.recommended_output == 'full_screen_horizontal' %}Full screen required
-      {% elif _framing.recommended_output == 'mobile_crop_static' %}Mobile ready · static crop
-      {% elif _framing.recommended_output == 'mobile_crop_tracking' %}Mobile · tracking crop
-      {% elif _framing.recommended_output == 'already_mobile' %}Already mobile
-      {% elif _framing.recommended_output == 'reject_crop' %}Manual edit required
+      {% if _framing.recommended_output == 'full_screen_horizontal' %}Necesita pantalla completa
+      {% elif _framing.recommended_output == 'mobile_crop_static' %}Listo para móvil · recorte fijo
+      {% elif _framing.recommended_output == 'mobile_crop_tracking' %}Móvil · recorte que sigue la cara
+      {% elif _framing.recommended_output == 'already_mobile' %}Ya está en vertical
+      {% elif _framing.recommended_output == 'reject_crop' %}Necesita edición a mano
       {% else %}{{ _framing.recommended_output }}
       {% endif %}
     </span>
-    <span class="nc-framing__confidence" title="Framing detector confidence">
-      {{ "%.0f"|format((_framing.confidence or 0) * 100) }}% conf
+    <span class="nc-framing__confidence" title="Qué tan seguro está del encuadre">
+      {{ "%.0f"|format((_framing.confidence or 0) * 100) }}% seguro
     </span>
   </div>
   <p class="nc-framing__reason">{{ _framing.reason or '' }}</p>
   <div class="nc-framing__overrides">
     <label class="nc-checkbox">
       <input type="checkbox" name="framing_force_vertical_crop" value="1" id="ctl-framing-force-vertical">
-      <span>Force mobile crop anyway</span>
+      <span>Forzar recorte vertical de todos modos</span>
     </label>
     <label class="nc-checkbox">
       <input type="checkbox" name="framing_export_horizontal" value="1" id="ctl-framing-export-horizontal">
-      <span>Export full horizontal</span>
+      <span>Exportar en horizontal completo</span>
     </label>
     <label class="nc-checkbox">
       <input type="checkbox" name="framing_export_blurred_bg" value="1" id="ctl-framing-export-blurred-bg">
-      <span>Export blurred-background mobile version</span>
+      <span>Exportar versión vertical con fondo borroso</span>
     </label>
   </div>
 </div>
@@ -3207,19 +3207,19 @@
 <details class="nc-advanced-analysis">
   <summary class="nc-advanced-analysis__summary">
     <i class="ti ti-chart-line" aria-hidden="true"></i>
-    <span>Why AI selected this clip</span>
-    <small>· technical evidence behind the score</small>
+    <span>Por qué la IA eligió este clip</span>
+    <small>· lo que hay detrás del puntaje</small>
   </summary>
 <div class="nc-ai-strip">
   <div class="nc-ai-strip__header" style="display:none;">
     <i class="ti ti-sparkles" aria-hidden="true"></i>
-    <span>AI insights</span>
-    <small>· click any score to see the evidence</small>
+    <span>Lo que vio la IA</span>
+    <small>· toca cualquier puntaje para ver el detalle</small>
   </div>
 
   <details class="nc-ai-score nc-ai-score--detail">
     <summary>
-      <div class="nc-ai-score__label">Viral score</div>
+      <div class="nc-ai-score__label">Potencial viral</div>
       <div class="nc-ai-score__value">
         {{ ai_scores.viral_score }}<span class="nc-ai-score__value--lg100"> / 100</span>
       </div>
@@ -3229,13 +3229,13 @@
     </summary>
     <div class="nc-ai-score__evidence">
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Heuristic that fired</span>
+        <span class="nc-ai-evidence__label">Qué lo activó</span>
         <span class="nc-mono">{{ breakdown.heuristic_reason }}</span>
         <span class="nc-mono nc-mono--muted">{{ "%.3f"|format(breakdown.heuristic_score) }}</span>
       </div>
       {% if breakdown.reaction_confidence is not none %}
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Vision-LLM rescore</span>
+        <span class="nc-ai-evidence__label">Revisión con la IA de imagen</span>
         <span class="nc-mono">{{ "%.3f"|format(breakdown.reaction_confidence) }}</span>
         {% if breakdown.rescore_delta is not none %}
         <span class="nc-mono nc-mono--muted">Δ {{ "%+.3f"|format(breakdown.rescore_delta) }}</span>
@@ -3244,16 +3244,16 @@
       {% endif %}
       {% if breakdown.face_presence is not none %}
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Face presence</span>
+        <span class="nc-ai-evidence__label">Presencia de cara</span>
         <span class="nc-mono">{{ "%.0f%%"|format(breakdown.face_presence * 100) }}</span>
-        <span class="nc-mono nc-mono--muted">of clip seconds</span>
+        <span class="nc-mono nc-mono--muted">de los segundos del clip</span>
       </div>
       {% endif %}
       {% if breakdown.motion_score is not none %}
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Motion energy</span>
+        <span class="nc-ai-evidence__label">Movimiento</span>
         <span class="nc-mono">{{ "%.3f"|format(breakdown.motion_score) }}</span>
-        <span class="nc-mono nc-mono--muted">avg / sec</span>
+        <span class="nc-mono nc-mono--muted">promedio / seg</span>
       </div>
       {% endif %}
       <div class="nc-ai-evidence__why">{{ ai_scores.viral_why }}</div>
@@ -3262,18 +3262,18 @@
 
   <details class="nc-ai-score nc-ai-score--detail">
     <summary>
-      <div class="nc-ai-score__label">Hook strength</div>
+      <div class="nc-ai-score__label">Fuerza del hook</div>
       <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.hook_strength|lower }}">
         {{ ai_scores.hook_strength }}
       </span>
     </summary>
     <div class="nc-ai-score__evidence">
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Viral score</span>
+        <span class="nc-ai-evidence__label">Potencial viral</span>
         <span class="nc-mono">{{ ai_scores.viral_score }} / 100</span>
       </div>
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Band</span>
+        <span class="nc-ai-evidence__label">Nivel</span>
         <span class="nc-mono">{{ ai_scores.hook_strength }}</span>
       </div>
       <div class="nc-ai-evidence__why">{{ ai_scores.hook_why }}</div>
@@ -3282,7 +3282,7 @@
 
   <details class="nc-ai-score nc-ai-score--detail">
     <summary>
-      <div class="nc-ai-score__label">Caption readability</div>
+      <div class="nc-ai-score__label">Qué tan legibles son los subtítulos</div>
       <span class="nc-ai-score__pill nc-ai-score__pill--{{ ai_scores.caption_readability|lower }}">
         {{ ai_scores.caption_readability }}
       </span>
@@ -3290,16 +3290,16 @@
     <div class="nc-ai-score__evidence">
       {% if breakdown.speaking_intensity is not none %}
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Speaking pace</span>
+        <span class="nc-ai-evidence__label">Ritmo al hablar</span>
         <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
-        <span class="nc-mono nc-mono--muted">words / sec</span>
+        <span class="nc-mono nc-mono--muted">palabras / seg</span>
       </div>
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Sweet spot</span>
-        <span class="nc-mono">0.8 – 2.2 wps</span>
+        <span class="nc-ai-evidence__label">Punto ideal</span>
+        <span class="nc-mono">0.8 – 2.2 pps</span>
       </div>
       {% else %}
-      <div class="nc-ai-evidence__why">No transcript on this clip yet — can't measure pacing.</div>
+      <div class="nc-ai-evidence__why">Este clip todavía no tiene transcripción, no se puede medir el ritmo.</div>
       {% endif %}
       <div class="nc-ai-evidence__why">{{ ai_scores.readability_why }}</div>
     </div>
@@ -3307,7 +3307,7 @@
 
   <details class="nc-ai-score nc-ai-score--detail">
     <summary>
-      <div class="nc-ai-score__label">Dead-air risk</div>
+      <div class="nc-ai-score__label">Riesgo de silencios</div>
       <span class="nc-ai-score__pill nc-ai-score__pill--{% if ai_scores.dead_air_risk == 'HIGH' %}high-risk{% else %}{{ ai_scores.dead_air_risk|lower }}{% endif %}">
         {{ ai_scores.dead_air_risk }}
       </span>
@@ -3315,13 +3315,13 @@
     <div class="nc-ai-score__evidence">
       {% if breakdown.speaking_intensity is not none %}
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Speaking density</span>
+        <span class="nc-ai-evidence__label">Qué tanto hablas</span>
         <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
-        <span class="nc-mono nc-mono--muted">words / sec</span>
+        <span class="nc-mono nc-mono--muted">palabras / seg</span>
       </div>
       <div class="nc-ai-evidence__row">
-        <span class="nc-ai-evidence__label">Risk thresholds</span>
-        <span class="nc-mono">&lt; 0.4 = HIGH · 0.4–0.8 = MED · ≥ 0.8 = LOW</span>
+        <span class="nc-ai-evidence__label">Niveles de riesgo</span>
+        <span class="nc-mono">&lt; 0.4 = ALTO · 0.4–0.8 = MEDIO · ≥ 0.8 = BAJO</span>
       </div>
       {% endif %}
       <div class="nc-ai-evidence__why">{{ ai_scores.dead_air_why }}</div>
@@ -3342,8 +3342,8 @@
       <div class="nc-panel">
         <div class="nc-panel__header">
           <i class="ti ti-eye" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-          <span class="nc-panel__title">Live preview</span>
-          <small>— what the rendered clip will look like</small>
+          <span class="nc-panel__title">Vista previa en vivo</span>
+          <small>— así se verá el clip final</small>
         </div>
         <div class="nc-panel__body">
 
@@ -3359,10 +3359,10 @@
           <div class="nc-preview-fitmode" role="tablist">
             {% set _fit_mode = ov.get('fit_mode') or 'smart_crop' %}
             {% for fit_id, fit_label, fit_hint in [
-              ('smart_crop',   'Smart crop',  'Tight 9:16 crop on the subject'),
-              ('blurred_bg',   'Blurred bg',  'Full horizontal frame + blurred backdrop'),
-              ('letterbox',    'Letterbox',   'Full horizontal frame with black bars'),
-              ('dynamic_zoom', 'Cinematic',   'Slow zoom + drift (Ken Burns)'),
+              ('smart_crop',   'Recorte inteligente',  'Recorte 9:16 pegado a ti'),
+              ('blurred_bg',   'Fondo borroso',  'Cuadro horizontal completo con fondo borroso'),
+              ('letterbox',    'Barras negras',   'Cuadro horizontal completo con barras negras'),
+              ('dynamic_zoom', 'Cinemático',   'Zoom lento con movimiento suave'),
             ] %}
             <button type="button"
                     class="nc-preview-fitmode__btn{% if _fit_mode == fit_id %} is-active{% endif %}"
@@ -3390,9 +3390,9 @@
             {% set _preview_mode = ov.get('preview_mode') or 'edited' %}
             {% if _preview_mode == 'final' %}{% set _preview_mode = 'platform' %}{% endif %}
             {% for mode_id, mode_label, mode_hint in [
-              ('raw',      'Raw',      'Source crop · no overlays'),
-              ('edited',   'Edited',   'Title + captions + banner'),
-              ('platform', 'Platform', 'Edited + fake platform UI chrome'),
+              ('raw',      'Sin nada',   'El recorte tal cual · sin overlays'),
+              ('edited',   'Editado',    'Título + subtítulos + banner'),
+              ('platform', 'En la app',  'Editado + cómo se ve dentro de la app'),
             ] %}
             <button type="button"
                     class="nc-preview-mode{% if _preview_mode == mode_id %} is-active{% endif %}"
@@ -3449,8 +3449,8 @@
               <div class="nc-pv-zones__band nc-pv-zones__band--top-caution"></div>
               <div class="nc-pv-zones__band nc-pv-zones__band--bottom-caution"></div>
               <div class="nc-pv-zones__band nc-pv-zones__band--bottom-unsafe"></div>
-              <div class="nc-pv-zones__label nc-pv-zones__label--top">UNSAFE · PLATFORM CHROME</div>
-              <div class="nc-pv-zones__label nc-pv-zones__label--bottom">UNSAFE · DESCRIPTION + DOCK</div>
+              <div class="nc-pv-zones__label nc-pv-zones__label--top">AQUÍ NO · LA APP TAPA</div>
+              <div class="nc-pv-zones__label nc-pv-zones__label--bottom">AQUÍ NO · TEXTO Y BOTONES</div>
             </div>
 
             {# Slice K.3 — ambient "this is a real post" affordances.
@@ -3465,8 +3465,8 @@
               <button type="button"
                       id="pv-mute-toggle"
                       class="nc-pv-ambient__mute"
-                      aria-label="Toggle sound"
-                      title="Sound (M)">
+                      aria-label="Activar o quitar el sonido"
+                      title="Sonido (M)">
                 <i class="ti ti-volume-off"></i>
               </button>
               <div class="nc-pv-ambient__like">
@@ -3485,7 +3485,7 @@
             <button type="button"
                     id="preview-play-overlay"
                     class="nc-pv-play-overlay"
-                    aria-label="Play preview">
+                    aria-label="Reproducir la vista previa">
               <i class="ti ti-player-play-filled" aria-hidden="true"></i>
             </button>
 
@@ -3649,7 +3649,7 @@
             <svg class="nc-waveform" id="waveform"
                  viewBox="0 0 200 36" preserveAspectRatio="none">
               <text class="nc-waveform__empty" x="100" y="22"
-                    text-anchor="middle" id="waveform-loading">loading waveform…</text>
+                    text-anchor="middle" id="waveform-loading">cargando audio…</text>
               <line class="nc-waveform__playhead" id="waveform-playhead"
                     x1="0" y1="0" x2="0" y2="36"
                     style="display: none;"></line>
@@ -3681,18 +3681,18 @@
           <div class="nc-preview-controls">
             <button type="button" id="preview-play" class="nc-btn nc-btn--sm">
               <i class="ti ti-player-play" aria-hidden="true"></i>
-              <span>Play preview</span>
+              <span>Reproducir</span>
             </button>
             <button type="button" id="preview-restart" class="nc-btn nc-btn--sm">
               <i class="ti ti-refresh" aria-hidden="true"></i>
-              <span>Restart</span>
+              <span>Reiniciar</span>
             </button>
           </div>
 
           <small style="display: block; margin-top: 8px; text-align: center;">
-            Live HTML preview. Clicking <strong>Ship to platforms</strong>
-            burns the title / banner / captions into a fresh
-            <code>clip_final.mp4</code> — that's what publishers upload.
+            Esto es solo la vista previa. Al tocar <strong>Publicar</strong>
+            el título, el banner y los subtítulos se queman en un
+            <code>clip_final.mp4</code> nuevo — ese es el que se sube.
           </small>
         </div>
       </div>
@@ -3725,8 +3725,8 @@
       <div class="nc-panel">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">0</span>
-          <span class="nc-panel__title">Where are you posting?</span>
-          <small>— pick one · the rest auto-configures to match what works there</small>
+          <span class="nc-panel__title">¿Dónde lo vas a subir?</span>
+          <small>— elige uno · lo demás se acomoda solo para lo que jala ahí</small>
         </div>
         <div class="nc-panel__body">
           {# Hidden field carries the picked target_platform on form
@@ -3734,7 +3734,7 @@
           {%- set _current_target = (ov.get('target_platform') if ov.get('target_platform') else (brand_kit.target_platform if brand_kit and brand_kit.target_platform else 'all')) -%}
           <input type="hidden" name="target_platform" id="ctl-target-platform"
                  value="{{ _current_target }}">
-          <div class="nc-platform-row" role="radiogroup" aria-label="Target platform">
+          <div class="nc-platform-row" role="radiogroup" aria-label="Dónde lo vas a subir">
             {% for tid, emoji, name, blurb in platform_target_choices %}
             <button type="button"
                     class="nc-platform-chip{% if _current_target == tid %} is-selected{% endif %}"
@@ -3765,8 +3765,8 @@
       <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="clip-style">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">·</span>
-          <span class="nc-panel__title">Clip style</span>
-          <small>— fine-tune · banner / hook / captions look</small>
+          <span class="nc-panel__title">Estilo del clip</span>
+          <small>— afina · cómo se ven banner / hook / subtítulos</small>
         </div>
         <div class="nc-panel__body">
           <input type="hidden" name="clip_style" id="ctl-clip-style"
@@ -3788,18 +3788,18 @@
       <div class="nc-panel nc-panel--accordion" data-accordion="hook">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">1</span>
-          <span class="nc-panel__title">Viral hook</span>
-          <small>— first thing viewers read · drives the swipe rate</small>
+          <span class="nc-panel__title">Hook viral</span>
+          <small>— lo primero que leen · decide si se quedan o pasan</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-label">
-            Hook title
+            Título del hook
             <textarea class="nc-textarea"
                       name="title_text"
                       id="ctl-title"
                       rows="2"
-                      placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again">{{ ov.get('title_text') or '' }}</textarea>
-            <small>Blank = no title overlay. Strongest performers are 6–10 words with curiosity / conflict / status.</small>
+                      placeholder="ej. Adin Ross le pidió RETA a Clav después de engordar otra vez">{{ ov.get('title_text') or '' }}</textarea>
+            <small>Si lo dejas vacío, no sale título. Los que más jalan tienen de 6 a 10 palabras con curiosidad, conflicto o estatus.</small>
           </label>
 
           {# AI hook generator (slice F.7-B). Tone picker + Generate
@@ -3809,20 +3809,20 @@
           <div class="nc-hook-gen">
             <div class="nc-hook-gen__row">
               <label class="nc-label" style="flex: 1; margin: 0;">
-                <small>AI tone</small>
+                <small>Tono de la IA</small>
                 <select class="nc-select" id="hook-tone">
-                  <option value="default">Default — natural voice</option>
-                  <option value="aggressive">Aggressive — confrontational</option>
-                  <option value="gen_z">Gen Z — TikTok slang</option>
-                  <option value="corporate">Corporate — clean / pro</option>
-                  <option value="curious">Curious — open-loop questions</option>
+                  <option value="default">Natural — tu voz de siempre</option>
+                  <option value="aggressive">Agresivo — directo y retador</option>
+                  <option value="gen_z">Gen Z — jerga de TikTok</option>
+                  <option value="corporate">Formal — limpio y pro</option>
+                  <option value="curious">Curioso — preguntas que enganchan</option>
                 </select>
               </label>
               <button type="button" class="nc-btn nc-btn--ai"
                       id="hook-gen-btn"
-                      title="Generates 5 AI title candidates · one Anthropic call">
+                      title="Genera 5 títulos con la IA · una llamada">
                 <i class="ti ti-sparkles" aria-hidden="true"></i>
-                <span>Generate 5</span>
+                <span>Generar 5</span>
               </button>
             </div>
             <div class="nc-hook-gen__results"
@@ -3839,24 +3839,24 @@
       <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="captions">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">2</span>
-          <span class="nc-panel__title">Captions</span>
-          <small>— burned in word-by-word</small>
+          <span class="nc-panel__title">Subtítulos</span>
+          <small>— quemados palabra por palabra</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-checkbox">
             <input type="checkbox" name="captions_enabled" value="1" id="ctl-captions-on"
                    {% if captions.get('enabled', True) %}checked{% endif %}>
-            <span>Burn captions into the clip</span>
+            <span>Quemar los subtítulos en el clip</span>
           </label>
-          <label class="nc-label">Preset
+          <label class="nc-label">Estilo
             <select class="nc-select" name="captions_preset" id="ctl-captions-preset">
-              <option value="">— use brand-kit default ({{ caption_style.preset }}) —</option>
+              <option value="">— usar el de tu kit de marca ({{ caption_style.preset }}) —</option>
               {% for choice_id, choice_label in caption_preset_choices %}
               <option value="{{ choice_id }}" {% if captions.get('preset') == choice_id %}selected{% endif %}>{{ choice_label }}</option>
               {% endfor %}
             </select>
           </label>
-          <label class="nc-label">Active-word highlight
+          <label class="nc-label">Color de la palabra activa
             <input class="nc-input"
                    type="color"
                    name="captions_highlight_color"
@@ -3897,7 +3897,7 @@
              positions today; the labels carry the operator intent
              so L.4b's face-aware dynamic positioning can read them
              later without breaking saved clips. #}
-          <label class="nc-label">Caption position
+          <label class="nc-label">Dónde van los subtítulos
             <select class="nc-select" name="captions_position" id="ctl-captions-position">
               {% set _cur_pos = captions.get('position') or caption_style.position %}
               {# Auto Viral is the special-case "" value — the
@@ -3906,25 +3906,25 @@
                  decision is available, surface what it would pick
                  so the operator sees the auto-choice inline. #}
               {%- set _ai_pos_label = {
-                  'upper_third': 'Viral Top',
-                  'centered':    'Face Follow',
-                  'lower_third': 'Streamer Standard',
-                  'bottom':      'Safe Lower',
+                  'upper_third': 'Arriba viral',
+                  'centered':    'Sigue la cara',
+                  'lower_third': 'Bajo la cara',
+                  'bottom':      'Abajo seguro',
               }.get(ai_decisions.caption_position) if ai_decisions else None -%}
               <option value="" {% if not _cur_pos %}selected{% endif %}>
-                ✨ Auto Viral{% if _ai_pos_label %} · AI picks {{ _ai_pos_label }}{% endif %}
+                ✨ Automático viral{% if _ai_pos_label %} · la IA pone {{ _ai_pos_label }}{% endif %}
               </option>
               <option value="lower_third" {% if _cur_pos == 'lower_third' %}selected{% endif %}>
-                Streamer Standard — under face (recommended)
+                Bajo la cara — debajo de tu cara (recomendado)
               </option>
               <option value="upper_third" {% if _cur_pos == 'upper_third' %}selected{% endif %}>
-                Viral Top — above face, big-poster feel
+                Arriba viral — sobre la cara, look de póster
               </option>
               <option value="centered" {% if _cur_pos == 'centered' %}selected{% endif %}>
-                Face Follow — eye-level over the subject
+                Sigue la cara — a la altura de los ojos
               </option>
               <option value="bottom" {% if _cur_pos == 'bottom' %}selected{% endif %}>
-                Safe Lower — just above platform UI
+                Abajo seguro — justo arriba de los botones de la app
               </option>
               {# Gameplay Safe is a second label that maps to the
                  same `upper_third` value as Viral Top. We surface
@@ -3934,7 +3934,7 @@
                  to the canonical option on next page load. #}
             </select>
             <small style="display:block;margin-top:4px;color:var(--nc-text-muted);">
-              Most creators leave this on Auto Viral. The AI picks per platform.
+              Casi todos lo dejan en Automático viral. La IA elige según la app.
             </small>
             {# Slice L.6 — surface the WHY behind the AI's choice
                directly under the dropdown. Operator can read it
@@ -3947,28 +3947,28 @@
             {% endif %}
           </label>
 
-          <label class="nc-label">Font size
+          <label class="nc-label">Tamaño de letra
             <select class="nc-select" name="captions_font_size" id="ctl-captions-font-size">
               {% set _cur_size = captions.get('font_size') or 'medium' %}
               {% for opt_id, opt_label in [
-                ('small',  'S — subtle subtitle'),
-                ('medium', 'M — default (balanced)'),
-                ('large',  'L — punchy'),
-                ('xl',     'XL — full-frame impact'),
+                ('small',  'S — discreto'),
+                ('medium', 'M — equilibrado (por defecto)'),
+                ('large',  'L — más fuerte'),
+                ('xl',     'XL — llena la pantalla'),
               ] %}
               <option value="{{ opt_id }}" {% if _cur_size == opt_id %}selected{% endif %}>{{ opt_label }}</option>
               {% endfor %}
             </select>
           </label>
 
-          <label class="nc-label">Animation
+          <label class="nc-label">Animación
             <select class="nc-select" name="captions_animation" id="ctl-captions-animation">
               {% set _cur_anim = captions.get('animation') or caption_style.animation or 'pop' %}
               {% for opt_id, opt_label in [
-                ('pop',        'Pop — scale bounce on active word'),
-                ('slide',      'Slide — words slide up into place'),
-                ('typewriter', 'Typewriter — letter-by-letter reveal'),
-                ('fade',       'Fade — soft cross-fade between words'),
+                ('pop',        'Rebote — la palabra activa pega un brinquito'),
+                ('slide',      'Deslizar — las palabras suben a su lugar'),
+                ('typewriter', 'Máquina de escribir — aparece letra por letra'),
+                ('fade',       'Desvanecer — transición suave entre palabras'),
               ] %}
               <option value="{{ opt_id }}" {% if _cur_anim == opt_id %}selected{% endif %}>{{ opt_label }}</option>
               {% endfor %}
@@ -3984,16 +3984,16 @@
       <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="branding">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">3</span>
-          <span class="nc-panel__title">Branding</span>
-          <small>— platform watermark + URL · matches your stream's UI</small>
+          <span class="nc-panel__title">Tu marca</span>
+          <small>— marca de agua de la app + tu URL · igual que tu stream</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-checkbox">
             <input type="checkbox" name="banner_enabled" value="1" id="ctl-banner-on"
                    {% if banner.get('enabled', False) %}checked{% endif %}>
-            <span>Show KICK-style bottom banner</span>
+            <span>Mostrar banner abajo estilo KICK</span>
           </label>
-          <label class="nc-label">Platform
+          <label class="nc-label">Plataforma
             <select class="nc-select" name="banner_platform" id="ctl-banner-platform">
               {% for p in ['kick', 'twitch', 'tiktok', 'youtube', 'instagram'] %}
               <option value="{{ p }}" {% if (banner.platform or 'kick') == p %}selected{% endif %}>{{ p }}</option>
@@ -4006,9 +4006,9 @@
                    name="banner_url"
                    id="ctl-banner-url"
                    value="{{ banner.url or '' }}"
-                   placeholder="kick.com/yourhandle">
+                   placeholder="kick.com/tuusuario">
           </label>
-          <label class="nc-label">Banner color <small>(blank = platform default)</small>
+          <label class="nc-label">Color del banner <small>(vacío = color de la app)</small>
             <input class="nc-input"
                    type="color"
                    name="banner_color"
@@ -4018,7 +4018,7 @@
           <label class="nc-checkbox" style="margin-top: 8px;">
             <input type="checkbox" name="banner_show_context" value="1" id="ctl-context-on"
                    {% if banner.get('show_context', False) %}checked{% endif %}>
-            <span>Show platform context (LIVE badge + chat)</span>
+            <span>Mostrar contexto de la app (insignia EN VIVO + chat)</span>
           </label>
           {# Slice L.3 — "Show platform safe zones" toggle hidden.
              The new always-on tri-color zone overlay (.nc-pv-zones)
@@ -4029,11 +4029,11 @@
           <label class="nc-checkbox" style="display:none;">
             <input type="checkbox" name="banner_show_safezones" value="1" id="ctl-safezones-on"
                    {% if banner.get('show_safezones', False) %}checked{% endif %}>
-            <span>Show platform safe zones (TikTok / Reels UI bands)</span>
+            <span>Mostrar zonas seguras (franjas de TikTok / Reels)</span>
           </label>
 
           {# Slice I.2 — platform overlay simulation + safe-zone target. #}
-          <label class="nc-label" style="margin-top: 10px;">Simulate platform UI
+          <label class="nc-label" style="margin-top: 10px;">Simular la pantalla de la app
             <select class="nc-select" name="platform_overlay_preview" id="ctl-platform-sim">
               {% set _cur_sim = ov.get('platform_overlay_preview') or 'clean' %}
               {% for p_id, p_label in platform_choices %}
@@ -4041,10 +4041,10 @@
               {% endfor %}
             </select>
             <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
-              Preview-only fake chrome — never burned. Pick the platform you'll publish to.
+              Solo es una simulación, nunca se quema. Elige la app donde vas a publicar.
             </small>
           </label>
-          <label class="nc-label">Safe-zone target
+          <label class="nc-label">App para las zonas seguras
             <select class="nc-select" name="safe_zone_platform" id="ctl-safezone-target">
               {% set _cur_sz = ov.get('safe_zone_platform') or 'tiktok' %}
               {% for p_id, p_label in platform_choices %}
@@ -4056,14 +4056,14 @@
           </label>
 
           {# Slice I.1 — Kick banner variant + LIVE badge. #}
-          <label class="nc-label" style="margin-top: 10px;">Banner variant
+          <label class="nc-label" style="margin-top: 10px;">Tipo de banner
             <select class="nc-select" name="banner_variant" id="ctl-banner-variant">
               {% set _cur_variant = banner.get('variant') or 'kick_repost_page' %}
               {% for opt_id, opt_label in [
-                ('kick_repost_page',      'Repost page — black bar + huge KICK + URL (default)'),
-                ('kick_black_bar_classic','Classic — colored band, platform left + URL right'),
-                ('kick_green_block',      'Green block — chunky gaming overlay'),
-                ('kick_minimal_url',      'Minimal — URL only, no banner box'),
+                ('kick_repost_page',      'Repost — barra negra + KICK enorme + URL (por defecto)'),
+                ('kick_black_bar_classic','Clásico — franja de color, app a la izquierda + URL a la derecha'),
+                ('kick_green_block',      'Bloque verde — overlay grueso gamer'),
+                ('kick_minimal_url',      'Mínimo — solo la URL, sin caja'),
               ] %}
               <option value="{{ opt_id }}" {% if _cur_variant == opt_id %}selected{% endif %}>{{ opt_label }}</option>
               {% endfor %}
@@ -4072,7 +4072,7 @@
           <label class="nc-checkbox">
             <input type="checkbox" name="banner_live_badge" value="1" id="ctl-live-badge"
                    {% if banner.get('live_badge', False) %}checked{% endif %}>
-            <span>Show LIVE NOW pill (repost-page banner only)</span>
+            <span>Mostrar pastilla EN VIVO (solo en el banner repost)</span>
           </label>
         </div>
       </div>
@@ -4083,30 +4083,30 @@
       <div class="nc-panel nc-panel--accordion is-collapsed" data-accordion="top-hook">
         <div class="nc-panel__header nc-panel__header--editor">
           <span class="nc-panel__step">4</span>
-          <span class="nc-panel__title">Top hook box</span>
-          <small>— white rounded headline above the face</small>
+          <span class="nc-panel__title">Caja de hook arriba</span>
+          <small>— título blanco redondeado encima de la cara</small>
         </div>
         <div class="nc-panel__body">
           <label class="nc-checkbox">
             <input type="checkbox" name="top_hook_enabled" value="1" id="ctl-top-hook-on"
                    {% if top_hook.get('enabled', False) %}checked{% endif %}>
-            <span>Show top hook box on the clip</span>
+            <span>Mostrar la caja de hook arriba del clip</span>
           </label>
-          <label class="nc-label">Headline text
+          <label class="nc-label">Texto del título
             <textarea class="nc-textarea"
                       name="top_hook_text"
                       id="ctl-top-hook-text"
                       rows="2"
                       maxlength="120"
-                      placeholder="e.g. Adin Ross asked Clav for RETA after he got FAT again 😭💀">{{ top_hook.get('text', '') }}</textarea>
+                      placeholder="ej. Adin Ross le pidió RETA a Clav después de engordar otra vez 😭💀">{{ top_hook.get('text', '') }}</textarea>
           </label>
-          <label class="nc-label">Box style
+          <label class="nc-label">Estilo de la caja
             <select class="nc-select" name="top_hook_style" id="ctl-top-hook-style">
               {% set _cur_hook_style = top_hook.get('style') or 'white_rounded' %}
               {% for opt_id, opt_label in [
-                ('white_rounded', 'White rounded — viral default'),
-                ('black_solid',   'Black solid — moody / serious'),
-                ('subtle',        'Subtle — translucent'),
+                ('white_rounded', 'Blanco redondeado — el viral de siempre'),
+                ('black_solid',   'Negro sólido — serio / con dramatismo'),
+                ('subtle',        'Discreto — translúcido'),
               ] %}
               <option value="{{ opt_id }}" {% if _cur_hook_style == opt_id %}selected{% endif %}>{{ opt_label }}</option>
               {% endfor %}
@@ -4119,8 +4119,8 @@
         <summary class="nc-panel__header nc-panel__header--editor"
                  style="cursor: pointer; list-style: none;">
           <span class="nc-panel__step">5</span>
-          <span class="nc-panel__title">Advanced</span>
-          <small>— caption timing · reactions rail · low-frequency overrides</small>
+          <span class="nc-panel__title">Avanzado</span>
+          <small>— tiempo de subtítulos · barra de reacciones · ajustes que casi no se tocan</small>
           <i class="ti ti-chevron-down" aria-hidden="true" style="margin-left: auto; color: var(--nc-text-muted);"></i>
         </summary>
         <div class="nc-panel__body">
@@ -4128,7 +4128,7 @@
              The 120ms recommended default is what 99% of clips ship
              with, so making the operator scroll past it on every clip
              added noise without value. #}
-          <label class="nc-label">Caption lead-time (ms before said)
+          <label class="nc-label">Adelanto de subtítulos (ms antes de decirlo)
             <input class="nc-input"
                    type="number"
                    min="0" max="500" step="10"
@@ -4136,16 +4136,16 @@
                    id="ctl-captions-lead-ms"
                    value="{{ captions.get('lead_ms', 120) }}">
             <small style="color: var(--nc-text-muted); margin-top: 4px; display: block;">
-              0 = caption appears as the word is spoken · 120ms = reads slightly ahead (recommended) · 250ms+ = strong anticipation
+              0 = aparece justo al decir la palabra · 120ms = se adelanta un poco (recomendado) · 250ms+ = se adelanta mucho
             </small>
           </label>
 
           <label class="nc-checkbox" style="margin-top: 10px;">
             <input type="checkbox" name="comments_show" value="1" id="ctl-comments-on"
                    {% if comments.get('show_overlay', False) %}checked{% endif %}>
-            <span>Show platform-style reactions rail</span>
+            <span>Mostrar barra de reacciones estilo app</span>
           </label>
-          <label class="nc-label">Visual likes count <small>(decorative only)</small>
+          <label class="nc-label">Número de likes visible <small>(solo decorativo)</small>
             <input class="nc-input"
                    type="number"
                    name="comments_fake_likes"
@@ -4194,13 +4194,13 @@
                 data-verdict-status="{{ publishability.status if publishability is defined else 'publish_ready' }}"
                 data-form-id="overlay-form">
           <i class="ti ti-circle-check" aria-hidden="true"></i>
-          <span>Approve &amp; continue</span>
+          <span>Aprobar y seguir</span>
         </button>
         <button type="submit"
                 formaction="/dashboard/clips/{{ clip.id }}/overlay"
                 class="nc-btn nc-btn--full">
           <i class="ti ti-device-floppy" aria-hidden="true"></i>
-          <span>Save draft</span>
+          <span>Guardar borrador</span>
         </button>
         {# Slice F.7-H — one-click reject. Lives in its OWN form
            (`formaction` would inherit the outer form's many caption /
@@ -4213,7 +4213,7 @@
                 class="nc-btn nc-btn--danger nc-btn--full"
                 style="margin-top: 8px;">
           <i class="ti ti-x" aria-hidden="true"></i>
-          <span>Reject &amp; close</span>
+          <span>Descartar y cerrar</span>
         </button>
       </div>
 
@@ -4229,66 +4229,66 @@
 <details class="nc-advanced-analysis">
   <summary class="nc-advanced-analysis__summary">
     <i class="ti ti-zoom-question" aria-hidden="true"></i>
-    <span>Why this clip?</span>
-    <small>· detection breakdown</small>
+    <span>¿Por qué este clip?</span>
+    <small>· el desglose de lo que detectamos</small>
   </summary>
   <div style="padding: 0;">
     <table class="nc-table">
       <tbody>
         <tr>
-          <td style="width: 40%;">Heuristic that fired</td>
+          <td style="width: 40%;">Qué lo activó</td>
           <td>
             <span class="nc-chip nc-chip--code">{{ breakdown.heuristic_reason }}</span>
             <span class="nc-mono">{{ "%.3f"|format(breakdown.heuristic_score) }}</span>
           </td>
         </tr>
         <tr>
-          <td>Motion score</td>
+          <td>Movimiento</td>
           <td>
             {% if breakdown.motion_score is not none %}
               <span class="nc-mono">{{ "%.3f"|format(breakdown.motion_score) }}</span>
-              <small>(avg motion energy across the clip)</small>
+              <small>(movimiento promedio en todo el clip)</small>
             {% else %}
-              <small><em>n/a — visual signals not analyzed</em></small>
+              <small><em>no aplica — no se analizó la imagen</em></small>
             {% endif %}
           </td>
         </tr>
         <tr>
-          <td>Face presence</td>
+          <td>Presencia de cara</td>
           <td>
             {% if breakdown.face_presence is not none %}
               <span class="nc-mono">{{ "%.0f%%"|format(breakdown.face_presence * 100) }}</span>
-              <small>of seconds with a detected face</small>
+              <small>de los segundos con una cara detectada</small>
             {% else %}
-              <small><em>n/a</em></small>
+              <small><em>no aplica</em></small>
             {% endif %}
           </td>
         </tr>
         <tr>
-          <td>Speaking intensity</td>
+          <td>Qué tanto hablas</td>
           <td>
             {% if breakdown.speaking_intensity is not none %}
               <span class="nc-mono">{{ "%.2f"|format(breakdown.speaking_intensity) }}</span>
-              <small>words/sec</small>
+              <small>palabras/seg</small>
             {% else %}
-              <small><em>n/a — no transcript</em></small>
+              <small><em>no aplica — sin transcripción</em></small>
             {% endif %}
           </td>
         </tr>
         <tr>
-          <td>Reaction confidence</td>
+          <td>Confianza en la reacción</td>
           <td>
             {% if breakdown.reaction_confidence is not none %}
               <span class="nc-mono">{{ "%.3f"|format(breakdown.reaction_confidence) }}</span>
-              <small>(vision-LLM rescore)</small>
+              <small>(revisado por la IA de imagen)</small>
             {% else %}
-              <small><em>not rescored — heuristic ranking stands</em></small>
+              <small><em>no se revisó — queda el orden base</em></small>
             {% endif %}
           </td>
         </tr>
         {% if breakdown.rescore_delta is not none %}
         <tr>
-          <td>Rescore delta</td>
+          <td>Cambio tras revisar</td>
           <td>
             <span class="nc-chip nc-chip--{% if breakdown.rescore_delta >= 0 %}success{% else %}danger{% endif %}">
               <span class="nc-mono">{{ "%+.3f"|format(breakdown.rescore_delta) }}</span>
@@ -4298,7 +4298,7 @@
         {% endif %}
         {% if breakdown.rescore_reason %}
         <tr>
-          <td>Rescore reason</td>
+          <td>Por qué cambió</td>
           <td><em>"{{ breakdown.rescore_reason }}"</em></td>
         </tr>
         {% endif %}
@@ -4312,26 +4312,26 @@
 <details class="nc-advanced-analysis">
   <summary class="nc-advanced-analysis__summary">
     <i class="ti ti-rocket" aria-hidden="true"></i>
-    <span>Publishing outcomes</span>
-    <small>· per-platform metrics</small>
+    <span>Resultados de publicación</span>
+    <small>· números por app</small>
   </summary>
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-chart-bar" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Engagement outcomes</span>
-    <small>(see <a href="/dashboard/calibration">calibration table</a>)</small>
+    <span class="nc-panel__title">Cómo le fue al clip</span>
+    <small>(mira la <a href="/dashboard/calibration">tabla de calibración</a>)</small>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table">
       <thead>
         <tr>
-          <th>Platform</th>
-          <th>External</th>
-          <th>Status</th>
-          <th class="nc-num">Views</th>
+          <th>App</th>
+          <th>Enlace</th>
+          <th>Estado</th>
+          <th class="nc-num">Vistas</th>
           <th class="nc-num">Likes</th>
-          <th class="nc-num">Comments</th>
-          <th>Last fetched</th>
+          <th class="nc-num">Comentarios</th>
+          <th>Última revisión</th>
         </tr>
       </thead>
       <tbody>
@@ -4354,7 +4354,7 @@
           <td class="nc-num nc-mono">{% if o.metric and o.metric.views is not none %}{{ "{:,}".format(o.metric.views) }}{% else %}—{% endif %}</td>
           <td class="nc-num nc-mono">{% if o.metric and o.metric.likes is not none %}{{ "{:,}".format(o.metric.likes) }}{% else %}—{% endif %}</td>
           <td class="nc-num nc-mono">{% if o.metric and o.metric.comments is not none %}{{ "{:,}".format(o.metric.comments) }}{% else %}—{% endif %}</td>
-          <td><small class="nc-mono nc-mono--muted">{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>not yet measured</em>{% endif %}</small></td>
+          <td><small class="nc-mono nc-mono--muted">{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>aún sin medir</em>{% endif %}</small></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -4956,7 +4956,7 @@
       icon.classList.toggle("ti-volume-off", vid.muted);
       icon.classList.toggle("ti-volume", !vid.muted);
       btn.classList.toggle("is-unmuted", !vid.muted);
-      btn.title = vid.muted ? "Sound (M)" : "Mute (M)";
+      btn.title = vid.muted ? "Sonido (M)" : "Silenciar (M)";
     }
     function toggleMute() {
       vid.muted = !vid.muted;
@@ -5047,7 +5047,7 @@
         var span = b.querySelector("span");
         if (span && !b.dataset.origLabel) {
           b.dataset.origLabel = span.textContent;
-          span.textContent = "Shipping…";
+          span.textContent = "Publicando…";
         }
       });
       try {
@@ -5198,8 +5198,8 @@
     var delta = scoreAfter - scoreBefore;
     var deltaTxt = (delta > 0 ? "+" : "") + delta;
     head.innerHTML =
-      '<span class="nc-fix-diff__title">✨ AI applied ' + fixes.length +
-        ' fix' + (fixes.length === 1 ? '' : 'es') + '</span>' +
+      '<span class="nc-fix-diff__title">✨ La IA hizo ' + fixes.length +
+        (fixes.length === 1 ? ' arreglo' : ' arreglos') + '</span>' +
       '<span class="nc-fix-diff__delta nc-fix-diff__delta--' +
         (delta > 0 ? 'up' : (delta < 0 ? 'down' : 'flat')) + '">' +
         scoreBefore + '% → ' + scoreAfter + '%  (' + deltaTxt + ')' +
@@ -5208,7 +5208,7 @@
     if (autoPromoted) {
       var promo = document.createElement("div");
       promo.className = "nc-fix-diff__promote";
-      promo.textContent = "✓ Status auto-promoted to Ready for review";
+      promo.textContent = "✓ Ya quedó listo para revisar";
       host.appendChild(promo);
     }
     // Each fix renders as a one-liner with the human "why".
@@ -5263,7 +5263,7 @@
       if (!clipId) return;
       applyBtn.disabled = true;
       if (applyFb) {
-        applyFb.textContent = "Applying fixes…";
+        applyFb.textContent = "Aplicando los arreglos…";
         applyFb.className = "nc-verdict__feedback";
       }
       fetch("/dashboard/clips/" + clipId + "/apply-ai-fixes", {
@@ -5280,7 +5280,7 @@
           var n = (data && data.fix_count) || 0;
           if (n === 0) {
             if (applyFb) {
-              applyFb.textContent = "Nothing to fix — the clip is already in good shape";
+              applyFb.textContent = "No hay nada que arreglar — el clip ya está bien";
               applyFb.className = "nc-verdict__feedback nc-verdict__feedback--ok";
             }
             applyBtn.disabled = false;
@@ -5337,7 +5337,7 @@
         })
         .catch(function (err) {
           if (applyFb) {
-            applyFb.textContent = "Couldn't apply fixes (" + err.message + ")";
+            applyFb.textContent = "No se pudieron aplicar los arreglos (" + err.message + ")";
             applyFb.className = "nc-verdict__feedback nc-verdict__feedback--err";
           }
           applyBtn.disabled = false;
@@ -5729,7 +5729,7 @@
       nameText = name ? name.textContent.trim() : targetId;
       emojiText = emojiEl ? emojiEl.textContent.trim() : "";
       if (blurb) {
-        blurb.innerHTML = "Optimized for <strong>" + nameText + "</strong> · " + b;
+        blurb.innerHTML = "Listo para <strong>" + nameText + "</strong> · " + b;
       }
     }
 
@@ -5741,7 +5741,7 @@
       var bEmoji = badge.querySelector(".nc-verdict__target-emoji");
       var bText  = badge.querySelector("span:last-child");
       if (bEmoji && emojiText) bEmoji.textContent = emojiText;
-      if (bText) bText.textContent = "Optimized for " + nameText;
+      if (bText) bText.textContent = "Listo para " + nameText;
     }
 
     // 7. Slice L.2 — re-render the platform chrome so the preview
@@ -5784,7 +5784,7 @@
       var b = sel.getAttribute("data-platform-blurb") || "";
       var name = sel.querySelector(".nc-platform-chip__name");
       var nameText = name ? name.textContent.trim() : "";
-      blurb.innerHTML = "Optimized for <strong>" + nameText + "</strong> · " + b;
+      blurb.innerHTML = "Listo para <strong>" + nameText + "</strong> · " + b;
     }
     // First-open auto-apply. _has_clip_overlay is the template flag
     // set to true iff the clip already has an overlay_config in the
@@ -5890,7 +5890,7 @@
         playBtnIcon.classList.toggle("ti-player-play", !playing);
         playBtnIcon.classList.toggle("ti-player-pause", playing);
       }
-      if (playBtnLabel) playBtnLabel.textContent = playing ? "Pause" : "Play preview";
+      if (playBtnLabel) playBtnLabel.textContent = playing ? "Pausar" : "Reproducir";
     }
   }
 
@@ -5983,7 +5983,7 @@
 
   function renderWaveformBars(peaks) {
     if (!peaks || peaks.length === 0) {
-      waveformLoading.textContent = "no waveform";
+      waveformLoading.textContent = "sin audio";
       return;
     }
     waveformLoading.style.display = "none";
@@ -6114,11 +6114,11 @@
     var win = diag.clip_window_s || [];
     var span = diag.transcript_span_s || null;
     if (reason === "no_transcript")
-      return "no transcript yet — run the pipeline on this stream";
+      return "todavía no hay transcripción — procesa este stream";
     if (reason === "transcript_empty")
-      return "whisper found no speech in this stream — check the audio extract or re-run on GPU";
+      return "no se detectó voz en este stream — revisa el audio o vuelve a procesarlo";
     if (reason === "no_word_timestamps")
-      return "transcript is pre-F.7-F (no word timings) — re-run the pipeline to refresh";
+      return "la transcripción es vieja (sin tiempos por palabra) — vuelve a procesar el stream";
     // window_outside_transcript: the clip is a VISUAL moment (scene change /
     // on-screen action) in a stretch with no speech — common for live
     // streams with a silent intro/outro. The clip is perfectly valid; it
@@ -6264,7 +6264,7 @@
     if (!markers || markers.length === 0) {
       var empty = document.createElement("div");
       empty.className = "nc-timeline__empty";
-      empty.textContent = "No standout moments detected — clip has no transcript / chat / visual signals to mine.";
+      empty.textContent = "No encontramos momentos destacados — este clip no tiene transcripción, chat ni señales visuales para revisar.";
       tlLegend.appendChild(empty);
       return;
     }
@@ -6279,7 +6279,7 @@
       dot.className = "nc-timeline__marker nc-timeline__marker--" + m.kind;
       dot.style.left = pct + "%";
       dot.title = fmtMarkerTs(m.ts) + "  ·  " + m.label;
-      dot.setAttribute("aria-label", m.label + " at " + fmtMarkerTs(m.ts));
+      dot.setAttribute("aria-label", m.label + " en " + fmtMarkerTs(m.ts));
       dot.addEventListener("click", function () {
         seekToFrac(m.ts / dur);
       });
@@ -6288,7 +6288,7 @@
       // Legend row.
       var row = document.createElement("div");
       row.className = "nc-timeline__legend-row";
-      row.title = "Click to seek";
+      row.title = "Toca para ir a ese momento";
       row.addEventListener("click", function () { seekToFrac(m.ts / dur); });
       var ts = document.createElement("span");
       ts.className = "nc-timeline__legend-ts";
@@ -6322,7 +6322,7 @@
     hookResults.innerHTML = "";
     var d = document.createElement("div");
     d.className = "nc-hook-gen__error";
-    d.textContent = "Generation failed: " + msg;
+    d.textContent = "No se pudieron generar: " + msg;
     hookResults.appendChild(d);
   }
 
@@ -6331,7 +6331,7 @@
     if (!hooks.length) {
       var hint = document.createElement("div");
       hint.className = "nc-hook-gen__hint";
-      hint.textContent = "No hooks returned — try a different tone.";
+      hint.textContent = "No salió ningún hook — prueba con otro tono.";
       hookResults.appendChild(hint);
       return;
     }
@@ -6339,7 +6339,7 @@
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "nc-hook-chip";
-      btn.title = "Click to use as hook title";
+      btn.title = "Toca para usarlo como título del hook";
       var icon = document.createElement("i");
       icon.className = "ti ti-arrow-up-right nc-hook-chip__icon";
       icon.setAttribute("aria-hidden", "true");
@@ -6368,7 +6368,7 @@
     hookResults.innerHTML = "";
     var hint = document.createElement("div");
     hint.className = "nc-hook-gen__hint";
-    hint.textContent = "Generating " + hookTone.options[hookTone.selectedIndex].text + "…";
+    hint.textContent = "Generando con tono " + hookTone.options[hookTone.selectedIndex].text + "…";
     hookResults.appendChild(hint);
 
     var form = new FormData();

@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}{% if kit %}{{ kit.name }} - Brand kit{% else %}New brand kit{% endif %} - NexoClip{% endblock %}
+{% block title %}{% if kit %}{{ kit.name }} - Tu estilo{% else %}Nuevo estilo{% endif %} - NexoClip{% endblock %}
 {% block content %}
 
 <div class="nc-page-header">
   <div>
-    <h2>{% if kit %}Edit brand kit{% else %}New brand kit{% endif %}</h2>
+    <h2>{% if kit %}Edita tu estilo{% else %}Nuevo estilo{% endif %}</h2>
     <small>
-      {% if kit %}<span class="nc-mono">{{ kit.id }}</span>{% else %}Define colors, fonts, handles, and trigger overrides for one streamer.{% endif %}
+      {% if kit %}<span class="nc-mono">{{ kit.id }}</span>{% else %}Define los colores, la tipografía, tus cuentas y las frases que disparan clips para un streamer.{% endif %}
     </small>
   </div>
   <div class="nc-page-summary">
     <a href="/dashboard/brand-kits" class="nc-btn nc-btn--sm">
       <i class="ti ti-arrow-left" aria-hidden="true"></i>
-      <span>All kits</span>
+      <span>Todos tus estilos</span>
     </a>
   </div>
 </div>
@@ -24,35 +24,35 @@
     <div class="nc-panel">
       <div class="nc-panel__header">
         <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-        <span class="nc-panel__title">Identity</span>
+        <span class="nc-panel__title">Tu identidad</span>
       </div>
       <div class="nc-panel__body">
-        <label class="nc-label">Name
+        <label class="nc-label">Nombre
           <input class="nc-input" type="text" name="name" required
                  value="{{ kit.name if kit else '' }}"
-                 placeholder="e.g. AARA, Aldo Villanueva">
+                 placeholder="ej. AARA, Aldo Villanueva">
         </label>
         <div class="nc-grid-3">
-          <label class="nc-label">Primary
+          <label class="nc-label">Color principal
             <input class="nc-input" type="color" name="primary_color"
                    value="{{ kit.primary_color if kit else '#FF3366' }}">
           </label>
-          <label class="nc-label">Accent
+          <label class="nc-label">Color de acento
             <input class="nc-input" type="color" name="accent_color"
                    value="{{ kit.accent_color if kit else '#FFD700' }}">
           </label>
-          <label class="nc-label">Text
+          <label class="nc-label">Color del texto
             <input class="nc-input" type="color" name="text_color"
                    value="{{ kit.text_color if kit else '#FFFFFF' }}">
           </label>
         </div>
         <div class="nc-grid-2">
-          <label class="nc-label">Font family
+          <label class="nc-label">Tipografía
             <input class="nc-input" type="text" name="font_family"
                    value="{{ kit.font_family if kit else 'Inter' }}"
                    placeholder="Inter / Roboto / Montserrat">
           </label>
-          <label class="nc-label">Font weight
+          <label class="nc-label">Grosor de la letra
             <select class="nc-select" name="font_weight">
               {% for w in [400, 500, 600, 700, 800, 900] %}
               <option value="{{ w }}" {% if kit and kit.font_weight == w %}selected{% elif not kit and w == 800 %}selected{% endif %}>{{ w }}</option>
@@ -60,7 +60,7 @@
             </select>
           </label>
         </div>
-        <label class="nc-label">Default layout
+        <label class="nc-label">Diseño por defecto
           <select class="nc-select" name="default_layout">
             {% for layout in ['pip', 'split_stack', 'blurred_bg'] %}
             <option value="{{ layout }}" {% if kit and kit.default_layout == layout %}selected{% elif not kit and layout == 'pip' %}selected{% endif %}>{{ layout }}</option>
@@ -70,7 +70,7 @@
         {% if not kit %}
         <label class="nc-checkbox">
           <input type="checkbox" name="is_default" value="1">
-          <span>Make this the tenant default</span>
+          <span>Que este sea tu estilo por defecto</span>
         </label>
         {% endif %}
       </div>
@@ -79,13 +79,13 @@
     <div class="nc-panel">
       <div class="nc-panel__header">
         <i class="ti ti-eye" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-        <span class="nc-panel__title">Live preview</span>
-        <small>— updates on save</small>
+        <span class="nc-panel__title">Vista previa</span>
+        <small>— se actualiza al guardar</small>
       </div>
       <div class="nc-panel__body">
         <div style="background: {{ kit.primary_color if kit else '#FF3366' }}; color: {{ kit.text_color if kit else '#FFFFFF' }}; font-family: {{ kit.font_family if kit else 'Inter' }}, sans-serif; font-weight: {{ kit.font_weight if kit else 800 }}; padding: 1.5rem; border-radius: var(--nc-radius); min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
           <div style="font-size: 0.8rem; opacity: 0.85;">@yourhandle</div>
-          <div style="font-size: 1.6rem; text-align: center;">EPIC PLAY</div>
+          <div style="font-size: 1.6rem; text-align: center;">JUGADA ÉPICA</div>
           <div style="font-size: 0.7rem; text-align: right; color: {{ kit.accent_color if kit else '#FFD700' }};">▲ NexoClip</div>
         </div>
       </div>
@@ -96,7 +96,7 @@
   <div class="nc-panel">
     <div class="nc-panel__header">
       <i class="ti ti-at" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Social handles</span>
+      <span class="nc-panel__title">Tus cuentas</span>
     </div>
     <div class="nc-panel__body">
       <div class="nc-grid-2">
@@ -114,7 +114,7 @@
         </label>
         <label class="nc-label">Kick
           <input class="nc-input nc-input--mono" type="text" name="handle_kick"
-                 value="{{ kit.handle_kick if kit else '' }}" placeholder="username">
+                 value="{{ kit.handle_kick if kit else '' }}" placeholder="tu_usuario">
         </label>
       </div>
     </div>
@@ -123,11 +123,11 @@
   <div class="nc-panel">
     <div class="nc-panel__header">
       <i class="ti ti-typography" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Captions</span>
-      <small>— burned into every clip rendered with this kit</small>
+      <span class="nc-panel__title">Subtítulos</span>
+      <small>— van pegados en cada clip que hagas con este estilo</small>
     </div>
     <div class="nc-panel__body">
-      <label class="nc-label">Caption preset
+      <label class="nc-label">Estilo de subtítulos
         <select class="nc-select" name="caption_preset">
           {% for choice_id, choice_label in caption_preset_choices %}
           <option value="{{ choice_id }}" {% if caption_style.preset == choice_id %}selected{% endif %}>{{ choice_label }}</option>
@@ -135,11 +135,11 @@
         </select>
       </label>
       <small>
-        <strong>Current preset:</strong>
+        <strong>Estilo actual:</strong>
         {{ caption_style.font_family }} {{ caption_style.font_weight }},
         {{ caption_style.font_size_px }}px,
         {{ caption_style.position }}, animation: {{ caption_style.animation }}.
-        {% if caption_style.censor_swears %}Swear-words censored.{% endif %}
+        {% if caption_style.censor_swears %}Groserías censuradas.{% endif %}
       </small>
     </div>
   </div>
@@ -147,8 +147,8 @@
   <div class="nc-panel">
     <div class="nc-panel__header">
       <i class="ti ti-message-2-code" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Custom trigger phrases</span>
-      <small>— added on top of the tenant base list</small>
+      <span class="nc-panel__title">Tus frases para cortar clips</span>
+      <small>— se suman a la lista base de tu cuenta</small>
     </div>
     <div class="nc-panel__body">
 
@@ -157,64 +157,64 @@
          "retroactive" from the field labels. #}
       <div class="nc-trigger-help">
         <div class="nc-trigger-help__intro">
-          NexoClip listens to your stream's audio. When the transcript matches
-          one of these phrases, a clip is extracted around that timestamp:
+          NexoClip escucha el audio de tu stream. Cuando lo que dices coincide
+          con una de estas frases, saca un clip alrededor de ese momento:
         </div>
         <div class="nc-grid-2 nc-trigger-help__cards">
           <div class="nc-trigger-card">
             <div class="nc-trigger-card__head">
               <i class="ti ti-arrow-right" aria-hidden="true"></i>
-              <strong>Forward — for things you anticipate</strong>
+              <strong>Hacia adelante — para lo que ves venir</strong>
             </div>
             <div class="nc-trigger-card__example">
-              <span class="nc-mono">"watch this — <em>clipea esto</em>"</span>
+              <span class="nc-mono">"mira esto — <em>clipea esto</em>"</span>
               <span class="nc-trigger-card__arrow">→</span>
-              <span class="nc-mono">clip = next <strong>30s</strong></span>
+              <span class="nc-mono">clip = los siguientes <strong>30s</strong></span>
             </div>
             <div class="nc-trigger-card__tape">
-              <span class="nc-trigger-card__tape-marker">phrase</span>
+              <span class="nc-trigger-card__tape-marker">frase</span>
               <span class="nc-trigger-card__tape-clip nc-trigger-card__tape-clip--right">+30s</span>
             </div>
-            <small>Use for moments you can predict before they happen.</small>
+            <small>Úsalo para momentos que puedes ver venir antes de que pasen.</small>
           </div>
           <div class="nc-trigger-card">
             <div class="nc-trigger-card__head">
               <i class="ti ti-arrow-left" aria-hidden="true"></i>
-              <strong>Retroactive — for moments that just ended</strong>
+              <strong>Hacia atrás — para lo que acaba de pasar</strong>
             </div>
             <div class="nc-trigger-card__example">
               <span class="nc-mono">"<em>clipeaste eso</em> jajaja"</span>
               <span class="nc-trigger-card__arrow">→</span>
-              <span class="nc-mono">clip = previous <strong>60s</strong></span>
+              <span class="nc-mono">clip = los <strong>60s</strong> de antes</span>
             </div>
             <div class="nc-trigger-card__tape">
               <span class="nc-trigger-card__tape-clip nc-trigger-card__tape-clip--left">−60s</span>
-              <span class="nc-trigger-card__tape-marker">phrase</span>
+              <span class="nc-trigger-card__tape-marker">frase</span>
             </div>
-            <small>The natural one — the funny moment ends, then you say it.</small>
+            <small>La más natural — el momento chistoso termina y luego lo dices.</small>
           </div>
         </div>
         <div class="nc-trigger-help__note">
           <i class="ti ti-info-circle" aria-hidden="true"></i>
-          Phrases are matched <strong>case-insensitively</strong> with fuzzy
-          tolerance (Whisper transcription is imperfect). Add as many variants
-          as you want — one per line. They're <em>added on top</em> of the
-          tenant-wide defaults (your tenant already has the spec defaults wired
-          in: <span class="nc-mono">clipea esto</span>,
-          <span class="nc-mono">clipeaste eso</span>, and the EN equivalents).
+          Las frases se reconocen <strong>sin importar mayúsculas</strong> y con
+          cierta tolerancia (la transcripción no es perfecta). Agrega todas las
+          variantes que quieras — una por línea. Se <em>suman</em> a las que ya
+          trae tu cuenta por defecto (ya tienes listas:
+          <span class="nc-mono">clipea esto</span>,
+          <span class="nc-mono">clipeaste eso</span> y sus equivalentes en inglés).
         </div>
       </div>
 
       <div class="nc-grid-2">
-        <label class="nc-label">Forward phrases
-          <small>extends 30s <strong>FORWARD</strong> from the timestamp</small>
+        <label class="nc-label">Frases hacia adelante
+          <small>toma 30s <strong>HACIA ADELANTE</strong> desde el momento</small>
           <textarea class="nc-textarea" name="forward_phrases" rows="6"
-                    placeholder="córtalo&#10;saca eso&#10;clip this">{{ kit.custom_trigger_phrases.forward|join('\n') if kit else '' }}</textarea>
+                    placeholder="córtalo&#10;saca eso&#10;guarda esto">{{ kit.custom_trigger_phrases.forward|join('\n') if kit else '' }}</textarea>
         </label>
-        <label class="nc-label">Retroactive phrases
-          <small>extends 60s <strong>BACKWARD</strong> from the timestamp</small>
+        <label class="nc-label">Frases hacia atrás
+          <small>toma 60s <strong>HACIA ATRÁS</strong> desde el momento</small>
           <textarea class="nc-textarea" name="retroactive_phrases" rows="6"
-                    placeholder="lo clipeaste&#10;monchi eso&#10;you clipped that">{{ kit.custom_trigger_phrases.retroactive|join('\n') if kit else '' }}</textarea>
+                    placeholder="lo clipeaste&#10;monchi eso&#10;eso quedó épico">{{ kit.custom_trigger_phrases.retroactive|join('\n') if kit else '' }}</textarea>
         </label>
       </div>
     </div>
@@ -227,34 +227,34 @@
   <div class="nc-panel">
     <div class="nc-panel__header">
       <i class="ti ti-shield-check" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-      <span class="nc-panel__title">Safe publishing</span>
-      <small>— anti-shadowban posting windows</small>
+      <span class="nc-panel__title">Publicación segura</span>
+      <small>— horarios que evitan que te castiguen el alcance</small>
     </div>
     <div class="nc-panel__body">
       <label class="nc-checkbox">
         <input type="checkbox" name="safe_schedule_enabled" value="1"
                {% if kit and kit.safe_schedule_enabled %}checked{% endif %}>
-        <span>Auto-schedule into safe windows</span>
+        <span>Programar solo en horarios seguros</span>
       </label>
       <small style="display: block; margin: 4px 0 10px;">
-        When on, auto-publish spaces posts out to avoid platform spam
-        heuristics and the worker defers any post that lands in a blocked
-        window. When off, the safe trap only surfaces an advisory risk
-        score on the publish screen.
+        Cuando está activo, tus clips se publican espaciados para que las
+        plataformas no los marquen como spam, y se posponen los que caen en un
+        horario bloqueado. Cuando está apagado, solo te mostramos un aviso de
+        riesgo en la pantalla de publicar.
       </small>
       <div class="nc-grid-2">
-        <label class="nc-label">Content timezone <small>(IANA, for quiet hours)</small>
+        <label class="nc-label">Tu zona horaria <small>(formato IANA, para las horas de descanso)</small>
           <input class="nc-input nc-input--mono" type="text" name="content_timezone"
                  value="{{ kit.content_timezone if kit else 'UTC' }}"
                  placeholder="America/Mexico_City">
         </label>
       </div>
-      <label class="nc-label">Per-platform overrides <small>(advanced — JSON; blank = built-in defaults)</small>
+      <label class="nc-label">Ajustes por plataforma <small>(avanzado — JSON; vacío = usamos lo recomendado)</small>
         <textarea class="nc-input nc-input--mono" name="safety_policy_json" rows="4"
                   placeholder='{"tiktok": {"min_spacing_min": 180, "daily_cap": 3}}'>{{ kit.safety_policy|tojson if kit and kit.safety_policy else '' }}</textarea>
       </label>
       <small style="display: block; margin-top: 4px;">
-        Fields: <span class="nc-mono">min_spacing_min</span>,
+        Campos: <span class="nc-mono">min_spacing_min</span>,
         <span class="nc-mono">daily_cap</span>,
         <span class="nc-mono">quiet_hours_start</span>,
         <span class="nc-mono">quiet_hours_end</span>,
@@ -274,16 +274,16 @@
   <div class="nc-panel">
     <div class="nc-panel__header">
       <i class="ti ti-license" aria-hidden="true" style="color: var(--nc-lime, #c8ff5c);"></i>
-      <span class="nc-panel__title">NexoClip credit</span>
-      <small>— "nexoclip.com" mark in the bottom-right of exports</small>
+      <span class="nc-panel__title">Marca NexoClip</span>
+      <small>— el sello "nexoclip.com" abajo a la derecha de tus clips</small>
     </div>
     <div class="nc-panel__body">
       {% if _tier == 'free' %}
       <div class="nc-empty" style="margin: 0; padding: 12px 14px; text-align: left;">
-        <strong style="color: var(--nc-lime, #c8ff5c);">Free plan</strong>
+        <strong style="color: var(--nc-lime, #c8ff5c);">Plan gratis</strong>
         <span style="color: var(--nc-text-muted);">
-          — the <code>nexoclip.com</code> credit stays on every export.
-          Upgrade to a Pro plan to remove it.
+          — el sello <code>nexoclip.com</code> se queda en todos tus clips.
+          Pásate a un plan Pro para quitarlo.
         </span>
       </div>
       {# Hidden input so the form submission still carries the value
@@ -293,9 +293,9 @@
       <label class="nc-checkbox">
         <input type="checkbox" name="show_nexoclip_credit" value="1"
                {% if not kit or kit.show_nexoclip_credit %}checked{% endif %}>
-        <span>Show "nexoclip.com" credit on exports
+        <span>Mostrar el sello "nexoclip.com" en tus clips
           <small style="display:block;color:var(--nc-text-muted);">
-            On by default — a small thank-you for the tool. Disable for a fully clean export.
+            Activado por defecto — un pequeño gracias por usar la herramienta. Apágalo para un clip totalmente limpio.
           </small>
         </span>
       </label>
@@ -306,14 +306,14 @@
   <div class="nc-row" style="margin-top: 12px;">
     <button type="submit" class="nc-btn nc-btn--primary">
       <i class="ti ti-device-floppy" aria-hidden="true"></i>
-      <span>{% if kit %}Save changes{% else %}Create brand kit{% endif %}</span>
+      <span>{% if kit %}Guardar cambios{% else %}Crear estilo{% endif %}</span>
     </button>
     {% if kit and not kit.is_default %}
     <button type="submit"
             formaction="/dashboard/brand-kits/{{ kit.id }}/default"
             class="nc-btn">
       <i class="ti ti-star" aria-hidden="true"></i>
-      <span>Make tenant default</span>
+      <span>Hacer mi estilo por defecto</span>
     </button>
     {% endif %}
     <div class="nc-spacer"></div>
@@ -321,9 +321,9 @@
     <button type="submit"
             formaction="/dashboard/brand-kits/{{ kit.id }}/delete"
             class="nc-btn nc-btn--danger"
-            onclick="return confirm('Delete this brand kit? Speakers using it will fall back to tenant default.');">
+            onclick="return confirm('¿Borrar este estilo? Los streamers que lo usan pasarán a tu estilo por defecto.');">
       <i class="ti ti-trash" aria-hidden="true"></i>
-      <span>Delete</span>
+      <span>Borrar</span>
     </button>
     {% endif %}
   </div>
@@ -334,36 +334,36 @@
   <div class="nc-panel__header">
     <i class="ti ti-sparkles" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
     <span class="nc-panel__title">Logo</span>
-    <small>— AI-generated SVG. Re-run for a different variant.</small>
+    <small>— hecho con IA. Vuelve a generarlo para otra versión.</small>
   </div>
   <div class="nc-panel__body">
     <div class="nc-grid-2">
       <div>
         {% if kit.logo_url %}
-        <img src="{{ kit.logo_url }}" alt="{{ kit.name }} logo"
+        <img src="{{ kit.logo_url }}" alt="logo de {{ kit.name }}"
              style="width: 200px; height: 200px; background: var(--nc-bg-raised); padding: 0.5rem; border: var(--nc-hairline); border-radius: var(--nc-radius);">
         <small style="display: block; margin-top: 6px;">
-          {% if kit.ai_generated %}AI-generated{% if kit.ai_provider %} via {{ kit.ai_provider }}{% endif %}.{% else %}Manually uploaded.{% endif %}
+          {% if kit.ai_generated %}Hecho con IA{% if kit.ai_provider %} con {{ kit.ai_provider }}{% endif %}.{% else %}Subido a mano.{% endif %}
         </small>
         {% else %}
         <div style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--nc-blue-dim); border-radius: var(--nc-radius); color: var(--nc-blue-dim); font-size: 32px;">
           <i class="ti ti-photo-off" aria-hidden="true"></i>
         </div>
-        <small style="display: block; margin-top: 6px;">No logo yet.</small>
+        <small style="display: block; margin-top: 6px;">Todavía no tienes logo.</small>
         {% endif %}
       </div>
       <form action="/dashboard/brand-kits/{{ kit.id }}/generate-logo" method="post">
-        <label class="nc-label">Style hint
+        <label class="nc-label">Cómo lo quieres
           <input class="nc-input" type="text" name="style_hint"
-                 value="{{ kit.ai_prompt if kit.ai_prompt else 'Minimal mark / monogram' }}"
-                 placeholder="Minimal mark / monogram">
+                 value="{{ kit.ai_prompt if kit.ai_prompt else 'Marca minimalista / monograma' }}"
+                 placeholder="Marca minimalista / monograma">
         </label>
         <small style="display: block; margin-bottom: 12px;">
-          Uses the brand's primary + accent colors. Cost: one Anthropic call.
+          Usa tus colores principal y de acento. Costo: una llamada a Anthropic.
         </small>
         <button type="submit" class="nc-btn">
           <i class="ti ti-wand" aria-hidden="true"></i>
-          <span>{% if kit.logo_url %}Regenerate logo{% else %}Generate logo{% endif %}</span>
+          <span>{% if kit.logo_url %}Generar otro logo{% else %}Generar logo{% endif %}</span>
         </button>
       </form>
     </div>

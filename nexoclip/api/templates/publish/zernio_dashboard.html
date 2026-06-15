@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Publish Center - NexoClip{% endblock %}
+{% block title %}Centro de publicación - NexoClip{% endblock %}
 {% block content %}
 
 <style>
@@ -170,9 +170,9 @@
    style="border-color: var(--nc-green); margin-bottom: 12px; display: block;">
   <div class="nc-panel__body" style="padding: 12px 16px; display:flex; align-items:center; gap:10px;">
     <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    <span>Queued: <span class="nc-mono">{{ request.query_params.get('queued') }}</span></span>
+    <span>En cola: <span class="nc-mono">{{ request.query_params.get('queued') }}</span></span>
     <span class="nc-pc-queued-banner__cta">
-      View status <i class="ti ti-arrow-right" aria-hidden="true"></i>
+      Ver estado <i class="ti ti-arrow-right" aria-hidden="true"></i>
     </span>
   </div>
 </a>
@@ -191,7 +191,7 @@
 <div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-green);"></i>
-    Linked Zernio profile <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
+    Vinculaste tu perfil de Zernio <span class="nc-mono">{{ request.query_params.get('claimed') }}</span>.
   </div>
 </div>
 {% endif %}
@@ -200,22 +200,22 @@
 <div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-unlink" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    Cleared. Connect a platform to publish.
+    Listo, lo desvinculaste. Conecta una plataforma para publicar.
   </div>
 </div>
 {% endif %}
 
 {# ----- Not configured short-circuit ----- #}
 {% if not configured %}
-<div class="nc-page-header"><div><h2>Publish Center</h2></div></div>
+<div class="nc-page-header"><div><h2>Centro de publicación</h2></div></div>
 <div class="nc-panel">
   <div class="nc-panel__body">
     <div class="nc-empty">
       <div class="nc-empty__icon"><i class="ti ti-plug-off" aria-hidden="true"></i></div>
-      <div class="nc-empty__title">Zernio not configured</div>
+      <div class="nc-empty__title">Zernio no está configurado</div>
       <p class="nc-empty__body">
-        Set <code class="nc-mono">NEXOCLIP_ZERNIO_API_KEY</code>
-        in the deployment environment and redeploy.
+        Define <code class="nc-mono">NEXOCLIP_ZERNIO_API_KEY</code>
+        en el entorno y vuelve a desplegar.
       </p>
     </div>
   </div>
@@ -225,13 +225,13 @@
 
 <div class="nc-page-header">
   <div>
-    <h2>Publish Center</h2>
+    <h2>Centro de publicación</h2>
     <small>
       {% if profile_id %}
-      Profile <strong>{{ profile_name or profile_id }}</strong> —
-      ship clips from your library to every connected platform.
+      Perfil <strong>{{ profile_name or profile_id }}</strong> —
+      publica clips de tu biblioteca en todas tus redes conectadas.
       {% else %}
-      Create a profile to group your social accounts, then publish.
+      Crea un perfil para juntar tus redes y empieza a publicar.
       {% endif %}
     </small>
   </div>
@@ -240,7 +240,7 @@
      class="nc-btn nc-btn--primary js-open-published"
      style="text-decoration:none; white-space:nowrap;">
     <i class="ti ti-circle-check" aria-hidden="true"></i>
-    <span>View published{% if history %} ({{ history|length }}){% endif %}</span>
+    <span>Ver publicados{% if history %} ({{ history|length }}){% endif %}</span>
   </a>
   {% endif %}
 </div>
@@ -248,24 +248,24 @@
 {% if profile_id %}
 <div class="nc-pc-stats">
   <div class="nc-pc-stat nc-pc-stat--ok js-open-published"
-       style="cursor:pointer;" title="View your published posts"
+       style="cursor:pointer;" title="Ver tus publicaciones"
        role="button" tabindex="0">
     <div class="nc-pc-stat__n">{{ stats.published }}</div>
-    <div class="nc-pc-stat__label">Published</div>
+    <div class="nc-pc-stat__label">Publicados</div>
   </div>
   <div class="nc-pc-stat nc-pc-stat--fail js-open-failed"
        style="cursor:pointer;" title="Ver y reintentar publicaciones fallidas"
        role="button" tabindex="0">
     <div class="nc-pc-stat__n">{{ stats.failed }}</div>
-    <div class="nc-pc-stat__label">Failed</div>
+    <div class="nc-pc-stat__label">Fallidos</div>
   </div>
   <div class="nc-pc-stat nc-pc-stat--sched">
     <div class="nc-pc-stat__n">{{ stats.scheduled }}</div>
-    <div class="nc-pc-stat__label">Scheduled</div>
+    <div class="nc-pc-stat__label">Programados</div>
   </div>
   <div class="nc-pc-stat nc-pc-stat--total">
     <div class="nc-pc-stat__n">{{ stats.total }}</div>
-    <div class="nc-pc-stat__label">Last 25</div>
+    <div class="nc-pc-stat__label">Últimos 25</div>
   </div>
 </div>
 {% endif %}
@@ -288,8 +288,8 @@
 <div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
     <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-orange);"></i>
-    Could not list connected accounts from Zernio — chips below may be
-    stale. The publish form still works.
+    No pudimos leer tus cuentas conectadas desde Zernio — las etiquetas de
+    abajo pueden estar desactualizadas. El formulario para publicar sigue funcionando.
   </div>
 </div>
 {% endif %}
@@ -302,28 +302,28 @@
   <div class="nc-panel__body">
     <div style="display:flex; align-items:center; gap:10px; margin-bottom: 10px;">
       <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-green);"></i>
-      <strong>Create your publishing profile</strong>
+      <strong>Crea tu perfil de publicación</strong>
     </div>
     <p class="nc-text--muted" style="margin: 0 0 12px 0; font-size: 13px;">
-      A profile groups the social accounts you publish from (e.g.
-      “Personal brand” or “My agency”). Create one to get started —
-      you’ll connect TikTok / Instagram / YouTube etc. to it next.
+      Un perfil junta las redes desde las que publicas (por ejemplo
+      “Mi marca” o “Mi agencia”). Crea uno para empezar — luego le
+      conectas TikTok, Instagram, YouTube y las demás.
     </p>
     <form id="zn-create-profile-form" style="display:flex; flex-direction:column; gap:8px; max-width: 520px;">
       <label class="nc-label" style="margin:0;">
-        Profile name
+        Nombre del perfil
         <input class="nc-input" id="zn-profile-name" name="name" required
-               maxlength="80" placeholder="My brand" autocomplete="off">
+               maxlength="80" placeholder="Mi marca" autocomplete="off">
       </label>
       <label class="nc-label" style="margin:0;">
-        Description <span class="nc-text--muted">(optional)</span>
+        Descripción <span class="nc-text--muted">(opcional)</span>
         <input class="nc-input" id="zn-profile-desc" name="description"
-               maxlength="200" placeholder="What this profile is for">
+               maxlength="200" placeholder="Para qué es este perfil">
       </label>
       <div style="display:flex; align-items:center; gap:10px; margin-top: 4px;">
         <button type="submit" class="nc-btn nc-btn--primary" id="zn-create-profile-btn">
           <i class="ti ti-plus" aria-hidden="true"></i>
-          <span>Create profile</span>
+          <span>Crear perfil</span>
         </button>
         <span id="zn-create-profile-msg" class="nc-text--muted" style="font-size:12px;"></span>
       </div>
@@ -331,17 +331,17 @@
 
     <details style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08);">
       <summary class="nc-text--muted" style="cursor:pointer; font-size:12px;">
-        Already have a Zernio profile? Link it instead.
+        ¿Ya tienes un perfil de Zernio? Vincúlalo en lugar de crear uno.
       </summary>
       <p class="nc-text--muted" style="font-size: 12px; margin: 8px 0;">
-        Paste an existing Zernio <code class="nc-mono">profileId</code>
-        (it must already have at least one connected account).
+        Pega un <code class="nc-mono">profileId</code> de Zernio que ya
+        exista (debe tener al menos una cuenta conectada).
       </p>
       <form action="/dashboard/publish/zernio/accounts/claim" method="post" style="display: flex; gap: 8px; max-width: 520px;">
         <input class="nc-input nc-input--mono" name="profile_id" required placeholder="prof_abc123…" style="flex:1;">
         <button type="submit" class="nc-btn">
           <i class="ti ti-link" aria-hidden="true"></i>
-          <span>Link</span>
+          <span>Vincular</span>
         </button>
       </form>
     </details>
@@ -356,15 +356,15 @@
 <div class="nc-pc-tabs">
   <button type="button" class="nc-pc-tab is-active" data-tab="single">
     <i class="ti ti-square" aria-hidden="true"></i>
-    Single Publish
+    Publicar uno
   </button>
   <button type="button" class="nc-pc-tab" data-tab="bulk">
     <i class="ti ti-layout-grid" aria-hidden="true"></i>
-    Bulk Publish
+    Publicar varios
   </button>
   <button type="button" class="nc-pc-tab" data-tab="published">
     <i class="ti ti-circle-check" aria-hidden="true"></i>
-    Published{% if history %} ({{ history|length }}){% endif %}
+    Publicados{% if history %} ({{ history|length }}){% endif %}
   </button>
   <button type="button" class="nc-pc-tab" data-tab="rendimiento">
     <i class="ti ti-chart-bar" aria-hidden="true"></i>
@@ -405,10 +405,10 @@
   {% if not publishable_clips %}
   <div class="nc-panel">
     <div class="nc-empty">
-      <div class="nc-empty__title">No clips ready to publish</div>
+      <div class="nc-empty__title">No tienes clips listos para publicar</div>
       <p class="nc-empty__body">
-        Cut + approve a clip in <a href="/dashboard/streams">Streams</a>,
-        then come back here.
+        Corta y aprueba un clip en <a href="/dashboard/streams">Streams</a>
+        y luego vuelve aquí.
       </p>
     </div>
   </div>
@@ -432,19 +432,19 @@
         <div class="nc-pc-clip-row__id">{{ c.id }}</div>
         <span class="nc-pc-clip-row__status">
           <i class="ti ti-circle-dot" aria-hidden="true" style="color: var(--nc-green);"></i>
-          Ready to publish
+          Listo para publicar
         </span>
       </div>
       <div style="display:flex; align-items:center; gap:10px;">
         <form action="/dashboard/publish/zernio/clip/{{ c.id }}/mark-published"
               method="post" style="margin:0;"
               onclick="event.stopPropagation();"
-              onsubmit="return confirm('Mark this clip as already published? It moves out of this list (no post is sent).');">
+              onsubmit="return confirm('¿Marcar este clip como ya publicado? Sale de esta lista (no se envía ningún post).');">
           <button type="submit" class="nc-btn"
                   style="padding: 3px 10px; font-size: 11px; color: var(--nc-text--muted, #888);"
-                  title="Already posted this clip? Mark it published so it leaves this list — nothing is sent.">
+                  title="¿Ya publicaste este clip? Márcalo como publicado para que salga de esta lista — no se envía nada.">
             <i class="ti ti-check" aria-hidden="true"></i>
-            <span>Mark published</span>
+            <span>Marcar publicado</span>
           </button>
         </form>
         <i class="ti ti-chevron-down nc-pc-clip-row__caret" aria-hidden="true"></i>
@@ -466,7 +466,7 @@
 
     <form id="zn-single-form" method="post" action="" style="margin: 0;">
       <div>
-        <small class="nc-text--muted">Platforms — click chips to toggle, grayed-out are not connected.</small>
+        <small class="nc-text--muted">Plataformas — toca para activar; las apagadas no están conectadas.</small>
         <div class="nc-pc-platform-chips" id="zn-platform-chips">
           {% for key, label, icon in supported_platforms %}
             {% set is_conn = key in connected_set %}
@@ -481,15 +481,15 @@
       </div>
 
       <label class="nc-label" style="margin-top: 12px;">
-        Title
+        Título
         <input class="nc-input" name="title" maxlength="140"
-               placeholder="Optional — used as the post title where the platform supports one">
+               placeholder="Opcional — se usa como título del post donde la plataforma lo permite">
       </label>
 
       <label class="nc-label">
-        Caption
+        Texto del post
         <textarea class="nc-input" name="description" rows="3"
-                  placeholder="Optional — the caption sent to every selected platform"></textarea>
+                  placeholder="Opcional — el texto que se manda a cada plataforma elegida"></textarea>
       </label>
 
       <label class="nc-label">
@@ -504,11 +504,11 @@
       <details style="margin-top: 10px;">
         <summary class="nc-text--muted" style="cursor: pointer; font-size: 13px;">
           <i class="ti ti-adjustments" aria-hidden="true"></i>
-          Captions por plataforma (opcional)
+          Texto por plataforma (opcional)
         </summary>
         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-left: 8px;">
           <label class="nc-label" data-yt-only style="margin: 0;">
-            Título de YouTube <span class="nc-text--muted">(obligatorio si publicas a YouTube y no hay Title)</span>
+            Título de YouTube <span class="nc-text--muted">(obligatorio si publicas a YouTube y no pusiste Título)</span>
             <input class="nc-input" name="yt_title" maxlength="100"
                    placeholder="Título del video en YouTube">
           </label>
@@ -524,9 +524,9 @@
           </label>
           {% for key, label, icon in supported_platforms %}
           <label class="nc-label" style="margin: 0;">
-            <span><i class="ti {{ icon }}" aria-hidden="true"></i> Caption {{ label }}</span>
+            <span><i class="ti {{ icon }}" aria-hidden="true"></i> Texto {{ label }}</span>
             <textarea class="nc-input" name="caption_{{ key }}" rows="2"
-                      placeholder="Override solo para {{ label }} — vacío usa la caption general"></textarea>
+                      placeholder="Solo para {{ label }} — si lo dejas vacío usa el texto general"></textarea>
           </label>
           {% endfor %}
         </div>
@@ -548,7 +548,7 @@
       <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center;">
         <button type="submit" class="nc-btn nc-btn--primary" data-mode="now">
           <i class="ti ti-send" aria-hidden="true"></i>
-          <span>Publish to <span id="zn-platform-count">0</span> platform(s)</span>
+          <span>Publicar en <span id="zn-platform-count">0</span> plataforma(s)</span>
         </button>
         <button type="submit" class="nc-btn" data-mode="draft"
                 title="Guarda en Borradores para revisar o aprobar después">
@@ -588,14 +588,14 @@
 <div class="nc-pc-tab-body" data-tab-body="bulk">
   {% if not publishable_clips %}
   <div class="nc-panel">
-    <div class="nc-empty"><div class="nc-empty__title">No clips ready to publish</div></div>
+    <div class="nc-empty"><div class="nc-empty__title">No tienes clips listos para publicar</div></div>
   </div>
   {% else %}
   <div class="nc-panel">
     <div class="nc-panel__body">
       <p class="nc-text--muted" style="margin: 0 0 8px 0;">
-        Pick platforms per clip below — chips toggle independently.
-        Hit Publish Selected to fire them all in parallel.
+        Elige plataformas para cada clip — cada etiqueta se activa por su cuenta.
+        Toca Publicar seleccionados y salen todos a la vez.
       </p>
       <div id="zn-bulk-rows">
         {% for c in publishable_clips %}
@@ -625,10 +625,10 @@
       <div class="nc-pc-bulk-actions">
         <button type="button" id="zn-bulk-publish" class="nc-btn nc-btn--primary">
           <i class="ti ti-send" aria-hidden="true"></i>
-          <span>Publish selected (<span id="zn-bulk-count">0</span>)</span>
+          <span>Publicar seleccionados (<span id="zn-bulk-count">0</span>)</span>
         </button>
         <span class="nc-text--muted" style="font-size: 12px;" id="zn-bulk-hint">
-          Pick at least one platform per clip to enable.
+          Elige al menos una plataforma por clip para activar.
         </span>
       </div>
     </div>
@@ -744,7 +744,7 @@
     <i class="ti ti-robot" aria-hidden="true"></i>
     Piloto automático
     <span class="nc-text--muted" style="margin-left:auto; font-size:12px;">
-      Publicá solo — hasta mientras dormís
+      Publica solo — hasta mientras duermes
     </span>
   </div>
   <div class="nc-panel__body" style="display:flex; flex-direction:column; gap:18px;">
@@ -756,7 +756,7 @@
         <strong style="font-size:15px;">Encender el piloto automático</strong>
         <div class="nc-text--muted" style="font-size:13px; margin-top:2px;">
           Cuando está encendido, cada clip nuevo se publica solo en tus redes —
-          con su gancho, su texto, sus hashtags y tu firma. Vos no tocás nada.
+          con su gancho, su texto, sus hashtags y tu firma. Tú no tocas nada.
         </div>
       </span>
     </label>
@@ -769,13 +769,13 @@
         <div style="font-size:14px; margin-bottom:8px;"><strong>1. ¿Reviso antes de publicar?</strong></div>
         <label style="display:block; margin-bottom:6px; cursor:pointer;">
           <input type="radio" name="zn-ap-mode" value="hands_free" checked>
-          <strong>No, publicá todo solo</strong>
+          <strong>No, publica todo solo</strong>
           <span class="nc-text--muted" style="font-size:13px;"> — lo más automático, ideal para no estar encima.</span>
         </label>
         <label style="display:block; cursor:pointer;">
           <input type="radio" name="zn-ap-mode" value="on_approve">
           <strong>Sí, yo elijo cada clip</strong>
-          <span class="nc-text--muted" style="font-size:13px;"> — se publica recién cuando vos le das “Ship”.</span>
+          <span class="nc-text--muted" style="font-size:13px;"> — se publica solo cuando tú le das “Ship”.</span>
         </label>
       </div>
 
@@ -808,7 +808,7 @@
         </label>
         <label class="nc-label" style="margin:0;">
           <strong style="font-size:14px;">5. ¿Qué clips publico?</strong>
-          <span class="nc-text--muted" style="font-size:12px;">Qué tan exigente sos.</span>
+          <span class="nc-text--muted" style="font-size:12px;">Qué tan exigente eres.</span>
           <select class="nc-input" id="zn-ap-threshold" style="width:auto;">
             <option value="0.3">Todos los clips</option>
             <option value="0.6">Los buenos y mejores</option>
@@ -825,7 +825,7 @@
           Se agrega al final de cada publicación: tus @ y tus hashtags de siempre.
         </span>
         <textarea class="nc-input" id="zn-ap-tagsuffix" rows="2" maxlength="500"
-                  placeholder="@minombre · seguime en Kick · #gaming #clips"></textarea>
+                  placeholder="@minombre · sígueme en Kick · #gaming #clips"></textarea>
       </label>
 
       <div>
@@ -929,7 +929,7 @@
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table" style="margin: 0;">
       <thead>
-        <tr><th>Caption</th><th>Plataformas</th><th>Creado</th><th style="width: 1%;"></th></tr>
+        <tr><th>Texto</th><th>Plataformas</th><th>Creado</th><th style="width: 1%;"></th></tr>
       </thead>
       <tbody>
         {% for d in drafts %}
@@ -984,14 +984,14 @@
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-history" aria-hidden="true"></i>
-    <span class="nc-panel__title">Published</span>
-    <span class="nc-chip nc-chip--muted" style="margin-left:auto;">last 25</span>
+    <span class="nc-panel__title">Publicados</span>
+    <span class="nc-chip nc-chip--muted" style="margin-left:auto;">últimos 25</span>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     {% if history %}
     <table class="nc-table">
       <thead>
-        <tr><th>When</th><th>Clip</th><th>Platforms</th><th>Status</th><th>Caption</th><th></th></tr>
+        <tr><th>Cuándo</th><th>Clip</th><th>Plataformas</th><th>Estado</th><th>Texto</th><th></th></tr>
       </thead>
       <tbody>
         {% for h in history %}
@@ -1003,7 +1003,7 @@
           </td>
           <td>
             {% if h.kind == "manual" %}
-            <span class="nc-chip nc-chip--muted" title="Marked as published by you — posted outside NexoClip or before history existed">manual</span>
+            <span class="nc-chip nc-chip--muted" title="Lo marcaste como publicado — se subió fuera de NexoClip o antes de que existiera el historial">manual</span>
             {% else %}
               {% for p in h.platforms %}
               <span class="nc-chip nc-chip--code">{{ p }}</span>
@@ -1022,7 +1022,7 @@
                class="nc-btn" style="padding: 3px 10px; font-size: 12px; text-decoration:none;"
                onclick="event.stopPropagation();">
               <i class="ti ti-eye" aria-hidden="true"></i>
-              <span>{{ "Open clip" if h.kind == "manual" else "View" }}</span>
+              <span>{{ "Abrir clip" if h.kind == "manual" else "Ver" }}</span>
             </a>
           </td>
         </tr>
@@ -1040,10 +1040,10 @@
     </script>
     {% else %}
     <div class="nc-empty">
-      <div class="nc-empty__title">No publishes yet</div>
+      <div class="nc-empty__title">Aún no has publicado nada</div>
       <p class="nc-empty__body">
-        Publish a clip from the Single or Bulk tab — every publish
-        lands here with its status and a View button.
+        Publica un clip desde la pestaña Publicar uno o Publicar varios —
+        cada publicación aparece aquí con su estado y un botón Ver.
       </p>
     </div>
     {% endif %}
@@ -1348,8 +1348,8 @@
         ? Array.from(singleChips.querySelectorAll(".is-selected"))
             .map(function (x) { return x.getAttribute("data-platform"); })
         : [];
-      if (!selected.length) { e.preventDefault(); alert("Pick at least one platform."); return; }
-      if (!form.action) { e.preventDefault(); alert("Pick a clip first."); return; }
+      if (!selected.length) { e.preventDefault(); alert("Elige al menos una plataforma."); return; }
+      if (!form.action) { e.preventDefault(); alert("Elige un clip primero."); return; }
       var mode = modeInput ? modeInput.value : "now";
       var schedAt = document.getElementById("zn-schedule-at");
       if (mode === "schedule") {
@@ -1373,7 +1373,7 @@
         var yt = (form.querySelector('[name="yt_title"]') || {}).value || "";
         if (!t.trim() && !yt.trim()) {
           e.preventDefault();
-          alert("YouTube necesita un título — completa Title o el título de YouTube.");
+          alert("YouTube necesita un título — completa Título o el título de YouTube.");
           return;
         }
       }
@@ -1470,8 +1470,8 @@
     if (bulkCount) bulkCount.textContent = pending.length;
     if (bulkHint) {
       bulkHint.textContent = pending.length
-        ? pending.length + " clip(s) ready to ship."
-        : "Pick at least one platform per clip to enable.";
+        ? pending.length + " clip(s) listos para salir."
+        : "Elige al menos una plataforma por clip para activar.";
     }
     return pending;
   }
@@ -1488,9 +1488,9 @@
   if (bulkBtn) {
     bulkBtn.addEventListener("click", async function () {
       var pending = recomputeBulk();
-      if (!pending.length) { alert("Pick at least one platform per clip."); return; }
+      if (!pending.length) { alert("Elige al menos una plataforma por clip."); return; }
       bulkBtn.disabled = true;
-      bulkBtn.querySelector("span").textContent = "Sending…";
+      bulkBtn.querySelector("span").textContent = "Enviando…";
       try {
         var resp = await fetch("/dashboard/publish/zernio/bulk-post", {
           method: "POST",
@@ -1501,14 +1501,14 @@
         var body = await resp.json();
         if (!resp.ok) { throw new Error(body.detail || ("HTTP " + resp.status)); }
         var ok = (body.results || []).filter(function (r) { return r.ok; }).length;
-        alert(ok + " of " + pending.length + " published.");
+        alert(ok + " de " + pending.length + " publicados.");
         // Reload in place — the published clips leave this list; their
         // rows are on the Published tab when the operator wants them.
         window.location.href = "/dashboard/publish/zernio";
       } catch (err) {
-        alert("Bulk publish failed: " + err.message);
+        alert("No se pudo publicar el lote: " + err.message);
         bulkBtn.disabled = false;
-        bulkBtn.querySelector("span").textContent = "Publish selected (" + pending.length + ")";
+        bulkBtn.querySelector("span").textContent = "Publicar seleccionados (" + pending.length + ")";
       }
     });
   }
@@ -1597,8 +1597,8 @@
       try {
         w.document.write(
           "<p style='font-family:system-ui,sans-serif;padding:24px;color:#333'>" +
-          "Opening " + platform + " authorization… you can close this window " +
-          "when you're done — NexoClip will update automatically.</p>"
+          "Abriendo la autorización de " + platform + "… puedes cerrar esta ventana " +
+          "cuando termines — NexoClip se actualiza solo.</p>"
         );
       } catch (e2) { /* ignore */ }
     }
@@ -1623,7 +1623,7 @@
       })
       .catch(function (err) {
         if (w) { try { w.close(); } catch (e3) { /* ignore */ } }
-        alert("Connect failed: " + err.message);
+        alert("No se pudo conectar: " + err.message);
       })
       .finally(function () { btn.disabled = false; });
   });
@@ -1640,8 +1640,8 @@
     var btn = e.target.closest(".js-zn-disconnect");
     if (!btn) return;
     var accountId = btn.getAttribute("data-account-id");
-    var label = btn.getAttribute("data-label") || "this account";
-    if (!window.confirm("Disconnect " + label + " from Zernio?")) { return; }
+    var label = btn.getAttribute("data-label") || "esta cuenta";
+    if (!window.confirm("¿Desconectar " + label + " de Zernio?")) { return; }
     btn.disabled = true;
     fetch("/dashboard/publish/zernio/accounts/" + encodeURIComponent(accountId) + "/disconnect", {
       method: "POST", credentials: "same-origin",
@@ -1653,7 +1653,7 @@
       })
       .catch(function (err) {
         btn.disabled = false;
-        alert("Disconnect failed: " + err.message);
+        alert("No se pudo desconectar: " + err.message);
       });
   });
 
@@ -1666,10 +1666,10 @@
       e.preventDefault();
       var name = (document.getElementById("zn-profile-name").value || "").trim();
       var desc = (document.getElementById("zn-profile-desc").value || "").trim();
-      if (!name) { cpMsg.textContent = "Enter a profile name."; return; }
+      if (!name) { cpMsg.textContent = "Escribe un nombre de perfil."; return; }
       cpBtn.disabled = true;
       cpMsg.style.color = "";
-      cpMsg.textContent = "Creating…";
+      cpMsg.textContent = "Creando…";
       try {
         var resp = await fetch("/dashboard/publish/zernio/profile", {
           method: "POST",
@@ -1682,14 +1682,14 @@
           throw new Error(body.error || body.detail || ("HTTP " + resp.status));
         }
         cpMsg.style.color = "var(--nc-green, #48bb78)";
-        cpMsg.textContent = "Profile “" + (body.name || name) + "” created. Loading…";
+        cpMsg.textContent = "Perfil “" + (body.name || name) + "” creado. Cargando…";
         // Reload in place so the per-platform Connect buttons appear
         // under the new profile (same URL — no navigation away).
         window.location.reload();
       } catch (err) {
         cpBtn.disabled = false;
         cpMsg.style.color = "#ff7575";
-        cpMsg.textContent = "Couldn't create profile: " + err.message;
+        cpMsg.textContent = "No se pudo crear el perfil: " + err.message;
       }
     });
   }
@@ -1704,8 +1704,8 @@
       var t = body.totals || {};
       document.getElementById("zn-perf-totals").innerHTML =
         "Tus clips (" + body.days + " días): " +
-        "<strong>" + fmtMetric(t.views) + "</strong> views · " +
-        "<strong>" + fmtMetric(t.likes) + "</strong> likes · " +
+        "<strong>" + fmtMetric(t.views) + "</strong> vistas · " +
+        "<strong>" + fmtMetric(t.likes) + "</strong> me gusta · " +
         "<strong>" + fmtMetric(t.comments) + "</strong> comentarios · " +
         "<strong>" + fmtMetric(t.shares) + "</strong> compartidos";
       var posts = body.posts || [];
@@ -1733,8 +1733,8 @@
       perfTable.innerHTML =
         '<table class="nc-table"><thead><tr>' +
         "<th>Clip</th><th>Plataformas</th>" +
-        '<th style="text-align:right;">Views</th>' +
-        '<th style="text-align:right;">Likes</th>' +
+        '<th style="text-align:right;">Vistas</th>' +
+        '<th style="text-align:right;">Me gusta</th>' +
         '<th style="text-align:right;">Coment.</th>' +
         '<th style="text-align:right;">Compart.</th>' +
         "</tr></thead><tbody>" + rows + "</tbody></table>";
@@ -1929,7 +1929,7 @@
             comment_id: c.comment_id, message: msg,
           }, function () { alert("Respuesta enviada."); });
         }));
-        actions.appendChild(act("Like", "ti-heart", function () {
+        actions.appendChild(act("Me gusta", "ti-heart", function () {
           postJSON("/dashboard/publish/zernio/inbox/comments/like", {
             account_id: c.account_id, post_id: c.platform_post_id || c.post_id, comment_id: c.comment_id,
           }, function () {});
@@ -2183,7 +2183,7 @@
       host.innerHTML = "";
       if (!platforms.length) {
         host.innerHTML = '<span class="nc-text--muted" style="font-size:12px;">'
-          + 'Conectá una cuenta en el compositor para elegir destinos.</span>';
+          + 'Conecta una cuenta en el compositor para elegir destinos.</span>';
         return;
       }
       var sel = {}; (selected || []).forEach(function (p) { sel[p] = true; });
@@ -2221,8 +2221,8 @@
           var used = document.getElementById("zn-ap-used");
           if (used) {
             used.textContent = s.daily_cap
-              ? ("Hoy llevás " + (b.used_today || 0) + " de " + s.daily_cap + " posts.")
-              : ("Hoy llevás " + (b.used_today || 0) + " posts.");
+              ? ("Hoy llevas " + (b.used_today || 0) + " de " + s.daily_cap + " posts.")
+              : ("Hoy llevas " + (b.used_today || 0) + " posts.");
           }
         })
         .catch(function () {});

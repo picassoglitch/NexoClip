@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Calibration - NexoClip{% endblock %}
+{% block title %}Calibración - NexoClip{% endblock %}
 {% block content %}
 
 <div class="nc-page-header">
   <div>
-    <h2>Vision-rescore calibration</h2>
+    <h2>¿Qué tan bien acierta tu IA?</h2>
     <small>
-      Pearson r over (rescore_score, views) for the last 30 days, per platform.
-      The auto-publish toggle stays off until r is high enough on real engagement.
+      Aquí ves qué tanto coincide la nota que tu IA le pone a un clip con las vistas que de verdad consigue, en los últimos 30 días y por plataforma.
+      El piloto automático no se enciende hasta que tu IA acierte lo suficiente con datos reales.
     </small>
   </div>
 </div>
@@ -21,15 +21,15 @@
     {% if r.pearson_r is not none %}
       <div class="nc-metric__value">r = {{ "%+.3f"|format(r.pearson_r) }}</div>
       {% if r.pearson_r >= 0.6 %}
-      <div class="nc-metric__sub" style="color: var(--nc-success);">strong — the rescore is predictive</div>
+      <div class="nc-metric__sub" style="color: var(--nc-success);">muy bien — tu IA le atina a lo que funciona</div>
       {% elif r.pearson_r >= 0.3 %}
-      <div class="nc-metric__sub" style="color: var(--nc-warn);">moderate — more data needed</div>
+      <div class="nc-metric__sub" style="color: var(--nc-warn);">más o menos — falta juntar más datos</div>
       {% else %}
-      <div class="nc-metric__sub" style="color: var(--nc-danger);">weak — rescore not yet predictive</div>
+      <div class="nc-metric__sub" style="color: var(--nc-danger);">todavía no — tu IA aún no le atina</div>
       {% endif %}
     {% else %}
-      <div class="nc-metric__value" style="font-size: 14px; color: var(--nc-text-muted);">not enough samples</div>
-      <div class="nc-metric__sub">need ≥ 3 paired</div>
+      <div class="nc-metric__value" style="font-size: 14px; color: var(--nc-text-muted);">aún faltan datos</div>
+      <div class="nc-metric__sub">necesitas al menos 3 clips medidos</div>
     {% endif %}
   </div>
   {% endfor %}
@@ -40,17 +40,17 @@
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-table" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">{{ r.platform }} — per-clip outcomes</span>
+    <span class="nc-panel__title">{{ r.platform }} — cómo le fue a cada clip</span>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table">
       <thead>
         <tr>
           <th>Clip</th>
-          <th class="nc-num">Rescore</th>
-          <th class="nc-num">Views</th>
+          <th class="nc-num">Nota de tu IA</th>
+          <th class="nc-num">Vistas</th>
           <th class="nc-num">Likes</th>
-          <th>Last fetched</th>
+          <th>Última medición</th>
         </tr>
       </thead>
       <tbody>

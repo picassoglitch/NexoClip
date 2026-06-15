@@ -25,21 +25,21 @@
       </div>
       {% if "unknown persona" in pipeline_failure.error|lower %}
       <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; padding: 10px 12px; background: rgba(255,255,255,0.03); border-radius: 6px;">
-        <strong>Causa típica:</strong> el slug de persona que se envió en el upload
-        no coincide con ninguna persona registrada. Crea o renombra una en
+        <strong>Lo que suele pasar:</strong> la persona que mandaste al subir el video
+        no existe todavía. Crea una o cámbiale el nombre en
         <a href="/dashboard/personas" style="color: var(--nc-accent);">/dashboard/personas</a>,
-        después re-sube el video.
+        y vuelve a subir el video.
       </div>
       {% elif "ingest" in pipeline_failure.error|lower or "yt-dlp" in pipeline_failure.error|lower %}
       <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; padding: 10px 12px; background: rgba(255,255,255,0.03); border-radius: 6px;">
-        <strong>Causa típica:</strong> el VOD source es inaccesible (URL privada,
-        plataforma requiere cookies, archivo movido). Revisa la URL o el archivo
-        subido.
+        <strong>Lo que suele pasar:</strong> no se pudo abrir el video (link privado,
+        la plataforma pide cookies, o el archivo se movió). Revisa el link o el archivo
+        que subiste.
       </div>
       {% else %}
       <div style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55;">
-        El traceback completo está en los logs del servidor.
-        Re-corre el pipeline con <strong>Run pipeline</strong> una vez resuelto.
+        El detalle completo del error quedó guardado en el servidor.
+        Cuando lo resuelvas, vuelve a correr el proceso con <strong>Generar clips</strong>.
       </div>
       {% endif %}
     </div>
@@ -50,20 +50,20 @@
     <div class="nc-panel__header">
       {% if is_done %}
         <i class="ti ti-circle-check" aria-hidden="true" style="color: var(--nc-success);"></i>
-        <span class="nc-panel__title">Pipeline complete</span>
+        <span class="nc-panel__title">¡Listo, tus clips están hechos!</span>
       {% elif has_failed %}
         <i class="ti ti-alert-octagon" aria-hidden="true" style="color: var(--nc-danger);"></i>
-        <span class="nc-panel__title">Pipeline failed</span>
+        <span class="nc-panel__title">Algo salió mal</span>
       {% elif is_abandoned %}
         <i class="ti ti-alert-triangle" aria-hidden="true" style="color: var(--nc-warn);"></i>
-        <span class="nc-panel__title">Pipeline abandoned</span>
+        <span class="nc-panel__title">El proceso se quedó a medias</span>
       {% else %}
         <span class="nc-status-dot nc-status-dot--warn nc-status-dot--pulse"></span>
-        <span class="nc-panel__title">Pipeline running</span>
+        <span class="nc-panel__title">Trabajando en tus clips…</span>
       {% endif %}
       <div class="nc-spacer"></div>
       <small>
-        <span class="nc-mono">{{ candidate_count }}</span> candidate{{ "s" if candidate_count != 1 else "" }} ·
+        <span class="nc-mono">{{ candidate_count }}</span> momento{{ "s" if candidate_count != 1 else "" }} que vale{{ "n" if candidate_count != 1 else "" }} la pena ·
         <span class="nc-mono">{{ clip_count }}</span> clip{{ "s" if clip_count != 1 else "" }}
       </small>
     </div>
@@ -78,7 +78,7 @@
                 names. -#}
             {%- set _is_diarize = (s.name|lower == 'diarize') -%}
             {%- if _is_diarize -%}
-              {%- set _display_name = "Voice analysis" -%}
+              {%- set _display_name = "Analizando las voces" -%}
             {%- else -%}
               {%- set _display_name = s.name -%}
             {%- endif -%}
@@ -106,20 +106,20 @@
               {%- set _raw_low = _raw.lower() -%}
               {%- if _is_diarize -%}
                 <span class="nc-steps__time" title="{{ _raw }}">
-                  · single speaker · 120ms
+                  · una sola voz · 120ms
                 </span>
               {%- else -%}
                 {%- if "visual detector disabled" in _raw_low -%}
-                  {%- set _friendly = "visual signals off — feature disabled" -%}
+                  {%- set _friendly = "lectura de imagen apagada — está desactivada" -%}
                 {%- elif "not decodable" in _raw_low -%}
-                  {%- set _friendly = "video could not be decoded by the visual detector" -%}
+                  {%- set _friendly = "no se pudo leer la imagen del video" -%}
                 {%- elif "timeout" in _raw_low or "exceeded" in _raw_low -%}
-                  {%- set _friendly = "step took too long, moved on" -%}
+                  {%- set _friendly = "tardó demasiado, seguimos sin este paso" -%}
                 {%- else -%}
                   {%- set _friendly = _raw[:80] -%}
                 {%- endif -%}
                 <span class="nc-steps__time" title="{{ _raw }}">
-                  (skipped{% if _friendly %} — {{ _friendly }}{% endif %})
+                  (omitido{% if _friendly %} — {{ _friendly }}{% endif %})
                 </span>
               {%- endif -%}
             {% elif s.duration_s is not none %}
@@ -133,34 +133,34 @@
             <span class="nc-steps__icon nc-steps__icon--running">
               <span class="nc-status-dot nc-status-dot--warn nc-status-dot--pulse"></span>
             </span>
-            <span><strong>{{ s.name }}</strong> <em style="color: var(--nc-text-muted);">(running…)</em></span>
+            <span><strong>{{ s.name }}</strong> <em style="color: var(--nc-text-muted);">(en proceso…)</em></span>
             {% if s.elapsed_s is not none %}
             <span class="nc-steps__time">
-              {% if s.elapsed_s < 60 %}{{ "%.0f"|format(s.elapsed_s) }}s elapsed
-              {% else %}{{ "%.1f"|format(s.elapsed_s / 60.0) }}m elapsed{% endif %}
+              {% if s.elapsed_s < 60 %}lleva {{ "%.0f"|format(s.elapsed_s) }}s
+              {% else %}lleva {{ "%.1f"|format(s.elapsed_s / 60.0) }}m{% endif %}
             </span>
             {% endif %}
           {% elif s.status == "abandoned" %}
             <span class="nc-steps__icon nc-steps__icon--warn"><i class="ti ti-alert-triangle" aria-hidden="true"></i></span>
             <span style="flex: 1;">
               <strong>{{ s.name }}</strong>
-              <em style="color: var(--nc-text-muted);">— abandoned after {{ "%.0f"|format(s.elapsed_s / 60.0) }}m</em>
+              <em style="color: var(--nc-text-muted);">— se quedó a medias tras {{ "%.0f"|format(s.elapsed_s / 60.0) }}m</em>
               <small style="display: block; margin-top: 4px;">
-                The dashboard was probably restarted while this step was running.
-                Click <strong>Run pipeline</strong> below to start fresh — finished
-                steps stay finished.
+                Seguramente se reinició el panel mientras este paso estaba corriendo.
+                Toca <strong>Generar clips</strong> aquí abajo para empezar de nuevo — lo que
+                ya estaba terminado se queda terminado.
               </small>
             </span>
           {% elif s.status == "failed" %}
             <span class="nc-steps__icon nc-steps__icon--failed"><i class="ti ti-x" aria-hidden="true"></i></span>
             <span style="flex: 1;">
-              <strong>{{ s.name }}</strong> — <span style="color: var(--nc-danger);">{{ s.error or "failed" }}</span>
+              <strong>{{ s.name }}</strong> — <span style="color: var(--nc-danger);">{{ s.error or "falló" }}</span>
               {% if s.error and ("cublas" in s.error|lower or "cudnn" in s.error|lower or "cudart" in s.error|lower) %}
               <small style="display: block; margin-top: 6px;">
-                <strong>Fix (recommended):</strong> switch Whisper to CPU. Edit <code>.env</code> and set:<br>
+                <strong>Solución recomendada:</strong> cambia Whisper a CPU. Abre <code>.env</code> y pon:<br>
                 <code>NEXOCLIP_WHISPER_DEVICE=cpu</code>,
                 <code>NEXOCLIP_WHISPER_COMPUTE_TYPE=int8</code>,
-                <code>NEXOCLIP_WHISPER_MODEL=base</code> — then restart and re-run.
+                <code>NEXOCLIP_WHISPER_MODEL=base</code> — luego reinicia y vuelve a intentar.
               </small>
               {% endif %}
             </span>
@@ -174,8 +174,8 @@
 
       {% if is_running and not is_done %}
       <small style="display: block; margin-top: 12px;">
-        Auto-refreshes every 3 seconds. Whisper transcription is the slow step
-        on a long VOD — expect minutes for hour-long videos.
+        Esto se actualiza solo cada 3 segundos. Sacar el texto del audio es la parte
+        más lenta — en videos de una hora, espera unos minutos.
       </small>
       {% endif %}
     </div>

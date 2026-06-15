@@ -57,11 +57,13 @@
           <i class="ti ti-player-play" aria-hidden="true"></i><span>{{ t('newClip.url.start') }}</span>
         </button>
       </form>
+      {% if not cookies_configured %}
       <p class="nc-ingest__foot">
         {{ t('newClip.url.cookiesPre') }}
         <code class="nc-envchip">NEXOCLIP_COOKIES_FILE=/data/cookies.txt</code>
         {{ t('newClip.url.cookiesMid') }}
       </p>
+      {% endif %}
     </div>
 
     {# ---- UPLOAD ---- #}

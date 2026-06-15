@@ -1258,6 +1258,13 @@ async def start_page(
     default_persona = personas[0] if personas else None
     s = get_settings()
     live_configured = bool((getattr(s, "live_rtmp_base_url", "") or "").strip())
+    # Cookie auth for Kick / age-gated YouTube. When the operator has set
+    # either knob (cookies.txt path or browser pass-through), the setup hint
+    # under the URL box is just noise — suppress it.
+    cookies_configured = bool(
+        (getattr(s, "cookies_file", "") or "").strip()
+        or (getattr(s, "cookies_from_browser", "") or "").strip()
+    )
 
     return templates.TemplateResponse(
         request,
@@ -1267,6 +1274,7 @@ async def start_page(
             "default_persona": default_persona,
             "ffmpeg_ok": is_ffmpeg_available(),
             "live_configured": live_configured,
+            "cookies_configured": cookies_configured,
             # Real RTMP server URL for the live ingest panel's "Server" row.
             # The per-tenant stream key is still TODO(ingest) — the template
             # shows a masked placeholder until that endpoint is wired.

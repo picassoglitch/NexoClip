@@ -3615,11 +3615,21 @@ async def _local_post_status(
     workspace) — but the post.* webhooks already wrote the real status +
     per-platform results into zernio_publishes. Falling back to that lets
     the job page + poll degrade to data we have instead of spinning on a
-    raw 404 forever. Returns None when there's no row for this tenant."""
+    raw 404 forever. Returns None when there's no row for this tenant — or
+    when the row carries no usable status yet."""
     row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
     if row is None or row.tenant_id != tenant_id:
         return None
-    return (row.status or "UNKNOWN").upper(), _parse_platforms_json(row.platforms_json)
+    status = (row.status or "").strip().upper()
+    # A "publish now" row seeds status=None until a post.* webhook lands.
+    # Returning "UNKNOWN" here is NOT terminal in the JS poller, so when
+    # Zernio also 404s the post (deleted / different workspace, no webhook
+    # ever coming) the page polls /status every 3s forever. Treat "no
+    # usable status" as no local info so the caller falls through to the
+    # terminal UNAVAILABLE branch and the poller settles.
+    if not status or status == "UNKNOWN":
+        return None
+    return status, _parse_platforms_json(row.platforms_json)
 
 
 # A post Zernio 404s AND we have no local record for. Terminal in the

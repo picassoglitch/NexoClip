@@ -142,6 +142,33 @@ async def test_status_transient_error_stays_502_for_retry(
 
 
 @pytest.mark.asyncio
+async def test_status_404_local_row_without_status_settles_unavailable(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # A "publish now" row seeds status=None (no post.* webhook yet). When
+    # Zernio also 404s the post, the old code returned "UNKNOWN" — NOT
+    # terminal — so the page polled /status every 3s forever. It must
+    # settle on terminal UNAVAILABLE instead.
+    await ZernioPublishesRepo(db).record(
+        post_id="p_nostatus", tenant_id=alice["id"], clip_id="clp_n",
+        platforms=["tiktok"], content="x",  # status defaults to None
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{_ZBASE}/posts/p_nostatus").mock(
+            return_value=httpx.Response(404, json={"error": "not found"})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/status/p_nostatus.json",
+            headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "UNAVAILABLE"  # terminal — poller stops
+
+
+@pytest.mark.asyncio
 async def test_status_404_ignores_other_tenants_record(
     zernio_env: None,
     client: httpx.AsyncClient,

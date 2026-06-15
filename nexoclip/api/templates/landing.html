@@ -781,7 +781,31 @@
     @keyframes nc-stage-rise {
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
-    .nc-stage__clip-thumb { position: absolute; inset: 0; }
+    .nc-stage__clip-thumb { position: absolute; inset: 0; z-index: 0; }
+    /* Real clip thumbnails (operator-supplied). Drop 9:16 images at
+       /static/demo/clip1.jpg … clip5.jpg and they cover the gradient
+       placeholder below; a missing/blocked file removes the <img>
+       (onerror) so the gradient shows — the hero never breaks on an
+       absent asset. See static/demo/README.md for sizing + licensing. */
+    .nc-stage__clip-img {
+      position: absolute; inset: 0; z-index: 1;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      object-position: center 28%;
+    }
+    /* Bottom scrim so the caption + score badge stay legible over a
+       busy photo (also grounds the gradient-only placeholders). */
+    .nc-stage__clip::before {
+      content: ""; position: absolute; inset: 0; z-index: 2;
+      pointer-events: none;
+      background: linear-gradient(
+        to top,
+        rgba(5, 10, 20, 0.74) 0%,
+        rgba(5, 10, 20, 0.15) 40%,
+        transparent 64%
+      );
+    }
+    .nc-stage__plat, .nc-stage__cap, .nc-stage__score { z-index: 3; }
     /* Per-clip thumb tints — keep the source card's signature palette
        (lime + magenta + cyan-ish blue) so the animation reads as ONE
        VOD spawning many siblings. */
@@ -1095,6 +1119,7 @@
       <ul class="nc-stage__clips" role="list" aria-label="Generated clips preview">
         <li class="nc-stage__clip" style="animation-delay:0.20s">
           <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <img class="nc-stage__clip-img" src="/static/demo/clip1.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
           <span class="nc-stage__plat nc-stage__plat--tiktok">TikTok</span>
           <span class="nc-stage__cap">{{ t('landing.anim.cap1') }}</span>
           <span class="nc-stage__score">
@@ -1104,6 +1129,7 @@
         </li>
         <li class="nc-stage__clip" style="animation-delay:0.45s">
           <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <img class="nc-stage__clip-img" src="/static/demo/clip2.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
           <span class="nc-stage__plat nc-stage__plat--reels">Reels</span>
           <span class="nc-stage__cap">{{ t('landing.anim.cap2') }}</span>
           <span class="nc-stage__score">
@@ -1113,6 +1139,7 @@
         </li>
         <li class="nc-stage__clip" style="animation-delay:0.70s">
           <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <img class="nc-stage__clip-img" src="/static/demo/clip3.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
           <span class="nc-stage__plat nc-stage__plat--shorts">Shorts</span>
           <span class="nc-stage__cap">{{ t('landing.anim.cap3') }}</span>
           <span class="nc-stage__score">
@@ -1122,6 +1149,7 @@
         </li>
         <li class="nc-stage__clip" style="animation-delay:0.95s">
           <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <img class="nc-stage__clip-img" src="/static/demo/clip4.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
           <span class="nc-stage__plat nc-stage__plat--kick">Kick</span>
           <span class="nc-stage__cap">{{ t('landing.anim.cap4') }}</span>
           <span class="nc-stage__score">
@@ -1131,6 +1159,7 @@
         </li>
         <li class="nc-stage__clip" style="animation-delay:1.20s">
           <span class="nc-stage__clip-thumb" aria-hidden="true"></span>
+          <img class="nc-stage__clip-img" src="/static/demo/clip5.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
           <span class="nc-stage__plat nc-stage__plat--twitch">Twitch</span>
           <span class="nc-stage__cap">{{ t('landing.anim.cap5') }}</span>
           <span class="nc-stage__score">

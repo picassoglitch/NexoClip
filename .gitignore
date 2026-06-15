@@ -39,6 +39,9 @@ htmlcov/
 # Output / scratch
 out/
 demo/
+# ...but the landing hero ships real clip thumbnails from this static
+# folder — keep it tracked despite the broad demo/ scratch rule above.
+!nexoclip/api/static/demo/
 scratch/
 tmp/
 export/

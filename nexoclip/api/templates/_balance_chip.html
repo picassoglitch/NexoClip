@@ -26,25 +26,25 @@
    chip is lying rather than trusting a frozen number. report_ok is
    tri-state: True (fresh), False (sync failing), None (never reported). #}
 {%- set _report_failing = _has_bal and (_bal.get('report_ok') == false) -%}
-{%- set _sync_err = (_bal.get('report_error') if _has_bal else None) or 'Balance sync to Nexo AI is failing — this number may be stale. Click to retry.' -%}
+{%- set _sync_err = (_bal.get('report_error') if _has_bal else None) or 'No estamos sincronizando con Nexo AI — este número puede estar desactualizado. Haz clic para reintentar.' -%}
 
 {%- if not _has_bal -%}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--muted"
-   title="Sin balance en cache. Click para refrescar desde Nexo AI."
+   title="Todavía no tenemos tu saldo. Haz clic para actualizarlo."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-coin" aria-hidden="true"></i>
-  <span>— tokens · refresh</span>
+  <span>— tokens · actualizar</span>
 </a>
 {%- elif _unlimited -%}
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--success"
-   title="Admin · sin límite de tokens. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
+   title="Admin · tokens sin límite. Llevas usados este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"
@@ -65,7 +65,7 @@
    hx-swap="outerHTML"
    style="text-decoration: none;">
   <i class="ti ti-alert-triangle" aria-hidden="true"></i>
-  <span>{{ _short }}k · sync ⚠</span>
+  <span>{{ _short }}k · sin sincronizar ⚠</span>
 </a>
 {%- else -%}
   {%- set _low = _remaining < 50000 -%}
@@ -76,7 +76,7 @@
 <a href="/dashboard/_balance/refresh"
    id="nc-balance-chip"
    class="nc-chip nc-chip--{% if _low %}warn{% else %}success{% endif %}"
-   title="{{ '{:,}'.format(_remaining) }} tokens disponibles. Usado este mes: {{ '{:,}'.format(_monthly_used) }}."
+   title="Te quedan {{ '{:,}'.format(_remaining) }} tokens. Llevas usados este mes: {{ '{:,}'.format(_monthly_used) }}."
    hx-get="/dashboard/_balance/chip"
    hx-trigger="balance-poll from:body"
    hx-swap="outerHTML"

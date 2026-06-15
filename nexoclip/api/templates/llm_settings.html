@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}LLM settings - NexoClip{% endblock %}
+{% block title %}Tu motor de IA - NexoClip{% endblock %}
 {% block content %}
 
 <div class="nc-page-header">
   <div>
-    <h2>LLM routing</h2>
+    <h2>Cómo trabaja tu IA</h2>
     <small>
-      Read from <code>config/llm.yaml</code>.
-      Read-only in Phase 1 — editing routing rules requires a config-file change + restart.
+      Esto sale de <code>config/llm.yaml</code>.
+      Por ahora solo lo ves, no lo tocas. Para cambiarlo se ajusta el archivo y se reinicia.
     </small>
   </div>
 </div>
@@ -15,16 +15,16 @@
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-server-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Providers</span>
+    <span class="nc-panel__title">Quién genera tu contenido</span>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table">
       <thead>
         <tr>
-          <th>Provider</th>
-          <th>Standard model</th>
-          <th>Premium model</th>
-          <th class="nc-num">Timeout</th>
+          <th>Servicio</th>
+          <th>Modelo estándar</th>
+          <th>Modelo premium</th>
+          <th class="nc-num">Tiempo de espera</th>
         </tr>
       </thead>
       <tbody>
@@ -44,17 +44,17 @@
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-route" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Routing</span>
-    <small>— purpose → quality → provider → model</small>
+    <span class="nc-panel__title">Qué modelo se usa para cada cosa</span>
+    <small>— para qué → qué tan bueno → servicio → modelo</small>
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     <table class="nc-table">
       <thead>
         <tr>
-          <th>Purpose</th>
-          <th>Default quality</th>
-          <th>Primary</th>
-          <th>Fallbacks</th>
+          <th>Para qué</th>
+          <th>Calidad por defecto</th>
+          <th>Principal</th>
+          <th>De respaldo</th>
         </tr>
       </thead>
       <tbody>

@@ -9,16 +9,17 @@ How a template uses it:
     <html lang="{{ locale() }}">
 
 VOICE NOTES (Spanish):
-  - Voseo platense/latino. "subí", "transmití", "agendá", "decí",
-    "clipeá", "tenés", "querés", "podés", "imaginate", "dejá", "empezá".
+  - Mexican Spanish, TUTEO ("tú"). "sube", "transmite", "agenda", "di",
+    "clipea", "tienes", "quieres", "puedes", "imagínate", "deja", "empieza".
+    NOT Argentine voseo (no "subí / tenés / publicá / imaginate").
   - Direct-response, OpusClip-style. Short paragraphs. Declarative.
     Sell outcomes (more views, more time, less editing, less spend).
   - Numbers ratified by the operator: hero says "20+ clips ready to
     post", emotional checklist uses "17 clips generados" as a concrete
     realistic instance. These override the earlier "12+" guard rail.
-  - Posting language: "Publicá mientras dormís" is the headline copy on
-    the feature card; the body says "Agendá clips automáticamente. Review
-    o undo cuando quieras." Undo window is the trust layer — keep both.
+  - Posting language: "Publica mientras duermes" is the headline copy on
+    the feature card; the body sells automatic scheduling with a review /
+    undo window. The undo window is the trust layer — keep it.
 
 How to add a new key:
   1. Add to TRANSLATIONS['en'] AND TRANSLATIONS['es'].
@@ -31,7 +32,9 @@ from fastapi.templating import Jinja2Templates
 
 
 SUPPORTED_LOCALES: tuple[str, ...] = ("en", "es")
-DEFAULT_LOCALE = "en"
+# Default to Mexican Spanish; English is served when the browser's
+# Accept-Language asks for it (see detect_locale).
+DEFAULT_LOCALE = "es"
 
 
 def detect_locale(request: Request) -> str:
@@ -85,7 +88,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # ---- Pain section ------------------------------------------
         "landing.pain.heading": "Editing clips is killing your growth.",
         "landing.pain.line1": "Every stream creates content.",
-        "landing.pain.line2": "Most creators never publish it.",
+        "landing.pain.line2": "Most creators never get around to publishing it.",
         "landing.pain.line3": "Because editing takes:",
         "landing.pain.item1": "Hours of clipping",
         "landing.pain.item2": "Hours of captions",
@@ -171,7 +174,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "landing.features.hook.title": "Never write another title again",
         "landing.features.hook.body": (
             "Get multiple viral title options for every clip. Choose one "
-            "with a click."
+            "with one click."
         ),
         "landing.features.timeline.title": "Skip the boring parts",
         "landing.features.timeline.body": (
@@ -201,7 +204,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # ---- Final CTA after statement -----------------------------
         "landing.final.heading": "Turn one stream into 20 pieces of content.",
         "landing.final.body": (
-            "Finally grow your channel without hiring an editor and "
+            "Finally grow your channel without hiring an editor or "
             "spending 4 hours a day cutting clips."
         ),
         "landing.final.cta": "Upload my first stream",
@@ -513,15 +516,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     # ================================================================
     "es": {
         "landing.title_tag": (
-            "NexoClip — convertí un stream en 20+ clips listos para publicar"
+            "NexoClip — convierte un stream en 20+ clips listos para publicar"
         ),
 
         # ---- Hero ---------------------------------------------------
         "landing.hero.eyebrow": "NEXOCLIP",
-        "landing.hero.h1_line1": "Dejá de pagar editores.",
-        "landing.hero.h1_line2": "Empezá a publicar clips virales todos los días.",
+        "landing.hero.h1_line1": "Deja de pagar editores.",
+        "landing.hero.h1_line2": "Empieza a publicar clips virales todos los días.",
         "landing.hero.sub_line1": (
-            "Convertí un stream de 4 horas en 20+ clips listos para "
+            "Convierte un stream de 4 horas en 20+ clips listos para "
             "publicar, en minutos."
         ),
         "landing.hero.sub_line2": (
@@ -529,7 +532,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "subtítulos, captions, hashtags, recorta para cada plataforma, "
             "y agenda todo automáticamente."
         ),
-        "landing.hero.tagline_a": "Vos transmitís.",
+        "landing.hero.tagline_a": "Tú transmites.",
         "landing.hero.tagline_b": "NexoClip hace el resto.",
         "landing.hero.cta_primary": "Subir mi primer stream",
         "landing.hero.cta_primary_micro": "Tu primer stream, gratis. Sin tarjeta.",
@@ -545,7 +548,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # ---- Pain section ------------------------------------------
         "landing.pain.heading": "Editar clips te está matando el crecimiento.",
         "landing.pain.line1": "Cada stream genera contenido.",
-        "landing.pain.line2": "La mayoría de los creators nunca lo publica.",
+        "landing.pain.line2": "Casi ningún creador llega a publicarlo.",
         "landing.pain.line3": "Porque editar lleva:",
         "landing.pain.item1": "Horas de clipping",
         "landing.pain.item2": "Horas de captions",
@@ -556,9 +559,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # ---- "NexoClip fixes that" ---------------------------------
         "landing.fix.heading": "NexoClip lo arregla.",
-        "landing.fix.s1": "Subí el stream.",
-        "landing.fix.s2": "Recibí los clips.",
-        "landing.fix.s3": "Publicá.",
+        "landing.fix.s1": "Sube el stream.",
+        "landing.fix.s2": "Recibe los clips.",
+        "landing.fix.s3": "Publica.",
         "landing.fix.s4": "Listo.",
 
         # ---- Value Prop --------------------------------------------
@@ -593,10 +596,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "landing.math.us_line5": "Nunca se va de vacaciones.",
 
         # ---- Emotional section -------------------------------------
-        "landing.imagine.heading": "Imaginate despertarte con esto.",
-        "landing.imagine.line1": "Terminás de transmitir a medianoche.",
+        "landing.imagine.heading": "Imagínate despertar con esto.",
+        "landing.imagine.line1": "Terminas de transmitir a medianoche.",
         "landing.imagine.line2": "Te vas a dormir.",
-        "landing.imagine.line3": "Cuando te despertás:",
+        "landing.imagine.line3": "Cuando despiertas:",
         "landing.imagine.item1": "17 clips generados",
         "landing.imagine.item2": "Mejores momentos identificados",
         "landing.imagine.item3": "Hooks escritos",
@@ -613,7 +616,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Más clips = más chances de hacer viral"
         ),
         "landing.results.line1": (
-            "Los creators que publican consistente crecen más rápido."
+            "Los creadores que publican constante crecen más rápido."
         ),
         "landing.results.line2": "El problema no es el talento.",
         "landing.results.line3": "El problema es el output.",
@@ -632,21 +635,21 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "landing.features.viral.body": (
             "NexoClip analiza cada segundo de tu stream e identifica los "
-            "clips con más chances de performar. Sin revisar nada a mano."
+            "clips con más chances de pegar. Sin revisar nada a mano."
         ),
-        "landing.features.hook.title": "Nunca más escribas otro título",
+        "landing.features.hook.title": "No vuelves a escribir un título",
         "landing.features.hook.body": (
-            "Recibí múltiples opciones de título viral para cada clip. "
-            "Elegí uno con un click."
+            "Recibe varias opciones de título viral para cada clip. "
+            "Elige una con un clic."
         ),
-        "landing.features.timeline.title": "Saltate las partes aburridas",
+        "landing.features.timeline.title": "Sáltate las partes aburridas",
         "landing.features.timeline.body": (
-            "Andá directo a los momentos más divertidos, ruidosos, "
-            "emocionales y enganchadores."
+            "Ve directo a los momentos más divertidos, ruidosos, "
+            "emocionantes y que más enganchan."
         ),
-        "landing.features.voice.title": "Clipeá momentos al instante",
+        "landing.features.voice.title": "Clipea momentos al instante",
         "landing.features.voice.body_html": (
-            "Decí: <code>clipeá esto.</code> "
+            "Di: <code>clipea esto.</code> "
             "Y NexoClip lo recuerda automáticamente."
         ),
         "landing.features.brand.title": (
@@ -655,24 +658,24 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "landing.features.brand.body": (
             "Logos. Fuentes. Colores. Captions. Todo aplicado automáticamente."
         ),
-        "landing.features.publish.title": "Publicá mientras dormís",
+        "landing.features.publish.title": "Publica mientras duermes",
         "landing.features.publish.body": (
-            "Agendá clips automáticamente en todas las plataformas. "
-            "Review o undo cuando quieras."
+            "Programa clips automáticamente en todas las plataformas. "
+            "Revisa o deshaz cuando quieras."
         ),
 
         # ---- Big statement -----------------------------------------
-        "landing.statement_line1": "Transmití más.",
-        "landing.statement_line2": "Editá menos.",
-        "landing.statement_line3": "Crecé más rápido.",
+        "landing.statement_line1": "Transmite más.",
+        "landing.statement_line2": "Edita menos.",
+        "landing.statement_line3": "Crece más rápido.",
 
         # ---- Final CTA --------------------------------------------
         "landing.final.heading": (
-            "Convertí un stream en 20 piezas de contenido."
+            "Convierte un stream en 20 piezas de contenido."
         ),
         "landing.final.body": (
-            "Finalmente hacé crecer tu canal sin contratar un editor y "
-            "sin pasarte 4 horas por día cortando clips."
+            "Por fin haz crecer tu canal sin contratar un editor y "
+            "sin pasarte 4 horas al día cortando clips."
         ),
         "landing.final.cta": "Subir mi primer stream",
         "landing.final.cta_micro": "Gratis. Sin tarjeta.",
@@ -681,52 +684,53 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "landing.faq.heading": "Preguntas frecuentes",
         "landing.faq.q1": "¿En qué se diferencia NexoClip de un editor de clips?",
         "landing.faq.a1": (
-            "Los editores te dan un timeline con handles para recortar. "
-            "NexoClip está upstream: la IA puntúa cada clip por potencial "
-            "viral, genera el hook, aplica el brand kit correcto y agenda "
-            "con ventana de undo. Tu laburo cambia de \"encontrar y "
-            "cortar\" a \"elegir el top 3 de la IA y dejar que se "
-            "publique\". El editor sigue ahí — la mayoría de las mañanas "
-            "no lo abrís."
+            "Los editores te dan una línea de tiempo con manijas para "
+            "recortar. NexoClip va un paso antes: la IA puntúa cada clip "
+            "por potencial viral, genera el hook, aplica el brand kit "
+            "correcto y lo programa con ventana para deshacer. Tu trabajo "
+            "cambia de \"encontrar y cortar\" a \"elegir el top 3 de la IA "
+            "y dejar que se publique\". El editor sigue ahí — pero casi "
+            "ninguna mañana lo vas a abrir."
         ),
         "landing.faq.q2": "¿Para quién es NexoClip?",
         "landing.faq.a2": (
             "Streamers que quieren los clips listos para la mañana. "
-            "Colectivos multi-host que necesitan branding per-streamer "
-            "dentro de un VOD. Agencias que clipean para varios creators "
-            "en paralelo. Agentes / clientes MCP que quieren manejar el "
-            "pipeline programáticamente."
+            "Colectivos multi-host que necesitan branding por streamer "
+            "dentro de un mismo VOD. Agencias que hacen clips para varios "
+            "creadores en paralelo. Agentes / clientes MCP que quieren "
+            "manejar el pipeline de forma programática."
         ),
         "landing.faq.q3": "¿Necesito una GPU?",
         "landing.faq.a3": (
-            "Una GPU consumer (RTX 4060+ recomendada) maneja Whisper + "
-            "pyannote cómodamente para VODs de ~4hs. Modo CPU-only anda "
-            "para clips cortos pero bastante más lento."
+            "Una GPU de consumidor (RTX 4060 o mejor, recomendada) maneja "
+            "Whisper + pyannote cómodamente para VODs de ~4 horas. Solo "
+            "con CPU funciona para clips cortos, pero bastante más lento."
         ),
         "landing.faq.q4": "¿Qué LLM usa NexoClip?",
         "landing.faq.a4": (
-            "Anthropic Claude exclusivamente para la surface en vivo. El "
-            "router soporta agregar más providers sin cambios de código."
+            "Anthropic Claude en exclusiva para todo lo que ves en vivo. "
+            "El router permite sumar más proveedores sin tocar el código."
         ),
         "landing.faq.q5": "¿Los agentes de IA pueden manejar NexoClip?",
         "landing.faq.a5_html": (
-            "Sí. NexoClip ship un servidor MCP para Claude Code, Cursor y "
-            "otros clientes LLM. Detalles técnicos en "
+            "Sí. NexoClip incluye un servidor MCP para Claude Code, Cursor "
+            "y otros clientes LLM. Detalles técnicos en "
             "<a href=\"/agents\">/agents</a>."
         ),
-        "landing.faq.q6": "¿Qué pasa con retention y privacy?",
+        "landing.faq.q6": "¿Qué pasa con la retención y la privacidad?",
         "landing.faq.a6": (
-            "Ventanas de retention per-tenant (default 30 días para VODs, "
-            "90 para clips, 365 para transcripciones) — todo configurable. "
-            "Audio y video se quedan en tu máquina para transcripción; "
-            "solo el paso de generación de captions LLM llama afuera."
+            "Ventanas de retención por tenant (por defecto 30 días para "
+            "VODs, 90 para clips, 365 para transcripciones) — todo "
+            "configurable. El audio y el video se quedan en tu máquina "
+            "para transcribir; solo la generación de captions con LLM "
+            "sale hacia afuera."
         ),
-        "landing.faq.q7": "¿Hay API directa que pueda llamar?",
+        "landing.faq.q7": "¿Hay una API directa que pueda llamar?",
         "landing.faq.a7_html": (
             "Sí. <a href=\"/openapi.json\">Spec OpenAPI</a> + "
-            "<a href=\"/docs\">Swagger UI interactivo</a>. Generás un "
+            "<a href=\"/docs\">Swagger UI interactivo</a>. Generas un "
             "token con <code>nexoclip tokens issue --tenant &lt;id&gt; "
-            "--scope full</code> y lo pasás como "
+            "--scope full</code> y lo pasas como "
             "<code>Authorization: Bearer &lt;token&gt;</code>."
         ),
 
@@ -746,7 +750,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Clipping con IA para streamers · #1 en LATAM"
         ),
         "landing.hero.paste_placeholder": (
-            "Pegá el link de tu VOD — Kick, Twitch, YouTube…"
+            "Pega el link de tu VOD — Kick, Twitch, YouTube…"
         ),
         "landing.hero.paste_cta": "Generar clips",
         "landing.hero.alt_or": "o",
@@ -774,7 +778,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "landing.anim.cap1": "\"No vas a creer lo que pasó…\"",
         "landing.anim.cap2": "El momento más viral del directo",
         "landing.anim.cap3": "La reacción que lo rompió todo",
-        "landing.anim.cap4": "Clip que pediste con \"clipeá eso\"",
+        "landing.anim.cap4": "Clip que pediste con \"clipea eso\"",
         "landing.anim.cap5": "Highlight con subtítulos automáticos",
         "landing.anim.note": (
             "1 stream → 5 plataformas → clips puntuados por "
@@ -783,10 +787,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # ---- Footer (4-column layout) ----------------------------
         "landing.foot.tagline": (
-            "NexoClip · convertí un stream en 20+ clips listos para publicar"
+            "NexoClip · convierte un stream en 20+ clips listos para publicar"
         ),
         "landing.foot.brand_blurb": (
-            "Convertí tus streams en clips virales listos para "
+            "Convierte tus streams en clips virales listos para "
             "publicar. Un producto de Quantor · Nexo AI."
         ),
         "landing.foot.col_product": "Producto",
@@ -821,65 +825,67 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "mitad agente."
         ),
         "agents.hero.sub": (
-            "Fan-in de signals multimodales, diarización per-speaker, "
-            "transcripción GPU local, surface MCP-nativa, REST API "
-            "fully-typed. Manejá NexoClip desde un browser, desde Claude "
-            "Code, Cursor, o cualquier cliente MCP-aware."
+            "Fan-in de señales multimodales, diarización por speaker, "
+            "transcripción GPU local, surface nativa de MCP, REST API "
+            "tipada de punta a punta. Maneja NexoClip desde un navegador, "
+            "desde Claude Code, Cursor, o cualquier cliente compatible con MCP."
         ),
         "agents.hero.cta_docs": "Docs OpenAPI",
         "agents.hero.cta_llms": "llms.txt",
         "agents.hero.cta_back": "← Volver al landing",
-        "agents.signals.title": "Fan-in de signals multimodales",
+        "agents.signals.title": "Fan-in de señales multimodales",
         "agents.signals.body": (
-            "Voice-marker triggers, chat heat, picos de audio, cortes de "
-            "escena, presencia de cara y motion alimentan un solo scorer "
-            "de ventanas candidatas. Cada candidata trae puntaje viral, "
-            "fuerza del hook, legibilidad del caption y riesgo de dead-air."
+            "Marcadores de voz, calor del chat, picos de audio, cortes de "
+            "escena, presencia de cara y movimiento alimentan un solo "
+            "scorer de ventanas candidatas. Cada candidata trae puntaje "
+            "viral, fuerza del hook, legibilidad del caption y riesgo de "
+            "silencio en cámara."
         ),
-        "agents.diarization.title": "Diarización per-speaker",
+        "agents.diarization.title": "Diarización por speaker",
         "agents.diarization.body": (
-            "pyannote-audio 3.1 etiqueta cada segmento de habla; "
-            "embeddings por cosine-similarity resuelven identidades "
-            "persistentes entre VODs. Streams multi-host rutean cada clip "
-            "al brand kit del host correcto — sin tagging manual."
+            "pyannote-audio 3.1 etiqueta cada segmento de habla; los "
+            "embeddings por similitud de coseno resuelven identidades "
+            "persistentes entre VODs. Los streams multi-host mandan cada "
+            "clip al brand kit del host correcto — sin etiquetar a mano."
         ),
         "agents.gpu.title": "Transcripción GPU local",
         "agents.gpu.body": (
             "faster-whisper corre en la GPU del operador. El audio del "
-            "stream nunca sale de la máquina para transcribir. El único "
-            "round-trip LLM es generación de captions + hooks vía "
+            "stream nunca sale de la máquina para transcribir. La única "
+            "ida y vuelta al LLM es la generación de captions + hooks vía "
             "Anthropic Claude."
         ),
-        "agents.mcp.title": "Surface de control MCP-nativa",
+        "agents.mcp.title": "Surface de control nativa de MCP",
         "agents.mcp.body_html": (
-            "Cada acción del operador es también una MCP tool. Corré "
+            "Cada acción del operador es también una herramienta MCP. Corre "
             "<code>nexoclip mcp serve --token &lt;api-token&gt;</code> "
             "para exponer MCP por stdio. Claude Code, Cursor y cualquier "
-            "cliente MCP ven tools para listar streams, kick-off de "
-            "pipelines, fetch de clips, manejar brand kits, inspeccionar "
-            "el gasto LLM."
+            "cliente MCP ven herramientas para listar streams, arrancar "
+            "pipelines, traer clips, manejar brand kits e inspeccionar "
+            "el gasto en LLM."
         ),
-        "agents.api.title": "REST fully-typed + OpenAPI",
+        "agents.api.title": "REST tipada de punta a punta + OpenAPI",
         "agents.api.body_html": (
-            "Spec OpenAPI 3.1 auto-generado en <code>/openapi.json</code>, "
+            "Spec OpenAPI 3.1 autogenerado en <code>/openapi.json</code>, "
             "Swagger interactivo en <code>/docs</code>. Request y response "
-            "bodies validados con Pydantic; cero string parsing en ambos "
+            "validados con Pydantic; cero parseo de strings en ambos "
             "lados."
         ),
         "agents.persona.title": (
             "Operador: mitad humano, mitad agente"
         ),
         "agents.persona.body": (
-            "NexoClip ship asumiendo que el operador es híbrido: un "
-            "agente que dibuja el batch durante la noche, un humano que "
+            "NexoClip se diseñó asumiendo que el operador es híbrido: un "
+            "agente que arma el batch durante la noche, un humano que "
             "lo aprueba en 30 segundos con el café de la mañana. La "
-            "ventana de undo es el límite de confianza entre las dos mitades."
+            "ventana para deshacer es el límite de confianza entre las "
+            "dos mitades."
         ),
-        "agents.cta.heading": "Empezá a integrar",
+        "agents.cta.heading": "Empieza a integrar",
         "agents.cta.body": (
-            "Leé el spec OpenAPI, droppeá el llms.txt en el contexto de "
-            "tu cliente LLM, o corré el servidor MCP local. El token de "
-            "tenant es la única credencial que necesitás."
+            "Lee el spec OpenAPI, suelta el llms.txt en el contexto de "
+            "tu cliente LLM, o corre el servidor MCP local. El token de "
+            "tenant es la única credencial que necesitas."
         ),
 
         # ============================================================
@@ -898,31 +904,31 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "nav.logout": "Salir",
         "nav.new_clip": "Nuevo clip",
         # ---- Nuevo clip — hub de ingesta (una sola card + selector) ----
-        "newClip.modesHint": "o envialo de otra forma",
+        "newClip.modesHint": "o mándalo de otra forma",
         "newClip.modes.url.label": "Pegar URL",
         "newClip.modes.upload.label": "Subir",
         "newClip.modes.live.label": "En vivo",
         "newClip.modes.drive.label": "Carpeta Drive",
-        "newClip.url.title": "Pegá una URL",
+        "newClip.url.title": "Pega una URL",
         "newClip.url.tag": "Lo más rápido",
-        "newClip.url.help": "VOD de Kick, Twitch o YouTube. Lo descargamos por vos.",
+        "newClip.url.help": "VOD de Kick, Twitch o YouTube. Lo descargamos por ti.",
         "newClip.url.fieldLabel": "URL del VOD",
         "newClip.url.placeholder": "https://kick.com/aldovillanueva/videos/…",
         "newClip.url.supportedPre": "Soportados:",
         "newClip.url.start": "Empezar",
-        "newClip.url.cookiesPre": "Kick y YouTube con restricción de edad necesitan un cookies.txt con sesión iniciada en el volumen — definí",
+        "newClip.url.cookiesPre": "Kick y YouTube con restricción de edad necesitan un cookies.txt con sesión iniciada en el volumen — define",
         "newClip.url.cookiesMid": "para apuntarlo.",
-        "newClip.upload.title": "Subí un video",
+        "newClip.upload.title": "Sube un video",
         "newClip.upload.tag": "Sin URL",
         "newClip.upload.help": "VOD ya grabado o video del celular.",
         "newClip.upload.fieldLabel": "Archivo de video",
-        "newClip.upload.dropTitle": "Soltá un archivo o hacé clic para buscar",
-        "newClip.upload.dropHint": "Arrastrá tu VOD acá, o seleccionalo desde tu dispositivo",
+        "newClip.upload.dropTitle": "Suelta un archivo o haz clic para buscar",
+        "newClip.upload.dropHint": "Arrastra tu VOD aquí, o selecciónalo desde tu dispositivo",
         "newClip.upload.cta": "Subir y procesar",
-        "newClip.upload.largeFiles": "Archivos grandes (> 500 MB) — mantené la pestaña abierta hasta que termine la subida.",
-        "newClip.live.title": "Transmití en vivo (RTMP)",
+        "newClip.upload.largeFiles": "Archivos grandes (> 500 MB) — deja la pestaña abierta hasta que termine la subida.",
+        "newClip.live.title": "Transmite en vivo (RTMP)",
         "newClip.live.tag": "OBS / Streamlabs",
-        "newClip.live.help": "Pegá esto en OBS. Grabamos la transmisión y corremos el pipeline cuando la cortás.",
+        "newClip.live.help": "Pega esto en OBS. Grabamos la transmisión y corremos el pipeline cuando la cortas.",
         "newClip.live.serverLabel": "Servidor",
         "newClip.live.keyLabel": "Clave de transmisión",
         "newClip.live.reveal": "Mostrar",
@@ -930,15 +936,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "newClip.live.copy": "Copiar",
         "newClip.live.copied": "Copiado",
         "newClip.live.openDashboard": "Abrir panel en vivo",
-        "newClip.live.note": "Empezamos a grabar apenas OBS se conecta. Cortá la transmisión para disparar el pipeline automáticamente.",
-        "newClip.live.notConfigured": "No está configurado en este despliegue. Definí NEXOCLIP_LIVE_RTMP_BASE_URL en el env para habilitarlo.",
+        "newClip.live.note": "Empezamos a grabar apenas OBS se conecta. Corta la transmisión para disparar el pipeline automáticamente.",
+        "newClip.live.notConfigured": "No está configurado en este despliegue. Define NEXOCLIP_LIVE_RTMP_BASE_URL en el env para habilitarlo.",
         "newClip.live.unavailable": "No disponible",
-        "newClip.drive.title": "Mirá una carpeta de Drive",
+        "newClip.drive.title": "Vigila una carpeta de Drive",
         "newClip.drive.tag": "Auto-ingesta",
-        "newClip.drive.help": "Soltá nuevos VODs en una carpeta de Google Drive; los traemos uno por uno automáticamente. Ideal para equipos.",
+        "newClip.drive.help": "Suelta nuevos VODs en una carpeta de Google Drive; los traemos uno por uno automáticamente. Ideal para equipos.",
         "newClip.drive.watchedLabel": "Carpeta vigilada",
-        "newClip.drive.connectTitle": "Conectá una carpeta de Drive",
-        "newClip.drive.connectHint": "Todavía no hay carpeta vigilada — configurá una para auto-ingestar nuevos VODs.",
+        "newClip.drive.connectTitle": "Conecta una carpeta de Drive",
+        "newClip.drive.connectHint": "Todavía no hay carpeta vigilada — configura una para auto-ingestar nuevos VODs.",
         "newClip.drive.manage": "Gestionar carpetas de Drive",
         "newClip.drive.note": "Los archivos nuevos se detectan en ~60 segundos y pasan por el mismo pipeline que todo lo demás.",
 
@@ -960,8 +966,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings.site.placeholder_es": "ej. US$ 29 / mes",
         "settings.site.placeholder_en": "ej. $29 / month",
         "settings.site.preview_note": (
-            "Escribí el texto completo tal cual querés que aparezca, "
-            "incluyendo la moneda y el período (ej. 'US$ 29 / mes'). Dejá un "
+            "Escribe el texto completo tal cual quieres que aparezca, "
+            "incluyendo la moneda y el período (ej. 'US$ 29 / mes'). Deja un "
             "campo vacío para que use el otro idioma, o el placeholder por "
             "defecto si los dos están vacíos."
         ),
@@ -974,8 +980,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # ============================================================
         "sso.fail.title": "Sesión inválida",
         "sso.fail.body": (
-            "El enlace que usaste para entrar no es válido o expiró. "
-            "Volvé al dashboard de Nexo AI y abrí NexoClip de nuevo."
+            "El enlace que usaste para entrar no es válido o ya expiró. "
+            "Vuelve al dashboard de Nexo AI y abre NexoClip de nuevo."
         ),
         "sso.fail.cta": "Ir a Nexo AI",
     },

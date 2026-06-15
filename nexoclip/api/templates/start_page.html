@@ -11,10 +11,10 @@
   <div class="nc-alert nc-alert--danger nc-ingest__alert">
     <div class="nc-alert__icon"><i class="ti ti-user-off" aria-hidden="true"></i></div>
     <div class="nc-alert__body">
-      <div class="nc-alert__title">You need a persona first</div>
+      <div class="nc-alert__title">Primero necesitas una firma</div>
       <div class="nc-alert__detail">
-        The pipeline writes captions + variants in a persona's voice. Set one up at
-        <a href="/dashboard/personas">/dashboard/personas</a>, then come back here.
+        Tus textos y versiones salen con la voz de tu firma. Crea una en
+        <a href="/dashboard/personas">/dashboard/personas</a> y vuelve aquí.
       </div>
     </div>
   </div>
@@ -23,9 +23,9 @@
   <div class="nc-alert nc-alert--danger nc-ingest__alert">
     <div class="nc-alert__icon"><i class="ti ti-alert-triangle" aria-hidden="true"></i></div>
     <div class="nc-alert__body">
-      <div class="nc-alert__title">ffmpeg is not installed on the server</div>
+      <div class="nc-alert__title">Falta ffmpeg en el servidor</div>
       <div class="nc-alert__detail">
-        The pipeline needs ffmpeg to extract audio. Install it and restart the dashboard.
+        Lo necesitamos para sacar el audio de tu video. Instálalo y reinicia el panel.
       </div>
     </div>
   </div>
@@ -229,10 +229,10 @@
   var urlSubmit = document.getElementById('urlSubmit');
   var urlForm = document.getElementById('urlForm');
   function validate(url) {
-    if (!url) return "Paste a VOD URL.";
+    if (!url) return "Pega el enlace de tu VOD.";
     var trimmed = url.trim();
     for (var i = 0; i < URL_PATTERNS.length; i++) { if (URL_PATTERNS[i].test(trimmed)) return null; }
-    return "Only kick.com / twitch.tv / youtube.com / youtu.be URLs are supported.";
+    return "Solo funcionan enlaces de kick.com, twitch.tv, youtube.com o youtu.be.";
   }
   function showError(msg) {
     if (!errorBox) return;
@@ -251,7 +251,7 @@
       var msg = validate(input.value);
       if (msg) { e.preventDefault(); showError(msg); input.focus(); return; }
       urlSubmit.disabled = true;
-      urlSubmit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Starting…</span>';
+      urlSubmit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Empezando…</span>';
     });
   }
 
@@ -289,7 +289,7 @@
     uploadForm.addEventListener('submit', function () {
       if (uploadSubmit) {
         uploadSubmit.disabled = true;
-        uploadSubmit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Uploading…</span>';
+        uploadSubmit.innerHTML = '<i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i> <span>Subiendo…</span>';
       }
     });
   }

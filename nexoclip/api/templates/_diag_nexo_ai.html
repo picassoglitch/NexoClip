@@ -11,7 +11,7 @@
 <div class="nc-page-header">
   <div>
     <h2>Diagnóstico · integración Nexo AI</h2>
-    <small>Cada eslabón de la cadena de reporting de tokens, en orden. El primero en rojo es el que hay que arreglar.</small>
+    <small>Cada paso de cómo se cuentan tus tokens, en orden. El primero que veas en rojo es el que tienes que arreglar.</small>
   </div>
 </div>
 
@@ -54,7 +54,7 @@
     <p style="margin: 12px 0 0 0;">
       <a href="#ping-detail" class="nc-btn nc-btn--sm" style="text-decoration: none;">
         <i class="ti ti-arrow-down" aria-hidden="true"></i>
-        <span>Saltar al detalle del ping HTTP</span>
+        <span>Ver el detalle de la conexión</span>
       </a>
     </p>
     {% endif %}
@@ -76,7 +76,7 @@
             {% if base_url %}
               <code style="color: var(--nc-success);">{{ base_url }}</code>
             {% else %}
-              <span style="color: var(--nc-danger);">✗ no configurada</span>
+              <span style="color: var(--nc-danger);">✗ falta configurar</span>
             {% endif %}
           </td>
         </tr>
@@ -84,9 +84,9 @@
           <td style="padding: 8px 0; color: var(--nc-text-muted); font-family: var(--nc-mono), monospace;">NEXO_AI_ADMIN_TOKEN</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if has_admin_token %}
-              <span style="color: var(--nc-success);">✓ presente</span>
+              <span style="color: var(--nc-success);">✓ lista</span>
             {% else %}
-              <span style="color: var(--nc-danger);">✗ no configurada</span>
+              <span style="color: var(--nc-danger);">✗ falta configurar</span>
             {% endif %}
           </td>
         </tr>
@@ -94,9 +94,9 @@
           <td style="padding: 8px 0; color: var(--nc-text-muted); font-family: var(--nc-mono), monospace;">NEXO_AI_SSO_SECRET</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if has_sso_secret %}
-              <span style="color: var(--nc-success);">✓ presente</span>
+              <span style="color: var(--nc-success);">✓ lista</span>
             {% else %}
-              <span style="color: var(--nc-warn);">⚠ no configurada (solo SSO falla)</span>
+              <span style="color: var(--nc-warn);">⚠ falta configurar (solo afecta al inicio de sesión)</span>
             {% endif %}
           </td>
         </tr>
@@ -124,7 +124,7 @@
             {% if external_user_id %}
               <code style="font-size: 11.5px; color: var(--nc-success);">{{ external_user_id }}</code>
             {% else %}
-              <span style="color: var(--nc-danger);">✗ NULL · no está vinculado</span>
+              <span style="color: var(--nc-danger);">✗ vacío · tu cuenta no está conectada</span>
             {% endif %}
           </td>
         </tr>
@@ -155,15 +155,15 @@
   <div class="nc-panel__header" style="border-color: {{ _ping_color }};">
     <i class="ti ti-{% if _ok %}check{% elif _skip %}forbid{% else %}alert-circle{% endif %}" aria-hidden="true" style="color: {{ _ping_color }};"></i>
     <span class="nc-panel__title" style="color: {{ _ping_color }};">
-      Ping en vivo a Nexo AI ·
+      Prueba de conexión con Nexo AI ·
       {%- if _ok %} OK
       {%- elif _po == 'http_error' %} HTTP {{ ping.status_code }}
-      {%- elif _po == 'timeout' %} TIMEOUT
-      {%- elif _po == 'network' %} NETWORK ERROR
-      {%- elif _po == 'parse_error' %} PARSE ERROR
-      {%- elif _po == 'skip_no_url' %} skipped (sin BASE_URL)
-      {%- elif _po == 'skip_no_token' %} skipped (sin ADMIN_TOKEN)
-      {%- elif _po == 'skip_no_external_id' %} skipped (sin external_user_id)
+      {%- elif _po == 'timeout' %} se tardó demasiado
+      {%- elif _po == 'network' %} sin conexión
+      {%- elif _po == 'parse_error' %} respuesta ilegible
+      {%- elif _po == 'skip_no_url' %} sin probar (falta BASE_URL)
+      {%- elif _po == 'skip_no_token' %} sin probar (falta ADMIN_TOKEN)
+      {%- elif _po == 'skip_no_external_id' %} sin probar (falta external_user_id)
       {%- else %} {{ _po }}
       {%- endif %}
     </span>
@@ -186,7 +186,7 @@
         {% endif %}
         {% if ping.elapsed_ms is not none %}
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Latencia</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Cuánto tardó</td>
           <td style="padding: 8px 0; text-align: right;">
             <code>{{ ping.elapsed_ms }} ms</code>
           </td>
@@ -210,7 +210,7 @@
         {% endif %}
         {% if ping.balance_remaining is not none %}
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Balance reportado por Nexo AI</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Saldo que reporta Nexo AI</td>
           <td style="padding: 8px 0; text-align: right;">
             <code>{{ '{:,}'.format(ping.balance_remaining) }} tokens</code>
             {% if ping.balance_unlimited %}<span style="color: var(--nc-success); margin-left: 8px;">unlimited</span>{% endif %}
@@ -226,7 +226,7 @@
     {% if ping.body_excerpt %}
     <div style="margin-top: 14px;">
       <div style="font-family: var(--nc-mono), monospace; font-size: 10px; letterspacing: 0.1em; text-transform: uppercase; color: var(--nc-text-muted); margin-bottom: 4px;">
-        Body de respuesta (primeros 500 chars)
+        Respuesta del servidor (primeros 500 caracteres)
       </div>
       <pre style="margin: 0; padding: 10px 12px; background: var(--nc-bg-1); border: 1px solid var(--nc-line); border-radius: 6px; font-size: 11px; color: var(--nc-text); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">{{ ping.body_excerpt }}</pre>
     </div>
@@ -252,21 +252,21 @@
 <div class="nc-panel" style="margin-bottom: 14px;">
   <div class="nc-panel__header">
     <i class="ti ti-upload" aria-hidden="true"></i>
-    <span class="nc-panel__title">Reporte de uso saliente (POST /usage)</span>
-    <small>— lo que mueve el chip rojo de tokens</small>
+    <span class="nc-panel__title">Aviso de uso que enviamos (POST /usage)</span>
+    <small>— esto es lo que prende el aviso rojo de tokens</small>
   </div>
   <div class="nc-panel__body">
     <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
       <tbody>
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Último reporte</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Último aviso</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if report_ok == 1 %}
               <span style="color: var(--nc-success);">✓ OK</span>
             {% elif report_ok == 0 %}
               <span style="color: var(--nc-danger);">✗ FALLÓ</span>
             {% else %}
-              <span style="color: var(--nc-text-muted);">— nunca se intentó</span>
+              <span style="color: var(--nc-text-muted);">— todavía no se intenta</span>
             {% endif %}
           </td>
         </tr>
@@ -279,7 +279,7 @@
         </tr>
         {% endif %}
         <tr>
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Cuándo</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Cuándo fue</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if report_at %}<code>{{ report_at }}</code>
             {% else %}<span style="color: var(--nc-text-muted);">—</span>{% endif %}
@@ -301,23 +301,23 @@
 <div class="nc-panel" style="margin-bottom: 14px;">
   <div class="nc-panel__header">
     <i class="ti ti-database" aria-hidden="true"></i>
-    <span class="nc-panel__title">Cache local del balance</span>
+    <span class="nc-panel__title">Saldo guardado en NexoClip</span>
   </div>
   <div class="nc-panel__body">
     <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
       <tbody>
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Estado del ping anterior (legacy)</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Resultado de la prueba anterior</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if live_ok %}
-              <span style="color: var(--nc-success);">✓ balance actualizado</span>
+              <span style="color: var(--nc-success);">✓ saldo actualizado</span>
             {% else %}
-              <span style="color: var(--nc-danger);">✗ falló — ver detalle arriba</span>
+              <span style="color: var(--nc-danger);">✗ falló — mira el detalle de arriba</span>
             {% endif %}
           </td>
         </tr>
         <tr style="border-bottom: 1px solid var(--nc-line-soft);">
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">remaining (cache local)</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Tokens que te quedan (guardado)</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if cached_remaining is not none %}
               <code>{{ '{:,}'.format(cached_remaining) }} tokens</code>
@@ -339,12 +339,12 @@
           </td>
         </tr>
         <tr>
-          <td style="padding: 8px 0; color: var(--nc-text-muted);">Última actualización</td>
+          <td style="padding: 8px 0; color: var(--nc-text-muted);">Última vez que se actualizó</td>
           <td style="padding: 8px 0; text-align: right;">
             {% if cached_at %}
               <code style="font-size: 11.5px;">{{ cached_at }}</code>
             {% else %}
-              <span style="color: var(--nc-text-muted);">nunca</span>
+              <span style="color: var(--nc-text-muted);">todavía nunca</span>
             {% endif %}
           </td>
         </tr>
@@ -353,11 +353,11 @@
     <div style="margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap;">
       <a href="/dashboard/_balance/refresh" class="nc-btn nc-btn--sm">
         <i class="ti ti-refresh" aria-hidden="true"></i>
-        <span>Refrescar balance otra vez</span>
+        <span>Volver a checar tu saldo</span>
       </a>
       <a href="/dashboard/streams" class="nc-btn nc-btn--sm nc-btn--ghost">
         <i class="ti ti-arrow-left" aria-hidden="true"></i>
-        <span>Volver al dashboard</span>
+        <span>Regresar a tu panel</span>
       </a>
     </div>
   </div>
@@ -365,7 +365,7 @@
 
 {# ── How the chain works (reference for whoever lands here) ──────────── #}
 <details class="nc-details" style="margin-top: 22px;">
-  <summary>Cómo funciona la cadena (referencia)</summary>
+  <summary>Cómo funciona todo esto (referencia)</summary>
   <ol style="line-height: 1.7; font-size: 13px; color: var(--nc-text-muted); margin-top: 12px; padding-left: 22px;">
     <li>NexoClip hace una llamada LLM (variants, hooks, etc.).</li>
     <li><code>nexoclip/llm/router.py</code> termina la llamada y dispara <code>schedule_report()</code> fire-and-forget.</li>
@@ -377,8 +377,8 @@
     <li><code>base.html</code> renderiza el chip arriba a la derecha.</li>
   </ol>
   <p style="font-size: 12.5px; color: var(--nc-text-muted); line-height: 1.55; margin-top: 10px;">
-    Si la cadena se rompe en cualquier paso, el chip queda en "— tokens · refresh"
-    y un click te trae aquí.
+    Si algo se rompe en cualquiera de estos pasos, el contador de arriba se queda en "— tokens · refresh"
+    y con un click te trae aquí.
   </p>
 </details>
 

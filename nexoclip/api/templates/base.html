@@ -91,13 +91,13 @@
       {%- set _tier = (request.state.tenant_tier if request and request.state else None) -%}
       {% if _tier %}
       <span class="nc-chip nc-chip--{% if _tier == 'free' %}warn{% else %}success{% endif %}"
-            title="{% if _tier == 'free' %}Free plan · nexoclip.com watermark burned on exports. Upgrade for clean exports.{% else %}{{ _tier|capitalize }} plan · clean export{% endif %}">
+            title="{% if _tier == 'free' %}Plan gratis · tus clips salen con la marca de nexoclip.com. Mejora tu plan y exporta sin marca.{% else %}Plan {{ _tier|capitalize }} · exportas sin marca{% endif %}">
         <i class="ti ti-{% if _tier == 'free' %}flame{% else %}crown{% endif %}" aria-hidden="true"></i>
         <span>{{ _tier|capitalize }}</span>
       </span>
       {% endif %}
       {% if tenant_id %}
-      <span class="nc-chip nc-chip--muted" title="Current tenant">
+      <span class="nc-chip nc-chip--muted" title="Tu cuenta">
         <i class="ti ti-user" aria-hidden="true"></i>
         <span>{{ tenant_id }}</span>
       </span>

@@ -6,7 +6,7 @@
   <div>
     <h2>{% if kit %}Edita tu estilo{% else %}Nuevo estilo{% endif %}</h2>
     <small>
-      {% if kit %}<span class="nc-mono">{{ kit.id }}</span>{% else %}Define los colores, la tipografía, tus cuentas y las frases que disparan clips para un streamer.{% endif %}
+      {% if kit %}<span class="nc-mono">{{ kit.id }}</span>{% else %}Define tus cuentas y las frases que disparan clips para un streamer.{% endif %}
     </small>
   </div>
   <div class="nc-page-summary">
@@ -19,78 +19,24 @@
 
 <form action="{% if kit %}/dashboard/brand-kits/{{ kit.id }}{% else %}/dashboard/brand-kits{% endif %}" method="post">
 
-  <div class="nc-grid-2">
-
-    <div class="nc-panel">
-      <div class="nc-panel__header">
-        <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-        <span class="nc-panel__title">Tu identidad</span>
-      </div>
-      <div class="nc-panel__body">
-        <label class="nc-label">Nombre
-          <input class="nc-input" type="text" name="name" required
-                 value="{{ kit.name if kit else '' }}"
-                 placeholder="ej. AARA, Aldo Villanueva">
-        </label>
-        <div class="nc-grid-3">
-          <label class="nc-label">Color principal
-            <input class="nc-input" type="color" name="primary_color"
-                   value="{{ kit.primary_color if kit else '#FF3366' }}">
-          </label>
-          <label class="nc-label">Color de acento
-            <input class="nc-input" type="color" name="accent_color"
-                   value="{{ kit.accent_color if kit else '#FFD700' }}">
-          </label>
-          <label class="nc-label">Color del texto
-            <input class="nc-input" type="color" name="text_color"
-                   value="{{ kit.text_color if kit else '#FFFFFF' }}">
-          </label>
-        </div>
-        <div class="nc-grid-2">
-          <label class="nc-label">Tipografía
-            <input class="nc-input" type="text" name="font_family"
-                   value="{{ kit.font_family if kit else 'Inter' }}"
-                   placeholder="Inter / Roboto / Montserrat">
-          </label>
-          <label class="nc-label">Grosor de la letra
-            <select class="nc-select" name="font_weight">
-              {% for w in [400, 500, 600, 700, 800, 900] %}
-              <option value="{{ w }}" {% if kit and kit.font_weight == w %}selected{% elif not kit and w == 800 %}selected{% endif %}>{{ w }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        </div>
-        <label class="nc-label">Diseño por defecto
-          <select class="nc-select" name="default_layout">
-            {% for layout in ['pip', 'split_stack', 'blurred_bg'] %}
-            <option value="{{ layout }}" {% if kit and kit.default_layout == layout %}selected{% elif not kit and layout == 'pip' %}selected{% endif %}>{{ layout }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        {% if not kit %}
-        <label class="nc-checkbox">
-          <input type="checkbox" name="is_default" value="1">
-          <span>Que este sea tu estilo por defecto</span>
-        </label>
-        {% endif %}
-      </div>
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-id-badge-2" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
+      <span class="nc-panel__title">Tu identidad</span>
     </div>
-
-    <div class="nc-panel">
-      <div class="nc-panel__header">
-        <i class="ti ti-eye" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-        <span class="nc-panel__title">Vista previa</span>
-        <small>— se actualiza al guardar</small>
-      </div>
-      <div class="nc-panel__body">
-        <div style="background: {{ kit.primary_color if kit else '#FF3366' }}; color: {{ kit.text_color if kit else '#FFFFFF' }}; font-family: {{ kit.font_family if kit else 'Inter' }}, sans-serif; font-weight: {{ kit.font_weight if kit else 800 }}; padding: 1.5rem; border-radius: var(--nc-radius); min-height: 180px; display: flex; flex-direction: column; justify-content: space-between;">
-          <div style="font-size: 0.8rem; opacity: 0.85;">@yourhandle</div>
-          <div style="font-size: 1.6rem; text-align: center;">JUGADA ÉPICA</div>
-          <div style="font-size: 0.7rem; text-align: right; color: {{ kit.accent_color if kit else '#FFD700' }};">▲ NexoClip</div>
-        </div>
-      </div>
+    <div class="nc-panel__body">
+      <label class="nc-label">Nombre
+        <input class="nc-input" type="text" name="name" required
+               value="{{ kit.name if kit else '' }}"
+               placeholder="ej. AARA, Aldo Villanueva">
+      </label>
+      {% if not kit %}
+      <label class="nc-checkbox">
+        <input type="checkbox" name="is_default" value="1">
+        <span>Que este sea tu estilo por defecto</span>
+      </label>
+      {% endif %}
     </div>
-
   </div>
 
   <div class="nc-panel">
@@ -242,23 +188,25 @@
         horario bloqueado. Cuando está apagado, solo te mostramos un aviso de
         riesgo en la pantalla de publicar.
       </small>
-      <div class="nc-grid-2">
-        <label class="nc-label">Tu zona horaria <small>(formato IANA, para las horas de descanso)</small>
-          <input class="nc-input nc-input--mono" type="text" name="content_timezone"
-                 value="{{ kit.content_timezone if kit else 'UTC' }}"
-                 placeholder="America/Mexico_City">
-        </label>
-      </div>
-      <label class="nc-label">Ajustes por plataforma <small>(avanzado — JSON; vacío = usamos lo recomendado)</small>
-        <textarea class="nc-input nc-input--mono" name="safety_policy_json" rows="4"
-                  placeholder='{"tiktok": {"min_spacing_min": 180, "daily_cap": 3}}'>{{ kit.safety_policy|tojson if kit and kit.safety_policy else '' }}</textarea>
+      {# Timezone is detected from the browser — the operator never types an
+         IANA name. JS fills the hidden input on load (keeping the saved value
+         if there is one) and shows it read-only below. #}
+      <input type="hidden" name="content_timezone" id="bk-tz"
+             value="{{ kit.content_timezone if kit and kit.content_timezone else '' }}">
+      <small style="display: block; margin-bottom: 10px;">
+        Tu zona horaria: <span class="nc-mono" id="bk-tz-label">detectando…</span>
+        <span class="nc-text--muted">— la detectamos sola, para respetar tus horas de descanso.</span>
+      </small>
+      <label class="nc-label">¿Qué tan seguido publicas?
+        <select class="nc-select" name="safety_preset">
+          <option value="recommended"{% if safety_preset == 'recommended' %} selected{% endif %}>Recomendado — lo más seguro</option>
+          <option value="cautious"{% if safety_preset == 'cautious' %} selected{% endif %}>Más cuidadoso — menos posts, más espaciados</option>
+          <option value="active"{% if safety_preset == 'active' %} selected{% endif %}>Más activo — más posts, más seguido</option>
+        </select>
       </label>
       <small style="display: block; margin-top: 4px;">
-        Campos: <span class="nc-mono">min_spacing_min</span>,
-        <span class="nc-mono">daily_cap</span>,
-        <span class="nc-mono">quiet_hours_start</span>,
-        <span class="nc-mono">quiet_hours_end</span>,
-        <span class="nc-mono">jitter_min</span>.
+        Nosotros nos encargamos del espaciado y los topes por plataforma para que
+        no te marquen como spam.
       </small>
     </div>
   </div>
@@ -329,45 +277,17 @@
   </div>
 </form>
 
-{% if kit %}
-<div class="nc-panel">
-  <div class="nc-panel__header">
-    <i class="ti ti-sparkles" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>
-    <span class="nc-panel__title">Logo</span>
-    <small>— hecho con IA. Vuelve a generarlo para otra versión.</small>
-  </div>
-  <div class="nc-panel__body">
-    <div class="nc-grid-2">
-      <div>
-        {% if kit.logo_url %}
-        <img src="{{ kit.logo_url }}" alt="logo de {{ kit.name }}"
-             style="width: 200px; height: 200px; background: var(--nc-bg-raised); padding: 0.5rem; border: var(--nc-hairline); border-radius: var(--nc-radius);">
-        <small style="display: block; margin-top: 6px;">
-          {% if kit.ai_generated %}Hecho con IA{% if kit.ai_provider %} con {{ kit.ai_provider }}{% endif %}.{% else %}Subido a mano.{% endif %}
-        </small>
-        {% else %}
-        <div style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--nc-blue-dim); border-radius: var(--nc-radius); color: var(--nc-blue-dim); font-size: 32px;">
-          <i class="ti ti-photo-off" aria-hidden="true"></i>
-        </div>
-        <small style="display: block; margin-top: 6px;">Todavía no tienes logo.</small>
-        {% endif %}
-      </div>
-      <form action="/dashboard/brand-kits/{{ kit.id }}/generate-logo" method="post">
-        <label class="nc-label">Cómo lo quieres
-          <input class="nc-input" type="text" name="style_hint"
-                 value="{{ kit.ai_prompt if kit.ai_prompt else 'Marca minimalista / monograma' }}"
-                 placeholder="Marca minimalista / monograma">
-        </label>
-        <small style="display: block; margin-bottom: 12px;">
-          Usa tus colores principal y de acento. Costo: una llamada a Anthropic.
-        </small>
-        <button type="submit" class="nc-btn">
-          <i class="ti ti-wand" aria-hidden="true"></i>
-          <span>{% if kit.logo_url %}Generar otro logo{% else %}Generar logo{% endif %}</span>
-        </button>
-      </form>
-    </div>
-  </div>
-</div>
-{% endif %}
+<script>
+  // Auto-detect the operator's timezone from the browser so they never type
+  // an IANA name. Keep any value already saved on the kit; otherwise detect.
+  (function () {
+    var input = document.getElementById("bk-tz");
+    var label = document.getElementById("bk-tz-label");
+    var detected = "UTC";
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) {}
+    var tz = (input && input.value) ? input.value : detected;
+    if (input) input.value = tz;
+    if (label) label.textContent = tz;
+  })();
+</script>
 {% endblock %}

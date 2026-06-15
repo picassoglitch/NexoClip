@@ -5317,8 +5317,8 @@ async def brand_kits_new_form(
 async def brand_kits_create(
     request: Request,
     name: str = Form(...),
-    primary_color: str = Form(...),
-    accent_color: str = Form(...),
+    primary_color: str = Form("#FF3366"),
+    accent_color: str = Form("#FFD700"),
     text_color: str = Form("#FFFFFF"),
     font_family: str = Form("Inter"),
     font_weight: int = Form(800),
@@ -5375,6 +5375,7 @@ async def brand_kits_edit_form(
     db: Database = Depends(get_db),
 ) -> Response:
     from nexoclip.branding import caption_style_or_default, preset_choices
+    from nexoclip.safety.policy import preset_for_overrides
 
     kit = await BrandKitsRepo(db).get(kit_id)
     if kit is None:
@@ -5387,6 +5388,7 @@ async def brand_kits_edit_form(
             "kit": kit,
             "caption_style": caption_style,
             "caption_preset_choices": preset_choices(),
+            "safety_preset": preset_for_overrides(kit.safety_policy),
         },
     )
 
@@ -5399,8 +5401,8 @@ async def brand_kits_edit_submit(
     request: Request,
     kit_id: str,
     name: str = Form(...),
-    primary_color: str = Form(...),
-    accent_color: str = Form(...),
+    primary_color: str = Form("#FF3366"),
+    accent_color: str = Form("#FFD700"),
     text_color: str = Form("#FFFFFF"),
     font_family: str = Form("Inter"),
     font_weight: int = Form(800),
@@ -5417,31 +5419,22 @@ async def brand_kits_edit_submit(
     retroactive_phrases: str = Form(""),
     safe_schedule_enabled: str = Form(""),
     content_timezone: str = Form("UTC"),
-    safety_policy_json: str = Form(""),
+    safety_preset: str = Form("recommended"),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    import json as _json
-
     from nexoclip.branding.captions import _preset_by_id
+    from nexoclip.safety.policy import policy_overrides_for_preset
 
     repo = BrandKitsRepo(db)
     if await repo.get(kit_id) is None:
         raise HTTPException(status_code=404, detail="brand kit not found")
     caption_style = _preset_by_id(caption_preset).model_dump()
 
-    # Safe trap — advanced per-platform overrides arrive as a JSON blob.
-    # An empty / malformed blob means "fall back to the built-in defaults"
-    # rather than 500ing the settings save.
-    safety_policy: dict[str, object] | None = None
-    blob = safety_policy_json.strip()
-    if blob:
-        try:
-            parsed = _json.loads(blob)
-            if isinstance(parsed, dict):
-                safety_policy = parsed
-        except _json.JSONDecodeError:
-            safety_policy = None
+    # The raw per-platform JSON was replaced by a simple preset; turn it into
+    # the override dict policy_for_kit consumes. "recommended" -> None means
+    # "use the built-in defaults".
+    safety_policy = policy_overrides_for_preset(safety_preset)
 
     await repo.update(
         kit_id,

@@ -65,6 +65,54 @@ def default_rule_for(platform: str) -> PlatformSafetyRule:
     return PLATFORM_DEFAULTS.get(platform, _FALLBACK)
 
 
+# Operator-facing presets that replace the raw per-platform JSON in the UI.
+# A non-technical operator picks one of these; the handler turns it into the
+# `{platform: {field: value}}` override dict that `policy_for_kit` consumes.
+SAFETY_PRESETS: tuple[str, ...] = ("recommended", "cautious", "active")
+
+
+def policy_overrides_for_preset(preset: str) -> dict[str, dict[str, int]] | None:
+    """Map a simple UI preset to per-platform overrides.
+
+    "recommended" -> None: use the built-in PLATFORM_DEFAULTS verbatim (the
+    safest, evenly-spaced envelope). "cautious" posts less / spaced wider;
+    "active" posts more / spaced tighter. Only the cap + spacing scale — quiet
+    hours and jitter keep their tuned defaults. Schedulers with no cap (buffer)
+    are left untouched.
+    """
+    if preset == "cautious":
+        factor_cap, factor_spacing = 0.6, 1.5
+    elif preset == "active":
+        factor_cap, factor_spacing = 1.6, 0.7
+    else:
+        return None
+
+    out: dict[str, dict[str, int]] = {}
+    for platform, rule in PLATFORM_DEFAULTS.items():
+        if rule.daily_cap <= 0:
+            continue
+        out[platform] = {
+            "daily_cap": max(1, round(rule.daily_cap * factor_cap)),
+            "min_spacing_min": max(30, round(rule.min_spacing_min * factor_spacing)),
+        }
+    return out
+
+
+def preset_for_overrides(overrides: Any) -> str:
+    """Best-effort reverse map: stored overrides -> UI preset.
+
+    Empty/None -> "recommended". An override dict that exactly matches a known
+    preset maps back to it; anything else (e.g. legacy hand-written JSON) also
+    falls back to "recommended" so the dropdown always has a sane selection.
+    """
+    if not overrides:
+        return "recommended"
+    for preset in ("cautious", "active"):
+        if overrides == policy_overrides_for_preset(preset):
+            return preset
+    return "recommended"
+
+
 def policy_for_kit(kit: Any) -> SafetyPolicy:
     """Build a `SafetyPolicy` from a brand kit.
 

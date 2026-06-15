@@ -35,8 +35,8 @@ async def test_create_form_renders(
     await _login(client, tenants["alice"]["token"])
     r = await client.get("/dashboard/brand-kits/new")
     assert r.status_code == 200
-    assert "New brand kit" in r.text
-    assert 'name="primary_color"' in r.text
+    assert "Nuevo estilo" in r.text
+    assert 'name="name"' in r.text
     assert 'name="forward_phrases"' in r.text
 
 

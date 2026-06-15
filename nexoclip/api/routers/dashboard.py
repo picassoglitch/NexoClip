@@ -5231,23 +5231,33 @@ async def sources_add(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
+    import sqlite3
+
     from nexoclip.ingest.service import detect_platform
 
     resolved = platform.strip() or detect_platform(channel_url)
-    await ChannelWatchesRepo(db).create(
-        platform=resolved,
-        channel_url=channel_url.strip(),
-        persona_id=persona_id,
-        channel_label=label.strip() or None,
-        language=language.strip() or None,
-        max_per_poll=int(max_per_poll),
-        polls_per_day=int(polls_per_day),
-    )
+    try:
+        await ChannelWatchesRepo(db).create(
+            platform=resolved,
+            channel_url=channel_url.strip(),
+            persona_id=persona_id,
+            channel_label=label.strip() or None,
+            language=language.strip() or None,
+            max_per_poll=int(max_per_poll),
+            polls_per_day=int(polls_per_day),
+        )
+    except sqlite3.IntegrityError:
+        # UNIQUE(tenant_id, channel_url): this tenant already watches this
+        # exact channel URL. A re-add (or a double-submit) must not 500 —
+        # bounce back with a friendly banner instead of crashing.
+        return RedirectResponse(
+            url="/dashboard/sources?error=already_watching", status_code=303,
+        )
     await EventsRepo(db).emit(
         type="channel_watch.created",
         payload={"channel_url": channel_url.strip(), "platform": resolved},
     )
-    return RedirectResponse(url="/dashboard/sources", status_code=303)
+    return RedirectResponse(url="/dashboard/sources?added=1", status_code=303)
 
 
 @router.post("/sources/{watch_id}/toggle", dependencies=[Depends(require_full_scope)])

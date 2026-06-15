@@ -9,6 +9,22 @@
   </div>
 </div>
 
+{% if request.query_params.get('error') == 'already_watching' %}
+<div class="nc-panel" role="alert" style="border-color: rgba(230,80,80,0.35); margin-bottom: 14px;">
+  <div class="nc-panel__body" style="display:flex; align-items:center; gap:10px; color:#ff9090;">
+    <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+    <span>Ya estás vigilando ese canal — la liga ya está en tu lista de abajo.</span>
+  </div>
+</div>
+{% elif request.query_params.get('added') %}
+<div class="nc-panel" role="status" style="border-color: rgba(72,187,120,0.35); margin-bottom: 14px;">
+  <div class="nc-panel__body" style="display:flex; align-items:center; gap:10px; color: var(--nc-green, #48bb78);">
+    <i class="ti ti-check" aria-hidden="true"></i>
+    <span>Canal conectado — lo revisaremos según la frecuencia que elegiste.</span>
+  </div>
+</div>
+{% endif %}
+
 <div class="nc-panel">
   <div class="nc-panel__header">
     <i class="ti ti-plug-connected" aria-hidden="true" style="color: var(--nc-blue-bright);"></i>

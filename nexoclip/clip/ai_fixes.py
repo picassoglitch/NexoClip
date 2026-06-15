@@ -50,11 +50,18 @@ class AIFixesResult:
     fixes: list[FixOutcome]
 
 
+# Sources where a Kick/stream-style bottom banner (repost-page URL, LIVE
+# badge, etc.) actually makes sense. Uploaded files and unknown sources get
+# no banner fixes — the banner would just paste an irrelevant handle.
+_STREAM_SOURCES: frozenset[str] = frozenset({"kick", "twitch", "youtube"})
+
+
 def apply_ai_fixes(
     *,
     overlay_config: dict[str, object] | None,
     safe_zone_platform: str = "tiktok",
     brand_kit_url: str | None = None,
+    source_platform: str | None = None,
 ) -> AIFixesResult:
     """Apply non-destructive fixes to the overlay config. Returns the
     updated dict + a list of what was changed (for the dashboard's
@@ -77,6 +84,11 @@ def apply_ai_fixes(
 
     fixes: list[FixOutcome] = []
 
+    # Banner fixes (Kick repost-page URL / LIVE badge / variant) only make
+    # sense when the clip came from a stream. For uploads / unknown sources
+    # we skip them — pasting a brand-kit handle onto a random upload is noise.
+    is_stream_source = (source_platform or "").strip().lower() in _STREAM_SOURCES
+
     # ---- Fix 1a: enable captions if disabled -------------------
     # Captions disabled = the publishability scorer dings the clip
     # with "no on-screen text, lowers retention". Flipping on is
@@ -86,7 +98,7 @@ def apply_ai_fixes(
         captions["enabled"] = True
         fixes.append(FixOutcome(
             field="captions.enabled", before=False, after=True,
-            why="Enabled captions — retention drops without on-screen text",
+            why="Activé los subtítulos — sin texto en pantalla la gente se va antes",
         ))
 
     # ---- Fix 1b: lead_ms — DELETED in slice N.2 -----------------
@@ -101,12 +113,12 @@ def apply_ai_fixes(
     # Operator's brand kit usually has a kick URL/handle saved. If
     # banner.url is empty and we have one to use, fill it. This
     # unblocks Fix 3 below (auto-enable banner when URL exists).
-    if brand_kit_url and not (banner.get("url") or "").strip():
+    if is_stream_source and brand_kit_url and not (banner.get("url") or "").strip():
         before = banner.get("url")
         banner["url"] = brand_kit_url
         fixes.append(FixOutcome(
             field="banner.url", before=before, after=brand_kit_url,
-            why="Filled banner URL from your brand kit",
+            why="Puse la URL del banner, tomada de tu estilo",
         ))
 
     # ---- Fix 2: silently set safe_zone_platform if missing -------
@@ -118,16 +130,18 @@ def apply_ai_fixes(
 
     # ---- Fix 3: enable banner when URL exists but toggle is off ---
     url = (banner.get("url") or "").strip() if isinstance(banner.get("url"), str) else ""
-    if url and not banner.get("enabled"):
+    if is_stream_source and url and not banner.get("enabled"):
         banner["enabled"] = True
         fixes.append(FixOutcome(
             field="banner.enabled", before=False, after=True,
-            why="Enabled bottom banner — URL is set",
+            why="Activé el banner de abajo — ya hay URL",
         ))
 
     # ---- Fix 4: pick the right banner variant for the clip style ---
     style_id = (out.get("clip_style") or "").strip()
     recommended_variant: str | None = None
+    if not is_stream_source:
+        style_id = ""  # skip banner-variant suggestion for non-stream clips
     if style_id == "repost_page_viral":
         recommended_variant = "kick_repost_page"
     elif style_id == "clean_creator":
@@ -149,7 +163,7 @@ def apply_ai_fixes(
             banner["variant"] = recommended_variant
             fixes.append(FixOutcome(
                 field="banner.variant", before=before, after=recommended_variant,
-                why=f"Picked banner variant matching {style_id} style",
+                why=f"Elegí el banner que combina con tu estilo {style_id}",
             ))
 
     # ---- Fix 5: reposition captions out of platform danger zone ---
@@ -175,7 +189,7 @@ def apply_ai_fixes(
                     captions["position"] = trial
                     fixes.append(FixOutcome(
                         field="captions.position", before=before_pos, after=trial,
-                        why=f"Moved captions to {trial} — was covered by platform UI",
+                        why=f"Moví los subtítulos a {trial} — los tapaba la app",
                     ))
                     break
 

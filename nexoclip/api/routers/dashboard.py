@@ -2292,8 +2292,8 @@ def _parse_overlay_form(
     captions_font_size: str = "",
     captions_animation: str = "",
     captions_lead_ms: int = 120,
-    comments_show: str,
-    comments_fake_likes: int,
+    comments_show: str = "",
+    comments_fake_likes: int = 8,
     # Slice I.1 — clip style + banner variant + top hook.
     clip_style: str = "",
     banner_variant: str = "",
@@ -2705,10 +2705,21 @@ async def clip_apply_ai_fixes(
     except Exception:  # noqa: BLE001 — best-effort
         bk_url = None
 
+    # Source platform gates the Kick/stream banner fixes — an uploaded or
+    # unknown-source clip shouldn't get a repost-page banner suggestion.
+    source_platform: str | None = None
+    try:
+        _stream = await StreamsRepo(db).get(clip.stream_id)
+        if _stream is not None:
+            source_platform = getattr(_stream, "platform", None)
+    except Exception:  # best-effort — source platform is just a gate hint
+        source_platform = None
+
     result = apply_ai_fixes(
         overlay_config=before_overlay,
         safe_zone_platform=safe_zone_target,
         brand_kit_url=bk_url,
+        source_platform=source_platform,
     )
 
     # --- Compute the AFTER state ------------------------------

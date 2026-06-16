@@ -283,6 +283,11 @@ async def upload_pipeline_runner(
         try:
             with bound_tenant(tenant_id):
                 await StreamsRepo(db).upsert(stream_to_row(stream))
+                # upsert is INSERT OR IGNORE; backfill the real length onto
+                # a row a live webhook may have created with duration 0.
+                await StreamsRepo(db).set_duration(
+                    stream.id, float(getattr(stream, "duration_s", 0) or 0)
+                )
         finally:
             await db.close()
 
@@ -487,6 +492,11 @@ async def live_pipeline_runner(
                     }
                 )
                 await StreamsRepo(db).upsert(row)
+                # upsert is INSERT OR IGNORE; backfill the real length onto
+                # the live row the NexoOBS webhook created with duration 0.
+                await StreamsRepo(db).set_duration(
+                    stream.id, float(getattr(stream, "duration_s", 0) or 0)
+                )
         finally:
             await db.close()
 

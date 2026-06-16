@@ -112,7 +112,7 @@
       <tbody>
         {% for c in calls %}
         <tr>
-          <td><span class="nc-mono nc-mono--muted">{{ c.ts[:19] }}</span></td>
+          <td><span class="nc-mono nc-mono--muted" data-localtime="{{ c.ts }}">{{ c.ts[:19] }}</span></td>
           <td><span class="nc-chip nc-chip--code">{{ c.purpose }}</span></td>
           <td><span class="nc-mono" style="font-size: 11px;">{{ c.provider }}/{{ c.model }}</span></td>
           <td class="nc-num nc-mono">{{ c.input_tokens }}</td>

@@ -505,10 +505,13 @@ async def nexoobs_started(
 
     now = _adapters_now()
     audio_path = recording_path.rsplit(".", 1)[0] + ".audio.wav"
-    # stream_id is <tenant>__<random>; the random suffix is the per-session
-    # part, so use it for the title (the tenant prefix is identical across a
+    # Prefer the title the operator set for the stream in NexoOBS (forwarded
+    # in the webhook payload). Fall back to a per-session tag when NexoOBS
+    # didn't send one: stream_id is <tenant>__<random>, so the random suffix
+    # is the per-session part (the tenant prefix is identical across a
     # tenant's streams and made every row look the same in the list).
     session_tag = stream_id.rsplit("__", 1)[-1][:10]
+    title = str(body.get("title") or "").strip() or f"NexoOBS live · {session_tag}"
     with bound_tenant(tenant.id):
         streams_repo = StreamsRepo(db)
         row = StreamRow(
@@ -516,8 +519,8 @@ async def nexoobs_started(
             tenant_id=tenant.id,
             vod_url=f"live://nexoobs/{stream_id}",
             platform="live",
-            title=f"NexoOBS live · {session_tag}",
-            channel=None,
+            title=title,
+            channel="NexoOBS",
             duration_s=0.0,
             source_video_path=recording_path,
             source_audio_path=audio_path,

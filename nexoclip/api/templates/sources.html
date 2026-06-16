@@ -142,7 +142,7 @@
             </form>
           </td>
           <td><span class="nc-mono">{{ w.seen_video_ids|length }}</span></td>
-          <td><span class="nc-mono" style="font-size: 11px;">{{ w.last_polled_at or 'nunca' }}</span></td>
+          <td><span class="nc-mono" style="font-size: 11px;"{% if w.last_polled_at %} data-localtime="{{ w.last_polled_at }}"{% endif %}>{{ w.last_polled_at[:19] if w.last_polled_at else 'nunca' }}</span></td>
           <td class="nc-cell-actions">
             <form action="/dashboard/sources/{{ w.id }}/toggle" method="post" style="display: inline; margin: 0;">
               <button type="submit" class="nc-btn nc-btn--sm">{{ "Pausar" if w.enabled else "Reanudar" }}</button>

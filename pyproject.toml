@@ -15,6 +15,11 @@ dependencies = [
 
     # VOD ingest
     "yt-dlp>=2024.10.0",
+    # Browser TLS impersonation. Kick is behind Cloudflare and 403s plain
+    # yt-dlp/httpx requests; curl_cffi lets us fetch Kick's channel-VOD API
+    # AND gives yt-dlp an `impersonate` target so the VOD download itself
+    # gets through. Required for the Kick channel-watch + ingest path.
+    "curl_cffi>=0.7",
 
     # Speech-to-text default is now AssemblyAI (cloud, no GPU dep).
     # See Migration Tasks A1-A3 in the project root for the rationale:

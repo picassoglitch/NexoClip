@@ -489,6 +489,23 @@ def _download_vod(
             hint="install aria2c on the host or set NEXOCLIP_YTDLP_USE_ARIA2C=false",
         )
 
+    # Kick sits behind Cloudflare and 403s plain yt-dlp requests. Tell
+    # yt-dlp to impersonate a browser (needs curl_cffi, a hard dep). Same
+    # bypass we use to list Kick channel VODs. Best-effort: if the
+    # impersonate backend is unavailable, fall through and let the normal
+    # error path explain the 403 rather than crashing here.
+    if platform == "kick":
+        try:
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+
+            ydl_opts["impersonate"] = ImpersonateTarget("chrome")
+        except Exception as e:  # impersonate is best-effort
+            _log.warning(
+                "ingest.kick_impersonate_unavailable",
+                error=str(e),
+                hint="install curl_cffi so yt-dlp can bypass Kick's Cloudflare",
+            )
+
     if cookies_file:
         ydl_opts["cookiefile"] = str(cookies_file)
     elif cookies_from_browser:

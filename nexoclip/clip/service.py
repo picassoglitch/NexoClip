@@ -44,7 +44,10 @@ if TYPE_CHECKING:
     from nexoclip.detect.framing import FramingVerdict
     from nexoclip.transcribe import Transcript
 
+from nexoclip.resources import heavy_slot
+
 from .encoders import (
+    ffmpeg_thread_args,
     mark_nvenc_runtime_failure,
     pick_video_encoder_args,
 )
@@ -199,18 +202,24 @@ async def cut_clips(
                         "total_candidates": total,
                     },
                 )
-            clip = await asyncio.to_thread(
-                _cut_one_sync,
-                tenant_id=tenant_id,
-                stream=stream,
-                candidate=candidate,
-                kit=kit,
-                clips_dir=clips_dir,
-                cfg=cfg,
-                transcript=transcript,
-                idx=idx,
-                on_substep=on_substep_threadsafe,
-            )
+            # Process-wide governor — bounds concurrent heavy ops across the
+            # cut fan-out, operator renders, and the poll pipeline so they
+            # can't collectively exhaust the host's thread/PID/memory ceiling
+            # (the EAGAIN cascade). The local `sem` above still caps this
+            # call's own fan-out; this caps it against everything else.
+            async with heavy_slot():
+                clip = await asyncio.to_thread(
+                    _cut_one_sync,
+                    tenant_id=tenant_id,
+                    stream=stream,
+                    candidate=candidate,
+                    kit=kit,
+                    clips_dir=clips_dir,
+                    cfg=cfg,
+                    transcript=transcript,
+                    idx=idx,
+                    on_substep=on_substep_threadsafe,
+                )
             if clip is not None and db is not None:
                 await emit(
                     db, CLIP_CUT_COMPLETED,
@@ -327,22 +336,29 @@ def _cut_one_sync(
         stream.source_video_path, start_s=start, end_s=end,
     )
 
+    # When the shared frame batch failed to decode, `sample_clip_frames`
+    # already opened (and failed on) cv2 once. The legacy fallbacks below
+    # would each re-open the SAME source — on a resource-starved host that
+    # turns one failed open into three per candidate (smart_crop + framing
+    # + thumbnail), hammering the exhausted resource. `allow_reopen=False`
+    # makes each helper skip the redundant re-open and degrade gracefully
+    # (centered crop / conservative framing / no thumbnail).
     _emit(clip_id, "cropping")
     smart_box = _safe_smart_crop(
         video_path=stream.source_video_path,
-        start_s=start, end_s=end, batch=batch,
+        start_s=start, end_s=end, batch=batch, allow_reopen=False,
     )
     # Slice G.3 — framing intelligence. Decides whether this clip
     # should ship as 9:16 static crop / 9:16 tracking crop /
     # full-screen horizontal / already-mobile recenter / rejected.
     framing_verdict = _safe_analyze_framing(
         video_path=stream.source_video_path,
-        start_s=start, end_s=end, batch=batch,
+        start_s=start, end_s=end, batch=batch, allow_reopen=False,
     )
     thumbnail_path, raw_jpeg = _safe_thumbnail(
         video_path=stream.source_video_path,
         start_s=start, end_s=end,
-        clip_dir=clip_dir, batch=batch,
+        clip_dir=clip_dir, batch=batch, allow_reopen=False,
     )
 
     _emit(clip_id, "encoding")
@@ -463,6 +479,7 @@ def _safe_smart_crop(
     start_s: float,
     end_s: float,
     batch: ClipFrameBatch | None = None,
+    allow_reopen: bool = True,
 ) -> SmartCropBox | None:
     """Run smart_crop, log + skip on failure (e.g. unreadable test stub video).
 
@@ -470,10 +487,17 @@ def _safe_smart_crop(
     cascade runs against the pre-decoded frames instead of re-opening
     the source. Falls back to the legacy per-pass open whenever the
     batch is missing or its `_from_frames` path raises.
+
+    `allow_reopen=False` suppresses the per-pass cv2 re-open when no batch
+    is available — the cut pipeline sets this after `sample_clip_frames`
+    has already tried (and failed) to open the source, so we don't hammer
+    an exhausted resource. Returns None → caller uses a centered crop.
     """
     try:
         if batch is not None and batch.frames_bgr:
             return compute_smart_crop_box_from_frames(batch)
+        if not allow_reopen:
+            return None
         return compute_smart_crop_box(video_path, start_s=start_s, end_s=end_s)
     except ClipError as e:
         _log.warning("smart_crop.skipped", reason=str(e))
@@ -489,6 +513,7 @@ def _safe_analyze_framing(
     start_s: float,
     end_s: float,
     batch: ClipFrameBatch | None = None,
+    allow_reopen: bool = True,
 ) -> "FramingVerdict | None":
     """Slice G.3 — run analyze_framing inside a guard so unreadable
     test-stub videos / missing opencv never break the cut step. The
@@ -497,11 +522,17 @@ def _safe_analyze_framing(
 
     Task 1c — when `batch` is supplied, runs the framing classifier
     against the shared decoded frames instead of opening the source
-    video again."""
+    video again.
+
+    `allow_reopen=False` suppresses the per-pass cv2 re-open when no batch
+    is available (the cut pipeline already tried via `sample_clip_frames`).
+    Returns None → caller ships without a framing verdict."""
     try:
         if batch is not None and batch.frames_bgr:
             from nexoclip.detect.framing import analyze_framing_from_frames
             return analyze_framing_from_frames(batch)
+        if not allow_reopen:
+            return None
         from nexoclip.detect.framing import analyze_framing
         return analyze_framing(
             video_path=video_path, start_s=start_s, end_s=end_s,
@@ -539,6 +570,7 @@ def _safe_thumbnail(
     end_s: float,
     clip_dir: Path,
     batch: ClipFrameBatch | None = None,
+    allow_reopen: bool = True,
 ) -> tuple[Path | None, bytes | None]:
     """Run pick_thumbnail + save_thumbnail; log + skip on failure.
 
@@ -549,10 +581,16 @@ def _safe_thumbnail(
 
     Task 1c — picks from the shared frame batch when available;
     otherwise falls through to the legacy per-pass open.
+
+    `allow_reopen=False` suppresses the per-pass cv2 re-open when no batch
+    is available (the cut pipeline already tried via `sample_clip_frames`).
+    Returns `(None, None)` → caller ships without a thumbnail.
     """
     try:
         if batch is not None and batch.frames_bgr:
             jpeg, _ts, _bd = pick_thumbnail_from_frames(batch)
+        elif not allow_reopen:
+            return None, None
         else:
             jpeg, _ts, _bd = pick_thumbnail(video_path, start_s=start_s, end_s=end_s)
         return save_thumbnail(clip_dir, jpeg), jpeg
@@ -920,6 +958,7 @@ def _run_encode_with_fallback(
             "-c:v", "libx264",
             "-preset", cfg.preset,
             "-crf", str(cfg.crf),
+            *ffmpeg_thread_args(cfg),
         ]
         cmd = build_cmd(fallback_args)
         _run_ffmpeg(cmd, what=f"{what} (libx264 fallback)")

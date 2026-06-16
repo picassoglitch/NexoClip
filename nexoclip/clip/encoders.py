@@ -87,6 +87,17 @@ def reset_nvenc_cache() -> None:
     _NVENC_RUNTIME_DISABLED = False
 
 
+def ffmpeg_thread_args(cfg: ClipConfig) -> list[str]:
+    """`-threads N` for software (CPU) encodes, or `[]` when unset.
+
+    Returns an empty slice when `cfg.ffmpeg_threads` is 0 so ffmpeg keeps
+    its `threads=auto` behavior; otherwise pins the encoder to N threads to
+    keep a single encode from oversubscribing the host's thread ceiling.
+    """
+    n = int(getattr(cfg, "ffmpeg_threads", 0) or 0)
+    return ["-threads", str(n)] if n > 0 else []
+
+
 def pick_video_encoder_args(cfg: ClipConfig) -> list[str]:
     """Return the ffmpeg `-c:v ...` argument sequence for the reformat
     step. Applies the selection rules in the module docstring.
@@ -97,9 +108,12 @@ def pick_video_encoder_args(cfg: ClipConfig) -> list[str]:
     # Rule 1 — operator override.
     encoder = (cfg.encoder or "").strip() or "libx264"
     if encoder != "libx264":
-        return ["-c:v", encoder, "-preset", cfg.preset, "-crf", str(cfg.crf)]
+        return [
+            "-c:v", encoder, "-preset", cfg.preset, "-crf", str(cfg.crf),
+            *ffmpeg_thread_args(cfg),
+        ]
 
-    # Rule 2 — NVENC if available + preferred.
+    # Rule 2 — NVENC if available + preferred. GPU-bound, so no -threads cap.
     if getattr(cfg, "prefer_nvenc", True) and has_nvenc():
         cq = int(getattr(cfg, "nvenc_cq", cfg.crf))
         return [
@@ -111,7 +125,10 @@ def pick_video_encoder_args(cfg: ClipConfig) -> list[str]:
         ]
 
     # Rule 3 — libx264 fallback.
-    return ["-c:v", "libx264", "-preset", cfg.preset, "-crf", str(cfg.crf)]
+    return [
+        "-c:v", "libx264", "-preset", cfg.preset, "-crf", str(cfg.crf),
+        *ffmpeg_thread_args(cfg),
+    ]
 
 
 # ---- internals ----
@@ -173,6 +190,7 @@ def _probe_nvenc() -> bool:
 
 
 __all__ = [
+    "ffmpeg_thread_args",
     "has_nvenc",
     "mark_nvenc_runtime_failure",
     "pick_video_encoder_args",

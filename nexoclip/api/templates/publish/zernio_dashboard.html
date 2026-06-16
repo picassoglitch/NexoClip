@@ -2581,35 +2581,74 @@
         autoprogBtn.disabled = true;
         msg.style.color = "var(--nc-text--muted)";
         msg.textContent = "Programando…";
+
+        var seen = {};  // clip_ids already removed from the grids (dedupe)
+        // Reflect a progress snapshot in the UI: live counter while running,
+        // final breakdown when done. Removes each scheduled clip from the
+        // To-publish + Bulk grids as it lands.
+        function applyProgress(p) {
+          (p.results || []).forEach(function (r) {
+            if (!r.ok || !r.clip_id || seen[r.clip_id]) { return; }
+            seen[r.clip_id] = true;
+            document.querySelectorAll('[data-clip-id="' + r.clip_id + '"]')
+              .forEach(function (row) { row.remove(); });
+          });
+          var countEl = document.getElementById("zn-autoprog-count");
+          if (countEl) { countEl.textContent = Math.max(0, count - (p.scheduled || 0)); }
+          var failTxt = p.failed ? (" · ✗ " + p.failed + " fallido(s)") : "";
+          if (p.state === "done") {
+            msg.style.color = p.failed ? "#e0a458" : "var(--nc-green, #48bb78)";
+            msg.textContent = "Programados " + (p.scheduled || 0) + " clip(s)" + failTxt + " ✓";
+            loadSchedule();  // refresh "Próximas publicaciones"
+          } else {
+            msg.style.color = "var(--nc-text--muted)";
+            msg.textContent = "Programando " + (p.done || 0) + "/" + (p.total || count)
+              + " · ✓ " + (p.scheduled || 0) + failTxt + "…";
+          }
+        }
+
+        var poll = null;
+        function stop() {
+          if (poll) { clearInterval(poll); poll = null; }
+          autoprogBtn.disabled = false;
+        }
+        function tick() {
+          fetch("/dashboard/publish/zernio/schedule/auto/progress", {
+            credentials: "same-origin",
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (p) {
+              applyProgress(p);
+              if (p.state === "done") { stop(); }
+              else if (p.state === "error") {
+                msg.style.color = "#ff7575";
+                msg.textContent = "No se pudo programar: " + (p.error || "error");
+                stop();
+              }
+            })
+            .catch(function () { /* transient; keep polling */ });
+        }
+
         fetch("/dashboard/publish/zernio/schedule/auto", {
           method: "POST", credentials: "same-origin",
         })
           .then(function (r) { return r.json(); })
           .then(function (b) {
             if (!b.ok) { throw new Error(b.error || b.detail || "fallo"); }
-            // Clear the scheduled clips from the To-publish + Bulk grids live —
-            // the backend already flipped them out of the approved list.
-            (b.results || []).forEach(function (r) {
-              if (!r.ok || !r.clip_id) { return; }
-              document
-                .querySelectorAll('[data-clip-id="' + r.clip_id + '"]')
-                .forEach(function (row) { row.remove(); });
-            });
-            var countEl = document.getElementById("zn-autoprog-count");
-            if (countEl) {
-              var left = Math.max(0, (parseInt(countEl.textContent, 10) || 0) - b.scheduled);
-              countEl.textContent = left;
+            if (b.state === "done") {  // nothing to schedule
+              applyProgress({ state: "done", scheduled: b.scheduled || 0, failed: 0 });
+              autoprogBtn.disabled = false;
+              return;
             }
-            msg.style.color = "var(--nc-green, #48bb78)";
-            msg.textContent = "Programados " + b.scheduled + " clip(s)"
-              + (b.skipped ? (" · " + b.skipped + " omitido(s)") : "") + " ✓";
-            loadSchedule();  // refresh "Próximas publicaciones"
+            // Run is live on the server — poll for progress every second.
+            poll = setInterval(tick, 1000);
+            tick();
           })
           .catch(function (e) {
             msg.style.color = "#ff7575";
             msg.textContent = "No se pudo programar: " + e.message;
-          })
-          .finally(function () { autoprogBtn.disabled = false; });
+            autoprogBtn.disabled = false;
+          });
       });
     }
 

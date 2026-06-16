@@ -26,6 +26,7 @@ upload-post downloaded `video`.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from pathlib import Path
@@ -263,7 +264,7 @@ async def _publish_clip(
     *,
     client: ZernioClient,
     db: Database,
-    request: Request,
+    request: Request | None,
     tenant_id: str,
     profile_id: str,
     account_map: dict[str, str],
@@ -275,6 +276,12 @@ async def _publish_clip(
     scheduled_for: str | None = None,
     options: PublishOptions | None = None,
     tiktok_privacy: str | None = None,
+    # Background callers (e.g. the auto-program worker) have no live request,
+    # so they pass these three request-derived values explicitly. When
+    # `request` is provided they're ignored and derived from it instead.
+    tenant_tier: str | None = None,
+    base_url: str | None = None,
+    session_cookie: str | None = None,
 ) -> str:
     """Shared publish core for the single + bulk paths.
 
@@ -332,7 +339,11 @@ async def _publish_clip(
 
     # Per-tier cap also applies at publish time — covers a tenant who
     # connected several accounts on a higher tier and then downgraded.
-    limit = _account_limit(request)
+    if request is not None:
+        limit = _account_limit(request)
+    else:
+        from nexoclip.tiers import zernio_account_limit
+        limit = zernio_account_limit(tenant_tier)
     if limit is not None and len(targets) > limit:
         raise HTTPException(
             status_code=402,
@@ -343,7 +354,7 @@ async def _publish_clip(
             ),
         )
 
-    base = _public_base_url(request)
+    base = _public_base_url(request) if request is not None else (base_url or "")
 
     # Make sure the edited MP4 (overlays + captions burned in) exists on
     # disk BEFORE we hand Zernio the URL — this is what closes the
@@ -353,7 +364,10 @@ async def _publish_clip(
     # The /render page is auth-gated, so pass the operator's session
     # cookie through to the headless recorder.
     settings = get_settings()
-    cookie_val = request.cookies.get("nexoclip_token", "") or None
+    if request is not None:
+        cookie_val = request.cookies.get("nexoclip_token", "") or None
+    else:
+        cookie_val = session_cookie
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
         await ensure_clip_rendered(
@@ -2796,6 +2810,81 @@ async def zernio_compose_clip(
     })
 
 
+# In-memory progress for the whole-queue auto-program run, keyed by tenant.
+# Single-instance state: the POST that starts a run and the GET that polls it
+# must hit the same process (true on Railway's single web instance). If the
+# web tier scales horizontally, move this to a shared store (DB/Redis).
+_AUTOPROG: dict[str, dict[str, Any]] = {}
+_AUTOPROG_TASKS: set[asyncio.Task[None]] = set()
+
+
+async def _run_autoprog(
+    *,
+    tenant_id: str,
+    schedule: list[tuple[str, str]],
+    targets: list[str],
+    handle_suffix: str,
+    account_map: dict[str, str],
+    profile_id: str,
+    tenant_tier: str | None,
+    base_url: str,
+    session_cookie: str | None,
+    db_target: str,
+) -> None:
+    """Background worker for /schedule/auto: enrich + publish each clip,
+    updating the shared progress record as it goes. Never raises into the
+    event loop — per-clip failures land on the record; the run ends 'done'
+    (or 'error' on a setup failure)."""
+    from nexoclip.publish.compose import build_post
+    from nexoclip.tenancy import bound_tenant
+
+    prog = _AUTOPROG[tenant_id]
+    db = Database(db_target)
+    try:
+        client = _build_client()
+        with bound_tenant(tenant_id):
+            for clip_id, when_iso in schedule:
+                try:
+                    composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
+                    post_id = await _publish_clip(
+                        client=client, db=db, request=None, tenant_id=tenant_id,
+                        profile_id=profile_id, account_map=account_map,
+                        clip_id=clip_id, platforms=targets,
+                        content=composed.caption, title=composed.title,
+                        mode="schedule", scheduled_for=when_iso,
+                        tenant_tier=tenant_tier, base_url=base_url,
+                        session_cookie=session_cookie,
+                    )
+                    prog["scheduled"] += 1
+                    prog["results"].append({
+                        "clip_id": clip_id, "ok": True, "post_id": post_id,
+                        "scheduled_for": when_iso,
+                    })
+                except HTTPException as e:
+                    prog["failed"] += 1
+                    prog["results"].append(
+                        {"clip_id": clip_id, "ok": False, "error": str(e.detail)}
+                    )
+                except Exception as e:  # one clip's failure must not abort the batch
+                    prog["failed"] += 1
+                    prog["results"].append(
+                        {"clip_id": clip_id, "ok": False, "error": str(e)}
+                    )
+                prog["done"] += 1
+        prog["state"] = "done"
+        _log.info(
+            "zernio.autoprogram tenant=%s total=%d scheduled=%d failed=%d",
+            tenant_id, prog["total"], prog["scheduled"], prog["failed"],
+        )
+    except Exception as e:
+        prog["state"] = "error"
+        prog["error"] = str(e)
+        _log.exception("zernio.autoprogram.run_failed tenant=%s", tenant_id)
+    finally:
+        with contextlib.suppress(Exception):
+            await db.close()
+
+
 @router.post("/schedule/auto")
 async def zernio_schedule_auto(
     request: Request,
@@ -2816,7 +2905,6 @@ async def zernio_schedule_auto(
     import datetime as _dt
 
     from nexoclip.db import AutopublishSettingsRepo
-    from nexoclip.publish.compose import build_post
     from nexoclip.publish.hub import plan_batch_times
 
     settings = get_settings()
@@ -2827,10 +2915,20 @@ async def zernio_schedule_auto(
             {"ok": False, "error": "Conecta tus redes primero."}, status_code=409,
         )
 
+    # One auto-program run per tenant at a time — a second click while a run
+    # is live would double-schedule clips.
+    cur = _AUTOPROG.get(tenant_id)
+    if cur and cur.get("state") == "running":
+        return JSONResponse(
+            {"ok": False, "error": "Ya hay una programación en curso."},
+            status_code=409,
+        )
+
     clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
     if not clips:
         return JSONResponse({
-            "ok": True, "scheduled": 0, "skipped": 0, "results": [],
+            "ok": True, "state": "done", "total": 0,
+            "scheduled": 0, "skipped": 0, "results": [],
             "message": "No hay clips aprobados para programar.",
         })
 
@@ -2876,35 +2974,50 @@ async def zernio_schedule_auto(
         existing_today=existing_today, best_slots=best_slots or None,
     )
 
-    results: list[dict[str, Any]] = []
-    scheduled = 0
-    for clip, when in zip(clips, times, strict=False):
-        try:
-            composed = await build_post(db, clip.id, handle_suffix=handle_suffix)
-            post_id = await _publish_clip(
-                client=client, db=db, request=request, tenant_id=tenant_id,
-                profile_id=profile_id, account_map=account_map, clip_id=clip.id,
-                platforms=targets, content=composed.caption, title=composed.title,
-                mode="schedule", scheduled_for=when.isoformat(),
-            )
-            scheduled += 1
-            results.append({
-                "clip_id": clip.id, "ok": True, "post_id": post_id,
-                "scheduled_for": when.isoformat(),
-            })
-        except HTTPException as e:
-            results.append({"clip_id": clip.id, "ok": False, "error": str(e.detail)})
-        except Exception as e:  # one clip's failure must not abort the batch
-            results.append({"clip_id": clip.id, "ok": False, "error": str(e)})
-
-    skipped = len(clips) - scheduled
-    _log.info(
-        "zernio.autoprogram tenant=%s clips=%d scheduled=%d skipped=%d targets=%s",
-        tenant_id, len(clips), scheduled, skipped, ",".join(targets),
+    # The per-clip loop (LLM enrichment + render + Zernio publish) is slow —
+    # minutes for a big queue. Run it in the background and return immediately;
+    # the UI polls /schedule/auto/progress for live counts. The request's
+    # tier/base-url/cookie are captured now (the request is gone by the time
+    # the task runs).
+    schedule = [
+        (clip.id, when.isoformat())
+        for clip, when in zip(clips, times, strict=False)
+    ]
+    _AUTOPROG[tenant_id] = {
+        "state": "running", "total": len(schedule),
+        "done": 0, "scheduled": 0, "failed": 0, "results": [],
+    }
+    task = asyncio.create_task(
+        _run_autoprog(
+            tenant_id=tenant_id, schedule=schedule, targets=targets,
+            handle_suffix=handle_suffix, account_map=account_map,
+            profile_id=profile_id,
+            tenant_tier=getattr(request.state, "tenant_tier", None),
+            base_url=_public_base_url(request),
+            session_cookie=request.cookies.get("nexoclip_token", "") or None,
+            db_target=db.target,
+        )
     )
-    return JSONResponse({
-        "ok": True, "scheduled": scheduled, "skipped": skipped, "results": results,
-    })
+    # Hold a reference so the task isn't garbage-collected mid-run.
+    _AUTOPROG_TASKS.add(task)
+    task.add_done_callback(_AUTOPROG_TASKS.discard)
+    return JSONResponse({"ok": True, "state": "running", "total": len(schedule)})
+
+
+@router.get("/schedule/auto/progress")
+async def zernio_schedule_auto_progress(
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+) -> Response:
+    """Live progress for the tenant's auto-program run, polled by the UI.
+
+    Returns {state: idle|running|done|error, total, done, scheduled, failed,
+    results:[{clip_id, ok, post_id|error, ...}]}."""
+    prog = _AUTOPROG.get(tenant_id)
+    if not prog:
+        return JSONResponse({"state": "idle"})
+    return JSONResponse(prog)
 
 
 @router.post("/schedule/cancel/{post_id}")

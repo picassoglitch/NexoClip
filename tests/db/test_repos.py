@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import datetime as _dt
 
-import aiosqlite
 import pytest
 
 from nexoclip.db import (
@@ -26,6 +25,8 @@ from nexoclip.db import (
 from nexoclip.db.models import LLMCallRow, StreamRow
 from nexoclip.errors import TenancyError
 from nexoclip.tenancy import bound_tenant, hash_token, mint_token
+
+from .._db_backend import INTEGRITY_ERRORS
 
 
 def _now() -> str:
@@ -339,7 +340,7 @@ async def test_inserting_user_with_unknown_tenant_raises_fk(
 ) -> None:
     """Direct SQL: attempting to create a child of a non-existent tenant fails."""
     conn = await migrated_db.connect()
-    with pytest.raises(aiosqlite.IntegrityError):
+    with pytest.raises(INTEGRITY_ERRORS):
         await conn.execute(
             "INSERT INTO users (id, tenant_id, email, role, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -377,6 +378,6 @@ async def test_deleting_tenant_with_tokens_is_restricted(
     with bound_tenant("ten_a"):
         await ApiTokensRepo(migrated_db).create(hash_=hashed)
     conn = await migrated_db.connect()
-    with pytest.raises(aiosqlite.IntegrityError):
+    with pytest.raises(INTEGRITY_ERRORS):
         await conn.execute("DELETE FROM tenants WHERE id = 'ten_a'")
         await conn.commit()

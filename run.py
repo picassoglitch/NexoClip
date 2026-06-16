@@ -477,14 +477,21 @@ def _check_db_persistence(db_path: Path) -> None:
 
 async def _boot() -> None:
     _silence_connection_reset(asyncio.get_running_loop())
+    # Postgres takes precedence when DATABASE_URL is set (Railway-injected);
+    # otherwise fall back to the local SQLite file. The SQLite-only
+    # ephemeral-storage warning is meaningless for a managed Postgres, so
+    # skip it on the DSN path.
+    database_url = os.environ.get("DATABASE_URL")
     db_path = Path(os.environ.get("NEXOCLIP_DB_PATH", "./nexoclip.db"))
     host = os.environ.get("NEXOCLIP_HOST", "127.0.0.1")
     port = int(os.environ.get("NEXOCLIP_PORT", "8000"))
 
     _free_stale_port(host, port)
-    _check_db_persistence(db_path)
-
-    db = Database(db_path)
+    if database_url:
+        db = Database(database_url)
+    else:
+        _check_db_persistence(db_path)
+        db = Database(db_path)
     await apply_migrations(db)
     app = create_app(db=db, enable_background_drains=True)
 

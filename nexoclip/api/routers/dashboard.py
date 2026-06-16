@@ -50,6 +50,7 @@ from nexoclip.db import (
 )
 from nexoclip.db.models import CustomTriggerPhrases
 from nexoclip.errors import NexoClipError
+from nexoclip.settings import resolve_db_target
 
 from .._pipeline import PipelineKickoff
 from ..deps import get_db, require_full_scope, tenant_binder
@@ -962,13 +963,19 @@ async def queue_health(
     # tenant filter — admin view). 7d window is generous: anything
     # older than that is almost certainly a crashed pipeline whose
     # next manual re-run will refresh the events.
+    # `ts` is stored as an ISO-8601 UTC string, so a lexicographic >=
+    # against a Python-computed cutoff is correct and backend-agnostic
+    # (avoids SQLite-only `datetime('now', '-7 days')`, which Postgres
+    # doesn't have).
+    cutoff = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(days=7)).isoformat()
     conn = await db.connect()
     cur = await conn.execute(
         "SELECT tenant_id, type, payload_json, ts FROM events "
         "WHERE type IN ('pipeline.step.started', 'pipeline.step.completed', "
         "'pipeline.step.failed') "
-        "AND ts >= datetime('now', '-7 days') "
-        "ORDER BY ts ASC"
+        "AND ts >= ? "
+        "ORDER BY ts ASC",
+        (cutoff,),
     )
     rows = await cur.fetchall()
 
@@ -3229,7 +3236,7 @@ async def clip_overlay_finalize(
                 auth_cookie_value=_cookie_val,
                 width=1080,
                 height=1920,
-                db_path=_settings.db_path,
+                db_path=resolve_db_target(_settings),
             )
     except Exception as e:  # noqa: BLE001 — pre-render must never block approval
         from structlog import get_logger
@@ -4209,7 +4216,7 @@ async def clip_download(
         auth_cookie_value=cookie_val or None,
         width=target_w,
         height=target_h,
-        db_path=settings.db_path,
+        db_path=resolve_db_target(settings),
     )
     return JSONResponse(
         status_code=202,
@@ -5231,8 +5238,7 @@ async def sources_add(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    import sqlite3
-
+    from nexoclip.db import IntegrityViolation
     from nexoclip.ingest.service import detect_platform
 
     resolved = platform.strip() or detect_platform(channel_url)
@@ -5246,7 +5252,7 @@ async def sources_add(
             max_per_poll=int(max_per_poll),
             polls_per_day=int(polls_per_day),
         )
-    except sqlite3.IntegrityError:
+    except IntegrityViolation:
         # UNIQUE(tenant_id, channel_url): this tenant already watches this
         # exact channel URL. A re-add (or a double-submit) must not 500 —
         # bounce back with a friendly banner instead of crashing.

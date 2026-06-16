@@ -242,12 +242,12 @@ async def _seed_clip_with_debris_cache(
     with bound_tenant(tenant_id):
         conn = await db.connect()
         await conn.execute(
-            "INSERT OR IGNORE INTO streams "
+            "INSERT INTO streams "
             "(id, tenant_id, vod_url, platform, title, channel, "
             "duration_s, source_video_path, source_audio_path, status, "
             "created_at) "
             "VALUES (?, ?, 'https://kick.com/x/v/1', 'kick', NULL, NULL, "
-            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?)",
+            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?) ON CONFLICT DO NOTHING",
             (stream_id, tenant_id, _now()),
         )
         await conn.execute(

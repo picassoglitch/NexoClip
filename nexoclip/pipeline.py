@@ -171,6 +171,12 @@ def _step(name: str, *, db: Database | None = None, **fields: Any) -> Iterator[_
     )
 
 
+# Holds references to fire-and-forget event-emit tasks on the Postgres path
+# so they aren't garbage-collected before they run (the done-callback clears
+# each one). Best-effort telemetry — never awaited.
+_PENDING_EVENT_TASKS: set[asyncio.Task[Any]] = set()
+
+
 def _record_step_event(
     db: Database | None,
     event_type: str,
@@ -190,12 +196,34 @@ def _record_step_event(
     tenant_id = structlog.contextvars.get_contextvars().get("tenant_id")
     if not tenant_id:
         return
+    payload = {"step": step_name, "stream_id": stream_id, **fields}
+    # Strip non-JSON-serializable values defensively.
+    clean = {
+        k: v
+        for k, v in payload.items()
+        if isinstance(v, str | int | float | bool | type(None) | list | dict)
+    }
     try:
+        if getattr(db, "is_postgres", False):
+            # asyncpg has no sync API. This helper runs in the pipeline's sync
+            # `_step` context, so fire-and-forget the async emit onto the
+            # running loop (contextvars — incl. the bound tenant — are copied
+            # into the task). No running loop → skip; events are best-effort
+            # and the progress view degrades gracefully when one is missing.
+            from nexoclip.db import EventsRepo
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            # Hold a reference until done so the task isn't GC'd mid-flight.
+            task = loop.create_task(EventsRepo(db).emit(type=event_type, payload=clean))
+            _PENDING_EVENT_TASKS.add(task)
+            task.add_done_callback(_PENDING_EVENT_TASKS.discard)
+            return
+
         import sqlite3
 
-        payload = {"step": step_name, "stream_id": stream_id, **fields}
-        # Strip non-JSON-serializable values defensively.
-        clean = {k: v for k, v in payload.items() if isinstance(v, str | int | float | bool | type(None) | list | dict)}
         with sqlite3.connect(db.path) as conn:
             conn.execute(
                 "INSERT INTO events (id, tenant_id, type, payload_json, ts) VALUES (?, ?, ?, ?, ?)",

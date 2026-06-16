@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from nexoclip.db import Database, apply_migrations
+from nexoclip.db import Database
+
+from .._db_backend import migrated_database
 
 
 @pytest_asyncio.fixture
@@ -21,6 +23,8 @@ async def db_path(tmp_path: Path) -> Path:
 
 @pytest_asyncio.fixture
 async def db(db_path: Path) -> AsyncIterator[Database]:
+    # Intentionally SQLite + un-migrated: the migration-runner tests need a
+    # virgin database. The Postgres runner is covered by test_pg_migration.py.
     d = Database(db_path)
     try:
         yield d
@@ -29,7 +33,8 @@ async def db(db_path: Path) -> AsyncIterator[Database]:
 
 
 @pytest_asyncio.fixture
-async def migrated_db(db: Database) -> Database:
-    """A database with all migrations applied."""
-    await apply_migrations(db)
-    return db
+async def migrated_db(tmp_path: Path) -> AsyncIterator[Database]:
+    """A migrated database — Postgres when NEXOCLIP_TEST_PG_DSN is set, else
+    a fresh SQLite file. Repo tests run against the real engine on PG."""
+    async for d in migrated_database(tmp_path):
+        yield d

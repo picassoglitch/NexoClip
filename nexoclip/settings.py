@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     default_output_dir: str = "./out"
     db_path: str = "./nexoclip.db"
 
+    # Postgres migration seam. When set, the app talks to Postgres via
+    # asyncpg instead of the local SQLite file — `Database` dispatches on
+    # the scheme. Railway injects a bare `DATABASE_URL` when a Postgres
+    # service is attached, so we read that name directly (not the
+    # NEXOCLIP_ prefix). Unset → SQLite (current default).
+    database_url: str | None = Field(
+        default=None,
+        validation_alias="DATABASE_URL",
+    )
+
     whisper_device: str = "cuda"
     whisper_model: str = "medium"
     whisper_compute_type: str = "float16"
@@ -387,6 +397,11 @@ class Settings(BaseSettings):
     feature_whatsapp: bool = False
     feature_ads: bool = False
 
+    def db_target(self) -> str:
+        """The connection target `Database(...)` should open. See
+        `resolve_db_target` — this is the method form for direct callers."""
+        return resolve_db_target(self)
+
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.
 
@@ -404,3 +419,15 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton accessor; tests can call `get_settings.cache_clear()`."""
     return Settings()
+
+
+def resolve_db_target(settings: object) -> str:
+    """The connection target `Database(...)` should open: the Postgres DSN
+    when `DATABASE_URL` is configured, else the local SQLite path.
+
+    Single source of truth for the `database_url or db_path` choice. Reads
+    attributes defensively (not via a method) so any settings-like object
+    that only exposes `db_path` — e.g. lightweight test doubles — keeps
+    working without needing to mirror the full Settings interface.
+    """
+    return getattr(settings, "database_url", None) or settings.db_path  # type: ignore[attr-defined, no-any-return]

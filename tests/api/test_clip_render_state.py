@@ -55,12 +55,12 @@ async def _seed_clip(
         conn = await db.connect()
         # Streams row FIRST (clips FK references it).
         await conn.execute(
-            "INSERT OR IGNORE INTO streams "
+            "INSERT INTO streams "
             "(id, tenant_id, vod_url, platform, title, channel, "
             "duration_s, source_video_path, source_audio_path, status, "
             "created_at) "
             "VALUES (?, ?, 'https://kick.com/x/v/1', 'kick', NULL, NULL, "
-            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?)",
+            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?) ON CONFLICT DO NOTHING",
             (stream_id, tenant_id, _now()),
         )
         # Then the clip row with the render_* columns the tests assert on.

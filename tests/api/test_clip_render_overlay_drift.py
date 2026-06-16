@@ -53,12 +53,12 @@ async def _seed_clip_for_render(
         conn = await db.connect()
         # Stream row.
         await conn.execute(
-            "INSERT OR IGNORE INTO streams "
+            "INSERT INTO streams "
             "(id, tenant_id, vod_url, platform, title, channel, "
             "duration_s, source_video_path, source_audio_path, status, "
             "created_at) "
             "VALUES (?, ?, 'https://kick.com/x/v/1', 'kick', NULL, NULL, "
-            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?)",
+            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?) ON CONFLICT DO NOTHING",
             (stream_id, tenant_id, _now()),
         )
         # Candidate carrying framing evidence — drives face_zone.
@@ -69,10 +69,10 @@ async def _seed_clip_for_render(
                 },
             }
             await conn.execute(
-                "INSERT OR IGNORE INTO candidates "
+                "INSERT INTO candidates "
                 "(id, stream_id, tenant_id, ts, score, reason, "
                 "evidence_json, created_at) "
-                "VALUES (?, ?, ?, 1.0, 0.5, 'audio_energy', ?, ?)",
+                "VALUES (?, ?, ?, 1.0, 0.5, 'audio_energy', ?, ?) ON CONFLICT DO NOTHING",
                 (candidate_id, stream_id, tenant_id,
                  _json.dumps(ev), _now()),
             )
@@ -80,12 +80,12 @@ async def _seed_clip_for_render(
         # exercises the brand_kit branch.
         if brand_kit_target_platform is not None:
             await conn.execute(
-                "INSERT OR IGNORE INTO brand_kits "
+                "INSERT INTO brand_kits "
                 "(id, tenant_id, name, primary_color, accent_color, "
-                "text_color, target_platform, created_at, is_default) "
+                "text_color, target_platform, created_at, updated_at, is_default) "
                 "VALUES ('bk_test', ?, 'Test', '#000', '#fff', '#fff', "
-                "?, ?, 1)",
-                (tenant_id, brand_kit_target_platform, _now()),
+                "?, ?, ?, 1) ON CONFLICT DO NOTHING",
+                (tenant_id, brand_kit_target_platform, _now(), _now()),
             )
         # Clip row.
         ov_json = _json.dumps(overlay_config or {})

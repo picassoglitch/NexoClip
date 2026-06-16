@@ -50,6 +50,10 @@ dependencies = [
 
     # Persistence (Phase 0: filesystem only — aiosqlite arrives in Phase 1)
     "aiosqlite>=0.20",
+    # Postgres driver for the production backend. `Database` dispatches on
+    # the connection target: SQLite file → aiosqlite, postgres:// DSN →
+    # asyncpg pool. Set DATABASE_URL to switch (Railway-managed Postgres).
+    "asyncpg>=0.29",
 
     # Object storage for live-ingest recordings (Phase L.2 / Path B). The
     # `nexoclip-live` MediaMTX service uploads recordings to an S3-compatible
@@ -176,6 +180,7 @@ exclude = ["tests/", "nexoclip/diarize/_worker.py"]
 
 [[tool.mypy.overrides]]
 module = [
+    "asyncpg.*",
     "faster_whisper.*",
     "yt_dlp.*",
     "ffmpeg.*",

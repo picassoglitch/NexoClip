@@ -747,6 +747,25 @@ class StreamsRepo:
         )
         return _model(StreamRow, await cur.fetchone())
 
+    async def find_by_vod_url(self, vod_url: str) -> StreamRow | None:
+        """Return the OLDEST stream for (current tenant, vod_url), or None.
+
+        Lets the channel poller reuse an already-ingested VOD's stream id
+        instead of minting a new one and re-downloading — the dedup that
+        keeps a re-poll (lost seen-set, or a prior pipeline failure the
+        poller retried) from spawning duplicate stream rows. Oldest-first
+        so repeated calls converge on one canonical stream even when
+        historical duplicates already exist. Backed by idx_streams_tenant_vod
+        (migration 047)."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT * FROM streams WHERE tenant_id = ? AND vod_url = ? "
+            "ORDER BY created_at ASC LIMIT 1",
+            (tenant_id, vod_url),
+        )
+        return _model(StreamRow, await cur.fetchone())
+
     async def list_for_tenant(self, *, limit: int = 10_000) -> list[StreamRow]:
         """List a tenant's streams, hard-capped to `limit` rows (default 10k).
 

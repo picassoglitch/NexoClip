@@ -50,23 +50,32 @@ def make_channel_ingest_callback(
         from nexoclip.ingest import ingest_vod
 
         with bound_tenant(tenant_id):
+            # Idempotency on (tenant, vod_url): if this VOD was already
+            # ingested, reuse its stream id so ingest_vod cache-hits (no
+            # re-download) and the upsert is a no-op. Without this, every
+            # re-detection mints a fresh ULID and re-downloads the whole
+            # VOD into a duplicate stream row — which is what a lost
+            # seen-set or a retried pipeline failure was producing.
+            existing = await StreamsRepo(db).find_by_vod_url(vod_url)
             stream = await ingest_vod(
                 tenant_id=tenant_id,
                 vod_url=vod_url,
                 output_dir=output_dir,
+                stream_id=existing.id if existing is not None else None,
                 cookies_from_browser=cookies_from_browser,
                 cookies_file=cookies_file,
                 db=db,
             )
             row = await StreamsRepo(db).upsert(stream_to_row(stream))
-            await EventsRepo(db).emit(
-                type="channel.vod_detected",
-                payload={
-                    "stream_id": row.id,
-                    "video_id": video_id,
-                    "vod_url": vod_url,
-                },
-            )
+            if existing is None:
+                await EventsRepo(db).emit(
+                    type="channel.vod_detected",
+                    payload={
+                        "stream_id": row.id,
+                        "video_id": video_id,
+                        "vod_url": vod_url,
+                    },
+                )
 
         kickoff = PipelineKickoff(
             tenant_id=tenant_id,
@@ -75,7 +84,26 @@ def make_channel_ingest_callback(
             output_dir=output_dir,
             language=language,
         )
-        await dispatcher.dispatch_pipeline(kickoff)
+        # Decouple ingest from pipeline outcome. A successful download +
+        # stream row IS the ingest as far as the poller's dedup is
+        # concerned; the pipeline runs with its own retry/resume (step
+        # events + dashboard re-run). If a pipeline step fails, it must NOT
+        # propagate here — otherwise the poller counts the VOD as
+        # un-ingested, never adds it to the seen-set, and re-runs the whole
+        # thing next poll (the duplicate-ingest + re-download loop that also
+        # amplifies host load). Download failures still raise from
+        # ingest_vod above, so a genuinely failed ingest is still retried.
+        try:
+            await dispatcher.dispatch_pipeline(kickoff)
+        except Exception as e:  # pipeline failure is not an ingest failure
+            _log.warning(
+                "channel.pipeline_dispatch_failed",
+                tenant_id=tenant_id,
+                stream_id=stream.id,
+                video_id=video_id,
+                error=str(e),
+            )
+            return
         _log.info(
             "channel.vod_dispatched",
             tenant_id=tenant_id,

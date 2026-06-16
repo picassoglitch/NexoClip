@@ -693,6 +693,24 @@
         radial-gradient(140px 140px at 72% 60%, rgba(255, 60, 200, 0.22), transparent 70%),
         linear-gradient(160deg, #0c1a33, #071020);
     }
+    /* Real VOD-card thumbnail. Already a finished card (its own LIVE tag,
+       play button, filename + duration are baked in), so when it loads we
+       hide the duplicate CSS chrome below and keep only the animated
+       progress sweep. If the <img> errors out it self-removes and the
+       gradient scene + overlays come back — graceful, asset-optional. */
+    .nc-stage__src-img {
+      position: absolute; inset: 0; z-index: 1;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      object-position: center;
+    }
+    .nc-stage__source:has(.nc-stage__src-img) { background: #0a0e16; }
+    .nc-stage__source:has(.nc-stage__src-img) .nc-stage__scene,
+    .nc-stage__source:has(.nc-stage__src-img) .nc-stage__ring,
+    .nc-stage__source:has(.nc-stage__src-img) .nc-stage__live,
+    .nc-stage__source:has(.nc-stage__src-img) .nc-stage__label,
+    .nc-stage__source:has(.nc-stage__src-img) .nc-stage__dur { display: none; }
+    .nc-stage__source .nc-stage__progress { z-index: 2; }
     .nc-stage__ring {
       position: absolute; top: 50%; left: 50%;
       width: 88px; height: 88px;
@@ -1108,6 +1126,12 @@
          prefers-reduced-motion: kills the count-up + rise. ------ #}
     <div class="nc-stage" id="nc-clipfan">
       <div class="nc-stage__source" aria-hidden="true">
+        {# Real VOD-card thumbnail (operator-supplied, 16:9). When present
+           it covers the gradient scene and the duplicate chrome below is
+           hidden via :has(); a missing/blocked file removes the <img>
+           (onerror) so the CSS scene + overlays render — the hero never
+           breaks on an absent asset. See static/demo/README.md. #}
+        <img class="nc-stage__src-img" src="/static/demo/source.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="this.remove()">
         <div class="nc-stage__scene"></div>
         <div class="nc-stage__ring"></div>
         <div class="nc-stage__live">{{ t('landing.anim.live_tag') }}</div>

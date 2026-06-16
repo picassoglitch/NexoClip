@@ -3448,8 +3448,12 @@
               <div class="nc-pv-zones__band nc-pv-zones__band--top-caution"></div>
               <div class="nc-pv-zones__band nc-pv-zones__band--bottom-caution"></div>
               <div class="nc-pv-zones__band nc-pv-zones__band--bottom-unsafe"></div>
-              <div class="nc-pv-zones__label nc-pv-zones__label--top">AQUÍ NO · LA APP TAPA</div>
-              <div class="nc-pv-zones__label nc-pv-zones__label--bottom">AQUÍ NO · TEXTO Y BOTONES</div>
+              {#- The "AQUÍ NO ·" text labels were removed: they floated over
+                  the clip (and collided with the Kick banner overlay) reading
+                  like burned-in content. The red/caution bands carry the
+                  teaching signal on their own — exactly what this slice's
+                  own note intended ("no text spam — the red wash IS the
+                  warning"). -#}
             </div>
 
             {# Slice K.3 — ambient "this is a real post" affordances.

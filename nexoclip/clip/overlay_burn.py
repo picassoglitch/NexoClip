@@ -837,11 +837,17 @@ def _format_kick_url(raw: str) -> str:
       "kick.com/aldo"               → "KICK.COM/ALDO"
       "https://kick.com/aldo"       → "KICK.COM/ALDO"
       "https://www.kick.com/aldo/"  → "KICK.COM/ALDO"
-      ""                            → "KICK.COM/YOURHANDLE"
+      ""                            → ""  (no placeholder burned)
+
+    When no handle is set we return an empty string so the burned banner
+    shows just the Kick-styled bar + logo — never a literal
+    "KICK.COM/YOURHANDLE" placeholder shipped on a published clip. The
+    editor preview (separate Jinja impl) still renders YOURHANDLE as a
+    prompt to fill it in.
     """
     h = (raw or "").strip()
     if not h:
-        return "KICK.COM/YOURHANDLE"
+        return ""
     # Strip protocol.
     if "://" in h:
         h = h.split("://", 1)[1]
@@ -853,7 +859,7 @@ def _format_kick_url(raw: str) -> str:
         h = h.split("/", 1)[1]
     # Strip leading "@", trailing slashes, then upper-case.
     h = h.lstrip("@").strip("/").strip().upper()
-    return f"KICK.COM/{h}" if h else "KICK.COM/YOURHANDLE"
+    return f"KICK.COM/{h}" if h else ""
 
 
 def _banner_repost_page(

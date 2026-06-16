@@ -11,6 +11,11 @@ from .overlay_burn import (
     captions_artifact_for_clip,
 )
 from .ai_fixes import AIFixesResult, FixOutcome, apply_ai_fixes
+from .auto_correct import (
+    AUTO_CORRECTIONS_FILENAME,
+    auto_correct_clip,
+    load_auto_corrections,
+)
 from .publishability import (
     DirectorLine,
     PublishabilityVerdict,
@@ -40,6 +45,7 @@ from .word_captions import (
 )
 
 __all__ = [
+    "AUTO_CORRECTIONS_FILENAME",
     "AIFixesResult",
     "AIScoreCard",
     "CaptionLine",
@@ -59,6 +65,7 @@ __all__ = [
     "WindowKind",
     "WindowPlan",
     "apply_ai_fixes",
+    "auto_correct_clip",
     "build_ass",
     "build_filter_graph",
     "build_srt",
@@ -77,6 +84,7 @@ __all__ = [
     "cut_window",
     "director_lines",
     "lines_to_json",
+    "load_auto_corrections",
     "load_clips",
     "load_or_compute_waveform",
     "plan_clip_window",

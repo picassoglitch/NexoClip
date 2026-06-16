@@ -2032,6 +2032,18 @@ async def clip_detail(
     breakdown = await clip_breakdown(db, clip_id)
     ai_scores = compute_ai_scores(breakdown)
 
+    # Slice G.6 — auto-correction summary written by the pipeline when the
+    # clip was cut (trim + overlay fixes applied while the VOD still existed).
+    # The editor only *reports* what was corrected — there's no "fix it"
+    # button anymore. None when the clip predates G.6 or had nothing to fix.
+    from nexoclip.clip import load_auto_corrections
+
+    auto_corrections = None
+    try:
+        auto_corrections = load_auto_corrections(Path(clip.path).parent)
+    except Exception:  # noqa: BLE001 — a missing/bad sidecar just hides the panel
+        auto_corrections = None
+
     # Slice I.3 — publishability verdict + AI Director narration.
     # The verdict reads BOTH the breakdown AND the operator's overlay
     # config (current banner / hook / caption choices) so it scores
@@ -2227,6 +2239,10 @@ async def clip_detail(
             # Slice I.3 — Publishability verdict + AI Director narrative.
             "publishability": publishability,
             "director_lines": director,
+            # Slice G.6 — what the pipeline auto-corrected at cut time
+            # (trim + overlay fixes). Drives the passive "Corregido
+            # automáticamente" panel that replaced the manual fix button.
+            "auto_corrections": auto_corrections,
             # Slice K.7 — surface the voice-trigger match that fired
             # this candidate. None when the clip wasn't voice-triggered
             # (e.g. chat-heat-only candidates).

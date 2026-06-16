@@ -3067,14 +3067,37 @@
   {%- endif -%}
   {%- endif -%}
 
+  {# Slice G.6 — passive "what we corrected" panel. The pipeline already
+     applied the AI's findings (trim + overlay fixes) at cut time, so the
+     editor only REPORTS them — there's no "fix it" button anymore. Renders
+     only when the sidecar recorded at least one correction. #}
+  {%- if auto_corrections and auto_corrections.corrections -%}
+  <div class="nc-verdict__autofix" style="margin-top: 12px; padding: 12px 14px; background: rgba(0,217,122,0.06); border: 1px solid rgba(0,217,122,0.28); border-radius: 8px;">
+    <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--nc-text);">
+      <i class="ti ti-sparkles" aria-hidden="true" style="color: var(--nc-success);"></i>
+      <span>Corregido automáticamente por la IA</span>
+      {%- set _delta = auto_corrections.score_after - auto_corrections.score_before -%}
+      {%- if _delta > 0 -%}
+      <span style="margin-left: auto; font-size: 12px; font-weight: 700; color: var(--nc-success);">+{{ _delta }}% listo</span>
+      {%- endif -%}
+    </div>
+    <ul style="margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px;">
+      {%- for c in auto_corrections.corrections -%}
+      <li style="display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--nc-text-muted);">
+        <i class="ti ti-check" aria-hidden="true" style="color: var(--nc-success); flex-shrink: 0; margin-top: 2px;"></i>
+        <span>{{ c.label }}</span>
+      </li>
+      {%- endfor -%}
+    </ul>
+    {%- if auto_corrections.ready -%}
+    <div style="margin-top: 8px; font-size: 12px; font-weight: 600; color: var(--nc-success);">
+      Quedó listo para publicar por sí solo.
+    </div>
+    {%- endif -%}
+  </div>
+  {%- endif -%}
+
   <div class="nc-verdict__cta-row">
-    <button type="button"
-            class="nc-btn nc-btn--primary nc-verdict__cta-primary"
-            id="apply-ai-fixes-btn"
-            data-clip-id="{{ clip.id }}">
-      <i class="ti ti-wand" aria-hidden="true"></i>
-      <span>Arreglar y mejorar solo</span>
-    </button>
     {# Slice N.2 — CTA renamed from "Review & publish" / "Publish
        now" to "Approve & continue". The button is no longer a raw
        form-submit when there are unresolved issues — the JS
@@ -3110,10 +3133,9 @@
         </span>
       </div>
       <div class="nc-approve-modal__body">
-        <p>La IA le dio
+        <p>La IA ya corrigió lo que pudo y le dio
           <strong id="approve-modal-score">{{ publishability.score }}%</strong> de listo para publicar.
-          Puedes publicarlo así, dejar que la IA arregle lo que pueda, o
-          seguir editando.</p>
+          Puedes publicarlo así o seguir editando.</p>
         <ul id="approve-modal-issues" class="nc-approve-modal__issues">
           {%- for b in publishability.blocking -%}
           <li class="nc-approve-modal__issues-row nc-approve-modal__issues-row--block">
@@ -3133,12 +3155,6 @@
                 id="approve-modal-cancel">
           <i class="ti ti-arrow-left" aria-hidden="true"></i>
           <span>Seguir editando</span>
-        </button>
-        <button type="button"
-                class="nc-btn nc-approve-modal__autofix"
-                id="approve-modal-autofix">
-          <i class="ti ti-wand" aria-hidden="true"></i>
-          <span>Que la IA lo arregle</span>
         </button>
         <button type="button"
                 class="nc-btn nc-btn--primary nc-approve-modal__force"

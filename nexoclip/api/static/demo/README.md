@@ -1,23 +1,29 @@
 # Landing hero demo thumbnails
 
-The five clip cards in the landing hero (the "1 stream → 5 platforms"
-animation) render real images from this folder. Drop your files here:
+The landing hero animation ("1 stream → 5 platforms") renders real images
+from this folder: one big source VOD card plus five vertical clip cards.
+Drop your files here:
 
-| File        | Card / badge |
-|-------------|--------------|
-| `clip1.jpg` | TikTok       |
-| `clip2.jpg` | Reels        |
-| `clip3.jpg` | Shorts       |
-| `clip4.jpg` | Kick         |
-| `clip5.jpg` | Twitch       |
+| File         | Card / badge               |
+|--------------|----------------------------|
+| `source.jpg` | Big source VOD card (16:9) |
+| `clip1.jpg`  | TikTok                     |
+| `clip2.jpg`  | Reels                      |
+| `clip3.jpg`  | Shorts                     |
+| `clip4.jpg`  | Kick                       |
+| `clip5.jpg`  | Twitch                     |
 
 ## Sizing
 
-- **Aspect ratio:** 9:16 (vertical). The card crops to this with
-  `object-fit: cover`, focal point ~28% from the top (faces sit well).
-- **Recommended:** 360×640 px, optimized JPG/WebP, < ~80 KB each so the
-  hero stays fast. (`.jpg` is what the template references; rename or
-  change the `src` in `landing.html` if you use `.webp`.)
+- **Clip cards (`clip1..5.jpg`):** 9:16 (vertical). The card crops to this
+  with `object-fit: cover`, focal point ~28% from the top (faces sit well).
+  Recommended 360×640 px, optimized JPG/WebP, < ~80 KB each.
+- **Source card (`source.jpg`):** 16:9 (horizontal), e.g. 1024×576. It's
+  treated as a finished card — its own LIVE tag, play button, filename and
+  duration can be baked in; when it loads the template hides its duplicate
+  CSS chrome and keeps only the animated progress sweep.
+- `.jpg` is what the template references; rename or change the `src` in
+  `landing.html` if you use `.webp`.
 
 ## Missing files are safe
 

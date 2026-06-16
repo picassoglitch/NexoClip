@@ -314,6 +314,14 @@ class ClipConfig(BaseModel):
     # behavior if ffmpeg starts thrashing, raise it on a big NVENC
     # host where the GPU is the bottleneck and the CPU is idle.
     cut_concurrency: int = Field(default=3, ge=1, le=16)
+    # Cap the per-encode CPU thread count for software (libx264) encodes.
+    # ffmpeg/x264 default to `threads=auto` (~1.5x core count); with the
+    # cut fan-out, an operator render, and the poll pipeline all encoding
+    # at once, that thread multiplier exhausts the container's PID/thread
+    # ceiling and `x264_encoder_open` fails with EAGAIN. Pinning a small
+    # count keeps each encode light. 0 = let ffmpeg decide (legacy auto).
+    # Ignored by the NVENC path (GPU-bound, not thread-bound).
+    ffmpeg_threads: int = Field(default=2, ge=0, le=64)
     # Task 1b — at startup we probe `ffmpeg -encoders` for
     # h264_nvenc. When present AND `prefer_nvenc=True` AND the
     # operator hasn't overridden `encoder` to something other than

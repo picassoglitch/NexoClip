@@ -183,6 +183,7 @@ async def render_clip_in_background(
         record_clip_to_mp4,
     )
     from nexoclip.db import ClipsRepo, Database
+    from nexoclip.resources import heavy_slot
     from nexoclip.tenancy import bound_tenant
 
     db = Database(db_path)
@@ -255,19 +256,24 @@ async def render_clip_in_background(
 
         hybrid_failed_with: str | None = None
         try:
-            await record_clip_hybrid(
-                clip_id=clip_id,
-                duration_s=duration_s,
-                audio_source_path=audio_source_path,
-                output_path=output_path,
-                base_url=base_url,
-                auth_cookie_value=auth_cookie_value,
-                auth_query=auth_query,
-                width=width,
-                height=height,
-                progress_callback=_on_progress,
-                ass_file_path=ass_file_path,
-            )
+            # Process-wide governor — a headless-Chromium render plus its
+            # ffmpeg composite is the single heaviest op in the process.
+            # Acquiring a slot keeps it from peaking alongside the cut
+            # fan-out / poll pipeline and tipping the host into EAGAIN.
+            async with heavy_slot():
+                await record_clip_hybrid(
+                    clip_id=clip_id,
+                    duration_s=duration_s,
+                    audio_source_path=audio_source_path,
+                    output_path=output_path,
+                    base_url=base_url,
+                    auth_cookie_value=auth_cookie_value,
+                    auth_query=auth_query,
+                    width=width,
+                    height=height,
+                    progress_callback=_on_progress,
+                    ass_file_path=ass_file_path,
+                )
         except HybridRecordingError as e:
             hybrid_failed_with = str(e)
             _log.warning(
@@ -313,18 +319,19 @@ async def render_clip_in_background(
                 # Hybrid succeeded — output is on disk, skip legacy.
                 pass
             else:
-                await record_clip_to_mp4(
-                    clip_id=clip_id,
-                    duration_s=duration_s,
-                    audio_source_path=audio_source_path,
-                    output_path=output_path,
-                    base_url=base_url,
-                    auth_cookie_value=auth_cookie_value,
-                    auth_query=auth_query,
-                    width=width,
-                    height=height,
-                    progress_callback=_on_progress,
-                )
+                async with heavy_slot():
+                    await record_clip_to_mp4(
+                        clip_id=clip_id,
+                        duration_s=duration_s,
+                        audio_source_path=audio_source_path,
+                        output_path=output_path,
+                        base_url=base_url,
+                        auth_cookie_value=auth_cookie_value,
+                        auth_query=auth_query,
+                        width=width,
+                        height=height,
+                        progress_callback=_on_progress,
+                    )
         except PreviewRecordingError as e:
             # Render Migration R2 — wipe any partial bytes the recorder
             # left on disk BEFORE marking failed. Otherwise the download

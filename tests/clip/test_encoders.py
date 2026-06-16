@@ -22,8 +22,12 @@ def test_libx264_args_when_nvenc_unavailable(
     monkeypatch.setattr(encoders, "has_nvenc", lambda: False)
     cfg = ClipConfig()
     args = encoders.pick_video_encoder_args(cfg)
-    # Matches the O.49 quality bump (preset=fast, crf=19).
-    assert args == ["-c:v", "libx264", "-preset", cfg.preset, "-crf", str(cfg.crf)]
+    # Matches the O.49 quality bump (preset=fast, crf=19) plus the #3a
+    # software-encode thread cap (ffmpeg_threads default 2).
+    assert args == [
+        "-c:v", "libx264", "-preset", cfg.preset, "-crf", str(cfg.crf),
+        "-threads", str(cfg.ffmpeg_threads),
+    ]
 
 
 def test_nvenc_args_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,7 +64,11 @@ def test_explicit_encoder_override_wins_over_nvenc(
     monkeypatch.setattr(encoders, "has_nvenc", lambda: True)
     cfg = ClipConfig(encoder="libx265", preset="medium", crf=20)
     args = encoders.pick_video_encoder_args(cfg)
-    assert args == ["-c:v", "libx265", "-preset", "medium", "-crf", "20"]
+    # Software encoders carry the #3a thread cap (ffmpeg_threads default 2).
+    assert args == [
+        "-c:v", "libx265", "-preset", "medium", "-crf", "20",
+        "-threads", str(cfg.ffmpeg_threads),
+    ]
 
 
 def test_nvenc_cq_override(monkeypatch: pytest.MonkeyPatch) -> None:

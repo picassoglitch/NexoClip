@@ -58,6 +58,11 @@ _log = structlog.get_logger(__name__)
 # identical aside from the speed difference.
 FFMPEG_CRF = "14"
 FFMPEG_PRESET = "medium"
+# Cap libx264's CPU threads so the composite encode doesn't oversubscribe
+# the host's thread ceiling when it overlaps the cut fan-out / poll
+# pipeline (the EAGAIN cascade). Override via NEXOCLIP_FFMPEG_THREADS;
+# 0 restores ffmpeg's `threads=auto`.
+FFMPEG_THREADS = os.environ.get("NEXOCLIP_FFMPEG_THREADS", "2")
 DEFAULT_FPS = 30
 
 
@@ -420,6 +425,9 @@ def _ffmpeg_composite_alpha_over_source(
         "-c:v", "libx264",
         "-preset", FFMPEG_PRESET,
         "-crf", FFMPEG_CRF,
+        # Cap encoder threads (see FFMPEG_THREADS) to avoid EAGAIN under
+        # concurrent load. Spliced via *[] so 0/unset means "ffmpeg auto".
+        *(["-threads", FFMPEG_THREADS] if FFMPEG_THREADS not in ("0", "") else []),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "192k",

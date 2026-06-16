@@ -16,6 +16,21 @@ from nexoclip.config import ClipConfig
 from ._fixtures import make_candidate, seed_stream
 
 
+@pytest.fixture(autouse=True)
+def _unthrottle_governor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the process-wide heavy-op governor for this file.
+
+    These tests measure `cut_concurrency` in isolation — the barrier(3)
+    case needs all three candidates' first ffmpeg call to run at once. The
+    governor (nexoclip.resources) is a SEPARATE, additional cap whose
+    default (cpu//2) would throttle below 3 on small CI boxes and break the
+    barrier. It has its own coverage in test_resources_governor.py."""
+    from nexoclip import resources
+
+    monkeypatch.setenv("NEXOCLIP_HEAVY_SLOTS", "16")
+    resources.reset_for_testing()
+
+
 def _stub_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Same shape as the existing _stub_ffmpeg in test_cut_clips.py:
     create the output file so the rest of the pipeline sees a real

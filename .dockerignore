@@ -36,10 +36,10 @@ __pycache__/
 .env
 .env.*
 
-# Docs + tests + scripts don't run in production
+# Docs + tests don't run in production. scripts/ IS shipped (the Dockerfile
+# COPYs it) so ops tools like the SQLite→Postgres cutover can run in a shell.
 docs/
 tests/
-scripts/
 
 # OS noise
 .DS_Store

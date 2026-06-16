@@ -473,6 +473,33 @@ def _handsfree_clip_scores(clip_entries: list) -> list[tuple[str, float]]:
     ]
 
 
+async def _resolve_brand_kit_url(db: Database, *, stream_id: str) -> str | None:
+    """Best-effort: the operator's saved handle/URL for this stream's brand
+    kit, so auto-correct can fill an empty banner URL. Mirrors the dashboard
+    /apply-ai-fixes resolution. Returns None on any miss — the banner fix
+    just won't fire."""
+    try:
+        from nexoclip.branding import resolve_brand_kit_for_candidate
+
+        kit = await resolve_brand_kit_for_candidate(
+            db, stream_id=stream_id, speaker_label=None
+        )
+        if kit is None:
+            return None
+        for attr in (
+            "handle_kick",
+            "handle_tiktok",
+            "handle_youtube",
+            "handle_instagram",
+        ):
+            v = getattr(kit, attr, None)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    except Exception:  # noqa: BLE001 — brand-kit URL is an optional hint
+        return None
+    return None
+
+
 async def _run_pipeline(
     *,
     tenant_id: str,
@@ -1014,6 +1041,34 @@ async def _run_pipeline(
             ) from e
         if db is not None:
             await ClipsRepo(db).upsert_many([clip_to_row(c) for c in clips])
+
+    # 4b) auto-correct each clip — slice G.6. Apply the AI's findings NOW,
+    # while the source VOD still exists: auto-trim around freeze/silence and
+    # apply the safe overlay fixes, so the clip arrives publish-ready and the
+    # dashboard only reports what was corrected (no "fix it" button). Runs
+    # BEFORE the hands-free sweep so corrected/promoted clips get published.
+    # Strictly best-effort: one clip's failure must not break the batch or
+    # the pipeline. No-op when no DB (offline/test cut).
+    if db is not None and clips:
+        from nexoclip.clip import auto_correct_clip
+
+        _source_platform = getattr(stream, "platform", None)
+        _bk_url = await _resolve_brand_kit_url(db, stream_id=stream.id)
+        with _step("auto_correct", db=db, clip_count=len(clips)):
+            for clip in clips:
+                try:
+                    await auto_correct_clip(
+                        db,
+                        clip_id=clip.id,
+                        source_platform=_source_platform,
+                        brand_kit_url=_bk_url,
+                    )
+                except Exception as e:  # noqa: BLE001 — never break the batch
+                    _log.warning(
+                        "pipeline.auto_correct_failed",
+                        clip_id=clip.id,
+                        error=str(e),
+                    )
 
     # 5) variants per clip — reuse the router built above for detect+viral.
     if db is not None:

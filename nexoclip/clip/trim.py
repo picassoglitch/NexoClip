@@ -113,24 +113,43 @@ async def auto_trim_around_integrity(
     new_end_s = clip.start_s + best[1]
     new_duration_s = new_end_s - new_start_s
 
-    # Re-cut the MP4 from the source video.
+    # Re-cut the MP4. Prefer the source VOD (full re-cut + 9:16 reformat).
+    # When the VOD has been pruned by the retention sweeper, fall back to
+    # slicing the clean sub-window straight out of the EXISTING clip MP4:
+    # it's already 9:16, and `best` is a sub-window of the clip in
+    # clip-local coords, so a plain fast-cut yields the same window without
+    # the source. This keeps auto-trim working on retention-pruned streams.
     stream = await streams_repo.get(clip.stream_id)
-    if stream is None:
-        raise ClipError(f"stream {clip.stream_id!r} not found for clip trim")
-    source_video = Path(stream.source_video_path)
-    if not source_video.exists():
-        raise ClipError(
-            f"source video missing: {source_video}. The VOD may have been "
-            f"pruned by the retention sweeper — re-ingest the stream to "
-            f"trim its clips."
-        )
+    source_video = Path(stream.source_video_path) if stream is not None else None
 
-    new_path = _recut_clip_mp4(
-        source_video=source_video,
-        out_path=Path(clip.path),
-        start_s=new_start_s,
-        duration_s=new_duration_s,
-    )
+    # First trim: stash a pristine copy of the clip MP4 next to it so revert
+    # can always restore it — even after the source VOD is pruned. We do this
+    # BEFORE overwriting clip.mp4 below. Subsequent trims keep the original
+    # copy (the FIRST pre-trim state), matching how original_start_s is kept.
+    if clip.original_start_s is None:
+        _save_pretrim_original(Path(clip.path))
+
+    if source_video is not None and source_video.exists():
+        new_path = _recut_clip_mp4(
+            source_video=source_video,
+            out_path=Path(clip.path),
+            start_s=new_start_s,
+            duration_s=new_duration_s,
+        )
+    else:
+        clip_mp4 = Path(clip.path)
+        if not clip_mp4.exists():
+            raise ClipError(
+                f"source video missing AND clip MP4 missing ({clip_mp4}); "
+                f"re-ingest the stream to trim its clips."
+            )
+        # `best` is clip-local — the clip MP4 timeline starts at 0 == the
+        # clip's current start_s, so best[0] indexes straight into it.
+        new_path = _recut_from_existing_clip(
+            clip_mp4=clip_mp4,
+            local_start_s=best[0],
+            duration_s=best_len,
+        )
 
     # First trim: stash originals. Subsequent trim (operator clicks
     # auto-trim twice): keep the FIRST original_start_s/end_s.
@@ -182,8 +201,10 @@ async def revert_trim(
     """Restore `clip_id` to its original bounds.
 
     No-op when the clip has never been trimmed (original_start_s
-    is NULL). Otherwise re-cuts the source video at the originals
-    and clears the originals column.
+    is NULL). Otherwise restore the pristine pre-trim MP4 copy stashed
+    on the first trim (`clip.original.mp4`) — that works even after the
+    source VOD is pruned. Only when that copy is missing do we fall back
+    to re-cutting the source video at the originals.
     """
     clips_repo = ClipsRepo(db)
     streams_repo = StreamsRepo(db)
@@ -195,27 +216,34 @@ async def revert_trim(
     if clip.original_start_s is None or clip.original_end_s is None:
         return {"outcome": "noop"}
 
-    stream = await streams_repo.get(clip.stream_id)
-    if stream is None:
-        raise ClipError(f"stream {clip.stream_id!r} not found for clip revert")
-    source_video = Path(stream.source_video_path)
-    if not source_video.exists():
-        raise ClipError(
-            f"source video missing: {source_video}. Can't revert without "
-            f"re-cutting; re-ingest the stream to restore the original "
-            f"bounds for its clips."
-        )
-
     original_start = float(clip.original_start_s)
     original_end = float(clip.original_end_s)
     original_duration = original_end - original_start
 
-    new_path = _recut_clip_mp4(
-        source_video=source_video,
-        out_path=Path(clip.path),
-        start_s=original_start,
-        duration_s=original_duration,
-    )
+    clip_mp4 = Path(clip.path)
+    pretrim = _pretrim_original_path(clip_mp4)
+    if pretrim.exists():
+        # Fast path: swap the pristine copy back into place. No source
+        # video, no ffmpeg re-encode — byte-identical to the original cut.
+        pretrim.replace(clip_mp4)
+        new_path = clip_mp4
+    else:
+        stream = await streams_repo.get(clip.stream_id)
+        if stream is None:
+            raise ClipError(f"stream {clip.stream_id!r} not found for clip revert")
+        source_video = Path(stream.source_video_path)
+        if not source_video.exists():
+            raise ClipError(
+                f"no pre-trim copy and source video missing: {source_video}. "
+                f"Can't revert without re-cutting; re-ingest the stream to "
+                f"restore the original bounds for its clips."
+            )
+        new_path = _recut_clip_mp4(
+            source_video=source_video,
+            out_path=clip_mp4,
+            start_s=original_start,
+            duration_s=original_duration,
+        )
 
     # Restore the bounds + path; pass originals=None so set_trim_bounds
     # clears them in the same query.
@@ -300,6 +328,68 @@ def _recut_clip_mp4(
         if tmp_out.exists():
             tmp_out.unlink()
     return out_path
+
+
+def _pretrim_original_path(clip_mp4: Path) -> Path:
+    """Path of the pristine pre-trim copy stashed beside the clip MP4."""
+    return clip_mp4.with_name(f"{clip_mp4.stem}.original{clip_mp4.suffix}")
+
+
+def _save_pretrim_original(clip_mp4: Path) -> None:
+    """Copy the current clip MP4 to its pre-trim sidecar, once.
+
+    Best-effort: a missing clip MP4 (already gone) or a copy failure must
+    not block the trim itself — revert just falls back to the source VOD.
+    Never overwrites an existing copy, so repeated trims keep the FIRST
+    pristine state.
+    """
+    import shutil
+
+    dest = _pretrim_original_path(clip_mp4)
+    if dest.exists() or not clip_mp4.exists():
+        return
+    try:
+        shutil.copy2(clip_mp4, dest)
+    except Exception:  # noqa: BLE001 — revert degrades to source re-cut
+        pass
+
+
+def _recut_from_existing_clip(
+    *,
+    clip_mp4: Path,
+    local_start_s: float,
+    duration_s: float,
+) -> Path:
+    """Fallback re-cut when the source VOD is gone: slice the clean
+    sub-window out of the EXISTING clip MP4.
+
+    The clip MP4 is already 9:16-reformatted, so we only fast-cut — no
+    reformat pass, no source video needed. `local_start_s` is relative to
+    the clip's current start (the clip MP4 timeline starts at 0). Reads
+    from `clip_mp4` into a separate temp file, then replaces it atomically.
+
+    Note: this is sample-accurate but re-encodes the already-encoded clip,
+    so it incurs one generation of recompression. revert_trim still needs
+    the source VOD — the trimmed-away footage isn't recoverable from this.
+    """
+    from .service import _ffmpeg_fast_cut
+    from nexoclip.config import ClipConfig
+
+    cfg = ClipConfig()
+    tmp_out = clip_mp4.with_suffix(".trim.tmp.mp4")
+    try:
+        _ffmpeg_fast_cut(
+            video_path=clip_mp4,
+            start_s=local_start_s,
+            duration_s=duration_s,
+            out_path=tmp_out,
+            cfg=cfg,
+        )
+        tmp_out.replace(clip_mp4)
+    finally:
+        if tmp_out.exists():
+            tmp_out.unlink()
+    return clip_mp4
 
 
 def _invalidate_export_cache(clip_dir: Path) -> None:

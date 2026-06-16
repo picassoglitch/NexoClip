@@ -939,7 +939,7 @@
             {{ (d.content or '(sin caption)')[:80] }}
           </td>
           <td><span class="nc-chip nc-chip--code">{{ d.platforms }}</span></td>
-          <td class="nc-text--muted" style="font-size: 12px;">{{ d.created_at[:16] }}</td>
+          <td class="nc-text--muted" style="font-size: 12px;" data-localtime="{{ d.created_at }}">{{ d.created_at[:16] }}</td>
           <td>
             <div style="display: flex; gap: 6px; align-items: center; white-space: nowrap;">
               <form method="post" action="/dashboard/publish/zernio/draft/{{ d.post_id }}/publish"
@@ -997,7 +997,7 @@
         {% for h in history %}
         {% set view_url = ("/dashboard/clips/" ~ h.clip_id) if h.kind == "manual" else ("/dashboard/publish/zernio/job/" ~ h.post_id) %}
         <tr class="nc-pc-history-row" data-href="{{ view_url }}">
-          <td><span class="nc-mono nc-mono--muted">{{ (h.created_at or "")[:19] }}</span></td>
+          <td><span class="nc-mono nc-mono--muted"{% if h.created_at %} data-localtime="{{ h.created_at }}"{% endif %}>{{ (h.created_at or "")[:19] }}</span></td>
           <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
             {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
           </td>

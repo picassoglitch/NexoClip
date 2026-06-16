@@ -119,8 +119,8 @@
             <span class="nc-chip nc-chip--muted">{{ s.status }}</span>
             {%- endif -%}
           </td>
-          <td class="nc-mono" style="font-size: 11px;">{{ s.live_started_at or '—' }}</td>
-          <td class="nc-mono" style="font-size: 11px;">{{ s.live_ended_at or '—' }}</td>
+          <td class="nc-mono" style="font-size: 11px;">{% if s.live_started_at %}<span data-localtime="{{ s.live_started_at }}">{{ s.live_started_at[:19] }}</span>{% else %}—{% endif %}</td>
+          <td class="nc-mono" style="font-size: 11px;">{% if s.live_ended_at %}<span data-localtime="{{ s.live_ended_at }}">{{ s.live_ended_at[:19] }}</span>{% else %}—{% endif %}</td>
           <td>
             {%- if s.status == 'live_ended' -%}
             <a href="/dashboard/streams/{{ s.id }}" class="nc-btn nc-btn--sm">

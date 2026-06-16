@@ -738,6 +738,27 @@ class StreamsRepo:
         assert existing is not None
         return existing
 
+    async def set_duration(self, stream_id: str, duration_s: float) -> None:
+        """Backfill the real media duration onto a row created without one.
+
+        `upsert` is INSERT OR IGNORE, so it never updates a row inserted
+        earlier — e.g. a live stream the NexoOBS webhook created with
+        duration 0 (the real length isn't known until the recording is
+        processed). The pipeline calls this after ffprobe so the streams
+        list shows the actual length instead of 0s. Guarded on
+        `duration_s <= 0` so a real value (e.g. from the live /ended
+        webhook) is never clobbered by a slightly different ffprobe read."""
+        if duration_s <= 0:
+            return
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE streams SET duration_s = ? "
+            "WHERE id = ? AND tenant_id = ? AND duration_s <= 0",
+            (float(duration_s), stream_id, tenant_id),
+        )
+        await conn.commit()
+
     async def get(self, stream_id: str) -> StreamRow | None:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()

@@ -4357,7 +4357,7 @@
           <td class="nc-num nc-mono">{% if o.metric and o.metric.views is not none %}{{ "{:,}".format(o.metric.views) }}{% else %}—{% endif %}</td>
           <td class="nc-num nc-mono">{% if o.metric and o.metric.likes is not none %}{{ "{:,}".format(o.metric.likes) }}{% else %}—{% endif %}</td>
           <td class="nc-num nc-mono">{% if o.metric and o.metric.comments is not none %}{{ "{:,}".format(o.metric.comments) }}{% else %}—{% endif %}</td>
-          <td><small class="nc-mono nc-mono--muted">{% if o.metric %}{{ o.metric.fetched_at[:19] }}{% else %}<em>aún sin medir</em>{% endif %}</small></td>
+          <td><small class="nc-mono nc-mono--muted">{% if o.metric %}<span data-localtime="{{ o.metric.fetched_at }}">{{ o.metric.fetched_at[:19] }}</span>{% else %}<em>aún sin medir</em>{% endif %}</small></td>
         </tr>
         {% endfor %}
       </tbody>

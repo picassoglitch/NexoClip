@@ -362,7 +362,7 @@ async def _publish_clip(
             tenant_id=tenant_id,
             base_url=base,
             auth_cookie_value=cookie_val,
-            db_path=settings.db_path,
+            db_path=settings.db_target(),
         )
     except RuntimeError as e:
         _log.error(
@@ -1832,7 +1832,7 @@ async def autopublish_hands_free_sweep(
                 content = composed.caption
                 await ensure_clip_rendered(
                     db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
-                    auth_cookie_value=None, db_path=settings.db_path,
+                    auth_cookie_value=None, db_path=settings.db_target(),
                     auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
                 )
                 media_url = mint_signed_clip_url(

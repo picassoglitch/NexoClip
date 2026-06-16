@@ -3229,7 +3229,7 @@ async def clip_overlay_finalize(
                 auth_cookie_value=_cookie_val,
                 width=1080,
                 height=1920,
-                db_path=_settings.db_path,
+                db_path=_settings.db_target(),
             )
     except Exception as e:  # noqa: BLE001 — pre-render must never block approval
         from structlog import get_logger
@@ -4209,7 +4209,7 @@ async def clip_download(
         auth_cookie_value=cookie_val or None,
         width=target_w,
         height=target_h,
-        db_path=settings.db_path,
+        db_path=settings.db_target(),
     )
     return JSONResponse(
         status_code=202,

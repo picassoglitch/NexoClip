@@ -3003,68 +3003,45 @@
     {% endfor %}
   </div>
 
-  {# Slice G.4b — integrity trim CTA. Renders only when the breakdown
-     has integrity issues OR the clip has been trimmed (so the Revert
-     button is available). Auto-trim shrinks the clip to its longest
-     clean window; Revert restores the original bounds. Both round-trip
-     through ffmpeg so the MP4 is regenerated; clip_render.mp4 +
-     clip_final.mp4 caches get invalidated. #}
-  {%- set _issues = (breakdown.integrity_issues if breakdown and breakdown.integrity_issues else []) -%}
+  {# Slice G.6 — trim revert row. Auto-trim now runs automatically at cut
+     time (the pipeline's auto-correct step), so there's no manual "Recortar"
+     button. This row appears only once a clip HAS been trimmed, to offer
+     "Deshacer" — revert restores the pristine pre-trim copy. #}
   {%- set _trimmed = (clip.original_start_s is not none) -%}
-  {%- if _issues or _trimmed -%}
+  {%- if _trimmed -%}
   <div class="nc-verdict__trim-row" style="margin-top: 12px; padding: 10px 12px; background: rgba(255, 184, 0, 0.06); border: 1px solid rgba(255, 184, 0, 0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
     <i class="ti ti-scissors" aria-hidden="true" style="color: var(--nc-warn); flex-shrink: 0;"></i>
     <div style="flex: 1; min-width: 180px;">
       <div style="font-size: 13px; font-weight: 600; color: var(--nc-text);">
-        {%- if _trimmed -%}
-          Recortamos el clip
-        {%- else -%}
-          {{ "Encontramos un detalle" if _issues|length == 1 else "Encontramos unos detalles" }}
-        {%- endif -%}
+        Recortamos el clip automáticamente
       </div>
       <div style="font-size: 11px; color: var(--nc-text-muted); margin-top: 2px;">
-        {%- if _trimmed -%}
-          Límites originales: {{ "%.1f"|format(clip.original_start_s) }}s &rarr; {{ "%.1f"|format(clip.original_end_s) }}s.
-          Toca Deshacer para regresarlos.
-        {%- else -%}
-          Recortar solo deja la mejor parte limpia del clip. Lo deshaces con un clic.
-        {%- endif -%}
+        Límites originales: {{ "%.1f"|format(clip.original_start_s) }}s &rarr; {{ "%.1f"|format(clip.original_end_s) }}s.
+        Toca Deshacer para regresarlos.
       </div>
     </div>
-    {%- if _issues -%}
-    <form action="/dashboard/clips/{{ clip.id }}/auto-trim" method="post" style="margin: 0;">
-      <button type="submit" class="nc-btn nc-btn--sm">
-        <i class="ti ti-cut" aria-hidden="true"></i>
-        <span>Recortar</span>
-      </button>
-    </form>
-    {%- endif -%}
-    {%- if _trimmed -%}
     <form action="/dashboard/clips/{{ clip.id }}/revert-trim" method="post" style="margin: 0;">
       <button type="submit" class="nc-btn nc-btn--sm">
         <i class="ti ti-arrow-back-up" aria-hidden="true"></i>
         <span>Deshacer</span>
       </button>
     </form>
-    {%- endif -%}
   </div>
+  {%- endif -%}
 
-  {# One-shot flash notice driven by ?trim=... query param. #}
+  {# One-shot flash notice driven by ?trim=... (set by revert-trim). Kept
+     outside the _trimmed gate so the "regresamos los límites" confirmation
+     still shows after a successful revert clears original_start_s. #}
   {%- set _trim_flash = request.query_params.get('trim') if request and request.query_params else None -%}
   {%- if _trim_flash -%}
   <div style="margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 12px;
-              {% if _trim_flash == 'trimmed' or _trim_flash == 'reverted' %}background: rgba(0,217,122,0.08); color: var(--nc-success); border: 1px solid rgba(0,217,122,0.3);
-              {% elif _trim_flash == 'no_issues' or _trim_flash == 'noop' %}background: rgba(120,140,180,0.08); color: var(--nc-text-muted); border: 1px solid rgba(120,140,180,0.25);
-              {% elif _trim_flash == 'no_clean_window' %}background: rgba(255,184,0,0.08); color: var(--nc-warn); border: 1px solid rgba(255,184,0,0.3);
+              {% if _trim_flash == 'reverted' %}background: rgba(0,217,122,0.08); color: var(--nc-success); border: 1px solid rgba(0,217,122,0.3);
+              {% elif _trim_flash == 'noop' %}background: rgba(120,140,180,0.08); color: var(--nc-text-muted); border: 1px solid rgba(120,140,180,0.25);
               {% else %}background: rgba(229,72,77,0.08); color: var(--nc-danger); border: 1px solid rgba(229,72,77,0.3);{% endif %}">
-    {% if _trim_flash == 'trimmed' %}Listo, recortamos alrededor del detalle.
-    {% elif _trim_flash == 'reverted' %}Listo, regresamos los límites originales.
-    {% elif _trim_flash == 'no_issues' %}No hay nada que recortar.
+    {% if _trim_flash == 'reverted' %}Listo, regresamos los límites originales.
     {% elif _trim_flash == 'noop' %}Este clip nunca se recortó, no hay nada que deshacer.
-    {% elif _trim_flash == 'no_clean_window' %}No encontramos un tramo limpio de al menos 5s. Edítalo a mano o descártalo.
-    {% else %}No se pudo recortar. Revisa los logs del servidor.{% endif %}
+    {% else %}No se pudo deshacer. Revisa los logs del servidor.{% endif %}
   </div>
-  {%- endif -%}
   {%- endif -%}
 
   {# Slice G.6 — passive "what we corrected" panel. The pipeline already
@@ -3113,13 +3090,12 @@
       <span>Aprobar y seguir</span>
     </button>
   </div>
-  <div id="apply-ai-fixes-feedback" class="nc-verdict__feedback"></div>
 
-  {# Slice N.2 — issues-before-ship banner modal. Hidden until the
+  {# Slice N.2 / G.6 — issues-before-ship banner modal. Hidden until the
      operator clicks Approve & continue on a clip whose publishability
-     status is NOT publish_ready. Three escape hatches:
+     status is NOT publish_ready. Two escape hatches (the AI already
+     auto-corrected at cut time, so there's no "let AI fix it" anymore):
        - Ignore & ship anyway  (submit the form as-is)
-       - AI auto-fix all       (run /apply-ai-fixes, then submit)
        - Cancel & keep editing (close modal, do nothing)
      The modal is rendered inline so the existing form-submit path
      stays intact — the modal's "Ship anyway" button submits the
@@ -5024,11 +5000,10 @@
   // Both share the same flow:
   //   - publishability.status === "publish_ready" → submit form,
   //     server-side finalize redirects to next clip in queue.
-  //   - else → open the issues modal with three escape hatches.
+  //   - else → open the issues modal with two escape hatches.
   //
   // Modal actions:
   //   - Cancel       → hide, do nothing
-  //   - Auto-fix all → fire /apply-ai-fixes, then auto-submit form
   //   - Ship anyway  → submit form (server still finalizes)
   (function () {
     var approveButtons = [
@@ -5126,7 +5101,6 @@
 
     if (modal) {
       var cancelBtn = document.getElementById("approve-modal-cancel");
-      var autofixBtn = document.getElementById("approve-modal-autofix");
       var forceBtn = document.getElementById("approve-modal-force");
 
       if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
@@ -5134,239 +5108,13 @@
         closeModal();
         submitForm();
       });
-      if (autofixBtn) autofixBtn.addEventListener("click", function () {
-        // Reuse the existing Auto Fix flow, then auto-submit on success.
-        var apply = document.getElementById("apply-ai-fixes-btn");
-        if (apply) {
-          // Mark that the next reload should auto-submit the form.
-          try {
-            sessionStorage.setItem(
-              "nc-autofix-then-ship-" + "{{ clip.id }}", "1"
-            );
-          } catch (_) {}
-          apply.click();
-        }
-        closeModal();
-      });
       // Click-outside-to-close
       modal.addEventListener("click", function (e) {
         if (e.target === modal) closeModal();
       });
     }
-
-    // If we landed here from a prior "auto-fix then ship" intent,
-    // resume the ship now that fixes have been applied + the page
-    // has reloaded.
-    try {
-      var resume = sessionStorage.getItem("nc-autofix-then-ship-" + "{{ clip.id }}");
-      if (resume === "1") {
-        sessionStorage.removeItem("nc-autofix-then-ship-" + "{{ clip.id }}");
-        // Give the persisted fix-diff a beat to render before we
-        // submit so the operator sees their final state.
-        setTimeout(submitForm, 1200);
-      }
-    } catch (_) {}
   })();
 
-  // ---- Slice I.3 + N.1 + N.2: Apply AI Fixes ----
-  // POSTs to /clips/{id}/apply-ai-fixes. Backend returns:
-  //   { fix_count, fixes:[{field, before, after, why}, …],
-  //     score_before, score_after, status_before, status_after,
-  //     auto_promoted }
-  //
-  // We now (N.1):
-  //   1. Animate the retention-score counter from before → after
-  //      so the operator SEES the bump (was previously hidden
-  //      behind a page reload).
-  //   2. Render every fix as a ✓-checked line item below the
-  //      verdict card so they can read exactly what changed.
-  //   3. When the post-fix score crosses 75 (publish_ready),
-  //      flash the verdict card lime and update the headline.
-  //   4. Auto-reload AFTER 2.4s so form inputs pick up the new
-  //      overlay_config — but only after the operator has a
-  //      moment to see the diff.
-  var applyBtn = document.getElementById("apply-ai-fixes-btn");
-  var applyFb  = document.getElementById("apply-ai-fixes-feedback");
-
-  function _animateScore(fromN, toN, durationMs) {
-    var el = document.querySelector(".nc-verdict__retention-pct");
-    if (!el) return;
-    var start = performance.now();
-    function tick(now) {
-      var t = Math.min(1, (now - start) / durationMs);
-      // ease-out cubic
-      var eased = 1 - Math.pow(1 - t, 3);
-      var v = Math.round(fromN + (toN - fromN) * eased);
-      el.textContent = v + "%";
-      if (t < 1) requestAnimationFrame(tick);
-      else el.textContent = toN + "%";
-    }
-    requestAnimationFrame(tick);
-  }
-
-  function _renderFixDiff(fixes, scoreBefore, scoreAfter, autoPromoted) {
-    // Build (or reuse) the fix-diff card under the verdict CTA row.
-    var host = document.getElementById("ai-fix-diff");
-    if (!host) {
-      host = document.createElement("div");
-      host.id = "ai-fix-diff";
-      host.className = "nc-fix-diff";
-      var verdict = document.querySelector(".nc-verdict");
-      if (verdict) verdict.appendChild(host);
-    }
-    host.innerHTML = "";
-    // Header line — score delta + auto-promote chip if applicable.
-    var head = document.createElement("div");
-    head.className = "nc-fix-diff__head";
-    var delta = scoreAfter - scoreBefore;
-    var deltaTxt = (delta > 0 ? "+" : "") + delta;
-    head.innerHTML =
-      '<span class="nc-fix-diff__title">✨ La IA hizo ' + fixes.length +
-        (fixes.length === 1 ? ' arreglo' : ' arreglos') + '</span>' +
-      '<span class="nc-fix-diff__delta nc-fix-diff__delta--' +
-        (delta > 0 ? 'up' : (delta < 0 ? 'down' : 'flat')) + '">' +
-        scoreBefore + '% → ' + scoreAfter + '%  (' + deltaTxt + ')' +
-      '</span>';
-    host.appendChild(head);
-    if (autoPromoted) {
-      var promo = document.createElement("div");
-      promo.className = "nc-fix-diff__promote";
-      promo.textContent = "✓ Ya quedó listo para revisar";
-      host.appendChild(promo);
-    }
-    // Each fix renders as a one-liner with the human "why".
-    fixes.forEach(function (f, i) {
-      var row = document.createElement("div");
-      row.className = "nc-fix-diff__row";
-      // Stagger the fade-in so they cascade visually.
-      row.style.animationDelay = (i * 80) + "ms";
-      row.innerHTML =
-        '<span class="nc-fix-diff__check">✓</span>' +
-        '<span class="nc-fix-diff__why">' + f.why + '</span>';
-      host.appendChild(row);
-    });
-  }
-
-  // Slice N.2 + N.7 — re-render any persisted fix diff for THIS clip.
-  // The cached payload carries a schema version; bump this constant
-  // whenever the fix-engine changes (added/removed fixes, etc.) so
-  // pre-existing sessionStorage entries get auto-invalidated. Without
-  // this, operators see ghost entries like "Set caption lead-time to
-  // recommended 120ms" long after that fix was removed from the engine.
-  var FIX_DIFF_SCHEMA_VERSION = "n7";
-  (function restoreFixDiff() {
-    try {
-      var raw = sessionStorage.getItem("nc-last-fix-diff-" + "{{ clip.id }}");
-      if (!raw) return;
-      var data = JSON.parse(raw);
-      if (!data || !data.fixes || data.fixes.length === 0) return;
-      // Drop if schema version doesn't match — old fix labels would
-      // confuse the operator now that the engine has changed.
-      if (data.schema !== FIX_DIFF_SCHEMA_VERSION) {
-        sessionStorage.removeItem("nc-last-fix-diff-" + "{{ clip.id }}");
-        return;
-      }
-      // Only restore if the diff was generated in the last 30 minutes.
-      if (Date.now() - (data.timestamp || 0) > 30 * 60 * 1000) {
-        sessionStorage.removeItem("nc-last-fix-diff-" + "{{ clip.id }}");
-        return;
-      }
-      _renderFixDiff(
-        data.fixes,
-        data.score_before,
-        data.score_after,
-        !!data.auto_promoted
-      );
-    } catch (_) {}
-  })();
-
-  if (applyBtn) {
-    applyBtn.addEventListener("click", function () {
-      var clipId = applyBtn.getAttribute("data-clip-id");
-      if (!clipId) return;
-      applyBtn.disabled = true;
-      if (applyFb) {
-        applyFb.textContent = "Aplicando los arreglos…";
-        applyFb.className = "nc-verdict__feedback";
-      }
-      fetch("/dashboard/clips/" + clipId + "/apply-ai-fixes", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {"Content-Type": "application/json"},
-        body: "{}",
-      })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (data) {
-          var n = (data && data.fix_count) || 0;
-          if (n === 0) {
-            if (applyFb) {
-              applyFb.textContent = "No hay nada que arreglar — el clip ya está bien";
-              applyFb.className = "nc-verdict__feedback nc-verdict__feedback--ok";
-            }
-            applyBtn.disabled = false;
-            return;
-          }
-          if (applyFb) applyFb.textContent = "";
-
-          // 1. Animate the retention-score counter on the verdict card.
-          _animateScore(
-            data.score_before || 0,
-            data.score_after || 0,
-            1100
-          );
-          // 2. Render the fix-diff list.
-          _renderFixDiff(
-            data.fixes || [],
-            data.score_before || 0,
-            data.score_after || 0,
-            !!data.auto_promoted
-          );
-          // 3. Slice N.2 — persist the diff in sessionStorage so it
-          //    survives the reload. Operator's #1 ask: "leave the
-          //    fixes window so the user can go back and know what
-          //    was fixed". We re-render the same card on next mount.
-          try {
-            sessionStorage.setItem(
-              "nc-last-fix-diff-" + "{{ clip.id }}",
-              JSON.stringify({
-                schema: FIX_DIFF_SCHEMA_VERSION,
-                fixes: data.fixes || [],
-                score_before: data.score_before || 0,
-                score_after: data.score_after || 0,
-                auto_promoted: !!data.auto_promoted,
-                status_after: data.status_after,
-                timestamp: Date.now(),
-              })
-            );
-          } catch (_) {}
-          // 4. Pulse the verdict card if status crossed into publish_ready.
-          if (data.status_after === "publish_ready") {
-            var verdict = document.querySelector(".nc-verdict");
-            if (verdict) {
-              verdict.classList.remove("nc-verdict--flash");
-              void verdict.offsetWidth;  // restart animation
-              verdict.classList.add("nc-verdict--flash");
-            }
-          }
-          // 5. Reload after the operator has had a moment to read the
-          // diff — form inputs need to pick up the new overlay_config.
-          // The diff itself is persisted (step 3) so it re-renders
-          // on the next page load. Reload delay 2.8s gives them time
-          // to skim the green check list before refresh.
-          setTimeout(function () { window.location.reload(); }, 2800);
-        })
-        .catch(function (err) {
-          if (applyFb) {
-            applyFb.textContent = "No se pudieron aplicar los arreglos (" + err.message + ")";
-            applyFb.className = "nc-verdict__feedback nc-verdict__feedback--err";
-          }
-          applyBtn.disabled = false;
-        });
-    });
-  }
   function applyDefaultBannerColor() {
     if (bannerColorTouched) return;
     var p = ctlBannerPlat.value || "kick";

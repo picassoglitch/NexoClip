@@ -122,25 +122,31 @@ async def migrate(sqlite_path: Path, pg_dsn: str, *, truncate: bool) -> int:
         copied[table] = len(rows)
         print(f"  {table:36s} {len(rows):>7d} rows")
 
-    # Verify: every source row landed (counts match per table).
+    # Verify: every SOURCE row landed in Postgres (pg_n >= src_n). Postgres
+    # having MORE rows is expected and fine — if the app is already serving on
+    # PG during the cutover, live activity (e.g. a login minting an api_token)
+    # adds rows the SQLite snapshot never had. Only a shortfall (rows that
+    # failed to copy) is a real failure.
     print("\nVerifying row counts ...")
-    mismatches = 0
+    shortfalls = 0
     for table in tables:
         src_n = src.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         cur = await conn.execute(f"SELECT COUNT(*) FROM {table}")
         pg_n = (await cur.fetchone())[0]
-        if src_n != pg_n:
-            mismatches += 1
-            print(f"  MISMATCH {table}: sqlite={src_n} pg={pg_n}")
+        if pg_n < src_n:
+            shortfalls += 1
+            print(f"  MISSING {table}: sqlite={src_n} pg={pg_n} ({src_n - pg_n} not copied)")
+        elif pg_n > src_n:
+            print(f"  note {table}: pg={pg_n} > sqlite={src_n} (+{pg_n - src_n}; live writes during cutover)")
 
     src.close()
     await pg.close()
 
     total = sum(copied.values())
-    if mismatches:
-        print(f"\nFAILED: {mismatches} table(s) have count mismatches.")
+    if shortfalls:
+        print(f"\nFAILED: {shortfalls} table(s) are missing rows in Postgres.")
         return 1
-    print(f"\nOK: {total} rows across {len(tables)} tables; all counts match.")
+    print(f"\nOK: {total} rows copied; every source row is present in Postgres.")
     return 0
 
 

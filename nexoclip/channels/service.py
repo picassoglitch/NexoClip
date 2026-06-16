@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import re
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -96,10 +97,79 @@ def _canonical_url(platform: str, entry: dict[str, object]) -> str | None:
     return url if isinstance(url, str) and url else None
 
 
+# ---- Kick VOD listing (Kick API via browser impersonation) ----
+#
+# yt-dlp has NO Kick channel-VOD-list extractor (only kick:live/vod/clips),
+# so kick.com/<slug>/videos falls through to kick:live and 403s behind
+# Cloudflare. We hit Kick's own API instead, with curl_cffi impersonating a
+# browser so Cloudflare lets us through. The VOD download (ingest_vod) gets
+# the same impersonation via yt-dlp's `impersonate` target.
+
+_KICK_SLUG_RE = re.compile(r"kick\.com/(?P<slug>[\w-]+)", re.IGNORECASE)
+# Path segments that are NOT a channel slug (kick.com/video/... etc.).
+_KICK_RESERVED = frozenset({"video", "videos", "api", "search", "categories"})
+
+
+def _kick_channel_slug(channel_url: str) -> str | None:
+    """Extract the channel slug from a Kick channel URL (with or without
+    a trailing `/videos`). Returns None when the URL isn't a channel."""
+    m = _KICK_SLUG_RE.search(channel_url)
+    if not m:
+        return None
+    slug = m.group("slug")
+    return None if slug.lower() in _KICK_RESERVED else slug
+
+
+def _fetch_kick_vods_sync(slug: str) -> list[dict[str, Any]]:
+    # curl_cffi imported here so it stays out of module-load time and a
+    # missing wheel only bites the Kick path, not the whole service.
+    from curl_cffi import requests as _creq
+
+    url = f"https://kick.com/api/v2/channels/{slug}/videos"
+    resp = _creq.get(url, impersonate="chrome", timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+
+
+async def list_kick_channel_vods(
+    channel_url: str, *, limit: int
+) -> list[ChannelVOD]:
+    """List a Kick channel's newest `limit` VODs via Kick's API.
+
+    Each entry's `video.uuid` is the stable id; the ingestable URL is
+    `kick.com/<slug>/videos/<uuid>` (matches yt-dlp's kick:vod extractor).
+    """
+    slug = _kick_channel_slug(channel_url)
+    if not slug:
+        raise ValueError(f"not a Kick channel URL: {channel_url!r}")
+    entries = await asyncio.to_thread(_fetch_kick_vods_sync, slug)
+    # Newest-first regardless of API order (created_at is ISO-ish, sorts
+    # lexically). Defensive: don't rely on Kick's response ordering.
+    entries.sort(key=lambda e: str(e.get("created_at") or ""), reverse=True)
+    vods: list[ChannelVOD] = []
+    for e in entries[:limit]:
+        video = e.get("video")
+        uuid = video.get("uuid") if isinstance(video, dict) else None
+        if not isinstance(uuid, str) or not uuid:
+            continue
+        title = e.get("session_title")
+        vods.append(
+            ChannelVOD(
+                video_id=uuid,
+                url=f"https://kick.com/{slug}/videos/{uuid}",
+                title=title if isinstance(title, str) and title else None,
+            )
+        )
+    return vods
+
+
 async def list_channel_vods(
     platform: str, channel_url: str, *, limit: int
 ) -> list[ChannelVOD]:
     """List a channel's newest `limit` videos (newest first), no download."""
+    if platform == "kick":
+        return await list_kick_channel_vods(channel_url, limit=limit)
     entries = await asyncio.to_thread(_list_channel_vods_sync, channel_url, limit)
     vods: list[ChannelVOD] = []
     for e in entries[:limit]:

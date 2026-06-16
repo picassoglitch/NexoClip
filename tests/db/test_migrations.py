@@ -9,7 +9,7 @@ import pytest
 from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
-_CURRENT_HEAD = 46  # bumped each time we add a migration (046_autopublish_tag_suffix)
+_CURRENT_HEAD = 47  # bumped each time we add a migration (047_streams_vod_url_index)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:

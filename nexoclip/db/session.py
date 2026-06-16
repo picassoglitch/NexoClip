@@ -33,8 +33,15 @@ async def db_session(
     Closes the connection on exit. Works under both the orchestrator and
     individual CLI handlers; both bind the same tenant for the duration.
     """
-    path = Path(db_path) if db_path is not None else Path(get_settings().db_path)
-    db = Database(path)
+    # An explicit `db_path` arg always wins (CLI / tests pass a file path).
+    # Otherwise resolve via settings, which prefers a Postgres DSN when
+    # DATABASE_URL is set. Don't wrap the resolved value in Path() — a DSN
+    # string must reach Database() intact for scheme dispatch.
+    if db_path is not None:
+        target: str | Path = db_path
+    else:
+        target = get_settings().db_target()
+    db = Database(target)
     try:
         if apply_migrations_on_open:
             await apply_migrations(db)

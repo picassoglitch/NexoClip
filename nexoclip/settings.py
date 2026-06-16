@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     default_output_dir: str = "./out"
     db_path: str = "./nexoclip.db"
 
+    # Postgres migration seam. When set, the app talks to Postgres via
+    # asyncpg instead of the local SQLite file — `Database` dispatches on
+    # the scheme. Railway injects a bare `DATABASE_URL` when a Postgres
+    # service is attached, so we read that name directly (not the
+    # NEXOCLIP_ prefix). Unset → SQLite (current default).
+    database_url: str | None = Field(
+        default=None,
+        validation_alias="DATABASE_URL",
+    )
+
     whisper_device: str = "cuda"
     whisper_model: str = "medium"
     whisper_compute_type: str = "float16"
@@ -386,6 +396,15 @@ class Settings(BaseSettings):
     # Env: NEXOCLIP_FEATURE_WHATSAPP, NEXOCLIP_FEATURE_ADS.
     feature_whatsapp: bool = False
     feature_ads: bool = False
+
+    def db_target(self) -> str:
+        """The connection target `Database(...)` should open.
+
+        Returns the Postgres DSN when `DATABASE_URL` is configured, else the
+        local SQLite path. Single source of truth for "which database" so
+        callers don't each re-implement the `database_url or db_path` choice.
+        """
+        return self.database_url or self.db_path
 
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.

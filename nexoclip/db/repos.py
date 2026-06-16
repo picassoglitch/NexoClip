@@ -4766,9 +4766,12 @@ class HubPublishJobsRepo:
         `day` (YYYY-MM-DD, UTC). Drives the batch anti-spam cap."""
         conn = await self._db.connect()
         cur = await conn.execute(
+            # substr(...,1,10) takes the YYYY-MM-DD prefix of the ISO-8601
+            # timestamp string — portable across SQLite and Postgres (PG's
+            # date() returns a date type, which breaks str param binding).
             "SELECT COUNT(*) AS n FROM hub_publish_jobs "
             "WHERE tenant_id = ? "
-            "AND date(COALESCE(scheduled_for, created_at)) = ? "
+            "AND substr(COALESCE(scheduled_for, created_at), 1, 10) = ? "
             "AND (',' || targets || ',') LIKE ? "
             "AND status != 'failed'",
             (tenant_id, day, f"%,{platform},%"),

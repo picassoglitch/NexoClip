@@ -31,6 +31,16 @@ from nexoclip.api._clip_render import render_clip_in_background
 from nexoclip.db import ClipsRepo, Database
 from nexoclip.tenancy import bound_tenant
 
+from .._db_backend import pg_enabled
+
+# These drive render_clip_in_background directly with a hardcoded SQLite
+# db_path (the task opens its own Database from it), so they can't share the
+# Postgres fixture's data. The renderer's PG state-write behavior is covered
+# by the HTTP render-state tests, which dispatch via settings.db_target().
+pytestmark = pytest.mark.skipif(
+    pg_enabled(), reason="directly wires a SQLite db_path into the render task"
+)
+
 
 def _now() -> str:
     return _dt.datetime.now(_dt.UTC).isoformat()
@@ -52,12 +62,12 @@ async def _seed_clip(
     with bound_tenant(tenant_id):
         conn = await db.connect()
         await conn.execute(
-            "INSERT OR IGNORE INTO streams "
+            "INSERT INTO streams "
             "(id, tenant_id, vod_url, platform, title, channel, "
             "duration_s, source_video_path, source_audio_path, status, "
             "created_at) "
             "VALUES (?, ?, 'https://kick.com/x/v/1', 'kick', NULL, NULL, "
-            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?)",
+            "30, '/tmp/v.mp4', '/tmp/a.wav', 'ingested', ?) ON CONFLICT DO NOTHING",
             (stream_id, tenant_id, _now()),
         )
         await conn.execute(

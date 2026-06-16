@@ -6,7 +6,7 @@ The `db_session` helper is the canonical way to open the DB + bind a
 tenant in one call.
 """
 
-from .connection import Database
+from .connection import Database, IntegrityViolation
 from .migrations import MigrationError, apply_migrations, schema_version
 from .repos import (
     ApiTokensRepo,
@@ -61,8 +61,9 @@ __all__ = [
     "DriveWatchesRepo",
     "EventsRepo",
     "HubPublishJobsRepo",
-    "LiveStreamKeysRepo",
+    "IntegrityViolation",
     "LLMCallsRepo",
+    "LiveStreamKeysRepo",
     "MigrationError",
     "PersonasRepo",
     "PlatformSettingsRepo",

@@ -5238,8 +5238,7 @@ async def sources_add(
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
-    import sqlite3
-
+    from nexoclip.db import IntegrityViolation
     from nexoclip.ingest.service import detect_platform
 
     resolved = platform.strip() or detect_platform(channel_url)
@@ -5253,7 +5252,7 @@ async def sources_add(
             max_per_poll=int(max_per_poll),
             polls_per_day=int(polls_per_day),
         )
-    except sqlite3.IntegrityError:
+    except IntegrityViolation:
         # UNIQUE(tenant_id, channel_url): this tenant already watches this
         # exact channel URL. A re-add (or a double-submit) must not 500 —
         # bounce back with a friendly banner instead of crashing.

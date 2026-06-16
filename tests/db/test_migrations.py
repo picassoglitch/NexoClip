@@ -9,7 +9,15 @@ import pytest
 from nexoclip.db import Database, apply_migrations, schema_version
 from nexoclip.db.migrations import MigrationError, _discover_migrations
 
+from .._db_backend import pg_enabled
+
 _CURRENT_HEAD = 47  # bumped each time we add a migration (047_streams_vod_url_index)
+
+# These assert SQLite implementation details (sqlite_master, PRAGMA). The
+# Postgres schema + FK enforcement are covered by test_pg_migration.py.
+_sqlite_only = pytest.mark.skipif(
+    pg_enabled(), reason="SQLite-specific introspection; PG covered by test_pg_migration.py"
+)
 
 
 async def test_apply_migrations_brings_empty_db_to_current_head(db: Database) -> None:
@@ -25,6 +33,7 @@ async def test_apply_migrations_is_idempotent(db: Database) -> None:
     assert v2 == _CURRENT_HEAD
 
 
+@_sqlite_only
 async def test_schema_creates_all_phase_1_through_3_tables(migrated_db: Database) -> None:
     conn = await migrated_db.connect()
     cur = await conn.execute(
@@ -54,6 +63,7 @@ async def test_schema_creates_all_phase_1_through_3_tables(migrated_db: Database
     assert expected <= names, f"missing tables: {expected - names}"
 
 
+@_sqlite_only
 async def test_foreign_keys_are_enforced(migrated_db: Database) -> None:
     conn = await migrated_db.connect()
     cur = await conn.execute("PRAGMA foreign_keys")

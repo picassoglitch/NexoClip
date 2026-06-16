@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sqlite3
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -38,6 +39,22 @@ import aiosqlite
 
 if TYPE_CHECKING:
     import asyncpg
+
+# Backend-agnostic constraint-violation types (UNIQUE / FK / CHECK). Catch
+# this in handlers/repos instead of a driver-specific exception so a
+# duplicate or constraint hit is handled the same on SQLite and Postgres.
+# aiosqlite raises sqlite3.IntegrityError; asyncpg raises its
+# IntegrityConstraintViolationError family. Guarded so the SQLite-only path
+# still imports if asyncpg is somehow absent.
+try:
+    import asyncpg.exceptions as _pg_exc
+
+    IntegrityViolation: tuple[type[Exception], ...] = (
+        sqlite3.IntegrityError,
+        _pg_exc.IntegrityConstraintViolationError,
+    )
+except ImportError:  # pragma: no cover — asyncpg is a declared dependency
+    IntegrityViolation = (sqlite3.IntegrityError,)
 
 
 def _is_postgres_dsn(target: Path | str) -> bool:

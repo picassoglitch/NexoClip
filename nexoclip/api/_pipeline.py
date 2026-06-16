@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from nexoclip.jobs import PipelineKickoff, PipelineRunner
+from nexoclip.settings import resolve_db_target
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,7 +52,7 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
     from nexoclip.pipeline import process_vod
     from nexoclip.settings import get_settings
 
-    db_path = get_settings().db_target()
+    db_path = resolve_db_target(get_settings())
 
     try:
         await process_vod(
@@ -257,7 +258,7 @@ async def upload_pipeline_runner(
     from nexoclip.tenancy import bound_tenant
 
     settings = get_settings()
-    db_path = settings.db_target()
+    db_path = resolve_db_target(settings)
 
     try:
         # Phase 1 — finish ingest (move file + extract audio + persist
@@ -450,7 +451,7 @@ async def live_pipeline_runner(
     from nexoclip.settings import get_settings
     from nexoclip.tenancy import bound_tenant
 
-    db_path = get_settings().db_target()
+    db_path = resolve_db_target(get_settings())
 
     try:
         # 1. Acquire the recording locally — pull from R2 (Path B) or read
@@ -602,7 +603,7 @@ async def maybe_autoclip_after_live_end(
     if not personas:
         try:
             await _emit_top_level_failure(
-                db_path=settings.db_target(),
+                db_path=resolve_db_target(settings),
                 tenant_id=tenant_id,
                 stream_id=stream_id,
                 error=RuntimeError(

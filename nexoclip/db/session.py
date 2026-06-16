@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from nexoclip.settings import get_settings
+from nexoclip.settings import get_settings, resolve_db_target
 from nexoclip.tenancy import bound_tenant
 
 from .connection import Database
@@ -40,7 +40,7 @@ async def db_session(
     if db_path is not None:
         target: str | Path = db_path
     else:
-        target = get_settings().db_target()
+        target = resolve_db_target(get_settings())
     db = Database(target)
     try:
         if apply_migrations_on_open:

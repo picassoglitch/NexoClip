@@ -153,10 +153,21 @@ class _PgCursor:
         return rows
 
 
+def _encode_args(params: Sequence[Any]) -> tuple[Any, ...]:
+    """Adapt aiosqlite-style params to asyncpg's stricter binding.
+
+    SQLite stores booleans as 0/1 integers and our schema types those
+    columns as `bigint` (never Postgres `boolean`). asyncpg refuses to bind
+    a Python `bool` to an integer column, so coerce bool → int. `bool` is a
+    subclass of `int`, hence the explicit isinstance check first.
+    """
+    return tuple(int(p) if isinstance(p, bool) else p for p in params)
+
+
 async def _run(conn: asyncpg.Connection, sql: str, params: Sequence[Any]) -> _PgCursor:
     """Translate + dispatch one statement on an asyncpg connection."""
     query = _qmark_to_dollar(sql)
-    args = tuple(params)
+    args = _encode_args(params)
     if _returns_rows(query):
         rows = await conn.fetch(query, *args)
         return _PgCursor(list(rows), len(rows))
@@ -184,7 +195,7 @@ class _PgConnection:
         self, sql: str, seq_of_params: Sequence[Sequence[Any]],
     ) -> _PgCursor:
         query = _qmark_to_dollar(sql)
-        rows = [tuple(p) for p in seq_of_params]
+        rows = [_encode_args(p) for p in seq_of_params]
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.executemany(query, rows)
         return _PgCursor([], len(rows))
@@ -218,7 +229,7 @@ class _PgPinnedConnection:
         self, sql: str, seq_of_params: Sequence[Sequence[Any]],
     ) -> _PgCursor:
         query = _qmark_to_dollar(sql)
-        rows = [tuple(p) for p in seq_of_params]
+        rows = [_encode_args(p) for p in seq_of_params]
         await self._conn.executemany(query, rows)
         return _PgCursor([], len(rows))
 

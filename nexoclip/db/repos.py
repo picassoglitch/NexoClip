@@ -127,12 +127,14 @@ class PlatformSettingsRepo:
         return {row[0]: row[1] for row in rows}
 
     async def set(self, key: str, value: str) -> None:
-        """Upsert a single key. Uses INSERT OR REPLACE (same idiom as the
-        migration runner) so it's create-or-update in one statement."""
+        """Upsert a single key. Portable ON CONFLICT upsert (works on both
+        SQLite >=3.24 and Postgres) so it's create-or-update in one statement."""
         conn = await self._db.connect()
         await conn.execute(
-            "INSERT OR REPLACE INTO platform_settings (key, value, updated_at) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO platform_settings (key, value, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET "
+            "value = excluded.value, updated_at = excluded.updated_at",
             (key, value, _now()),
         )
         await conn.commit()
@@ -715,10 +717,11 @@ class StreamsRepo:
             )
         conn = await self._db.connect()
         await conn.execute(
-            "INSERT OR IGNORE INTO streams "
+            "INSERT INTO streams "
             "(id, tenant_id, vod_url, platform, title, channel, duration_s, "
             "source_video_path, source_audio_path, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (
                 stream.id,
                 stream.tenant_id,
@@ -1321,9 +1324,10 @@ class CandidatesRepo:
                 raise TenancyError(f"candidate tenant {row.tenant_id!r} != bound {bound!r}")
         conn = await self._db.connect()
         await conn.executemany(
-            "INSERT OR IGNORE INTO candidates "
+            "INSERT INTO candidates "
             "(id, stream_id, tenant_id, ts, score, reason, evidence_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             [
                 (
                     r.id,
@@ -1411,10 +1415,11 @@ class ClipsRepo:
                 raise TenancyError(f"clip tenant {row.tenant_id!r} != bound {bound!r}")
         conn = await self._db.connect()
         await conn.executemany(
-            "INSERT OR IGNORE INTO clips "
+            "INSERT INTO clips "
             "(id, stream_id, tenant_id, candidate_id, start_s, end_s, duration_s, "
             "width, height, path, smart_crop_box_json, thumbnail_frame_path, status, "
-            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             [
                 (
                     r.id,
@@ -3639,9 +3644,10 @@ class DriveExportSettingsRepo:
         now = _now()
         conn = await self._db.connect()
         await conn.execute(
-            "INSERT OR IGNORE INTO drive_export_settings "
+            "INSERT INTO drive_export_settings "
             "(tenant_id, enabled, created_at, updated_at) "
-            "VALUES (?, 0, ?, ?)",
+            "VALUES (?, 0, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (tenant_id, now, now),
         )
         await conn.commit()
@@ -3757,10 +3763,11 @@ class ZernioPublishesRepo:
         the draft re-publish path (migration 033)."""
         conn = await self._db.connect()
         await conn.execute(
-            "INSERT OR IGNORE INTO zernio_publishes "
+            "INSERT INTO zernio_publishes "
             "(post_id, tenant_id, clip_id, platforms, content, created_at, "
             "status, options_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (
                 post_id,
                 tenant_id,
@@ -4022,8 +4029,9 @@ class ZernioCommunityRepo:
         already claimed (at-least-once redelivery)."""
         conn = await self._db.connect()
         cur = await conn.execute(
-            "INSERT OR IGNORE INTO zernio_community_notifications "
-            "(source_post_id, tenant_id, sent_at) VALUES (?, ?, ?)",
+            "INSERT INTO zernio_community_notifications "
+            "(source_post_id, tenant_id, sent_at) VALUES (?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (source_post_id, tenant_id, _now()),
         )
         await conn.commit()
@@ -4518,9 +4526,10 @@ class ZernioAutoRetriesRepo:
         True on a fresh claim, False if one already exists."""
         conn = await self._db.connect()
         cur = await conn.execute(
-            "INSERT OR IGNORE INTO zernio_auto_retries "
+            "INSERT INTO zernio_auto_retries "
             "(post_id, tenant_id, attempted_at, outcome) "
-            "VALUES (?, ?, ?, 'scheduled')",
+            "VALUES (?, ?, ?, 'scheduled') "
+            "ON CONFLICT DO NOTHING",
             (post_id, tenant_id, _now()),
         )
         await conn.commit()
@@ -4572,9 +4581,10 @@ class ZernioEventsRepo:
         (a redelivery — the caller ACKs 200 without reprocessing)."""
         conn = await self._db.connect()
         cur = await conn.execute(
-            "INSERT OR IGNORE INTO zernio_events "
+            "INSERT INTO zernio_events "
             "(event_id, type, payload, profile_id, tenant_id, received_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
             (event_id, type, payload, profile_id, tenant_id, _now()),
         )
         await conn.commit()

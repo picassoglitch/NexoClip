@@ -398,13 +398,9 @@ class Settings(BaseSettings):
     feature_ads: bool = False
 
     def db_target(self) -> str:
-        """The connection target `Database(...)` should open.
-
-        Returns the Postgres DSN when `DATABASE_URL` is configured, else the
-        local SQLite path. Single source of truth for "which database" so
-        callers don't each re-implement the `database_url or db_path` choice.
-        """
-        return self.database_url or self.db_path
+        """The connection target `Database(...)` should open. See
+        `resolve_db_target` — this is the method form for direct callers."""
+        return resolve_db_target(self)
 
     def hub_service_token_map(self) -> dict[str, str]:
         """Parse hub_service_tokens into {token: consumer_name}.
@@ -423,3 +419,15 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton accessor; tests can call `get_settings.cache_clear()`."""
     return Settings()
+
+
+def resolve_db_target(settings: object) -> str:
+    """The connection target `Database(...)` should open: the Postgres DSN
+    when `DATABASE_URL` is configured, else the local SQLite path.
+
+    Single source of truth for the `database_url or db_path` choice. Reads
+    attributes defensively (not via a method) so any settings-like object
+    that only exposes `db_path` — e.g. lightweight test doubles — keeps
+    working without needing to mirror the full Settings interface.
+    """
+    return getattr(settings, "database_url", None) or settings.db_path  # type: ignore[attr-defined, no-any-return]

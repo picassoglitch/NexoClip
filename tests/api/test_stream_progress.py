@@ -350,7 +350,16 @@ async def test_default_pipeline_runner_passes_db_path(
     monkeypatch.setattr("nexoclip.pipeline.process_vod", fake_process_vod)
     monkeypatch.setattr(
         "nexoclip.settings.get_settings",
-        lambda: type("S", (), {"db_path": str(tmp_path / "fake.db")})(),
+        lambda: type(
+            "S",
+            (),
+            {
+                "db_path": str(tmp_path / "fake.db"),
+                # _pipeline now resolves the target via db_target() (Postgres
+                # migration seam); mirror it so the runner forwards the path.
+                "db_target": lambda self: str(tmp_path / "fake.db"),
+            },
+        )(),
     )
 
     stream = Stream(

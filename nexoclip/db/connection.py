@@ -36,6 +36,15 @@ class Database:
                 await conn.execute("PRAGMA journal_mode = WAL")
                 await conn.execute("PRAGMA foreign_keys = ON")
                 await conn.execute("PRAGMA synchronous = NORMAL")
+                # WAL removes reader/writer contention but NOT writer/writer:
+                # only one write txn runs at a time, and any other connection
+                # (background render task, pipeline workers) that hits the held
+                # write lock raises `database is locked` IMMEDIATELY when the
+                # busy_timeout is the default 0. Give contending writers up to
+                # 5s to wait the lock out — SQLite retries internally, which
+                # turns those bursty collisions into a short stall instead of a
+                # 500. Must be set per-connection; connect() is the chokepoint.
+                await conn.execute("PRAGMA busy_timeout = 5000")
                 await conn.commit()
                 self._conn = conn
         return self._conn

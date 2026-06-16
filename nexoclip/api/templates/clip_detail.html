@@ -4853,12 +4853,11 @@
       b.classList.toggle("is-active", b.getAttribute("data-fit-mode") === mode);
     });
     try { localStorage.setItem("nc-fit-mode", mode); } catch (_) {}
-    // Persist via the same auto-save endpoint other editor prefs use.
-    // (Stored under overlay_config.fit_mode; renderer-side wiring lands
-    //  in G.5 — for now this just survives reload + per-clip override.)
-    if (typeof autoSavePref === "function") {
-      autoSavePref("fit_mode", mode);
-    }
+    // fit_mode is editor-local state: localStorage survives reload, and
+    // the per-clip override rides the overlay form. It is NOT a brand_kit
+    // field, so it must not hit /me/brand-kit-prefs (that endpoint rejects
+    // unknown fields with a 400). Server-side persistence + renderer wiring
+    // lands in G.5; until then localStorage is the source of truth.
   }
   document.querySelectorAll(".nc-preview-fitmode__btn").forEach(function (btn) {
     btn.addEventListener("click", function () {

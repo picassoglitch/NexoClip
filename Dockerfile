@@ -59,6 +59,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN pip install --no-cache-dir playwright>=1.50 && \
     playwright install --with-deps chromium
 
+# Ship the ops scripts (e.g. the SQLite→Postgres data cutover) so they can be
+# run from a Railway shell. Placed after the dependency layers so editing a
+# script doesn't invalidate the pip/playwright cache.
+COPY scripts ./scripts
+
 # All persistent state lives on /data:
 #   * SQLite DB
 #   * Output clips + frames (ffmpeg writes here)

@@ -277,6 +277,14 @@ class Database:
     def is_postgres(self) -> bool:
         return self._is_pg
 
+    @property
+    def target(self) -> str:
+        """The connection target (Postgres DSN or SQLite path) this instance
+        opened. Lets a background task reopen the SAME database the request
+        used — `Database(other.target)` — instead of re-deriving from settings
+        (which differs from the active DB in tests)."""
+        return self._dsn if self._is_pg else str(self.path)
+
     async def connect(self) -> Any:
         """Lazily open the backend. Idempotent.
 

@@ -16,6 +16,7 @@ covered by the render tests, not here).
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 from collections.abc import Iterator
@@ -225,12 +226,26 @@ async def test_schedule_auto_schedules_all_approved_with_enrichment(
         resp = await client.post(
             "/dashboard/publish/zernio/schedule/auto", headers=auth(alice["token"]),
         )
+        # The run now executes in the background; the POST returns immediately.
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["state"] == "running"
+        # Poll progress until the background task finishes — keep the respx
+        # mock open so the task's POST /posts calls hit it.
+        prog: dict[str, Any] = {}
+        for _ in range(500):
+            prog = (
+                await client.get(
+                    "/dashboard/publish/zernio/schedule/auto/progress",
+                    headers=auth(alice["token"]),
+                )
+            ).json()
+            if prog.get("state") in ("done", "error"):
+                break
+            await asyncio.sleep(0.02)
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["ok"] is True
-    assert body["scheduled"] == 2
-    assert body["skipped"] == 0
+    assert prog.get("state") == "done", prog
+    assert prog["scheduled"] == 2
+    assert prog["failed"] == 0
     assert post_route.call_count == 2
 
     # Every scheduled post carries a future scheduledFor and the enriched

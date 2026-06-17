@@ -11,7 +11,7 @@ from nexoclip.db.migrations import MigrationError, _discover_migrations
 
 from .._db_backend import pg_enabled
 
-_CURRENT_HEAD = 47  # bumped each time we add a migration (047_streams_vod_url_index)
+_CURRENT_HEAD = 48  # bumped each time we add a migration (048_zernio_publishes_scheduled_for)
 
 # These assert SQLite implementation details (sqlite_master, PRAGMA). The
 # Postgres schema + FK enforcement are covered by test_pg_migration.py.

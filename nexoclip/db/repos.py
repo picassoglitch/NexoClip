@@ -3752,6 +3752,7 @@ class ZernioPublishesRepo:
         content: str | None,
         status: str | None = None,
         options_json: str | None = None,
+        scheduled_for: str | None = None,
     ) -> None:
         """Persist one fired publish. Idempotent on post_id — the
         duplicate-resolved path (Zernio 409 → existing post) records
@@ -3765,8 +3766,8 @@ class ZernioPublishesRepo:
         await conn.execute(
             "INSERT INTO zernio_publishes "
             "(post_id, tenant_id, clip_id, platforms, content, created_at, "
-            "status, options_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "status, options_json, scheduled_for) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT DO NOTHING",
             (
                 post_id,
@@ -3777,6 +3778,7 @@ class ZernioPublishesRepo:
                 _now(),
                 status,
                 options_json,
+                scheduled_for,
             ),
         )
         await conn.commit()
@@ -3795,7 +3797,7 @@ class ZernioPublishesRepo:
             params.append(status)
         cur = await conn.execute(
             "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
-            "status, platforms_json, updated_at, options_json "
+            "status, scheduled_for, platforms_json, updated_at, options_json "
             f"FROM zernio_publishes WHERE {where} "  # fixed fragments, params bound
             "ORDER BY created_at DESC LIMIT ?",
             (*params, int(limit)),

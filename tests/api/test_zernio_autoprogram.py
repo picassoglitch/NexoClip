@@ -348,6 +348,35 @@ async def test_handsfree_now_mode_posts_immediately(
     assert "scheduledFor" not in payload
 
 
+@pytest.mark.asyncio
+async def test_handsfree_empty_targets_falls_back_to_all_connected(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Regression: hands_free with NO target platforms picked must post to all
+    connected accounts (it used to silently no-op on empty targets, so
+    channel-auto clips never published)."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="",  # EMPTY
+        post_mode="now", daily_cap=10, score_threshold=0.5, tag_suffix="",
+    )
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok", "youtube")
+        post_route = mock.post(f"{_ZBASE}/posts").mock(
+            side_effect=lambda r: httpx.Response(
+                201, json={"success": True, "post": {"_id": "post_ft"}}
+            )
+        )
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_1", 0.9)],
+        )
+    # Old behavior: n == 0 (no_targets). Now it posts to the connected accounts.
+    assert n == 1
+    assert post_route.call_count == 1
+
+
 # ---- tag_suffix round-trip ----
 
 

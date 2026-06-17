@@ -1705,7 +1705,10 @@ async def maybe_autopublish_on_approve(
         accounts = await client.list_accounts(profile_id=profile_id)
         connected = _connected_platforms(accounts)
         want = [t for t in (s["targets"] or "").split(",") if t.strip()]
-        targets = [t for t in want if t in connected]
+        # Empty targets → all connected platforms (matches the manual
+        # Auto-programar scheduler). Without this, a tenant who enabled
+        # auto-publish but never picked target platforms gets a silent no-op.
+        targets = [t for t in want if t in connected] or sorted(connected)
         if not targets:
             log.info(
                 "autopublish.no_connected_targets",
@@ -1787,8 +1790,12 @@ async def autopublish_hands_free_sweep(
         account_map = _account_map(accounts)
         connected = _connected_platforms(accounts)
         want = [t for t in (s["targets"] or "").split(",") if t.strip()]
+        # Empty targets → all connected platforms (matches the manual
+        # Auto-programar scheduler). Without this, hands_free with no target
+        # platforms picked silently posts nothing.
+        chosen = [p for p in want if p in connected] or sorted(connected)
         post_targets = [
-            (p, account_map[p]) for p in want if p in connected and p in account_map
+            (p, account_map[p]) for p in chosen if p in account_map
         ]
         if not post_targets:
             log.info("autopublish.handsfree.no_targets", tenant_id=tenant_id, want=want)

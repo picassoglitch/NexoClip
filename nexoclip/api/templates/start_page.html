@@ -138,9 +138,10 @@
       </div>
       <p class="nc-ingest__help">{{ t('newClip.drive.help') }}</p>
       <label class="nc-ingest__flabel">{{ t('newClip.drive.watchedLabel') }}</label>
-      {# TODO(ingest): list the tenant's connected Drive folders + live pull
-         status here. Until wired, show a neutral connect prompt rather than
-         fabricating folder names / queue counts. #}
+      {# Drive folder auto-ingest is backend-only so far (repo + poller exist,
+         but there's no Google OAuth connect flow, no production poller, and no
+         management route). Show an honest "coming soon" state with a disabled
+         CTA rather than linking to a page that 404s. #}
       <div class="nc-connected">
         <span class="nc-connected__ic"><i class="ti ti-brand-google-drive" aria-hidden="true"></i></span>
         <span class="nc-connected__nm">
@@ -148,9 +149,9 @@
           <small>{{ t('newClip.drive.connectHint') }}</small>
         </span>
       </div>
-      <a href="/dashboard/drive-watches" class="nc-btn nc-btn--full nc-ingest__cta">
-        <span>{{ t('newClip.drive.manage') }}</span><i class="ti ti-arrow-right" aria-hidden="true"></i>
-      </a>
+      <button class="nc-btn nc-btn--full nc-ingest__cta" disabled>
+        <i class="ti ti-lock" aria-hidden="true"></i><span>{{ t('newClip.drive.unavailable') }}</span>
+      </button>
       <p class="nc-ingest__foot">{{ t('newClip.drive.note') }}</p>
     </div>
 

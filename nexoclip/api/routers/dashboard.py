@@ -1859,6 +1859,11 @@ async def stream_detail(
         + base_charge_tokens
     )
 
+    # Clips still awaiting approval — drives the "Aprobar todos" bulk button.
+    pending_approval_count = sum(
+        1 for c in clips if c.status in ("cut", "ready_for_review")
+    )
+
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
@@ -1866,6 +1871,7 @@ async def stream_detail(
             "stream": stream,
             "candidates": candidates,
             "clips": clips,
+            "pending_approval_count": pending_approval_count,
             "overview": overview,
             "actual_spend": actual_spend,
             "personas": personas,
@@ -3467,6 +3473,41 @@ async def clip_generate_hooks(
         ),
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post(
+    "/streams/{stream_id}/clips/approve-all",
+    dependencies=[Depends(require_full_scope)],
+)
+async def stream_approve_all_clips(
+    stream_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Bulk-approve every clip on a stream still awaiting review
+    (cut / ready_for_review → approved), so the operator doesn't click
+    through 40 clips one at a time.
+
+    Status-flip ONLY — it deliberately does NOT publish or render. Firing a
+    render per clip here would spawn dozens of Chromium/ffmpeg processes at
+    once and exhaust the box. After this, the Publish Center's
+    "Auto-programar" schedules the now-approved clips (sequentially, capped).
+    """
+    repo = ClipsRepo(db)
+    clips = await repo.list_for_stream(stream_id)
+    approved = 0
+    for clip in clips:
+        if clip.status in ("cut", "ready_for_review"):
+            await repo.update_status(clip.id, status="approved")
+            approved += 1
+    await EventsRepo(db).emit(
+        type="clips.bulk_approved",
+        payload={"stream_id": stream_id, "count": approved},
+    )
+    return RedirectResponse(
+        url=f"/dashboard/streams/{stream_id}?approved={approved}#clips",
+        status_code=303,
     )
 
 

@@ -997,7 +997,13 @@
         {% for h in history %}
         {% set view_url = ("/dashboard/clips/" ~ h.clip_id) if h.kind == "manual" else ("/dashboard/publish/zernio/job/" ~ h.post_id) %}
         <tr class="nc-pc-history-row" data-href="{{ view_url }}">
-          <td><span class="nc-mono nc-mono--muted"{% if h.created_at %} data-localtime="{{ h.created_at }}"{% endif %}>{{ (h.created_at or "")[:19] }}</span></td>
+          {# Scheduled posts show their real publish time; everything else
+             shows when it was recorded. Both render in local tz via JS. #}
+          {% set when_ts = h.scheduled_for if (h.status == "scheduled" and h.scheduled_for) else h.created_at %}
+          <td>
+            <span class="nc-mono nc-mono--muted"{% if when_ts %} data-localtime="{{ when_ts }}"{% endif %}>{{ (when_ts or "")[:19] }}</span>
+            {% if h.status == "scheduled" and h.scheduled_for %}<span class="nc-text--muted" style="font-size:10px;"> · programado</span>{% endif %}
+          </td>
           <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
             {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
           </td>

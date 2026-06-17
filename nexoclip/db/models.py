@@ -369,6 +369,10 @@ class ZernioPublishRow(BaseModel):
     content: str | None = None
     created_at: str
     status: str | None = None  # Zernio vocab: scheduled/published/failed/…
+    # When the post is set to publish (mode=schedule). NULL for immediate
+    # posts. Migration 048 — lets the Publicados list show the real publish
+    # time instead of the batch creation time.
+    scheduled_for: str | None = None
     platforms_json: str | None = None  # per-platform results, verbatim JSON
     updated_at: str | None = None
     options_json: str | None = None  # publish-extras snapshot (migration 033)

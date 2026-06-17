@@ -482,6 +482,7 @@ async def _publish_clip(
             "scheduled" if mode == "schedule" else None
         ),
         options_json=options_json,
+        scheduled_for=scheduled_for if mode == "schedule" else None,
     )
     # Flip the clip out of the "ready to publish" grid. Best-effort —
     # the publish already happened; a status-write hiccup must not fail
@@ -618,6 +619,7 @@ async def zernio_dashboard(
                 "platforms": [p for p in row.platforms.split(",") if p],
                 "content": row.content,
                 "created_at": row.created_at,
+                "scheduled_for": row.scheduled_for,
                 "status": status,
             }
         )

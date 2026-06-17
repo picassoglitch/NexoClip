@@ -180,3 +180,32 @@ async def test_calendar_date_range_filter(
     posts = {e["post_id"] for e in resp.json()["entries"]}
     assert "june" in posts
     assert "july" not in posts
+
+
+@pytest.mark.asyncio
+async def test_calendar_buckets_scheduled_by_publish_date(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # A scheduled post must land on the day it PUBLISHES (scheduled_for),
+    # not the day it was queued (created_at). Regression: the calendar used
+    # to bucket every scheduled clip onto the batch-creation day.
+    await ZernioPublishesRepo(db).record(
+        post_id="post_future", tenant_id=alice["id"], clip_id="clp_f",
+        platforms=["youtube"], content="Sale el 23", status="scheduled",
+        scheduled_for="2026-06-23T22:00:00Z",
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json", headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+    entry = next(
+        e for e in resp.json()["entries"] if e["post_id"] == "post_future"
+    )
+    assert entry["date"][:10] == "2026-06-23"

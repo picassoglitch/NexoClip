@@ -171,6 +171,34 @@ def _connected_platforms(accounts: list[ZernioAccount]) -> set[str]:
     return {a.platform.lower() for a in accounts}
 
 
+def _order_publish_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order the Publicados feed so the operator sees what is about to go
+    out, not just what was most recently queued.
+
+    Upcoming scheduled posts come first, soonest-to-publish at the top
+    (ordered by `scheduled_for`); already-published / immediate history
+    follows, newest first. A scheduled post's effective time is its
+    publish time; everything else uses `created_at`.
+
+    All upcoming posts are kept — never truncated, which was the "últimos
+    25 nada más" complaint where a backlog of scheduled clips fell off the
+    bottom. Only the published tail is capped (at 25)."""
+
+    def _is_upcoming(h: dict[str, Any]) -> bool:
+        return h.get("status") == "scheduled" and bool(h.get("scheduled_for"))
+
+    def _when(h: dict[str, Any]) -> str:
+        if _is_upcoming(h):
+            return str(h.get("scheduled_for") or "")
+        return str(h.get("created_at") or "")
+
+    upcoming = sorted((h for h in history if _is_upcoming(h)), key=_when)
+    published = sorted(
+        (h for h in history if not _is_upcoming(h)), key=_when, reverse=True
+    )
+    return upcoming + published[:25]
+
+
 def _tiktok_settings() -> dict[str, Any]:
     """Default TikTok publishing settings.
 
@@ -642,8 +670,7 @@ async def zernio_dashboard(
                 "status": "published",
             }
         )
-    history.sort(key=lambda h: str(h.get("created_at") or ""), reverse=True)
-    history = history[:25]
+    history = _order_publish_history(history)
 
     # Publishable clips for both tabs — APPROVED only: a clip flips to
     # 'published' on its first successful publish and leaves this grid
@@ -2553,9 +2580,16 @@ async def zernio_calendar_json(
     for p in publishes:
         if p.status in ("draft", "deleted"):
             continue
-        # zernio_publishes has no scheduled_for column (that's
-        # hub_publish_jobs); created_at is the publish moment.
-        date = p.created_at
+        # Bucket by the day the post actually goes out: a future-scheduled
+        # post lands on its `scheduled_for` day, an immediate publish on its
+        # `created_at` day. (Before, everything landed on the batch-creation
+        # day, so a day's worth of scheduled clips piled onto the day they
+        # were queued instead of the day they publish.)
+        date = (
+            p.scheduled_for
+            if p.status == "scheduled" and p.scheduled_for
+            else p.created_at
+        )
         if df and date and date[:10] < df:
             continue
         if dt and date and date[:10] > dt:

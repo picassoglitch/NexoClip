@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # (publishers consume variant.caption / variant.hashtags).
     variants_enabled: bool = False
 
+    # Auto-generate a viral hook (title line) per clip during the pipeline,
+    # for clips at/above the tenant's auto-publish score threshold (so the
+    # publish-worthy clips get a hook without a manual "Generar 5" click —
+    # pre-filled in the editor, burned into the render, used by auto-publish).
+    # One small LLM call per qualifying clip. Set False to disable.
+    auto_hook_enabled: bool = True
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None

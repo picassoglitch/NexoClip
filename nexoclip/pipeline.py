@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from nexoclip.clip import Clip, cut_clips
 from nexoclip.config import NexoClipConfig, load_config
 from nexoclip.db import (
+    AutopublishSettingsRepo,
     CandidatesRepo,
     ClipsRepo,
     Database,
@@ -498,6 +499,41 @@ async def _resolve_brand_kit_url(db: Database, *, stream_id: str) -> str | None:
     except Exception:  # noqa: BLE001 — brand-kit URL is an optional hint
         return None
     return None
+
+
+async def _auto_hook_for_clip(
+    *,
+    clip: Any,
+    persona: Persona,
+    language: str | None,
+    tenant_id: str,
+    router: Any,
+) -> str:
+    """Generate ONE viral hook (title line) from the clip's transcript
+    snippet. Best-effort — returns '' on any failure so a hook hiccup never
+    breaks the pipeline. The snippet already lives on the clip's candidate
+    evidence (set by detect), so no extra transcript work is needed."""
+    from nexoclip.variants.hooks import generate_hooks
+
+    evidence = getattr(clip.candidate, "evidence", None) or {}
+    snippet = (
+        str(evidence.get("transcript_snippet") or "")
+        if isinstance(evidence, dict)
+        else ""
+    )
+    try:
+        hooks = await generate_hooks(
+            tenant_id=tenant_id,
+            persona_voice=persona.voice_prompt,
+            persona_language=language or persona.primary_language or "es",
+            transcript_snippet=snippet,
+            n=1,
+            router=router,
+        )
+        return hooks[0].text.strip() if hooks else ""
+    except Exception as e:
+        _log.warning("pipeline.auto_hook_failed", clip_id=clip.id, error=str(e))
+        return ""
 
 
 async def _run_pipeline(
@@ -1090,8 +1126,27 @@ async def _run_pipeline(
     # back to the persona name otherwise. No LLM calls in the
     # disabled path.
     variants_enabled = bool(getattr(settings, "variants_enabled", False))
+    # Auto-hook: generate a viral title for publish-worthy clips (score at/
+    # above the tenant's auto-publish threshold) so the editor, the render
+    # burn, and auto-publish all get a hook without a manual "Generar 5".
+    auto_hook_enabled = bool(getattr(settings, "auto_hook_enabled", True))
+    hook_threshold = 0.5
+    if auto_hook_enabled and db is not None:
+        try:
+            _aps = await AutopublishSettingsRepo(db).get(tenant_id)
+            if _aps and _aps.get("score_threshold") is not None:
+                hook_threshold = float(_aps["score_threshold"])
+        except Exception:
+            hook_threshold = 0.5
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
+            auto_hook = ""
+            _clip_score = float(getattr(clip.candidate, "score", 0.0) or 0.0)
+            if auto_hook_enabled and _clip_score >= hook_threshold:
+                auto_hook = await _auto_hook_for_clip(
+                    clip=clip, persona=persona, language=language,
+                    tenant_id=tenant_id, router=router,
+                )
             if variants_enabled:
                 variants = await generate_variants(
                     tenant_id=tenant_id,
@@ -1124,10 +1179,30 @@ async def _run_pipeline(
                         id="v_stub",
                         language=language or persona.primary_language or "es",
                         caption=str(stub_caption)[:240],
-                        title_card_text="",
+                        title_card_text=auto_hook,
                         hashtags=[],
                     )
                 ]
+            # Persist the hook into the clip's overlay so the editor pre-fills
+            # it and the renderer burns it in. (build_post reads the variant
+            # title above for the published caption.)
+            if auto_hook and db is not None:
+                try:
+                    await ClipsRepo(db).set_overlay_config(
+                        clip.id,
+                        overlay_config={
+                            "top_hook": {
+                                "enabled": True,
+                                "text": auto_hook,
+                                "style": "white_rounded",
+                            }
+                        },
+                    )
+                except Exception as e:
+                    _log.warning(
+                        "pipeline.auto_hook_persist_failed",
+                        clip_id=clip.id, error=str(e),
+                    )
             clip_entries.append(ClipEntry(clip=clip, persona_id=persona.id, variants=variants))
             if db is not None:
                 variant_rows = [

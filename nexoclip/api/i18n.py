@@ -469,9 +469,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "newClip.drive.help": "Drop new VODs into a Google Drive folder; we pull each one automatically. Good for team workflows.",
         "newClip.drive.watchedLabel": "Watched folder",
         "newClip.drive.connectTitle": "Connect a Drive folder",
-        "newClip.drive.connectHint": "No folder watched yet — set one up to auto-ingest new VODs.",
+        "newClip.drive.connectHint": "Coming soon — Drive folder auto-ingest isn't available yet.",
         "newClip.drive.manage": "Manage Drive watches",
-        "newClip.drive.note": "New files are detected within ~60 seconds and run through the same pipeline as everything else.",
+        "newClip.drive.unavailable": "Coming soon",
+        "newClip.drive.note": "In the meantime, use Paste URL or Upload to bring in a VOD.",
 
         # ============================================================
         # SITE SETTINGS (admin — operator-editable landing values)
@@ -944,9 +945,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "newClip.drive.help": "Suelta nuevos VODs en una carpeta de Google Drive; los traemos uno por uno automáticamente. Ideal para equipos.",
         "newClip.drive.watchedLabel": "Carpeta vigilada",
         "newClip.drive.connectTitle": "Conecta una carpeta de Drive",
-        "newClip.drive.connectHint": "Todavía no hay carpeta vigilada — configura una para auto-ingestar nuevos VODs.",
+        "newClip.drive.connectHint": "Próximamente — la auto-ingesta de carpetas de Drive aún no está disponible.",
         "newClip.drive.manage": "Gestionar carpetas de Drive",
-        "newClip.drive.note": "Los archivos nuevos se detectan en ~60 segundos y pasan por el mismo pipeline que todo lo demás.",
+        "newClip.drive.unavailable": "Próximamente",
+        "newClip.drive.note": "Mientras tanto, usa Pegar URL o Subir para traer un VOD.",
 
         # ============================================================
         # SITE SETTINGS (admin — valores del landing editables por el operador)

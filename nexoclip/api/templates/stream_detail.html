@@ -176,6 +176,14 @@
       <i class="ti ti-scissors" aria-hidden="true"></i>
       <span>Revisa tus clips</span>
     </a>
+    {% if pending_approval_count %}
+    <form method="post" action="/dashboard/streams/{{ stream.id }}/clips/approve-all" style="display:inline;">
+      <button type="submit" class="nc-btn nc-btn--primary">
+        <i class="ti ti-checks" aria-hidden="true"></i>
+        <span>Aprobar todos ({{ pending_approval_count }})</span>
+      </button>
+    </form>
+    {% endif %}
     {% if ov.ready_count %}
     <a href="/dashboard/publish/zernio" class="nc-btn">
       <i class="ti ti-rocket" aria-hidden="true"></i>

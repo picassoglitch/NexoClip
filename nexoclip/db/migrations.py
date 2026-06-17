@@ -73,16 +73,35 @@ def _pg_baseline_version() -> int:
     return int(m.group(1))
 
 
-async def _apply_pg_baseline(db: Database, target: int) -> int:
-    """Apply the consolidated Postgres baseline to a fresh database.
+async def _stamp_pg_version(conn: aiosqlite.Connection, version: int) -> None:
+    await conn.execute(
+        "INSERT INTO schema_version (rowid, version) VALUES (1, ?) "
+        "ON CONFLICT (rowid) DO UPDATE SET version = excluded.version",
+        (version,),
+    )
+    await conn.commit()
 
-    The asyncpg backend can't replay the SQLite migration files, so a fresh
-    Postgres database gets the single baseline schema instead, then its
-    version is stamped to the head of the SQLite chain. Idempotent: a
-    database already at/above the baseline is a no-op.
+
+async def _apply_pg(db: Database, available: list[tuple[int, str, Path]]) -> int:
+    """Bring a Postgres database up to the migration chain head.
+
+    Two cases:
+      * Fresh database (schema_version 0) → apply the single consolidated
+        baseline, then stamp it to the chain head. The asyncpg backend can't
+        replay the SQLite-dialect early migrations, so the baseline stands in
+        for all of them.
+      * Already-migrated database at version N (e.g. after the data cutover,
+        or a prior deploy) → apply each forward migration file N+1..head
+        incrementally. Migrations added AFTER the baseline must be portable
+        SQL (the repo writes them that way); pre-baseline files are never
+        replayed on PG. This is what lets a new migration ship without a
+        flag-day re-baseline.
+
+    Idempotent: a database already at/above the head is a no-op.
     """
     if not _PG_BASELINE_PATH.exists():
         raise MigrationError(f"Postgres baseline not found: {_PG_BASELINE_PATH}")
+    target = available[-1][0]
     baseline_version = _pg_baseline_version()
     if baseline_version != target:
         raise MigrationError(
@@ -94,21 +113,26 @@ async def _apply_pg_baseline(db: Database, target: int) -> int:
     current = await _ensure_schema_version_table(conn)
     if current >= target:
         return current
-    if current != 0:
-        # A partially-migrated SQLite database can't be upgraded by the
-        # baseline (it only knows the end state). Fresh Postgres only.
-        raise MigrationError(
-            f"Postgres backend expects a fresh database, but schema_version={current}. "
-            "Use the data-migration tooling to move an existing SQLite database."
-        )
-    await conn.executescript(_PG_BASELINE_PATH.read_text(encoding="utf-8"))
-    await conn.execute(
-        "INSERT INTO schema_version (rowid, version) VALUES (1, ?) "
-        "ON CONFLICT (rowid) DO UPDATE SET version = excluded.version",
-        (target,),
-    )
-    await conn.commit()
-    return target
+
+    if current == 0:
+        await conn.executescript(_PG_BASELINE_PATH.read_text(encoding="utf-8"))
+        await _stamp_pg_version(conn, target)
+        return target
+
+    # Forward-migrate an existing database one file at a time.
+    for version, _name, path in available:
+        if version <= current:
+            continue
+        try:
+            await conn.executescript(path.read_text(encoding="utf-8"))
+            await _stamp_pg_version(conn, version)
+        except Exception as e:
+            raise MigrationError(
+                f"Postgres migration {path.name} failed (post-baseline migrations "
+                f"must be portable SQL): {e}"
+            ) from e
+        current = version
+    return current
 
 
 async def apply_migrations(db: Database, *, migrations_dir: Path | None = None) -> int:
@@ -130,7 +154,7 @@ async def apply_migrations(db: Database, *, migrations_dir: Path | None = None) 
 
     # Postgres: one consolidated baseline instead of replaying SQLite files.
     if getattr(db, "is_postgres", False):
-        return await _apply_pg_baseline(db, available[-1][0])
+        return await _apply_pg(db, available)
 
     conn = await db.connect()
     current = await _ensure_schema_version_table(conn)

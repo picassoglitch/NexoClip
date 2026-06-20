@@ -57,7 +57,7 @@ from nexoclip.settings import get_settings, resolve_db_target
 from ..deps import get_db, require_full_scope, tenant_binder
 from ..status_gate import require_paid_tier
 from .clips import _VALID_STATUS_TRANSITIONS
-from .internal import mint_signed_clip_url
+from .internal import mint_signed_clip_url, signed_clip_ttl_for_schedule
 
 _log = logging.getLogger("nexoclip.api.zernio")
 
@@ -421,11 +421,18 @@ async def _publish_clip(
         ) from e
 
     try:
+        # A scheduled post is fetched at posting time, not now — so the
+        # signed URL must live until then. Size its TTL to the scheduled
+        # time (+ margin) instead of a flat 1h, which would expire before
+        # a post hours/days out is ever downloaded.
+        ttl_seconds = signed_clip_ttl_for_schedule(
+            scheduled_for if mode == "schedule" else None
+        )
         media_url = mint_signed_clip_url(
             clip_id=clip_id,
             tenant_id=tenant_id,
             base_url=base,
-            ttl_seconds=3600,
+            ttl_seconds=ttl_seconds,
         )
     except RuntimeError as e:
         _log.error(
@@ -1596,6 +1603,7 @@ async def zernio_community_save_settings(
 
 _AUTOPUBLISH_MODES = ("on_approve", "hands_free")
 _AUTOPUBLISH_POST_MODES = ("queue", "now")
+_AUTOPUBLISH_CONTENT_STRATEGIES = ("unique", "variations")
 
 
 @router.get("/autopublish.json")
@@ -1610,7 +1618,7 @@ async def zernio_autopublish_json(
     s = await AutopublishSettingsRepo(db).get(tenant_id) or {
         "enabled": False, "mode": "on_approve", "targets": None,
         "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
-        "tag_suffix": "",
+        "tag_suffix": "", "content_strategy": "unique",
     }
     platforms: list[str] = []
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -1651,6 +1659,9 @@ async def zernio_autopublish_save(
     post_mode = str(data.get("post_mode") or "queue")
     if post_mode not in _AUTOPUBLISH_POST_MODES:
         post_mode = "queue"
+    content_strategy = str(data.get("content_strategy") or "unique")
+    if content_strategy not in _AUTOPUBLISH_CONTENT_STRATEGIES:
+        content_strategy = "unique"
     raw_targets = data.get("targets")
     targets = (
         ",".join(str(t).strip().lower() for t in raw_targets if str(t).strip())
@@ -1677,6 +1688,7 @@ async def zernio_autopublish_save(
         daily_cap=daily_cap,
         score_threshold=score_threshold,
         tag_suffix=tag_suffix,
+        content_strategy=content_strategy,
     )
     return JSONResponse({"ok": True})
 
@@ -1786,7 +1798,8 @@ async def autopublish_hands_free_sweep(
     clip via a signed URL (no cookie — runs in the background pipeline) and
     posts through Zernio. Returns how many were published. NEVER raises — the
     pipeline must not fail because publishing did. Idempotent per clip (skips
-    clips already in zernio_publishes); honours the daily cap."""
+    clips already in zernio_publishes). Queue mode drips one post every
+    30/60 min (content strategy); the daily cap only bounds `now` mode."""
     import structlog
 
     log = structlog.get_logger("nexoclip.api.zernio")
@@ -1796,6 +1809,7 @@ async def autopublish_hands_free_sweep(
         from nexoclip.api.routers.internal import (
             mint_signed_clip_url,
             sign_render_query,
+            signed_clip_ttl_for_schedule,
         )
         from nexoclip.db import AutopublishSettingsRepo, ClipsRepo
         from nexoclip.publish.compose import build_post
@@ -1835,8 +1849,8 @@ async def autopublish_hands_free_sweep(
         pubs = ZernioPublishesRepo(db)
 
         # Eligible clips: above threshold, not already posted, in the order
-        # given. Honour the daily cap up front so we only take what we can
-        # actually post today.
+        # given. The daily cap only bounds the `now` path (anti-spam on
+        # immediate posts); the queue drip is interval-spaced, not capped.
         eligible: list[str] = []
         for clip_id, score in clip_scores:
             if score < threshold:
@@ -1844,30 +1858,25 @@ async def autopublish_hands_free_sweep(
             if await pubs.exists_for_clip(tenant_id, clip_id):
                 continue
             eligible.append(clip_id)
-        if cap:
+        if cap and post_mode == "now":
             eligible = eligible[: max(0, cap - used)]
         if not eligible:
             return 0
 
-        # Queue mode → spread the VOD's clips across best-time slots
-        # (analytics, else the fallback spread), capped per UTC day — the
-        # SAME planner the Auto-program button uses. Now mode → fire
-        # immediately.
+        # Queue mode → drip one post every 30 min (unique) / 60 min
+        # (same-video variations) from the tenant's content strategy. No
+        # best-time slots, no daily cap — the interval is the only spacing.
+        # Now mode → fire immediately.
         schedule_times: list[Any] = []
         if post_mode != "now":
             import datetime as _dt
 
-            from nexoclip.publish.hub import plan_batch_times
+            from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
 
-            best_slots: list[dict[str, Any]] = []
-            with contextlib.suppress(ZernioError):
-                best_slots = await client.best_time_slots(profile_id=profile_id)
-            schedule_times = plan_batch_times(
+            schedule_times = plan_drip_times(
                 len(eligible),
                 now=_dt.datetime.now(_dt.UTC),
-                cap_per_day=(max(cap, 1) if cap else 10),
-                existing_today=used,
-                best_slots=best_slots or None,
+                interval_minutes=drip_interval_minutes(s.get("content_strategy")),
             )
 
         for i, clip_id in enumerate(eligible):
@@ -1885,14 +1894,17 @@ async def autopublish_hands_free_sweep(
                     auth_cookie_value=None, db_path=resolve_db_target(settings),
                     auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
                 )
-                media_url = mint_signed_clip_url(
-                    clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
-                    ttl_seconds=3600,
-                )
                 when = (
                     schedule_times[i].isoformat()
                     if post_mode != "now" and i < len(schedule_times)
                     else None
+                )
+                # Size the signed URL's TTL to the scheduled time — a
+                # best-time slot can be days out, and the platform fetches
+                # the media then, not now. A flat 1h TTL would expire first.
+                media_url = mint_signed_clip_url(
+                    clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
+                    ttl_seconds=signed_clip_ttl_for_schedule(when),
                 )
                 result = await client.create_post(
                     profile_id=profile_id, content=content, media_url=media_url,
@@ -2770,6 +2782,121 @@ async def zernio_retry_all(
     )
 
 
+async def _reprocess_failed_rows(
+    request: Request, db: Database, tenant_id: str, rows: list[Any],
+) -> dict[str, Any]:
+    """Re-render + re-schedule failed posts through the drip gate.
+
+    Zernio's own retry (`/retry-all`) re-fires the SAME post against the
+    SAME media URL — useless when the failure was an expired signed URL
+    (the 403 "could not download" class). Reprocess instead rebuilds each
+    post from the local clip via `_publish_clip`: fresh render, fresh
+    signed URL (correct TTL), and a NEW slot from the interval drip. The
+    old failed row is tombstoned and its Zernio post deleted (best-effort).
+    Per-clip failures don't abort the batch."""
+    import datetime as _dt
+
+    from nexoclip.db import AutopublishSettingsRepo
+    from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
+
+    if not rows:
+        return {"ok": True, "reprocessed": 0, "results": []}
+
+    profile_id = await _require_profile(db, tenant_id)
+    client = _build_client()
+    try:
+        account_map = _account_map(await client.list_accounts(profile_id=profile_id))
+    except ZernioError as e:
+        raise HTTPException(
+            status_code=502, detail=f"Zernio setup failed: {e}",
+        ) from e
+
+    s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+    times = plan_drip_times(
+        len(rows),
+        now=_dt.datetime.now(_dt.UTC),
+        interval_minutes=drip_interval_minutes(s.get("content_strategy")),
+    )
+
+    pubs = ZernioPublishesRepo(db)
+    results: list[dict[str, Any]] = []
+    for row, when in zip(rows, times, strict=False):
+        platforms = [p for p in (row.platforms or "").split(",") if p]
+        if not row.clip_id or not platforms:
+            results.append({
+                "post_id": row.post_id, "ok": False,
+                "error": "no es un clip de NexoClip reprocesable",
+            })
+            continue
+        try:
+            new_post_id = await _publish_clip(
+                client=client, db=db, request=request, tenant_id=tenant_id,
+                profile_id=profile_id, account_map=account_map,
+                clip_id=row.clip_id, platforms=platforms,
+                content=row.content or "", mode="schedule",
+                scheduled_for=when.isoformat(),
+            )
+        except HTTPException as e:
+            results.append({"post_id": row.post_id, "ok": False, "error": str(e.detail)})
+            continue
+        except Exception as e:  # one clip's failure must not abort the batch
+            results.append({"post_id": row.post_id, "ok": False, "error": str(e)})
+            continue
+        # New post is live — retire the old failed one (best-effort delete
+        # on Zernio, always tombstone locally so it leaves the failed list).
+        with contextlib.suppress(ZernioError):
+            await client.delete_post(row.post_id)
+        await pubs.set_status(row.post_id, status="deleted")
+        results.append({
+            "post_id": row.post_id, "ok": True,
+            "new_post_id": new_post_id, "scheduled_for": when.isoformat(),
+        })
+    ok = sum(1 for r in results if r["ok"])
+    _log.info(
+        "zernio.reprocess tenant=%s tried=%d ok=%d", tenant_id, len(results), ok,
+    )
+    return {"ok": True, "reprocessed": ok, "results": results}
+
+
+@router.post("/reprocess-failed")
+async def zernio_reprocess_failed(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reprocesar todos los posts fallidos del tenant a través del drip.
+
+    Re-renderiza cada clip, mintea una URL firmada nueva y lo re-agenda
+    con el nuevo gate (uno cada 30/60 min según la estrategia). Esto SÍ
+    arregla los fallos por URL expirada — a diferencia de "Reintentar
+    todos", que re-dispara la misma URL."""
+    rows = await ZernioPublishesRepo(db).list_for_tenant(limit=200, status="failed")
+    # Oldest-first so the earliest failure gets the earliest drip slot.
+    rows = list(reversed(rows))
+    return JSONResponse(await _reprocess_failed_rows(request, db, tenant_id, rows))
+
+
+@router.post("/reprocess/{post_id}")
+async def zernio_reprocess_one(
+    request: Request,
+    post_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reprocesar un post fallido (re-render + URL nueva + re-agendar)."""
+    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
+    if row is None or row.tenant_id != tenant_id:
+        return JSONResponse(
+            {"ok": False, "error": "post no encontrado"}, status_code=404,
+        )
+    result = await _reprocess_failed_rows(request, db, tenant_id, [row])
+    return JSONResponse(result)
+
+
 @router.get("/best-time.json")
 async def zernio_best_time_json(
     platform: str = "",
@@ -2936,19 +3063,18 @@ async def zernio_schedule_auto(
     _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Auto-program every approved clip across the tenant's best posting
-    times.
+    """Auto-program every approved clip as an interval drip.
 
-    Spreads the available clips with `plan_batch_times` — best-engagement
-    hours when analytics exist, the sane fallback spread otherwise, never
-    more than the daily cap per UTC day — and enriches each post (viral
+    Spreads the available clips with `plan_drip_times` — one post every
+    30 min (unique) or 60 min (same-video variations), per the tenant's
+    content strategy, with no daily cap — and enriches each post (viral
     hook + caption + AI hashtags + the fixed handle/hashtag suffix). One
     clip's failure is collected, not fatal. Targets the autopublish target
     platforms ∩ connected, else all connected accounts."""
     import datetime as _dt
 
     from nexoclip.db import AutopublishSettingsRepo
-    from nexoclip.publish.hub import plan_batch_times
+    from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
 
     settings = get_settings()
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -3000,21 +3126,13 @@ async def zernio_schedule_auto(
     if limit is not None:
         targets = targets[:limit]
     handle_suffix = str(s.get("tag_suffix") or "")
-    try:
-        cap = max(1, int(s.get("daily_cap") or 10))
-    except (TypeError, ValueError):
-        cap = 10
 
-    # Best-time slots feed the planner; empty (no analytics) → fallback spread.
-    best_slots: list[dict[str, Any]] = []
-    with contextlib.suppress(ZernioError):
-        best_slots = await client.best_time_slots(profile_id=profile_id)
-
+    # Drip the approved clips one every 30/60 min from the tenant's
+    # content strategy — no best-time slots, no daily cap.
     now_dt = _dt.datetime.now(_dt.UTC)
-    existing_today = await _autopublish_count_today(db, tenant_id)
-    times = plan_batch_times(
-        len(clips), now=now_dt, cap_per_day=cap,
-        existing_today=existing_today, best_slots=best_slots or None,
+    times = plan_drip_times(
+        len(clips), now=now_dt,
+        interval_minutes=drip_interval_minutes(s.get("content_strategy")),
     )
 
     # The per-clip loop (LLM enrichment + render + Zernio publish) is slow —

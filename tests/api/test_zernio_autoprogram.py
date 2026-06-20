@@ -37,6 +37,7 @@ from nexoclip.db import (
     StreamsRepo,
     TenantsRepo,
     VariantsRepo,
+    ZernioPublishesRepo,
 )
 from nexoclip.db.models import CandidateRow, ClipRow, StreamRow, VariantRow
 from nexoclip.integrations.nexo_ai.service import sync_tenant_tier
@@ -218,10 +219,10 @@ async def test_schedule_auto_schedules_all_approved_with_enrichment(
 
     with respx.mock() as mock:
         _mock_accounts(mock, "tiktok")
-        # No analytics add-on → empty best-time → planner uses fallback hours.
-        mock.get(f"{_ZBASE}/analytics/best-time").mock(
-            return_value=httpx.Response(403, json={"error": "addon"})
-        )
+        # Fresh tenant (no publish history) → engagement scheduling is
+        # gated off, so best-time is NOT fetched at all and the planner
+        # uses the fixed fallback hours. (If the gate regressed and the
+        # code called best-time, respx would 404 the un-mocked route.)
         post_route = mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
         resp = await client.post(
             "/dashboard/publish/zernio/schedule/auto", headers=auth(alice["token"]),
@@ -302,9 +303,8 @@ async def test_handsfree_queue_spreads_and_enriches(
 
     with respx.mock() as mock:
         _mock_accounts(mock, "tiktok")
-        mock.get(f"{_ZBASE}/analytics/best-time").mock(
-            return_value=httpx.Response(403, json={"error": "addon"})
-        )
+        # Fresh tenant → engagement gated off → best-time not fetched;
+        # queue mode still spreads, just on the fallback hours.
         post_route = mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
         n = await autopublish_hands_free_sweep(
             db=db, tenant_id=alice["id"], base_url="https://x.test",
@@ -377,6 +377,57 @@ async def test_handsfree_empty_targets_falls_back_to_all_connected(
     assert post_route.call_count == 1
 
 
+async def _run_drip_sweep(
+    db: Database, alice: dict[str, str], *, content_strategy: str,
+) -> list[dict[str, Any]]:
+    """Run the hands-free queue sweep for clp_1+clp_2 and return the POST
+    /posts payloads (no best-time analytics — queue mode drips now)."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="queue", daily_cap=10, score_threshold=0.5, tag_suffix="",
+        content_strategy=content_strategy,
+    )
+    payloads: list[dict[str, Any]] = []
+
+    def _create(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content.decode()))
+        pid = f"post_{len(payloads)}"
+        return httpx.Response(201, json={"success": True, "post": {"_id": pid}})
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        # No best-time route mocked: the drip must not consult analytics.
+        mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_1", 0.9), ("clp_2", 0.8)],
+        )
+    assert n == 2
+    return payloads
+
+
+@pytest.mark.asyncio
+async def test_handsfree_drip_unique_is_30_min_apart(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Unique strategy → consecutive scheduled posts are 30 min apart."""
+    payloads = await _run_drip_sweep(db, alice, content_strategy="unique")
+    whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in payloads)
+    assert whens[1] - whens[0] == _dt.timedelta(minutes=30)
+
+
+@pytest.mark.asyncio
+async def test_handsfree_drip_variations_is_60_min_apart(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Same-video-variations strategy → consecutive posts are 1 h apart."""
+    payloads = await _run_drip_sweep(db, alice, content_strategy="variations")
+    whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in payloads)
+    assert whens[1] - whens[0] == _dt.timedelta(hours=1)
+
+
 # ---- tag_suffix round-trip ----
 
 
@@ -405,3 +456,112 @@ async def test_tag_suffix_roundtrips_through_save_and_json(
         )
     assert got.status_code == 200
     assert got.json()["settings"]["tag_suffix"] == "@minombre #marca"
+
+
+@pytest.mark.asyncio
+async def test_content_strategy_roundtrips_and_validates(
+    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+) -> None:
+    # Valid value persists and is echoed by /autopublish.json.
+    resp = await client.post(
+        "/dashboard/publish/zernio/autopublish/save",
+        json={
+            "enabled": True, "mode": "hands_free", "targets": ["tiktok"],
+            "post_mode": "queue", "content_strategy": "variations",
+        },
+        headers=auth(alice["token"]),
+    )
+    assert resp.status_code == 200
+    s = await AutopublishSettingsRepo(db).get(alice["id"])
+    assert s is not None and s["content_strategy"] == "variations"
+
+    # Garbage falls back to the safe default.
+    await client.post(
+        "/dashboard/publish/zernio/autopublish/save",
+        json={"enabled": True, "mode": "hands_free", "targets": ["tiktok"],
+              "post_mode": "queue", "content_strategy": "bogus"},
+        headers=auth(alice["token"]),
+    )
+    s2 = await AutopublishSettingsRepo(db).get(alice["id"])
+    assert s2 is not None and s2["content_strategy"] == "unique"
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        got = await client.get(
+            "/dashboard/publish/zernio/autopublish.json", headers=auth(alice["token"]),
+        )
+    assert got.json()["settings"]["content_strategy"] == "unique"
+
+
+# ---- reprocess failed ----
+
+
+async def _seed_failed(db: Database, tid: str, post_id: str, clip_id: str) -> None:
+    """A local zernio_publishes row in the 'failed' state (what the
+    expired-URL bug left behind)."""
+    await ZernioPublishesRepo(db).record(
+        post_id=post_id, tenant_id=tid, clip_id=clip_id,
+        platforms=["tiktok"], content="Cuerpo " + clip_id, status="failed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_reprocess_failed_reschedules_via_drip(
+    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+) -> None:
+    """Reprocess re-creates each failed post (fresh signed media URL) and
+    re-schedules it through the drip; the old failed rows are tombstoned."""
+    await _seed_failed(db, alice["id"], "post_f1", "clp_1")
+    await _seed_failed(db, alice["id"], "post_f2", "clp_2")
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="queue", daily_cap=10, content_strategy="variations",
+    )
+    created: list[dict[str, Any]] = []
+
+    def _create(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        created.append(body)
+        return httpx.Response(
+            201, json={"success": True, "post": {"_id": f"new_{len(created)}"}}
+        )
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
+        mock.delete(url__regex=rf"{_ZBASE}/posts/.+").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        resp = await client.post(
+            "/dashboard/publish/zernio/reprocess-failed", headers=auth(alice["token"]),
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["reprocessed"] == 2
+
+    # Both new posts are SCHEDULED (drip), 60 min apart (variations strategy),
+    # and each carries a fresh signed media URL.
+    whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in created)
+    assert whens[1] - whens[0] == _dt.timedelta(hours=1)
+    for p in created:
+        url = p.get("mediaUrl") or (p.get("mediaItems") or [{}])[0].get("url", "")
+        assert "/api/internal/clip/" in url and "sig=" in url
+
+    # Old failed rows tombstoned so they leave the failed list.
+    old1 = await ZernioPublishesRepo(db).get_by_post_id("post_f1")
+    old2 = await ZernioPublishesRepo(db).get_by_post_id("post_f2")
+    assert old1 is not None and old1.status == "deleted"
+    assert old2 is not None and old2.status == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_reprocess_one_unknown_post_404s(
+    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+) -> None:
+    resp = await client.post(
+        "/dashboard/publish/zernio/reprocess/post_nope", headers=auth(alice["token"]),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["ok"] is False

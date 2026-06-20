@@ -3911,7 +3911,8 @@ class AutopublishSettingsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, tag_suffix, updated_at FROM autopublish_settings "
+            "score_threshold, tag_suffix, content_strategy, updated_at "
+            "FROM autopublish_settings "
             "WHERE tenant_id = ?",
             (tenant_id,),
         )
@@ -3933,23 +3934,25 @@ class AutopublishSettingsRepo:
         daily_cap: int,
         score_threshold: float = 0.6,
         tag_suffix: str = "",
+        content_strategy: str = "unique",
     ) -> None:
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO autopublish_settings "
             "(tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, tag_suffix, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "score_threshold, tag_suffix, content_strategy, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(tenant_id) DO UPDATE SET "
             "enabled = excluded.enabled, mode = excluded.mode, "
             "targets = excluded.targets, post_mode = excluded.post_mode, "
             "daily_cap = excluded.daily_cap, "
             "score_threshold = excluded.score_threshold, "
             "tag_suffix = excluded.tag_suffix, "
+            "content_strategy = excluded.content_strategy, "
             "updated_at = excluded.updated_at",
             (
                 tenant_id, 1 if enabled else 0, mode, targets, post_mode,
-                daily_cap, score_threshold, tag_suffix, _now(),
+                daily_cap, score_threshold, tag_suffix, content_strategy, _now(),
             ),
         )
         await conn.commit()

@@ -16,7 +16,12 @@ import time
 
 import pytest
 
-from nexoclip.api.routers.internal import _verify_signed_params, mint_signed_clip_url
+from nexoclip.api.routers.internal import (
+    _SIGNED_CLIP_MAX_TTL_S,
+    _verify_signed_params,
+    mint_signed_clip_url,
+    signed_clip_ttl_for_schedule,
+)
 from nexoclip.settings import get_settings
 
 
@@ -126,6 +131,60 @@ def test_verify_rejects_implausibly_far_expiry() -> None:
         )
     assert ei.value.status_code == 403
     assert "implausible" in ei.value.detail.lower()
+
+
+def test_ttl_for_immediate_post_is_default() -> None:
+    # No schedule -> the 1h default is plenty.
+    assert signed_clip_ttl_for_schedule(None) == 3600
+
+
+def test_ttl_for_past_or_unparseable_schedule_is_default() -> None:
+    import datetime as _dt
+    # Unparseable, and a deep-past schedule whose gap+margin underflows,
+    # both degrade to the default TTL.
+    assert signed_clip_ttl_for_schedule("not-a-timestamp") == 3600
+    deep_past = _dt.datetime.now(_dt.UTC) - _dt.timedelta(days=1)
+    assert signed_clip_ttl_for_schedule(deep_past.isoformat()) == 3600
+
+
+def test_ttl_covers_a_multi_day_schedule() -> None:
+    import datetime as _dt
+    now = int(time.time())
+    when = _dt.datetime.now(_dt.UTC) + _dt.timedelta(days=3)
+    ttl = signed_clip_ttl_for_schedule(when, now=now)
+    # Must outlive the gap to the scheduled time so the platform can still
+    # download at posting time — the bug was a flat 3600s here.
+    assert ttl > 3 * 24 * 3600
+    assert ttl <= _SIGNED_CLIP_MAX_TTL_S
+
+
+def test_ttl_is_clamped_to_ceiling() -> None:
+    import datetime as _dt
+    when = _dt.datetime.now(_dt.UTC) + _dt.timedelta(days=400)
+    assert signed_clip_ttl_for_schedule(when) == _SIGNED_CLIP_MAX_TTL_S
+
+
+def test_clip_route_accepts_a_scheduled_url_days_out() -> None:
+    # Regression: a clip scheduled days out used to 403 as "implausible"
+    # under the old 24h clip-route ceiling. It must verify now.
+    import datetime as _dt
+    when = _dt.datetime.now(_dt.UTC) + _dt.timedelta(days=3)
+    url = mint_signed_clip_url(
+        clip_id="clp_sched",
+        tenant_id="ten_alice",
+        base_url="https://nexoclip.test",
+        ttl_seconds=signed_clip_ttl_for_schedule(when),
+    )
+    import re
+    exp = int(re.search(r"exp=(\d+)", url).group(1))
+    sig = re.search(r"sig=([a-f0-9]+)", url).group(1)
+    _verify_signed_params(
+        resource_id="clp_sched",
+        tenant="ten_alice",
+        exp=exp,
+        sig=sig,
+        max_ttl_s=_SIGNED_CLIP_MAX_TTL_S,
+    )  # raises on failure
 
 
 def test_mint_refuses_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,8 +34,47 @@ VALID_SOURCES = ("nexoobs", "nexoclip", "nexoai")
 FIRST_COMMENT_PLATFORMS = frozenset({"facebook", "instagram", "linkedin", "youtube"})
 
 # Fallback posting hours (UTC) when an account has no best-time data:
-# spread through the engagement day, cap-many per day.
+# spread through the engagement day, cap-many per day. Used by the
+# internal service-API batch (`hub_batch`) and the manual "best hour"
+# suggestion — the dashboard auto-publish queue now drips on an interval
+# (see `plan_drip_times`) instead.
 _FALLBACK_HOURS = (10, 13, 16, 19, 22, 7)
+
+# Auto-publish queue cadence: how many minutes between consecutive drip
+# posts, keyed by the tenant's content strategy.
+#   unique      — distinct videos          → one every 30 min
+#   variations  — same video, re-edited     → one every 60 min (so the
+#                 near-duplicates don't bunch up, across platforms too)
+DRIP_INTERVAL_MINUTES = {"unique": 30, "variations": 60}
+
+
+def drip_interval_minutes(content_strategy: str | None) -> int:
+    """Minutes between drip posts for a tenant's content strategy.
+    Unknown / unset falls back to the 'unique' cadence (30 min)."""
+    return DRIP_INTERVAL_MINUTES.get(
+        (content_strategy or "unique"), DRIP_INTERVAL_MINUTES["unique"]
+    )
+
+
+def plan_drip_times(
+    count: int,
+    *,
+    now: _dt.datetime,
+    interval_minutes: int,
+) -> list[_dt.datetime]:
+    """Schedule `count` posts as a steady drip — one every
+    `interval_minutes`, the first one interval out from `now`.
+
+    This is the auto-publish queue cadence. Unlike the best-time planner
+    it ignores analytics slots and the daily cap entirely: the interval is
+    the ONLY spacing rule, so a long batch simply runs continuously (e.g.
+    48 posts/day at 30-min). The interval lives on one global timeline, not
+    per platform — the same-video-with-variations tactic relies on that to
+    keep near-duplicates an hour apart even when they target different
+    platforms. Deterministic, so callers/tests can predict every slot."""
+    step = _dt.timedelta(minutes=max(1, interval_minutes))
+    start = now + step
+    return [start + step * i for i in range(max(0, count))]
 
 
 class HubPublishError(Exception):
@@ -549,28 +589,62 @@ def plan_batch_times(
     """Distribute `count` posts across days, at most `cap_per_day` per
     UTC day (counting `existing_today` already-planned posts on day 0).
 
-    Hours come from the tenant's best-time slots for that weekday when
-    available, padded with the fallback spread — deterministic, so the
-    batch endpoint's behavior is testable and explainable.
+    Used by the internal service-API batch (`hub_batch`); the dashboard
+    auto-publish queue drips on a fixed interval instead (`plan_drip_times`).
+
+    Two distinct hour sources, never blended into each other day-by-day:
+
+      - `best_slots` given → ENGAGEMENT pass: only each weekday's
+        analytics-ranked hours. A weekday with no proven slot places
+        nothing and spills forward — we post at known-good times, not
+        generic ones.
+      - FALLBACK pass: the fixed `_FALLBACK_HOURS` spread. This is the
+        sole pass when there are no slots, AND a LAST-RESORT top-up when
+        the engagement pass couldn't place every clip within the horizon
+        (e.g. a tenant with one good slot on one weekday and a big batch).
+        Without it those leftover clips would fall through to posting
+        immediately — a generic-but-decent hour beats that.
+
+    Padding *every* engagement day with generic hours is what muddied the
+    best-time signal, so that never happens; fallback only fills the
+    remainder after engagement has taken everything it can. Deterministic
+    either way, so the batch behavior is testable.
     """
     out: list[_dt.datetime] = []
+    taken: set[_dt.datetime] = set()
     floor = now + _dt.timedelta(minutes=30)  # too soon = that's mode=now
-    # Safety bound: even at 1 post/day the batch fits in count+31 days.
-    for day_offset in range(count + 31):
-        if len(out) >= count:
-            break
-        day = (now + _dt.timedelta(days=day_offset)).replace(
-            minute=0, second=0, microsecond=0,
-        )
-        capacity = cap_per_day - (existing_today if day_offset == 0 else 0)
-        if capacity <= 0:
-            continue
-        # Preferred hours FIRST: this weekday's best slots in engagement
-        # order, then the fallback spread pads the rest — so a day with
-        # one great slot uses it before generic hours.
-        best_hours: list[int] = []
-        if best_slots:
-            best_hours = [
+
+    def _fill(hours_for_day: Callable[[_dt.datetime], list[int]]) -> None:
+        """Place posts at each day's hours until `out` reaches `count` or
+        the horizon is exhausted. Respects `cap_per_day` across BOTH passes
+        (existing_today on day 0 + whatever an earlier pass already placed)
+        and never reuses a slot already chosen."""
+        # Safety bound: even at 1 post/day the batch fits in count+31 days.
+        for day_offset in range(count + 31):
+            if len(out) >= count:
+                return
+            day = (now + _dt.timedelta(days=day_offset)).replace(
+                minute=0, second=0, microsecond=0,
+            )
+            already = sum(1 for t in out if t.date() == day.date())
+            base_used = existing_today if day_offset == 0 else 0
+            capacity = cap_per_day - base_used - already
+            if capacity <= 0:
+                continue
+            picked = 0
+            for hour in dict.fromkeys(hours_for_day(day)):
+                if picked >= capacity or len(out) >= count:
+                    break
+                candidate = day.replace(hour=hour)
+                if candidate <= floor or candidate in taken:
+                    continue  # past, or already taken by an earlier pass
+                taken.add(candidate)
+                out.append(candidate)
+                picked += 1
+
+    if best_slots:
+        def _engagement_hours(day: _dt.datetime) -> list[int]:
+            return [
                 int(s["hour"])
                 for s in sorted(
                     best_slots, key=lambda s: -float(s.get("avg_engagement") or 0)
@@ -578,16 +652,10 @@ def plan_batch_times(
                 if isinstance(s.get("hour"), int)
                 and s.get("day_of_week") == day.weekday()
             ]
-        hours = best_hours + [h for h in sorted(_FALLBACK_HOURS) if h not in best_hours]
-        taken = 0
-        picked: list[_dt.datetime] = []
-        for hour in dict.fromkeys(hours):
-            if taken >= capacity or len(out) + len(picked) >= count:
-                break
-            candidate = day.replace(hour=hour)
-            if candidate <= floor:
-                continue  # late in the day — later hours may still fit
-            picked.append(candidate)
-            taken += 1
-        out.extend(sorted(picked))  # chronological within the day
-    return out[:count]
+
+        _fill(_engagement_hours)
+
+    if len(out) < count:
+        _fill(lambda _day: sorted(_FALLBACK_HOURS))
+
+    return sorted(out)[:count]

@@ -16,6 +16,7 @@ remaining TTL window. The signing secret never crosses the wire.
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import hmac
 import time
@@ -29,6 +30,52 @@ from nexoclip.settings import get_settings
 from nexoclip.tenancy import bound_tenant
 
 router = APIRouter(prefix="/api/internal", tags=["internal"], include_in_schema=False)
+
+# A scheduled post fires at `scheduled_for`, then the publishing vendor's
+# per-platform pipeline downloads the media minutes later — and clocks
+# drift. The signed clip URL must outlive that whole tail, so we pad the
+# gap-until-scheduled with this margin. Without it a URL minted now with a
+# 1h TTL expires long before a post scheduled hours/days out is fetched,
+# and the platform gets a 403 ("could not download the video").
+_SCHEDULED_FETCH_MARGIN_S = 6 * 3600
+
+# Verify-side ceiling for the signed CLIP route (distinct from the 24h
+# audio ceiling). Scheduled publishing legitimately needs URLs that live
+# until the post fires — best-time-slot spread can place posts several
+# days out — so the clip route allows a longer plausible horizon. The
+# leak tradeoff is small: the resource is a single short-form clip that's
+# about to be published to the world anyway.
+_SIGNED_CLIP_MAX_TTL_S = 35 * 24 * 3600
+
+
+def signed_clip_ttl_for_schedule(
+    scheduled_for: str | _dt.datetime | None,
+    *,
+    now: int | None = None,
+    default_ttl_s: int = 3600,
+) -> int:
+    """Pick a signed-clip-URL TTL that is still valid when the post is
+    actually downloaded.
+
+    For an immediate post the 1h default is ample. For a SCHEDULED post,
+    size the TTL to cover the gap until `scheduled_for` plus a margin for
+    the per-platform pipeline + clock skew, clamped to the route ceiling.
+    Accepts an ISO string or a datetime (naive is treated as UTC); an
+    unparseable value, or one far enough in the past that gap+margin
+    underflows, falls back to the default TTL."""
+    if scheduled_for is None:
+        return default_ttl_s
+    when = scheduled_for
+    if isinstance(when, str):
+        try:
+            when = _dt.datetime.fromisoformat(when)
+        except ValueError:
+            return default_ttl_s
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.UTC)
+    now_ts = now if now is not None else int(time.time())
+    ttl = int(when.timestamp()) - now_ts + _SCHEDULED_FETCH_MARGIN_S
+    return max(default_ttl_s, min(ttl, _SIGNED_CLIP_MAX_TTL_S))
 
 
 def _verify_signed_params(
@@ -220,7 +267,7 @@ async def fetch_clip_for_publisher(
         tenant=tenant,
         exp=exp,
         sig=sig,
-        max_ttl_s=24 * 3600,
+        max_ttl_s=_SIGNED_CLIP_MAX_TTL_S,
     )
 
     db: Database = request.app.state.db

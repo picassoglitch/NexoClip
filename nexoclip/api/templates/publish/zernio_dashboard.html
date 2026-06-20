@@ -783,11 +783,21 @@
       <div>
         <div style="font-size:14px; margin-bottom:8px;"><strong>2. ¿Cuándo salen?</strong></div>
         <select class="nc-input" id="zn-ap-postmode" style="max-width:360px;">
-          <option value="queue">En mis mejores horarios (recomendado)</option>
+          <option value="queue">En cola, espaciados (recomendado)</option>
           <option value="now">Apenas el clip está listo</option>
         </select>
         <div class="nc-text--muted" style="font-size:12px; margin-top:4px;">
-          “Mejores horarios” reparte los clips en las horas con más enganche, sin amontonarlos.
+          “En cola” publica de a uno, espaciado en el tiempo, para no amontonarlos.
+        </div>
+        <div style="margin-top:10px;">
+          <select class="nc-input" id="zn-ap-strategy" style="max-width:360px;">
+            <option value="unique">Videos únicos — uno cada 30 min</option>
+            <option value="variations">Mismo video con variaciones — uno cada 1 h</option>
+          </select>
+          <div class="nc-text--muted" style="font-size:12px; margin-top:4px;">
+            Con variaciones del mismo video espaciamos a 1 h (también entre plataformas)
+            para que no se amontonen los casi-duplicados.
+          </div>
         </div>
       </div>
 
@@ -905,7 +915,12 @@
   <div class="nc-panel__header" style="display:flex; align-items:center; gap:8px;">
     <i class="ti ti-alert-triangle" aria-hidden="true" style="color:#ff7575;"></i>
     Publicaciones fallidas
-    <button type="button" class="nc-btn" id="zn-retry-all" style="margin-left:auto; padding:4px 12px; font-size:12px;">
+    <button type="button" class="nc-btn nc-btn--primary" id="zn-reprocess-all" style="margin-left:auto; padding:4px 12px; font-size:12px;"
+            title="Re-renderiza, genera una URL nueva y reagenda por el drip. Arregla fallos por URL/render expirado.">
+      <i class="ti ti-rotate-clockwise" aria-hidden="true"></i> Reprocesar fallidos
+    </button>
+    <button type="button" class="nc-btn" id="zn-retry-all" style="padding:4px 12px; font-size:12px;"
+            title="Reintenta el mismo post en Zernio (misma URL). Útil solo para fallos temporales.">
       <i class="ti ti-refresh" aria-hidden="true"></i> Reintentar todos
     </button>
   </div>
@@ -2215,6 +2230,7 @@
             r.checked = (r.value === mode);
           });
           document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
+          document.getElementById("zn-ap-strategy").value = s.content_strategy || "unique";
           document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
           // Threshold is a 3-option select now — snap the stored float to the
           // nearest bucket so old precise values still land somewhere sane.
@@ -2252,6 +2268,7 @@
           mode: mode,
           targets: targets,
           post_mode: document.getElementById("zn-ap-postmode").value,
+          content_strategy: document.getElementById("zn-ap-strategy").value,
           daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
           score_threshold: parseFloat(document.getElementById("zn-ap-threshold").value) || 0,
           tag_suffix: document.getElementById("zn-ap-tagsuffix").value || "",
@@ -2349,10 +2366,34 @@
           '<div style="display:flex; align-items:center; gap:10px;">' +
           '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
           (p.content || "(sin caption)") + "</span></div>" + plats;
+        var actions = document.createElement("div");
+        actions.style.cssText = "display:flex; gap:8px; margin-top:6px;";
+        var reprocess = document.createElement("button");
+        reprocess.type = "button";
+        reprocess.className = "nc-btn nc-btn--primary";
+        reprocess.style.cssText = "padding:4px 12px; font-size:12px;";
+        reprocess.innerHTML = '<i class="ti ti-rotate-clockwise"></i> Reprocesar';
+        reprocess.title = "Re-renderiza, URL nueva y reagenda por el drip.";
+        reprocess.addEventListener("click", function () {
+          reprocess.disabled = true;
+          fetch("/dashboard/publish/zernio/reprocess/" + encodeURIComponent(p.post_id), {
+            method: "POST", credentials: "same-origin",
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              var r0 = (res.results || [])[0];
+              if (!res.ok || (r0 && !r0.ok)) {
+                throw new Error((r0 && r0.error) || res.error || "fallo");
+              }
+              card.style.opacity = "0.4";
+              reprocess.innerHTML = '<i class="ti ti-check"></i> Reagendado';
+            })
+            .catch(function (e) { reprocess.disabled = false; alert(e.message); });
+        });
         var retry = document.createElement("button");
         retry.type = "button";
         retry.className = "nc-btn";
-        retry.style.cssText = "padding:4px 12px; font-size:12px; margin-top:6px;";
+        retry.style.cssText = "padding:4px 12px; font-size:12px;";
         retry.innerHTML = '<i class="ti ti-refresh"></i> Reintentar';
         retry.addEventListener("click", function () {
           retry.disabled = true;
@@ -2367,7 +2408,9 @@
             })
             .catch(function (e) { retry.disabled = false; alert(e.message); });
         });
-        card.appendChild(retry);
+        actions.appendChild(reprocess);
+        actions.appendChild(retry);
+        card.appendChild(actions);
         failedList.appendChild(card);
       });
     }
@@ -2393,6 +2436,28 @@
       el.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openFailed(); }
       });
+    });
+
+    document.getElementById("zn-reprocess-all").addEventListener("click", function () {
+      var btn = this;
+      if (!window.confirm(
+        "¿Reprocesar todas las publicaciones fallidas? Se re-renderizan y " +
+        "se reagendan por el drip (uno cada 30/60 min)."
+      )) { return; }
+      btn.disabled = true;
+      var label = btn.innerHTML;
+      btn.innerHTML = '<i class="ti ti-loader"></i> Reprocesando…';
+      fetch("/dashboard/publish/zernio/reprocess-failed", {
+        method: "POST", credentials: "same-origin",
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.error || "fallo"); }
+          alert((res.reprocessed || 0) + " reprocesadas y reagendadas. Recargando…");
+          loadFailed();
+        })
+        .catch(function (e) { alert("No se pudo: " + e.message); })
+        .finally(function () { btn.disabled = false; btn.innerHTML = label; });
     });
 
     document.getElementById("zn-retry-all").addEventListener("click", function () {

@@ -5,10 +5,19 @@ background loops at boot:
 
   * webhook dispatch      every 30s   per active tenant
   * metrics ingest        every 1h    per active tenant
+  * retention sweep       every 24h   all tenants (runs shortly after boot)
 
 The legacy publish_jobs drain was removed (Etapa A): publishing now goes
 through Zernio, not the per-platform worker. `publish_interval_s` is kept
 on the signatures for back-compat but no longer starts a loop.
+
+The retention loop is what actually enforces the per-tenant retention
+windows. `sweep_retention` was previously only reachable via the CLI
+(`nexoclip retention sweep`), so unless an operator SSH'd in and ran it by
+hand, nothing on disk was ever reclaimed and the volume grew without bound.
+The loop runs once shortly after boot (so a fresh deploy reclaims space
+promptly even if redeploys happen more often than once a day) and then on
+the 24h cadence.
 
 Each loop iterates `TenantsRepo.list_all()` and runs the drain serially
 for each tenant. Per-tenant errors are logged and swallowed so a single
@@ -43,6 +52,13 @@ _DEFAULT_METRICS_INTERVAL_S = 3600.0
 # Channel polling is comparatively expensive (a yt-dlp listing per watch
 # plus a full pipeline run per new VOD) — keep it slow.
 _DEFAULT_CHANNEL_POLL_INTERVAL_S = 900.0
+# Retention only needs to run daily — aged-out artifacts don't get more
+# aged-out by sweeping more often, and the scan touches every tenant.
+_DEFAULT_RETENTION_INTERVAL_S = 86400.0
+# Delay before the FIRST retention sweep after boot. Long enough to let
+# migrations + warm-up finish and not contend with startup I/O, short
+# enough that a deploy reclaims disk within minutes rather than a day.
+_DEFAULT_RETENTION_INITIAL_DELAY_S = 120.0
 
 
 async def _webhook_loop(db: Database, interval_s: float) -> None:
@@ -117,6 +133,35 @@ async def _channel_poll_loop(
             _log.warning("channel_poll_loop_iteration_failed", error=str(e))
 
 
+async def _retention_loop(
+    db: Database,
+    output_dir: Path,
+    interval_s: float,
+    initial_delay_s: float = _DEFAULT_RETENTION_INITIAL_DELAY_S,
+) -> None:
+    """Sweep per-tenant retention windows on a loop, hard-deleting aged
+    artifacts (raw VODs, old clips, stale transcripts).
+
+    Runs once after `initial_delay_s` (so a fresh deploy reclaims disk
+    promptly even when redeploys are more frequent than the interval),
+    then every `interval_s`. `sweep_retention` already logs per-tenant
+    outcomes and swallows per-tenant errors, so a single bad tenant won't
+    stall the loop.
+    """
+    from nexoclip.retention import sweep_retention
+
+    first = True
+    while True:
+        try:
+            await asyncio.sleep(initial_delay_s if first else interval_s)
+            first = False
+            await sweep_retention(db, output_dir=output_dir)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _log.warning("retention_loop_iteration_failed", error=str(e))
+
+
 @asynccontextmanager
 async def background_drains_lifespan(
     app: FastAPI,
@@ -125,6 +170,7 @@ async def background_drains_lifespan(
     webhook_interval_s: float = _DEFAULT_WEBHOOK_INTERVAL_S,
     metrics_interval_s: float = _DEFAULT_METRICS_INTERVAL_S,
     channel_poll_interval_s: float = _DEFAULT_CHANNEL_POLL_INTERVAL_S,
+    retention_interval_s: float = _DEFAULT_RETENTION_INTERVAL_S,
 ) -> AsyncIterator[None]:
     """Start the background loops on boot; cancel + await on shutdown."""
     db: Database = app.state.db
@@ -136,7 +182,11 @@ async def background_drains_lifespan(
         webhook_interval_s=webhook_interval_s,
         metrics_interval_s=metrics_interval_s,
         channel_poll_interval_s=channel_poll_interval_s,
+        retention_interval_s=retention_interval_s,
     )
+    from nexoclip.settings import get_settings
+
+    output_dir = Path(get_settings().default_output_dir)
     tasks = [
         asyncio.create_task(
             _webhook_loop(db, webhook_interval_s), name="nexoclip-webhook-loop"
@@ -144,14 +194,15 @@ async def background_drains_lifespan(
         asyncio.create_task(
             _metrics_loop(db, metrics_interval_s), name="nexoclip-metrics-loop"
         ),
+        asyncio.create_task(
+            _retention_loop(db, output_dir, retention_interval_s),
+            name="nexoclip-retention-loop",
+        ),
     ]
     # The channel-poll loop needs the pipeline dispatcher + output dir; only
     # start it when the app wired a dispatcher (the dashboard app does).
     dispatcher = getattr(app.state, "job_dispatcher", None)
     if dispatcher is not None:
-        from nexoclip.settings import get_settings
-
-        output_dir = Path(get_settings().default_output_dir)
         tasks.append(
             asyncio.create_task(
                 _channel_poll_loop(

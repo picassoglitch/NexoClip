@@ -81,12 +81,20 @@ async def transcribe(
         raise TranscriptionError(
             f"tenant mismatch: caller={tenant_id!r}, stream={stream.tenant_id!r}"
         )
-    if not stream.source_audio_path.exists():
-        raise TranscriptionError(f"audio file missing: {stream.source_audio_path}")
 
+    # Cache check BEFORE the source-audio guard: a completed stream's
+    # transcript.json is the durable output, and the raw source audio may
+    # have been reclaimed after the pipeline finished (the source VOD is
+    # deleted on completion — see pipeline.process_vod). A non-forced
+    # re-run must still return the cached transcript without the audio
+    # present, so the pipeline stays idempotent post-cleanup. We only
+    # require the audio file when we actually have to transcribe.
     out_path = _transcript_path(stream)
     if not force and out_path.exists():
         return Transcript.model_validate_json(out_path.read_text("utf-8"))
+
+    if not stream.source_audio_path.exists():
+        raise TranscriptionError(f"audio file missing: {stream.source_audio_path}")
 
     # Pick the provider. Caller can inject (tests do); otherwise we
     # honor the per-call overrides for local Whisper to keep the old

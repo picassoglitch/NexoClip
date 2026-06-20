@@ -5,9 +5,16 @@ per-tenant retention windows. Hard-delete only — no soft-delete /
 trash bin per spec.
 
 System defaults (when a tenant's column is NULL):
-    retention_vod_days        = 30
+    retention_vod_days        = 7
     retention_clip_days       = 90
     retention_transcript_days = 365
+
+The raw source VOD is normally deleted the moment the pipeline finishes
+(see `Settings.delete_source_on_completion`), so the 7-day VOD window is a
+backstop for streams whose pipeline crashed before that cleanup. A stream's
+row + per-stream dir are torn down only once no clips (90d) or transcripts
+(365d) survive under it — reclaiming the source at the VOD window never
+takes longer-lived artifacts down early.
 
 Tenants override via `TenantsRepo.set_retention(...)`.
 
@@ -29,6 +36,7 @@ from .service import (
     DEFAULT_RETENTION_VOD_DAYS,
     RetentionPolicy,
     RetentionReport,
+    reclaim_stream_source,
     sweep_retention,
 )
 
@@ -38,5 +46,6 @@ __all__ = [
     "DEFAULT_RETENTION_VOD_DAYS",
     "RetentionPolicy",
     "RetentionReport",
+    "reclaim_stream_source",
     "sweep_retention",
 ]

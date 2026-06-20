@@ -184,7 +184,7 @@ async def test_sweep_keeps_artifacts_inside_window(
         tenant_id=t.id,
         stream_id="str_recent",
         output_dir=out_dir,
-        age_days=5,  # well inside 30-day default
+        age_days=5,  # well inside 7-day VOD default
     )
     reports = await sweep_retention(retention_db, output_dir=out_dir)
     assert len(reports) == 1
@@ -205,7 +205,7 @@ async def test_sweep_deletes_aged_vod_files_and_row(
         tenant_id=t.id,
         stream_id="str_old",
         output_dir=out_dir,
-        age_days=45,  # past 30-day default
+        age_days=45,  # past 7-day VOD default
     )
     stream_dir = out_dir / "str_old"
     assert stream_dir.exists()
@@ -231,7 +231,7 @@ async def test_sweep_deletes_aged_clips_and_unlinks_clip_dir(
         tenant_id=t.id,
         stream_id="str_keep",
         output_dir=out_dir,
-        age_days=20,
+        age_days=3,  # inside the 7-day VOD window → stream untouched
     )
     clip_path = await _seed_clip(
         retention_db,
@@ -252,6 +252,52 @@ async def test_sweep_deletes_aged_clips_and_unlinks_clip_dir(
     # Stream is still here.
     with bound_tenant(t.id):
         assert await StreamsRepo(retention_db).get("str_keep") is not None
+
+
+async def test_sweep_past_vod_window_preserves_in_window_clips(
+    retention_db: Database, tmp_path: Path
+) -> None:
+    """A stream past the VOD window (30d) keeps clips that are still inside
+    the clip window (90d). Only the raw source is reclaimed.
+
+    Regression: the sweeper used to nuke the whole stream dir + cascade-
+    delete the row at the VOD cutoff, which destroyed in-window clips (and
+    their rows) early. With the daily sweep loop now active, that would be
+    live data loss.
+    """
+    out_dir = tmp_path / "out"
+    t = await TenantsRepo(retention_db).create(name="Aldo")
+    await _seed_stream(
+        retention_db,
+        tenant_id=t.id,
+        stream_id="str_mixed",
+        output_dir=out_dir,
+        age_days=45,  # past 30-day VOD window
+    )
+    # Clip at 45 days — past VOD window but well inside the 90-day clip one.
+    clip_path = await _seed_clip(
+        retention_db,
+        tenant_id=t.id,
+        stream_id="str_mixed",
+        clip_id="clp_keep",
+        output_dir=out_dir,
+        age_days=45,
+    )
+    source_dir = out_dir / "str_mixed" / "source"
+    assert source_dir.exists()
+
+    reports = await sweep_retention(retention_db, output_dir=out_dir)
+    r = reports[0]
+
+    # Source reclaimed...
+    assert r.vods_deleted == 1
+    assert not source_dir.exists()
+    # ...but the clip and its stream survive.
+    assert r.clips_deleted == 0
+    assert clip_path.exists()
+    with bound_tenant(t.id):
+        assert await StreamsRepo(retention_db).get("str_mixed") is not None
+        assert await ClipsRepo(retention_db).get("clp_keep") is not None
 
 
 async def test_sweep_deletes_aged_transcripts(

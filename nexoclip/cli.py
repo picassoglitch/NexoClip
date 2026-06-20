@@ -951,7 +951,7 @@ def tenants_set_retention_cmd(
     vod_days: int | None = typer.Option(
         None,
         "--vod-days",
-        help="Days to keep raw VODs. Pass 0 to clear back to the system default (30).",
+        help="Days to keep raw VODs. Pass 0 to clear back to the system default (7).",
         min=0,
     ),
     clip_days: int | None = typer.Option(
@@ -1000,7 +1000,7 @@ def tenants_set_retention_cmd(
 
     updated = asyncio.run(_run())
     typer.echo(
-        f"  vod_days={updated.retention_vod_days or 'default(30)'}  "
+        f"  vod_days={updated.retention_vod_days or 'default(7)'}  "
         f"clip_days={updated.retention_clip_days or 'default(90)'}  "
         f"transcript_days={updated.retention_transcript_days or 'default(365)'}"
     )

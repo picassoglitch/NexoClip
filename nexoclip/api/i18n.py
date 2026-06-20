@@ -250,7 +250,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "landing.faq.q6": "What about retention and privacy?",
         "landing.faq.a6": (
-            "Per-tenant retention windows (default 30 days for VODs, 90 "
+            "Per-tenant retention windows (default 7 days for VODs, 90 "
             "for clips, 365 for transcripts) — all configurable. Audio and "
             "video stay on your machine for transcription; only LLM "
             "caption-generation calls out."
@@ -720,7 +720,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "landing.faq.q6": "¿Qué pasa con la retención y la privacidad?",
         "landing.faq.a6": (
-            "Ventanas de retención por tenant (por defecto 30 días para "
+            "Ventanas de retención por tenant (por defecto 7 días para "
             "VODs, 90 para clips, 365 para transcripciones) — todo "
             "configurable. El audio y el video se quedan en tu máquina "
             "para transcribir; solo la generación de captions con LLM "

@@ -1291,6 +1291,42 @@ async def _run_pipeline(
                 "cost_usd_micros": manifest.llm_spend.total_cost_usd_micros,
             },
         )
+
+    # Reclaim the raw source VOD now that the pipeline has run to completion.
+    # The source (downloaded video + extracted audio) is the heaviest thing
+    # on disk and is only needed during processing — clips are cut, the
+    # transcript is persisted, and auto-correct already ran (step 4b runs
+    # "while the source VOD still exists"). Deleting it here is what keeps
+    # the volume flat as processed-stream count grows.
+    #
+    # Reaching this point means every step succeeded; an earlier failure
+    # raises and skips this, leaving the source for a re-run. Re-runs of a
+    # completed stream serve cached transcript + clips before touching the
+    # source, so they stay no-ops even with it gone (a `force=True` re-run
+    # re-downloads). Gated on `db is not None` so filesystem-only/CLI runs
+    # keep the source for inspection. Best-effort — never fail the pipeline.
+    if db is not None and getattr(settings, "delete_source_on_completion", True):
+        from nexoclip.retention import reclaim_stream_source
+
+        try:
+            freed = reclaim_stream_source(
+                stream_dir=stream_dir,
+                source_video_path=stream.source_video_path,
+                source_audio_path=stream.source_audio_path,
+            )
+            _log.info(
+                "pipeline.source_reclaimed",
+                stream_id=stream.id,
+                bytes_freed=freed,
+            )
+        except Exception as e:
+            # Cleanup must never break a successful run.
+            _log.warning(
+                "pipeline.source_reclaim_failed",
+                stream_id=stream.id,
+                error=str(e),
+            )
+
     return manifest
 
 

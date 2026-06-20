@@ -208,7 +208,7 @@ def test_tenants_set_retention_zero_clears_to_default(tmp_path: Path) -> None:
         ],
     )
     assert r.exit_code == 0, r.output
-    assert "vod_days=default(30)" in r.output
+    assert "vod_days=default(7)" in r.output
 
 
 def test_tenants_set_retention_no_args_exits_2(tmp_path: Path) -> None:

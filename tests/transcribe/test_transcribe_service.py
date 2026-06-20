@@ -163,6 +163,25 @@ def test_transcribe_rejects_missing_audio(tmp_path: Path) -> None:
         asyncio.run(transcribe(tenant_id="default", stream=stream))
 
 
+def test_transcribe_returns_cache_when_audio_reclaimed(tmp_path: Path) -> None:
+    """Cache check precedes the source-audio guard, so a re-run after the
+    raw source has been reclaimed (delete-on-completion) still serves the
+    cached transcript instead of raising. This is what keeps the pipeline
+    idempotent once the source VOD is gone."""
+    stream = _make_stream(tmp_path)
+    first = asyncio.run(transcribe(tenant_id="default", stream=stream))
+
+    # Simulate the pipeline's delete-on-completion: the audio is gone but
+    # transcript.json (the durable output) remains.
+    stream.source_audio_path.unlink()
+    assert not stream.source_audio_path.exists()
+
+    second = asyncio.run(transcribe(tenant_id="default", stream=stream))
+    assert second == first
+    # No second whisper run — served from cache.
+    assert len(FakeWhisperModel.transcribe_calls) == 1
+
+
 def test_transcribe_auto_language_passes_none(tmp_path: Path) -> None:
     stream = _make_stream(tmp_path)
     asyncio.run(transcribe(tenant_id="default", stream=stream, language=None))

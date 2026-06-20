@@ -3,7 +3,10 @@
 Three retention scopes:
 
   * **VOD** (source video + audio): the heaviest artifact. ~5-50 GB per
-    4hr stream. Default 30 days.
+    4hr stream. Default 7 days. Normally the source is already gone — the
+    pipeline deletes it on completion (see `delete_source_on_completion`);
+    this window is the backstop for streams whose pipeline crashed before
+    that cleanup ran.
   * **Clip** (rendered vertical clip + thumbnails): ~50-500 MB per clip.
     Default 90 days.
   * **Transcript** (Whisper JSON segments): KBs per stream. Default 365
@@ -43,7 +46,7 @@ from nexoclip.tenancy import bound_tenant
 
 _log = structlog.get_logger(__name__)
 
-DEFAULT_RETENTION_VOD_DAYS = 30
+DEFAULT_RETENTION_VOD_DAYS = 7
 DEFAULT_RETENTION_CLIP_DAYS = 90
 DEFAULT_RETENTION_TRANSCRIPT_DAYS = 365
 
@@ -138,6 +141,30 @@ def _safe_unlink(path: Path) -> int:
 
 
 # ---- public entry ----
+
+
+def reclaim_stream_source(
+    *,
+    stream_dir: Path,
+    source_video_path: Path | None = None,
+    source_audio_path: Path | None = None,
+) -> int:
+    """Delete a stream's raw source artifacts (downloaded video + extracted
+    audio), returning bytes freed.
+
+    Idempotent — safe to call when the source is already gone (returns 0).
+    The conventional layout keeps both under ``<stream_dir>/source/``; live
+    recordings (and legacy layouts) put the source files outside the
+    per-stream dir, so we unlink those explicit paths too when they live
+    elsewhere. Used by the pipeline's delete-on-completion path; the
+    retention sweeper reaches the same files via the per-stream dir.
+    """
+    src_dir = stream_dir / "source"
+    freed = _safe_unlink(src_dir)
+    for p in (source_video_path, source_audio_path):
+        if p is not None and src_dir not in p.parents:
+            freed += _safe_unlink(p)
+    return freed
 
 
 async def sweep_retention(
@@ -253,7 +280,16 @@ async def _sweep_one_tenant(
             (tenant_id, transcript_cutoff),
         )
 
-    # --- Streams: unlink VOD + audio, then cascade-delete the row.
+    # --- Streams past the VOD window: reclaim the raw source (the heavy
+    # artifact). The stream ROW + the rest of the per-stream dir are only
+    # removed once nothing with a LONGER window survives under them.
+    #
+    # This ordering matters: clips (90d) and transcripts (365d) outlive the
+    # VOD window (30d), and BOTH the stream dir (`clips/` lives inside it)
+    # and the stream row (FK-cascades to clip + transcript rows) would take
+    # those still-in-window artifacts down early if we nuked them at the VOD
+    # cutoff. So at the VOD window we delete ONLY the source; full teardown
+    # waits until the stream has no surviving clips or transcripts.
     cur = await conn.execute(
         "SELECT id, source_video_path, source_audio_path FROM streams "
         "WHERE tenant_id = ? AND created_at < ?",
@@ -264,20 +300,41 @@ async def _sweep_one_tenant(
         stream_id = row["id"]
         video = Path(row["source_video_path"]) if row["source_video_path"] else None
         audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
+        stream_dir = output_dir / stream_id
         vods_deleted += 1
-        if not dry_run:
-            # The per-stream directory holds source/ + clips/ + manifests
-            # + chat replay + visual signals + diarization.json + ...
-            # Take the whole thing — anything still inside is past retention
-            # too (clips already had their on-disk files unlinked above).
-            stream_dir = output_dir / stream_id
+        if dry_run:
+            continue
+
+        # Always reclaim the source at the VOD window — usually already gone
+        # (deleted on pipeline completion), so this is a cheap backstop for
+        # streams whose pipeline crashed before that cleanup ran.
+        bytes_freed += reclaim_stream_source(
+            stream_dir=stream_dir,
+            source_video_path=video,
+            source_audio_path=audio,
+        )
+
+        # Surviving = newer than its own cutoff (i.e. NOT swept above). We
+        # query explicitly rather than relying on the earlier DELETEs so the
+        # gate is correct in dry-run too.
+        cur_c = await conn.execute(
+            "SELECT COUNT(*) AS n FROM clips "
+            "WHERE stream_id = ? AND tenant_id = ? AND created_at >= ?",
+            (stream_id, tenant_id, clip_cutoff),
+        )
+        surviving_clips = int((await cur_c.fetchone())["n"])
+        cur_t = await conn.execute(
+            "SELECT COUNT(*) AS n FROM transcripts "
+            "WHERE stream_id = ? AND tenant_id = ? AND created_at >= ?",
+            (stream_id, tenant_id, transcript_cutoff),
+        )
+        surviving_transcripts = int((await cur_t.fetchone())["n"])
+
+        if surviving_clips == 0 and surviving_transcripts == 0:
+            # Nothing longer-lived remains — tear down the rest of the dir
+            # (manifests, visual signals, chat replay, diarization) and the
+            # row. The FK cascade now only nukes already-aged-out rows.
             bytes_freed += _safe_unlink(stream_dir)
-            # Defensive — if the source files lived OUTSIDE the per-stream
-            # dir (legacy layout), unlink them explicitly too.
-            if video is not None and stream_dir not in video.parents:
-                bytes_freed += _safe_unlink(video)
-            if audio is not None and stream_dir not in audio.parents:
-                bytes_freed += _safe_unlink(audio)
             await conn.execute(
                 "DELETE FROM streams WHERE id = ? AND tenant_id = ?",
                 (stream_id, tenant_id),

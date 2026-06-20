@@ -65,6 +65,25 @@ class Settings(BaseSettings):
     # One small LLM call per qualifying clip. Set False to disable.
     auto_hook_enabled: bool = True
 
+    # Storage hygiene — delete the raw source VOD (downloaded video +
+    # extracted audio) as soon as the pipeline finishes. The raw source is
+    # by far the heaviest artifact on disk (~5-50 GB per 4hr stream) and is
+    # only needed DURING processing: once clips are cut + the transcript is
+    # persisted, it's dead weight. Deleting on completion is what keeps the
+    # volume flat as the number of processed streams grows — without it, a
+    # single active operator fills a 100+ GB volume in a month.
+    #
+    # Re-runs stay safe: transcribe + cut both serve their cached outputs
+    # before touching the source, so a non-forced re-run of an already-
+    # processed stream is a no-op even with the source gone. A `force=True`
+    # re-run (or re-cut) needs the source and will re-download it.
+    #
+    # Set False to keep the source around (debugging, or to allow re-cuts
+    # without re-download). The per-tenant retention window still applies as
+    # a backstop for any source that escapes this path (e.g. a pipeline that
+    # crashed before completion).
+    delete_source_on_completion: bool = True
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None

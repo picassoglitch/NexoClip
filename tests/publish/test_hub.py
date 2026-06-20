@@ -8,6 +8,7 @@ resolution, media-URL validation, and service-token parsing.
 from __future__ import annotations
 
 import datetime as _dt
+from itertools import pairwise
 
 import httpx
 import pytest
@@ -15,8 +16,10 @@ import respx
 
 from nexoclip.publish.hub import (
     HubPublishError,
+    drip_interval_minutes,
     next_best_time,
     plan_batch_times,
+    plan_drip_times,
     validate_media_url,
 )
 from nexoclip.settings import Settings
@@ -72,6 +75,94 @@ def test_batch_prefers_best_time_hours_for_matching_weekday() -> None:
     )
     assert times[0].hour == 18
     assert times[0].date() == _NOW.date()
+
+
+def test_engagement_path_does_not_pad_with_fallback_hours() -> None:
+    # One engagement slot, on Wednesdays only, at a NON-fallback hour.
+    from nexoclip.publish.hub import _FALLBACK_HOURS
+    slots = [{"day_of_week": 2, "hour": 14, "avg_engagement": 500.0, "post_count": 9}]
+    times = plan_batch_times(
+        3, now=_NOW, cap_per_day=4, existing_today=0, best_slots=slots,
+    )
+    assert len(times) == 3
+    # Pure engagement path: every post is at the one proven hour (14:00),
+    # never a generic fallback hour, and a day with no slot spills forward —
+    # so the three posts land on three successive Wednesdays.
+    assert all(t.hour == 14 for t in times)
+    assert 14 not in _FALLBACK_HOURS  # guards the test's premise
+    assert all(t.weekday() == 2 for t in times)
+    assert len({t.date() for t in times}) == 3
+
+
+def test_fallback_path_uses_fallback_hours_when_no_slots() -> None:
+    from nexoclip.publish.hub import _FALLBACK_HOURS
+    times = plan_batch_times(3, now=_NOW, cap_per_day=4, existing_today=0)
+    assert len(times) == 3
+    assert all(t.hour in _FALLBACK_HOURS for t in times)
+
+
+def test_engagement_short_falls_back_as_last_resort() -> None:
+    # One proven slot (Wed 14:00) but a batch too big for the Wednesdays in
+    # the horizon to absorb → leftovers must land on fallback hours, NOT be
+    # dropped (which would make the caller post them immediately).
+    from nexoclip.publish.hub import _FALLBACK_HOURS
+    slots = [{"day_of_week": 2, "hour": 14, "avg_engagement": 500.0, "post_count": 9}]
+    times = plan_batch_times(
+        8, now=_NOW, cap_per_day=4, existing_today=0, best_slots=slots,
+    )
+    # Every clip gets a real slot — none fall through to "immediate".
+    assert len(times) == 8
+    assert times == sorted(times)
+    eng = [t for t in times if t.hour == 14]
+    fallback = [t for t in times if t.hour in _FALLBACK_HOURS]
+    # Engagement is exhausted first (one 14:00 per Wednesday in the horizon),
+    # then the fixed hours top up the rest.
+    assert all(t.weekday() == 2 for t in eng)
+    assert len(eng) >= 1
+    assert len(fallback) >= 1
+    assert len(eng) + len(fallback) == 8
+
+
+# ---- plan_drip_times (auto-publish queue cadence) ----
+
+
+def test_drip_interval_minutes_maps_strategy() -> None:
+    assert drip_interval_minutes("unique") == 30
+    assert drip_interval_minutes("variations") == 60
+    # Unknown / unset → the 'unique' cadence.
+    assert drip_interval_minutes(None) == 30
+    assert drip_interval_minutes("nonsense") == 30
+
+
+def test_drip_unique_is_one_every_30_min() -> None:
+    times = plan_drip_times(4, now=_NOW, interval_minutes=30)
+    assert len(times) == 4
+    # First post one interval out, then a steady 30-min cadence.
+    assert times[0] == _NOW + _dt.timedelta(minutes=30)
+    deltas = {b - a for a, b in pairwise(times)}
+    assert deltas == {_dt.timedelta(minutes=30)}
+
+
+def test_drip_variations_is_one_every_hour() -> None:
+    times = plan_drip_times(3, now=_NOW, interval_minutes=60)
+    assert times[0] == _NOW + _dt.timedelta(hours=1)
+    deltas = {b - a for a, b in pairwise(times)}
+    assert deltas == {_dt.timedelta(hours=1)}
+
+
+def test_drip_has_no_daily_cap() -> None:
+    # 60 unique posts at 30 min would span > 1 day; the drip keeps going,
+    # never bounded to a per-day count.
+    times = plan_drip_times(60, now=_NOW, interval_minutes=30)
+    assert len(times) == 60
+    assert times[-1] == _NOW + _dt.timedelta(minutes=30 * 60)
+    # More than a day's worth land on day 0 — no cap clamped them.
+    day0 = sum(1 for t in times if t.date() == _NOW.date())
+    assert day0 > 24
+
+
+def test_drip_zero_count_is_empty() -> None:
+    assert plan_drip_times(0, now=_NOW, interval_minutes=30) == []
 
 
 # ---- next_best_time ----

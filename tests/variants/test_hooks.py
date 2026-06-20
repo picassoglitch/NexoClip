@@ -59,9 +59,24 @@ def test_user_prompt_handles_empty_snippet_and_voice() -> None:
         tone="default",
         n=5,
     )
-    assert "no transcript captured" in p
+    # Empty snippet steers the model to the context, not a defeatist
+    # "no transcript captured" placeholder that invites meta-commentary.
+    assert "transcript unavailable" in p
     assert "no persona voice provided" in p
     assert "Generate 5" in p
+
+
+def test_user_prompt_surfaces_clip_context() -> None:
+    p = _user_prompt(
+        persona_voice="x",
+        persona_language="es",
+        transcript_snippet="",
+        tone="default",
+        n=3,
+        clip_context="Stream title: Mexico 1 - 0 Korea",
+    )
+    # The stream title reaches the model so a no-speech clip hooks off it.
+    assert "Mexico 1 - 0 Korea" in p
 
 
 def test_user_prompt_unknown_tone_falls_back_to_default() -> None:

@@ -508,11 +508,16 @@ async def _auto_hook_for_clip(
     language: str | None,
     tenant_id: str,
     router: Any,
+    stream_title: str = "",
 ) -> str:
     """Generate ONE viral hook (title line) from the clip's transcript
     snippet. Best-effort — returns '' on any failure so a hook hiccup never
     breaks the pipeline. The snippet already lives on the clip's candidate
-    evidence (set by detect), so no extra transcript work is needed."""
+    evidence (set by detect), so no extra transcript work is needed.
+
+    `stream_title` is passed as context so a no-speech clip (sports goal,
+    reaction) still gets a real hook off the stream title instead of
+    meta-commentary about a missing transcript."""
     from nexoclip.variants.hooks import generate_hooks
 
     evidence = getattr(clip.candidate, "evidence", None) or {}
@@ -521,12 +526,19 @@ async def _auto_hook_for_clip(
         if isinstance(evidence, dict)
         else ""
     )
+    context_bits: list[str] = []
+    if (stream_title or "").strip():
+        context_bits.append(f"Stream title: {stream_title.strip()}")
+    reason = str(getattr(clip.candidate, "reason", "") or "").strip()
+    if reason:
+        context_bits.append(f"Why it was clipped: {reason}")
     try:
         hooks = await generate_hooks(
             tenant_id=tenant_id,
             persona_voice=persona.voice_prompt,
             persona_language=language or persona.primary_language or "es",
             transcript_snippet=snippet,
+            clip_context=" — ".join(context_bits),
             n=1,
             router=router,
         )
@@ -1146,6 +1158,7 @@ async def _run_pipeline(
                 auto_hook = await _auto_hook_for_clip(
                     clip=clip, persona=persona, language=language,
                     tenant_id=tenant_id, router=router,
+                    stream_title=stream.title or "",
                 )
             if variants_enabled:
                 variants = await generate_variants(

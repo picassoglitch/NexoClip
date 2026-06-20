@@ -112,7 +112,13 @@ async def generate_hook_line(
     from pathlib import Path
 
     try:
-        from nexoclip.db import CandidatesRepo, ClipsRepo, PersonasRepo, TranscriptsRepo
+        from nexoclip.db import (
+            CandidatesRepo,
+            ClipsRepo,
+            PersonasRepo,
+            StreamsRepo,
+            TranscriptsRepo,
+        )
         from nexoclip.llm import LLMRouter, load_llm_config
         from nexoclip.settings import get_settings
         from nexoclip.variants import generate_hooks
@@ -159,6 +165,7 @@ async def generate_hook_line(
         # Transcript snippet: candidate evidence is cheapest; fall back to
         # the transcript segments overlapping the clip window.
         snippet = ""
+        detect_reason = ""
         if clip.candidate_id:
             for cand in await CandidatesRepo(db).list_for_stream(clip.stream_id):
                 if cand.id == clip.candidate_id:
@@ -166,6 +173,7 @@ async def generate_hook_line(
                     snippet = str(
                         ev.get("transcript_snippet") or ev.get("phrase") or ""
                     ).strip()
+                    detect_reason = str(getattr(cand, "reason", "") or "").strip()
                     break
         if not snippet:
             try:
@@ -189,6 +197,18 @@ async def generate_hook_line(
         if tone_id not in ("default", "aggressive", "gen_z", "corporate", "curious"):
             tone_id = "default"
 
+        # Context the hook can lean on when the transcript is thin — the
+        # stream title (e.g. "Mexico 1 - 0 Korea") is often the whole story
+        # for a no-speech clip, plus why detect flagged the moment.
+        context_bits: list[str] = []
+        stream = await StreamsRepo(db).get(clip.stream_id)
+        stream_title = (stream.title or "").strip() if stream is not None else ""
+        if stream_title:
+            context_bits.append(f"Stream title: {stream_title}")
+        if detect_reason:
+            context_bits.append(f"Why it was clipped: {detect_reason}")
+        clip_context = " — ".join(context_bits)
+
         output_dir = Path(get_settings().default_output_dir)
         router = LLMRouter(
             config=load_llm_config(),
@@ -200,6 +220,7 @@ async def generate_hook_line(
             persona_voice=persona_voice,
             persona_language=persona_language,
             transcript_snippet=snippet,
+            clip_context=clip_context,
             tone=tone_id,  # type: ignore[arg-type]
             n=1,
             router=router,

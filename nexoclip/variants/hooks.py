@@ -92,7 +92,8 @@ _SYSTEM_PROMPT = """\
 You are a short-form video title writer working with a streamer.
 You're given:
   - the streamer's persona / voice
-  - a transcript snippet from the clip
+  - context about the clip (the stream title / what the moment is about)
+  - a transcript snippet from the clip (may be empty)
   - the language to write in
   - a tone instruction
 
@@ -110,6 +111,13 @@ Rules:
     under 1.5 seconds.
   - Don't repeat the transcript verbatim — the title is a HOOK, not
     a summary. It dramatizes the moment.
+  - NEVER write meta-commentary about your own inputs. Do not mention a
+    missing/absent transcript, "no captions", that you're guessing, or
+    that you bet something happened. Every title must read as if written
+    by someone who watched the clip.
+  - When the transcript is empty, write the titles from the CONTEXT
+    (the stream title / topic). E.g. a stream titled "Mexico 1 - 0 Korea"
+    should yield football-goal hooks, never "no transcript but..." filler.
 
 Generate variations that differ in approach (curiosity, conflict,
 status, identity, surprise) — the operator picks the best one.
@@ -123,16 +131,26 @@ def _user_prompt(
     transcript_snippet: str,
     tone: ToneId,
     n: int,
+    clip_context: str = "",
 ) -> str:
     tone_block = _TONE_PROMPTS.get(tone, _TONE_PROMPTS["default"])
+    has_snippet = bool(transcript_snippet.strip())
     snippet_block = (
         transcript_snippet.strip()
-        if transcript_snippet.strip()
-        else "(no transcript captured for this clip)"
+        if has_snippet
+        # No defeatist placeholder — the system prompt forbids writing
+        # about a missing transcript, so steer the model to the context.
+        else "(transcript unavailable — write the hooks from the context above)"
     )
     persona_block = persona_voice.strip() or "(no persona voice provided)"
+    context_block = (
+        f"What this clip / stream is about:\n{clip_context.strip()}\n\n"
+        if clip_context.strip()
+        else ""
+    )
     return (
         f"Streamer persona / voice:\n{persona_block}\n\n"
+        f"{context_block}"
         f"Language to write in: {persona_language}\n\n"
         f"Tone instruction: {tone_block}\n\n"
         f"Transcript snippet from the clip:\n\"\"\"\n{snippet_block}\n\"\"\"\n\n"
@@ -149,6 +167,7 @@ async def generate_hooks(
     persona_voice: str,
     persona_language: str,
     transcript_snippet: str,
+    clip_context: str = "",
     tone: ToneId = "default",
     n: int = DEFAULT_N,
     router: LLMRouter,
@@ -163,9 +182,12 @@ async def generate_hooks(
         persona_language: ISO 639-1 (`es`, `en`, ...) the hooks
             should be written in.
         transcript_snippet: 1-3 sentences from the clip's transcript,
-            used as the hook's context. Empty string is allowed and
-            falls back to "no transcript captured" — the LLM still
-            generates plausible candidates.
+            used as the hook's context. Empty string is allowed — the
+            LLM then writes from `clip_context` instead of inventing
+            meta-commentary about the missing transcript.
+        clip_context: extra context the model should hook off of when
+            the transcript is thin/empty — typically the stream title
+            (e.g. "Mexico 1 - 0 Korea") plus the detection reason.
         tone: One of the five ToneId presets. Falls back to "default"
             if the caller passes an unrecognized id.
         n: Number to generate. Clamped to [MIN_N, MAX_N].
@@ -181,6 +203,7 @@ async def generate_hooks(
         persona_voice=persona_voice,
         persona_language=persona_language,
         transcript_snippet=transcript_snippet,
+        clip_context=clip_context,
         tone=tone,
         n=n_clamped,
     )

@@ -362,8 +362,15 @@ async def _poll_one_watch(
             )
             failed += 1
 
-    # Advance last_polled_at only on a clean pass, same as the drive watcher.
-    new_polled_at = _now_iso() if failed == 0 else watch.last_polled_at
+    # The listing succeeded (a listing failure returns early above), so the
+    # poll itself ran — advance last_polled_at unconditionally. Per-video
+    # ingest failures must NOT freeze it: the failed videos stay UNSEEN
+    # (only successes are added to `seen` above) so they retry on the next
+    # scheduled poll. Freezing on any failure was the bug behind "última
+    # revisión: nunca" — one perpetually-failing video (e.g. a YouTube
+    # bot-check) kept the watch permanently "due", which both hid the real
+    # last-checked time AND re-listed the channel every loop tick.
+    new_polled_at = _now_iso()
     await ChannelWatchesRepo(db).mark_polled(
         watch.id,
         seen_video_ids=sorted(seen),

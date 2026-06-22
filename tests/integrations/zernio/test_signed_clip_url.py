@@ -17,6 +17,7 @@ import time
 import pytest
 
 from nexoclip.api.routers.internal import (
+    _IMMEDIATE_PUBLISH_TTL_S,
     _SIGNED_CLIP_MAX_TTL_S,
     _verify_signed_params,
     mint_signed_clip_url,
@@ -134,17 +135,17 @@ def test_verify_rejects_implausibly_far_expiry() -> None:
 
 
 def test_ttl_for_immediate_post_is_default() -> None:
-    # No schedule -> the 1h default is plenty.
-    assert signed_clip_ttl_for_schedule(None) == 3600
+    # No schedule -> the 24h default floor covers the vendor's retry tail.
+    assert signed_clip_ttl_for_schedule(None) == _IMMEDIATE_PUBLISH_TTL_S
 
 
 def test_ttl_for_past_or_unparseable_schedule_is_default() -> None:
     import datetime as _dt
     # Unparseable, and a deep-past schedule whose gap+margin underflows,
     # both degrade to the default TTL.
-    assert signed_clip_ttl_for_schedule("not-a-timestamp") == 3600
+    assert signed_clip_ttl_for_schedule("not-a-timestamp") == _IMMEDIATE_PUBLISH_TTL_S
     deep_past = _dt.datetime.now(_dt.UTC) - _dt.timedelta(days=1)
-    assert signed_clip_ttl_for_schedule(deep_past.isoformat()) == 3600
+    assert signed_clip_ttl_for_schedule(deep_past.isoformat()) == _IMMEDIATE_PUBLISH_TTL_S
 
 
 def test_ttl_covers_a_multi_day_schedule() -> None:

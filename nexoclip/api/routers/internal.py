@@ -47,17 +47,29 @@ _SCHEDULED_FETCH_MARGIN_S = 6 * 3600
 # about to be published to the world anyway.
 _SIGNED_CLIP_MAX_TTL_S = 35 * 24 * 3600
 
+# Floor TTL for an IMMEDIATE ("now") publish. The signed URL is baked
+# into the vendor (Zernio) post payload exactly once — it can't be
+# refreshed afterwards — and the vendor fetches the media server-side on
+# its own retry schedule. A 1h floor expired before a queued/rate-limited
+# fetch retried, so every retry 403'd forever and the post never shipped
+# (while the vendor's worker fleet hammered /api/internal/clip for days).
+# A 24h floor comfortably covers that retry tail. Same leak tradeoff as
+# the route ceiling above: the clip is about to be published anyway.
+_IMMEDIATE_PUBLISH_TTL_S = 24 * 3600
+
 
 def signed_clip_ttl_for_schedule(
     scheduled_for: str | _dt.datetime | None,
     *,
     now: int | None = None,
-    default_ttl_s: int = 3600,
+    default_ttl_s: int = _IMMEDIATE_PUBLISH_TTL_S,
 ) -> int:
     """Pick a signed-clip-URL TTL that is still valid when the post is
     actually downloaded.
 
-    For an immediate post the 1h default is ample. For a SCHEDULED post,
+    For an immediate post the 24h default floor covers the vendor's
+    server-side fetch + retry tail (see `_IMMEDIATE_PUBLISH_TTL_S`). For a
+    SCHEDULED post,
     size the TTL to cover the gap until `scheduled_for` plus a margin for
     the per-platform pipeline + clock skew, clamped to the route ceiling.
     Accepts an ISO string or a datetime (naive is treated as UTC); an

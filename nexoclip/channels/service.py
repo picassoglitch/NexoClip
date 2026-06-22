@@ -216,6 +216,7 @@ async def poll_channel_watches(
     ingest_callback: ChannelIngestCallback,
     list_vods: ChannelVODLister = list_channel_vods,
     tenant_id: str | None = None,
+    watch_id: str | None = None,
     respect_schedule: bool = False,
     now: _dt.datetime | None = None,
 ) -> list[ChannelPollReport]:
@@ -229,6 +230,10 @@ async def poll_channel_watches(
             in tests.
         tenant_id: When set, restricts to that tenant; otherwise polls
             every tenant.
+        watch_id: When set, restricts to that single watch (within the
+            tenant). Used by the dashboard's on-demand "scan now" button so
+            the operator can pull a channel immediately instead of waiting
+            for its cadence. Pair with `respect_schedule=False`.
         respect_schedule: When True (the background loop), skip watches
             whose `polls_per_day` cadence hasn't elapsed — no yt-dlp call.
             When False (manual `channel poll` / tests), poll regardless.
@@ -249,6 +254,8 @@ async def poll_channel_watches(
     for t in tenants:
         with bound_tenant(t.id):
             watches = await ChannelWatchesRepo(db).list_for_tenant()
+            if watch_id is not None:
+                watches = [w for w in watches if w.id == watch_id]
             for watch in watches:
                 if (
                     respect_schedule

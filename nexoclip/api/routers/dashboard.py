@@ -5149,6 +5149,49 @@ async def sources_schedule(
     return RedirectResponse(url="/dashboard/sources", status_code=303)
 
 
+@router.post("/sources/{watch_id}/poll", dependencies=[Depends(require_full_scope)])
+async def sources_poll_now(
+    request: Request,
+    watch_id: str,
+    background_tasks: BackgroundTasks,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Scan one watched channel for new VODs right now, ignoring its cadence.
+
+    The listing + per-VOD download can take minutes, so the poll runs as a
+    background task and the page redirects immediately with a 'scanning'
+    banner; new VODs appear on the streams page as they finish. Uses the
+    shared app DB + dispatcher (the request-scoped ones don't outlive the
+    response) and `poll_channel_watches`' own per-tenant binding, scoped to
+    this single watch via `watch_id` + `respect_schedule=False`.
+    """
+    from nexoclip.channels import make_channel_ingest_callback, poll_channel_watches
+    from nexoclip.settings import get_settings
+
+    if await ChannelWatchesRepo(db).get(watch_id) is None:
+        raise HTTPException(status_code=404, detail="channel watch not found")
+
+    app_db = request.app.state.db
+    dispatcher = request.app.state.job_dispatcher
+    output_dir = Path(get_settings().default_output_dir)
+    ingest_callback = make_channel_ingest_callback(
+        app_db, dispatcher, output_dir=output_dir
+    )
+
+    async def _run() -> None:
+        await poll_channel_watches(
+            app_db,
+            ingest_callback=ingest_callback,
+            tenant_id=tenant_id,
+            watch_id=watch_id,
+            respect_schedule=False,
+        )
+
+    background_tasks.add_task(_run)
+    return RedirectResponse(url="/dashboard/sources?scanning=1", status_code=303)
+
+
 @router.get("/brand-kits", response_class=HTMLResponse)
 async def brand_kits_list(
     request: Request,

@@ -23,6 +23,13 @@
     <span>Canal conectado — lo revisaremos según la frecuencia que elegiste.</span>
   </div>
 </div>
+{% elif request.query_params.get('scanning') %}
+<div class="nc-panel" role="status" style="border-color: rgba(72,187,120,0.35); margin-bottom: 14px;">
+  <div class="nc-panel__body" style="display:flex; align-items:center; gap:10px; color: var(--nc-green, #48bb78);">
+    <i class="ti ti-radar" aria-hidden="true"></i>
+    <span>Escaneando el canal ahora — los VODs nuevos aparecerán en Streams en cuanto terminen de procesarse.</span>
+  </div>
+</div>
 {% endif %}
 
 <div class="nc-panel">
@@ -144,6 +151,12 @@
           <td><span class="nc-mono">{{ w.seen_video_ids|length }}</span></td>
           <td><span class="nc-mono" style="font-size: 11px;"{% if w.last_polled_at %} data-localtime="{{ w.last_polled_at }}"{% endif %}>{{ w.last_polled_at[:19] if w.last_polled_at else 'nunca' }}</span></td>
           <td class="nc-cell-actions">
+            <form action="/dashboard/sources/{{ w.id }}/poll" method="post" style="display: inline; margin: 0;">
+              <button type="submit" class="nc-btn nc-btn--sm" title="Buscar VODs nuevos ahora, sin esperar a la próxima revisión">
+                <i class="ti ti-radar" aria-hidden="true"></i>
+                <span>Escanear ahora</span>
+              </button>
+            </form>
             <form action="/dashboard/sources/{{ w.id }}/toggle" method="post" style="display: inline; margin: 0;">
               <button type="submit" class="nc-btn nc-btn--sm">{{ "Pausar" if w.enabled else "Reanudar" }}</button>
             </form>

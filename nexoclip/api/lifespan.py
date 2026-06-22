@@ -59,6 +59,12 @@ _DEFAULT_RETENTION_INTERVAL_S = 86400.0
 # migrations + warm-up finish and not contend with startup I/O, short
 # enough that a deploy reclaims disk within minutes rather than a day.
 _DEFAULT_RETENTION_INITIAL_DELAY_S = 120.0
+# Pipeline-recovery cadence. The in-process dispatcher drops background
+# tasks on a restart, freezing URL ingests at `pending`; this loop
+# re-dispatches them. The FIRST pass runs shortly after boot so a deploy
+# that orphaned a job heals within a minute, not on the next interval.
+_DEFAULT_RECOVERY_INTERVAL_S = 600.0
+_DEFAULT_RECOVERY_INITIAL_DELAY_S = 45.0
 
 
 async def _webhook_loop(db: Database, interval_s: float) -> None:
@@ -162,6 +168,48 @@ async def _retention_loop(
             _log.warning("retention_loop_iteration_failed", error=str(e))
 
 
+async def _recovery_loop(
+    db: Database,
+    dispatcher: object,
+    output_dir: Path,
+    interval_s: float,
+    initial_delay_s: float = _DEFAULT_RECOVERY_INITIAL_DELAY_S,
+) -> None:
+    """Re-dispatch orphaned URL-ingest pipelines on a loop.
+
+    The in-process dispatcher loses its background task when the process
+    restarts (deploy, OOM, crash), leaving the URL-job stream frozen at
+    `status="pending"` with nothing to resume it. This loop finds those
+    dead-in-flight streams and re-runs them — `process_vod` is idempotent,
+    so a re-dispatch is safe and the intake self-heals across restarts.
+
+    Runs once after `initial_delay_s` (so a deploy that orphaned a job
+    heals promptly) then every `interval_s`. `recover_orphaned_pipelines`
+    logs + swallows per-tenant errors; `task_registry` keeps strong refs
+    to the in-flight recovery tasks so they aren't GC'd mid-run.
+    """
+    from nexoclip.jobs import JobDispatcher
+    from nexoclip.recovery import recover_orphaned_pipelines
+
+    assert isinstance(dispatcher, JobDispatcher)
+    task_registry: set[asyncio.Task[None]] = set()
+    first = True
+    while True:
+        try:
+            await asyncio.sleep(initial_delay_s if first else interval_s)
+            first = False
+            await recover_orphaned_pipelines(
+                db,
+                dispatcher=dispatcher,
+                output_dir=output_dir,
+                task_registry=task_registry,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _log.warning("recovery_loop_iteration_failed", error=str(e))
+
+
 @asynccontextmanager
 async def background_drains_lifespan(
     app: FastAPI,
@@ -171,6 +219,7 @@ async def background_drains_lifespan(
     metrics_interval_s: float = _DEFAULT_METRICS_INTERVAL_S,
     channel_poll_interval_s: float = _DEFAULT_CHANNEL_POLL_INTERVAL_S,
     retention_interval_s: float = _DEFAULT_RETENTION_INTERVAL_S,
+    recovery_interval_s: float = _DEFAULT_RECOVERY_INTERVAL_S,
 ) -> AsyncIterator[None]:
     """Start the background loops on boot; cancel + await on shutdown."""
     db: Database = app.state.db
@@ -183,6 +232,7 @@ async def background_drains_lifespan(
         metrics_interval_s=metrics_interval_s,
         channel_poll_interval_s=channel_poll_interval_s,
         retention_interval_s=retention_interval_s,
+        recovery_interval_s=recovery_interval_s,
     )
     from nexoclip.settings import get_settings
 
@@ -199,8 +249,9 @@ async def background_drains_lifespan(
             name="nexoclip-retention-loop",
         ),
     ]
-    # The channel-poll loop needs the pipeline dispatcher + output dir; only
-    # start it when the app wired a dispatcher (the dashboard app does).
+    # The channel-poll + recovery loops need the pipeline dispatcher + output
+    # dir; only start them when the app wired a dispatcher (the dashboard app
+    # does).
     dispatcher = getattr(app.state, "job_dispatcher", None)
     if dispatcher is not None:
         tasks.append(
@@ -209,6 +260,12 @@ async def background_drains_lifespan(
                     db, dispatcher, output_dir, channel_poll_interval_s
                 ),
                 name="nexoclip-channel-poll-loop",
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                _recovery_loop(db, dispatcher, output_dir, recovery_interval_s),
+                name="nexoclip-recovery-loop",
             )
         )
     try:

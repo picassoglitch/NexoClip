@@ -762,6 +762,39 @@ class StreamsRepo:
         )
         await conn.commit()
 
+    async def reconcile_metadata(
+        self,
+        stream_id: str,
+        *,
+        title: str | None,
+        channel: str | None,
+        duration_s: float,
+    ) -> None:
+        """Backfill real metadata onto a placeholder row after ingest.
+
+        `upsert` is INSERT-OR-IGNORE, so a row pre-inserted as a placeholder
+        (the URL-job flow at `dashboard.url_job_create` inserts
+        status='pending', duration 0, no title) is NEVER updated by the
+        pipeline's later upsert — it would display 'pending / 0s /
+        url-as-title' forever even after a fully successful run. This fills
+        the gaps WITHOUT clobbering values already set: title/channel only
+        when NULL, duration only when <= 0 (same guard as `set_duration`),
+        and status 'pending' -> 'ingested' (live / processing / done states
+        are left untouched). Safe to call on the non-placeholder paths too —
+        there it's a no-op since nothing is empty."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE streams SET "
+            "title = COALESCE(title, ?), "
+            "channel = COALESCE(channel, ?), "
+            "duration_s = CASE WHEN duration_s <= 0 THEN ? ELSE duration_s END, "
+            "status = CASE WHEN status = 'pending' THEN 'ingested' ELSE status END "
+            "WHERE id = ? AND tenant_id = ?",
+            (title, channel, float(duration_s or 0.0), stream_id, tenant_id),
+        )
+        await conn.commit()
+
     async def get(self, stream_id: str) -> StreamRow | None:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()

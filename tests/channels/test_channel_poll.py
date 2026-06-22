@@ -172,10 +172,12 @@ async def test_ingest_failure_keeps_video_unseen_for_retry(
     assert report.videos_ingested == 2  # a, c
     assert report.videos_failed == 1   # b
     assert refreshed is not None
-    # b stays unseen → retried next poll; a clean pass requirement keeps
-    # last_polled_at from advancing.
+    # b stays unseen → retried next poll. last_polled_at DOES advance now:
+    # the listing succeeded, so the poll ran; a single failed video must not
+    # freeze the watch as "nunca" / permanently due.
     assert "b" not in refreshed.seen_video_ids
     assert {"a", "c"} <= set(refreshed.seen_video_ids)
+    assert refreshed.last_polled_at != "2026-06-10T10:00:00+00:00"
 
 
 # ---- poll schedule (polls_per_day) ----

@@ -381,3 +381,59 @@ async def test_deleting_tenant_with_tokens_is_restricted(
     with pytest.raises(INTEGRITY_ERRORS):
         await conn.execute("DELETE FROM tenants WHERE id = 'ten_a'")
         await conn.commit()
+
+
+# ---------- StreamsRepo.reconcile_metadata (URL-job placeholder backfill) ----
+
+
+def _placeholder_stream_row(*, stream_id: str, tenant_id: str) -> StreamRow:
+    """Mimics the URL-job placeholder: pending, 0s, no title/channel."""
+    return StreamRow(
+        id=stream_id,
+        tenant_id=tenant_id,
+        vod_url="https://www.youtube.com/watch?v=abc",
+        platform="youtube",
+        title=None,
+        channel=None,
+        duration_s=0.0,
+        source_video_path=f"/out/{stream_id}/source/video.mp4",
+        source_audio_path=f"/out/{stream_id}/source/audio.wav",
+        status="pending",
+        created_at=_now(),
+    )
+
+
+async def test_reconcile_metadata_fills_placeholder(migrated_db: Database) -> None:
+    await _seed_two_tenants(migrated_db)
+    repo = StreamsRepo(migrated_db)
+    with bound_tenant("ten_a"):
+        await repo.upsert(_placeholder_stream_row(stream_id="str_1", tenant_id="ten_a"))
+        await repo.reconcile_metadata(
+            "str_1", title="Real Title", channel="real_channel", duration_s=1924.0
+        )
+        row = await repo.get("str_1")
+    assert row is not None
+    assert row.title == "Real Title"
+    assert row.channel == "real_channel"
+    assert row.duration_s == 1924.0
+    assert row.status == "ingested"  # pending -> ingested
+
+
+async def test_reconcile_metadata_does_not_clobber_real_values(
+    migrated_db: Database,
+) -> None:
+    await _seed_two_tenants(migrated_db)
+    repo = StreamsRepo(migrated_db)
+    with bound_tenant("ten_a"):
+        # A fully-populated, non-placeholder row (e.g. channel/live path).
+        await repo.upsert(_stream_row(stream_id="str_1", tenant_id="ten_a"))
+        await repo.reconcile_metadata(
+            "str_1", title="OTHER", channel="other", duration_s=99.0
+        )
+        row = await repo.get("str_1")
+    assert row is not None
+    # _stream_row sets title="t", channel="c", duration 600, status ingested.
+    assert row.title == "t"
+    assert row.channel == "c"
+    assert row.duration_s == 600.0
+    assert row.status == "ingested"

@@ -156,3 +156,85 @@ def test_ingest_falls_back_to_ffprobe_for_duration(
 
     assert stream.duration_s == pytest.approx(42.0)
     assert stream.platform == "twitch"
+
+
+# ---- Download-completeness guard (truncated recent-upload fetch) ----
+
+
+def test_assert_download_complete_raises_on_truncation() -> None:
+    from nexoclip.errors import IngestError
+
+    # 32-min video, ~8s actually downloaded — the still-processing-upload case.
+    with pytest.raises(IngestError, match="truncated"):
+        ingest_service._assert_download_complete(
+            vod_url="https://youtu.be/x", claimed_s=1924.0, actual_s=8.0
+        )
+
+
+def test_assert_download_complete_allows_near_full_download() -> None:
+    # Within 90% — minor container rounding, not a truncation.
+    ingest_service._assert_download_complete(
+        vod_url="https://youtu.be/x", claimed_s=1924.0, actual_s=1920.0
+    )
+
+
+def test_assert_download_complete_tolerates_small_absolute_shortfall() -> None:
+    # Short clip off by a couple seconds: ratio is low but the absolute
+    # gap is under tolerance, so it must NOT trip.
+    ingest_service._assert_download_complete(
+        vod_url="https://youtu.be/x", claimed_s=20.0, actual_s=15.0
+    )
+
+
+def test_assert_download_complete_noop_without_baseline() -> None:
+    # No claimed duration, or ffprobe unavailable -> nothing to compare.
+    ingest_service._assert_download_complete(
+        vod_url="https://youtu.be/x", claimed_s=0.0, actual_s=0.0
+    )
+    ingest_service._assert_download_complete(
+        vod_url="https://youtu.be/x", claimed_s=600.0, actual_s=0.0
+    )
+
+
+def test_ingest_fails_on_truncated_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.errors import IngestError
+
+    # Metadata claims 32 min; the file on disk ffprobes to 8s.
+    info = {"duration": 1924.0, "title": "fresh upload", "uploader": "u"}
+    _stub_download_writes_file(monkeypatch, info=info)
+    _stub_audio_extract(monkeypatch)
+    _stub_ffprobe(monkeypatch, duration_s=8.0)
+
+    with pytest.raises(IngestError, match="truncated"):
+        asyncio.run(
+            ingest_vod(
+                tenant_id="default",
+                vod_url="https://www.youtube.com/watch?v=abc",
+                output_dir=tmp_path,
+            )
+        )
+    # No stream.json written -> a re-run re-downloads instead of caching
+    # the partial fetch.
+    assert not list(tmp_path.glob("*/stream.json"))
+
+
+def test_ingest_uses_ffprobe_duration_over_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Metadata and the real file are both ~full but differ slightly; the
+    # on-disk ffprobe value wins now (authoritative), not the info dict.
+    info = {"duration": 600.0, "title": "t", "uploader": "u"}
+    _stub_download_writes_file(monkeypatch, info=info)
+    _stub_audio_extract(monkeypatch)
+    _stub_ffprobe(monkeypatch, duration_s=590.0)
+
+    stream = asyncio.run(
+        ingest_vod(
+            tenant_id="default",
+            vod_url="https://twitch.tv/videos/9",
+            output_dir=tmp_path,
+        )
+    )
+    assert stream.duration_s == pytest.approx(590.0)

@@ -17,12 +17,31 @@ FROM python:3.11-slim-bookworm
 #   ffmpeg          — cut + reformat clips, audio extraction
 #   build-essential — some Python deps compile native extensions
 #   ca-certificates — outbound HTTPS to Anthropic, Resend, AssemblyAI, etc.
+#   curl + unzip    — fetch + unpack the deno runtime (next layer)
 # Keep the layer minimal: rm apt lists after install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         build-essential \
         ca-certificates \
+        curl \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# JavaScript runtime for yt-dlp. Current yt-dlp needs a JS runtime to solve
+# YouTube's player challenge (nsig/signature); WITHOUT one it falls back to
+# the `android_vr` client, which YouTube gates behind "Sign in to confirm
+# you're not a bot" — so every YouTube ingest 403s even with valid cookies
+# (confirmed in prod: `[debug] JS runtimes: none` → `LOGIN_REQUIRED`). deno
+# is the runtime yt-dlp enables by DEFAULT, so just having it on PATH fixes
+# the extraction with no application-code change. Pinned via the `latest`
+# release asset for linux x86_64 (Railway's arch).
+RUN curl -fsSL \
+        https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+        -o /tmp/deno.zip \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && rm /tmp/deno.zip \
+    && chmod +x /usr/local/bin/deno \
+    && /usr/local/bin/deno --version
 
 WORKDIR /app
 

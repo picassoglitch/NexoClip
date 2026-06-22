@@ -590,6 +590,17 @@ async def _run_pipeline(
         )
         if db is not None:
             await StreamsRepo(db).upsert(stream_to_row(stream))
+            # upsert is INSERT-OR-IGNORE: if this stream was pre-inserted as
+            # a placeholder (URL-job flow → pending/0s/no-title), the upsert
+            # above is a no-op. Backfill the real title/channel/duration and
+            # flip pending→ingested so a successful run stops displaying as
+            # 'pending / 0s' forever.
+            await StreamsRepo(db).reconcile_metadata(
+                stream.id,
+                title=stream.title,
+                channel=stream.channel,
+                duration_s=stream.duration_s,
+            )
             await emit(
                 db,
                 STREAM_CREATED,

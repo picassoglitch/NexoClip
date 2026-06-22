@@ -2965,6 +2965,8 @@ _BRAND_KIT_COLS = (
     "target_platform, "
     # Slice O.1 — pro-tier "show nexoclip credit" toggle (migration 013).
     "show_nexoclip_credit, "
+    # Pro-tier "show nexoclip end-card outro" toggle (migration 050).
+    "show_nexoclip_outro, "
     # Publishing safe trap (migration 042).
     "safe_schedule_enabled, safety_policy_json, content_timezone, "
     "created_at, updated_at"
@@ -2985,6 +2987,8 @@ def _brand_kit_from_row(row: aiosqlite.Row) -> BrandKitRow:
     d["top_hook_enabled_default"] = bool(d.get("top_hook_enabled_default", 0))
     # Slice O.1 — pro-tier credit toggle (migration 013).
     d["show_nexoclip_credit"] = bool(d.get("show_nexoclip_credit", 1))
+    # Pro-tier end-card outro toggle (migration 050).
+    d["show_nexoclip_outro"] = bool(d.get("show_nexoclip_outro", 1))
     # Safe trap (migration 042).
     d["safe_schedule_enabled"] = bool(d.get("safe_schedule_enabled", 0))
     raw_safety = d.pop("safety_policy_json", None)
@@ -3049,6 +3053,7 @@ class BrandKitsRepo:
         safe_schedule_enabled: bool = False,
         safety_policy: dict[str, object] | None = None,
         content_timezone: str = "UTC",
+        show_nexoclip_outro: bool = True,
     ) -> BrandKitRow:
         tenant_id = current_tenant_id()
         kit_id = new_id("brk")
@@ -3060,13 +3065,14 @@ class BrandKitsRepo:
                 "WHERE tenant_id = ? AND is_default = 1",
                 (now, tenant_id),
             )
-        # _BRAND_KIT_COLS lists 43 columns (40 + 3 safe-trap cols from
-        # migration 042) — keep the placeholder count in lockstep or
-        # sqlite raises "incorrect number of bindings".
+        # _BRAND_KIT_COLS lists 44 columns (40 + 3 safe-trap cols from
+        # migration 042 + show_nexoclip_outro from migration 050) — keep
+        # the placeholder count in lockstep or sqlite raises "incorrect
+        # number of bindings".
         await conn.execute(
             f"INSERT INTO brand_kits ({_BRAND_KIT_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 kit_id, tenant_id, name, 1 if is_default else 0,
                 primary_color, accent_color, text_color, font_family, font_weight,
@@ -3102,6 +3108,9 @@ class BrandKitsRepo:
                 None,    # target_platform
                 # Slice O.1 — show_nexoclip_credit defaults ON.
                 1,
+                # End-card outro toggle (migration 050) — defaults ON;
+                # the create() caller can override for paid tenants.
+                1 if show_nexoclip_outro else 0,
                 # Safe trap (migration 042) — advisory by default.
                 1 if safe_schedule_enabled else 0,
                 json.dumps(safety_policy) if safety_policy else None,
@@ -3210,6 +3219,8 @@ class BrandKitsRepo:
         safe_schedule_enabled: bool | None = None,
         safety_policy: dict[str, object] | None = None,
         content_timezone: str | None = None,
+        # End-card outro toggle (migration 050).
+        show_nexoclip_outro: bool | None = None,
     ) -> BrandKitRow:
         """Partial update - only non-None args are applied."""
         existing = await self.get(kit_id)
@@ -3317,6 +3328,9 @@ class BrandKitsRepo:
         if content_timezone is not None:
             sets.append("content_timezone = ?")
             values.append(content_timezone)
+        if show_nexoclip_outro is not None:
+            sets.append("show_nexoclip_outro = ?")
+            values.append(1 if show_nexoclip_outro else 0)
         if not sets:
             return existing
         sets.append("updated_at = ?")

@@ -16,6 +16,7 @@ import pytest
 
 from nexoclip.branding import (
     merged_trigger_phrases_for_speaker,
+    outro_enabled_for_clip,
     resolve_brand_kit_for_candidate,
     resolve_brand_kit_for_speaker,
 )
@@ -75,6 +76,66 @@ async def test_create_get_roundtrip(migrated_db: Database) -> None:
     assert fetched.custom_trigger_phrases.forward == ["córtalo"]
     assert fetched.custom_trigger_phrases.retroactive == ["monchi eso"]
     assert fetched.is_default is False
+
+
+async def _set_tier(db: Database, tenant_id: str, tier: str) -> None:
+    conn = await db.connect()
+    await conn.execute(
+        "UPDATE tenants SET tier = ? WHERE id = ?", (tier, tenant_id)
+    )
+    await conn.commit()
+
+
+# ---- end-card outro tier gating (migration 050) ----
+
+
+async def test_outro_free_tier_always_on(migrated_db: Database) -> None:
+    """Free tier always gets the end card — even if a kit somehow has
+    the toggle off, the resolver forces it on."""
+    tenant_id = await _seed_tenant(migrated_db)
+    with bound_tenant(tenant_id):
+        await BrandKitsRepo(migrated_db).create(
+            name="K", primary_color="#fff", accent_color="#000",
+            is_default=True, show_nexoclip_outro=False,
+        )
+    assert await outro_enabled_for_clip(
+        migrated_db, tenant_id=tenant_id, stream_id="str_x"
+    ) is True
+
+
+async def test_outro_paid_tier_respects_toggle_off(migrated_db: Database) -> None:
+    tenant_id = await _seed_tenant(migrated_db)
+    await _set_tier(migrated_db, tenant_id, "pro")
+    with bound_tenant(tenant_id):
+        await BrandKitsRepo(migrated_db).create(
+            name="K", primary_color="#fff", accent_color="#000",
+            is_default=True, show_nexoclip_outro=False,
+        )
+    assert await outro_enabled_for_clip(
+        migrated_db, tenant_id=tenant_id, stream_id="str_x"
+    ) is False
+
+
+async def test_outro_paid_tier_default_on(migrated_db: Database) -> None:
+    tenant_id = await _seed_tenant(migrated_db)
+    await _set_tier(migrated_db, tenant_id, "pro")
+    with bound_tenant(tenant_id):
+        await BrandKitsRepo(migrated_db).create(
+            name="K", primary_color="#fff", accent_color="#000",
+            is_default=True,
+        )
+    assert await outro_enabled_for_clip(
+        migrated_db, tenant_id=tenant_id, stream_id="str_x"
+    ) is True
+
+
+async def test_outro_paid_tier_no_kit_defaults_on(migrated_db: Database) -> None:
+    """No default kit → nothing to read a toggle from → keep the card."""
+    tenant_id = await _seed_tenant(migrated_db)
+    await _set_tier(migrated_db, tenant_id, "pro")
+    assert await outro_enabled_for_clip(
+        migrated_db, tenant_id=tenant_id, stream_id="str_x"
+    ) is True
 
 
 async def test_set_default_demotes_previous(migrated_db: Database) -> None:

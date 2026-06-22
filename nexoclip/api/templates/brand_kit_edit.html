@@ -251,6 +251,42 @@
     </div>
   </div>
 
+  {#- NexoClip end-card outro toggle (migration 050).
+
+      A short bundled nexoclip end card is appended to every exported
+      clip. Free tenants always get it (hidden value=1 + info chip);
+      paid tenants can switch it off via `show_nexoclip_outro`. The
+      server forces it ON for free tier regardless of what's posted. -#}
+  <div class="nc-panel">
+    <div class="nc-panel__header">
+      <i class="ti ti-movie" aria-hidden="true" style="color: var(--nc-lime, #c8ff5c);"></i>
+      <span class="nc-panel__title">Cierre NexoClip</span>
+      <small>— una breve placa final de NexoClip al terminar cada clip</small>
+    </div>
+    <div class="nc-panel__body">
+      {% if _tier == 'free' %}
+      <div class="nc-empty" style="margin: 0; padding: 12px 14px; text-align: left;">
+        <strong style="color: var(--nc-lime, #c8ff5c);">Plan gratis</strong>
+        <span style="color: var(--nc-text-muted);">
+          — la placa final de NexoClip se añade a todos tus clips.
+          Pásate a un plan Pro para quitarla.
+        </span>
+      </div>
+      <input type="hidden" name="show_nexoclip_outro" value="1">
+      {% else %}
+      <label class="nc-checkbox">
+        <input type="checkbox" name="show_nexoclip_outro" value="1"
+               {% if not kit or kit.show_nexoclip_outro %}checked{% endif %}>
+        <span>Añadir la placa final de NexoClip a tus clips
+          <small style="display:block;color:var(--nc-text-muted);">
+            Activado por defecto. Apágalo para terminar el clip sin cierre de marca.
+          </small>
+        </span>
+      </label>
+      {% endif %}
+    </div>
+  </div>
+
   <div class="nc-row" style="margin-top: 12px;">
     <button type="submit" class="nc-btn nc-btn--primary">
       <i class="ti ti-device-floppy" aria-hidden="true"></i>

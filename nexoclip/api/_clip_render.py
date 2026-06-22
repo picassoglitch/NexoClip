@@ -254,6 +254,24 @@ async def render_clip_in_background(
                 clip_id, str(e)[:300],
             )
 
+        # Resolve the end-card outro decision ONCE and pass it to
+        # whichever recorder runs. Free tier always gets it; paid tiers
+        # respect their brand kit's show_nexoclip_outro toggle. Failure
+        # defaults to ON (free-like) so a lookup hiccup never silently
+        # strips the credit.
+        append_outro_enabled = True
+        try:
+            from nexoclip.branding import outro_enabled_for_clip
+            with bound_tenant(tenant_id):
+                _clip = await ClipsRepo(db).get(clip_id)
+            append_outro_enabled = await outro_enabled_for_clip(
+                db,
+                tenant_id=tenant_id,
+                stream_id=(_clip.stream_id if _clip else ""),
+            )
+        except Exception:  # noqa: BLE001 — best-effort; default to on
+            append_outro_enabled = True
+
         hybrid_failed_with: str | None = None
         try:
             # Process-wide governor — a headless-Chromium render plus its
@@ -273,6 +291,7 @@ async def render_clip_in_background(
                     height=height,
                     progress_callback=_on_progress,
                     ass_file_path=ass_file_path,
+                    append_outro_enabled=append_outro_enabled,
                 )
         except HybridRecordingError as e:
             hybrid_failed_with = str(e)
@@ -331,6 +350,7 @@ async def render_clip_in_background(
                         width=width,
                         height=height,
                         progress_callback=_on_progress,
+                        append_outro_enabled=append_outro_enabled,
                     )
         except PreviewRecordingError as e:
             # Render Migration R2 — wipe any partial bytes the recorder

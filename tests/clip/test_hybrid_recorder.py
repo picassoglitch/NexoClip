@@ -189,6 +189,11 @@ def test_composite_command_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         output_path=out,
         fps=30,
         duration_s=35.9,
+        # This test asserts the composite command shape only; the
+        # separate end-card outro step (which would issue its own
+        # ffprobe/ffmpeg calls through the globally-patched subprocess)
+        # is covered by tests/clip/test_outro.py.
+        append_outro_enabled=False,
     )
 
     cmd = captured["cmd"]

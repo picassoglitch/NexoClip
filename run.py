@@ -70,6 +70,101 @@ def _load_dotenv() -> None:
         )
 
 
+def _looks_like_cookie_content(value: str) -> bool:
+    """True if `value` is a cookies.txt BODY rather than a filesystem path.
+
+    A real path is a single line with no tabs; an exported cookies.txt is
+    multi-line, tab-delimited, and usually starts with a `# Netscape` header.
+    """
+    return (
+        "\n" in value
+        or "\t" in value
+        or value.lstrip().startswith("# Netscape")
+    )
+
+
+def _materialize_cookies_file() -> None:
+    """Write inline yt-dlp cookies (NEXOCLIP_COOKIES_TXT) to a file and point
+    NEXOCLIP_COOKIES_FILE at it.
+
+    On a datacenter IP (Railway/Fly/etc.) YouTube blocks anonymous yt-dlp with
+    "Sign in to confirm you're not a bot. Use --cookies-from-browser or
+    --cookies." `cookies_from_browser` is useless on a headless host (no
+    browser profile), and dropping a cookies.txt *file* onto a PaaS is awkward.
+    So we let the operator paste their exported Netscape cookies.txt straight
+    into a secret env var:
+
+        NEXOCLIP_COOKIES_TXT       — the cookies.txt content
+        NEXOCLIP_COOKIES_TXT_B64=1 — optional: the value is base64 (avoids
+                                     newline/quoting mangling in the env var)
+
+    At boot we materialize it to a real file and set NEXOCLIP_COOKIES_FILE,
+    which `Settings.cookies_file` reads — so every ingest path (channel poll,
+    URL job, manual upload) picks it up via `ingest_vod`'s settings fallback,
+    no per-call wiring needed.
+
+    Forgiving by design: people routinely paste the cookies.txt *body* into
+    NEXOCLIP_COOKIES_FILE (the "file" var) by mistake — yt-dlp then tries to
+    open a filename that is the entire cookie text and dies with a confusing
+    FileNotFoundError (and leaks the cookies into the error log). So we accept
+    the content in EITHER var and normalize it to a real file; only a genuine
+    path in NEXOCLIP_COOKIES_FILE (no newlines/tabs) is left untouched.
+    """
+    raw = os.environ.get("NEXOCLIP_COOKIES_TXT")
+    existing_file = os.environ.get("NEXOCLIP_COOKIES_FILE")
+
+    if raw:
+        content = raw
+        b64 = os.environ.get("NEXOCLIP_COOKIES_TXT_B64", "").strip().lower()
+        if b64 in ("1", "true", "yes"):
+            import base64
+
+            try:
+                content = base64.b64decode(raw).decode("utf-8")
+            except (ValueError, UnicodeDecodeError) as e:
+                print(f"[cookies] NEXOCLIP_COOKIES_TXT_B64 set but decode failed: {e}")
+                return
+    elif existing_file and _looks_like_cookie_content(existing_file):
+        # The cookies.txt body was pasted into NEXOCLIP_COOKIES_FILE — treat
+        # it as content, not a path, and rewrite the var to a real file below.
+        print(
+            "[cookies] NEXOCLIP_COOKIES_FILE looks like cookie CONTENT, not a "
+            "path — normalizing it to a real file."
+        )
+        content = existing_file
+    else:
+        # NEXOCLIP_COOKIES_FILE is a genuine path (or nothing is set) — leave
+        # it for Settings.cookies_file to read as-is.
+        return
+
+    # Basic sanity: a Netscape cookies.txt is tab-delimited with a header line.
+    # Don't hard-fail on a malformed file (yt-dlp will surface its own error),
+    # but warn so a pasted-wrong value is obvious in the boot log.
+    if "youtube.com" not in content and "google.com" not in content:
+        print(
+            "[cookies] cookie value has no youtube.com/google.com lines "
+            "— is this a real exported cookies.txt? Writing it anyway."
+        )
+
+    import contextlib
+    import tempfile
+
+    cookies_path = Path(tempfile.gettempdir()) / "nexoclip-youtube-cookies.txt"
+    try:
+        cookies_path.write_text(content, encoding="utf-8")
+    except OSError as e:
+        print(f"[cookies] could not write cookies file: {e}")
+        return
+    # cookies are credentials — don't leave them world-readable.
+    with contextlib.suppress(OSError):
+        os.chmod(cookies_path, 0o600)
+    os.environ["NEXOCLIP_COOKIES_FILE"] = str(cookies_path.resolve())
+    print(
+        f"[cookies] yt-dlp cookies materialized to {cookies_path} "
+        f"({len(content)} bytes) — YouTube ingest will authenticate with them."
+    )
+
+
 def _ensure_ffmpeg_on_path() -> None:
     """Best-effort: if ffmpeg isn't on PATH but winget installed it under
     %LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg*, prepend that
@@ -503,6 +598,7 @@ async def _boot() -> None:
 def main() -> None:
     _resolve_python_check()
     _load_dotenv()
+    _materialize_cookies_file()
     _ensure_ffmpeg_on_path()
     _ensure_system_cuda_on_path()
     _ensure_cuda_libs_on_path()

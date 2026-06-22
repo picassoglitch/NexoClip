@@ -69,6 +69,8 @@ models/
 
 # VODs / clips (any video files we accidentally commit)
 *.mp4
+# ...except bundled brand assets that ship with the app (the end-card outro).
+!nexoclip/clip/assets/outro.mp4
 *.mov
 *.mkv
 *.webm

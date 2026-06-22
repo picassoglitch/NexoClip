@@ -3320,6 +3320,20 @@ async def _burn_overlays_for_clip(
         # ffmpeg essays.
         reason = str(e)[:80].replace("\n", " ")
         return f"failed:{reason}"
+
+    # Append the nexoclip end card to the burned fallback artifact so
+    # the legacy-burn path matches the recorder path (which appends its
+    # own outro before publishing). Free tier always; paid tiers respect
+    # the brand-kit toggle. Best-effort — append_outro never raises and
+    # leaves clip_final.mp4 untouched on failure.
+    if burned:
+        from nexoclip.branding import outro_enabled_for_clip
+        from nexoclip.clip.outro import append_outro
+
+        if await outro_enabled_for_clip(
+            db, tenant_id=clip.tenant_id, stream_id=clip.stream_id
+        ):
+            await asyncio.to_thread(append_outro, target_path)
     return "burned" if burned else "skipped_no_overlays"
 
 
@@ -4130,6 +4144,11 @@ async def clip_download_legacy_inline(
             host = request.headers.get("host") or request.url.netloc
             base_url = f"{scheme}://{host}"
 
+        from nexoclip.branding import outro_enabled_for_clip
+        append_outro_enabled = await outro_enabled_for_clip(
+            db, tenant_id=clip.tenant_id, stream_id=clip.stream_id
+        )
+
         try:
             await record_clip_to_mp4(
                 clip_id=clip_id,
@@ -4140,6 +4159,7 @@ async def clip_download_legacy_inline(
                 auth_cookie_value=cookie_val or None,
                 width=target_w,
                 height=target_h,
+                append_outro_enabled=append_outro_enabled,
             )
         except PreviewRecordingError as e:
             # Slice O.31 — surface the recorder's error LOUDLY now so we
@@ -5245,6 +5265,7 @@ async def brand_kits_create(
     auto_publish_delay_min: int = Form(60),
     forward_phrases: str = Form(""),
     retroactive_phrases: str = Form(""),
+    show_nexoclip_outro: str = Form("1"),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
@@ -5254,6 +5275,7 @@ async def brand_kits_create(
 
     caption_style = _preset_by_id(caption_preset).model_dump()
     kit = await BrandKitsRepo(db).create(
+        show_nexoclip_outro=bool(show_nexoclip_outro),
         name=name,
         primary_color=primary_color,
         accent_color=accent_color,
@@ -5331,6 +5353,7 @@ async def brand_kits_edit_submit(
     safe_schedule_enabled: str = Form(""),
     content_timezone: str = Form("UTC"),
     safety_preset: str = Form("recommended"),
+    show_nexoclip_outro: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
@@ -5371,6 +5394,7 @@ async def brand_kits_edit_submit(
         safe_schedule_enabled=bool(safe_schedule_enabled),
         content_timezone=content_timezone or "UTC",
         safety_policy=safety_policy,
+        show_nexoclip_outro=bool(show_nexoclip_outro),
     )
     return RedirectResponse(url=f"/dashboard/brand-kits/{kit_id}", status_code=303)
 

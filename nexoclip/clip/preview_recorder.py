@@ -116,6 +116,7 @@ async def record_clip_to_mp4(
     height: int = DEFAULT_HEIGHT,
     fps: int = DEFAULT_FPS,
     progress_callback: "object | None" = None,
+    append_outro_enabled: bool = True,
 ) -> Path:
     """Record the render page for `clip_id` to an MP4 at `output_path`.
 
@@ -264,6 +265,7 @@ async def record_clip_to_mp4(
                 fps=fps,
                 duration_s=canonical_duration,
                 progress_callback=progress_callback,
+                append_outro_enabled=append_outro_enabled,
             )
             capture_ended = _dt.datetime.now(_dt.UTC)
             await page.close()
@@ -382,6 +384,7 @@ async def _record_via_seek_and_shoot(
     fps: int,
     duration_s: float,
     progress_callback: "object | None" = None,
+    append_outro_enabled: bool = True,
 ) -> None:
     """Deterministic frame-by-frame export.
 
@@ -490,6 +493,7 @@ async def _record_via_seek_and_shoot(
             output_path=output_path,
             duration_s=duration_s,
             fps=fps,
+            append_outro_enabled=append_outro_enabled,
         )
 
 
@@ -500,6 +504,7 @@ async def _encode_image_sequence(
     output_path: Path,
     duration_s: float,
     fps: int,
+    append_outro_enabled: bool = True,
 ) -> None:
     """Encode <frames_dir>/frame_NNNNNNNN.jpg into the final MP4.
 
@@ -589,6 +594,16 @@ async def _encode_image_sequence(
             raise PreviewRecordingError(
                 "ffmpeg returned 0 but no output file was written"
             )
+
+        # Append the nexoclip end card before publishing, when the
+        # caller (who resolved the tenant's tier + brand-kit toggle)
+        # asked for it. Best-effort: append_outro never raises and
+        # leaves `partial_path` untouched on failure, so a render still
+        # ships even if the outro can't.
+        if append_outro_enabled:
+            from .outro import append_outro
+
+            append_outro(partial_path)
 
         # Atomic publish — sibling paths, single FS, race-free swap.
         os.replace(partial_path, output_path)

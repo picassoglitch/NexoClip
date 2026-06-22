@@ -226,9 +226,20 @@ async def ingest_vod(
             },
         )
 
-    duration_s = float(info.get("duration") or 0.0)
-    if duration_s <= 0.0:
-        duration_s = await asyncio.to_thread(_ffprobe_duration, video_path)
+    # Duration: ffprobe the file we ACTUALLY downloaded — don't trust
+    # yt-dlp's metadata. A freshly-uploaded YouTube video is often still
+    # being processed server-side: yt-dlp can pull a truncated progressive
+    # stream (format 18) while the info dict still advertises the FULL
+    # length. Trusting the metadata there sizes the whole pipeline for a
+    # 32-min video that's a few seconds on disk, and detection silently
+    # emits one throwaway clip from the start. ffprobe of the on-disk file
+    # is authoritative; metadata is only the fallback when ffprobe can't read.
+    claimed_s = float(info.get("duration") or 0.0)
+    actual_s = await asyncio.to_thread(_ffprobe_duration, video_path)
+    _assert_download_complete(
+        vod_url=vod_url, claimed_s=claimed_s, actual_s=actual_s
+    )
+    duration_s = actual_s if actual_s > 0.0 else claimed_s
 
     chat_path: Path | None = None
     if chat_replay_source is not None:
@@ -623,6 +634,44 @@ def _extract_audio(video_path: Path, audio_path: Path) -> None:
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", "replace") if e.stderr else ""
         raise IngestError(f"ffmpeg audio extraction failed: {stderr}") from e
+
+
+# A download is "complete enough" when the file on disk is within this
+# fraction of the length the platform advertised. Below it, the fetch was
+# truncated (still-processing upload, aborted segment stream) and we fail
+# loudly rather than silently clipping the first few seconds.
+_MIN_DOWNLOAD_COMPLETENESS = 0.9
+# Absolute floor so a short clip legitimately off by a second or two
+# (container rounding, trailing-ad trim) doesn't trip the ratio check.
+_DOWNLOAD_SHORTFALL_TOLERANCE_S = 30.0
+
+
+def _assert_download_complete(
+    *, vod_url: str, claimed_s: float, actual_s: float
+) -> None:
+    """Guard against a truncated download.
+
+    Compares the advertised duration (yt-dlp metadata) against what we
+    actually got on disk (ffprobe). When the file is materially shorter
+    than claimed, the source wasn't fully available — almost always a
+    YouTube upload still being processed — so we raise instead of letting
+    the pipeline run on a fragment and emit a degenerate clip.
+
+    No-ops when either side is unknown (nothing claimed, or ffprobe
+    unavailable) — there's no baseline to compare against.
+    """
+    if claimed_s <= 0.0 or actual_s <= 0.0:
+        return
+    if actual_s >= claimed_s * _MIN_DOWNLOAD_COMPLETENESS:
+        return
+    if claimed_s - actual_s <= _DOWNLOAD_SHORTFALL_TOLERANCE_S:
+        return
+    raise IngestError(
+        f"download truncated: got {actual_s:.0f}s of a video the platform "
+        f"reports as {claimed_s:.0f}s ({vod_url}). The video is likely still "
+        "being processed after a recent upload — wait a few minutes and "
+        "re-run. (Re-downloading replaces the partial file automatically.)"
+    )
 
 
 def _ffprobe_duration(video_path: Path) -> float:

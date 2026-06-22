@@ -557,6 +557,77 @@ async def test_reprocess_failed_reschedules_via_drip(
 
 
 @pytest.mark.asyncio
+async def test_reprocess_drops_disconnected_platform(
+    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+) -> None:
+    """A tiktok+youtube failure, with only youtube reconnected, re-schedules
+    to youtube ONLY — the gone platform is dropped, not re-targeted (which
+    would just fail again)."""
+    await ZernioPublishesRepo(db).record(
+        post_id="post_mix", tenant_id=alice["id"], clip_id="clp_1",
+        platforms=["tiktok", "youtube"], content="Cuerpo", status="failed",
+    )
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="youtube",
+        post_mode="queue", daily_cap=10, content_strategy="unique",
+    )
+    created: list[dict[str, Any]] = []
+
+    def _create(request: httpx.Request) -> httpx.Response:
+        created.append(json.loads(request.content.decode()))
+        return httpx.Response(201, json={"success": True, "post": {"_id": "new_1"}})
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "youtube")  # tiktok no longer connected
+        mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
+        mock.delete(url__regex=rf"{_ZBASE}/posts/.+").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        resp = await client.post(
+            "/dashboard/publish/zernio/reprocess-failed", headers=auth(alice["token"]),
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reprocessed"] == 1
+    result = body["results"][0]
+    assert result["ok"] is True
+    assert result["platforms"] == ["youtube"]
+    assert result["dropped"] == ["tiktok"]
+    # The new post went out targeting youtube only — no tiktok account in it.
+    assert len(created) == 1
+    platforms_sent = {
+        e["platform"].lower() for e in created[0]["platforms"]
+    }
+    assert platforms_sent == {"youtube"}
+
+
+@pytest.mark.asyncio
+async def test_reprocess_skips_when_no_platform_connected(
+    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+) -> None:
+    """When none of a failed post's platforms are still connected, the clip
+    is skipped with a clear reason rather than crashing the batch."""
+    await ZernioPublishesRepo(db).record(
+        post_id="post_gone", tenant_id=alice["id"], clip_id="clp_2",
+        platforms=["tiktok"], content="Cuerpo", status="failed",
+    )
+
+    with respx.mock() as mock:
+        _mock_accounts(mock, "youtube")  # only youtube; the failure was tiktok
+        resp = await client.post(
+            "/dashboard/publish/zernio/reprocess-failed", headers=auth(alice["token"]),
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reprocessed"] == 0
+    result = body["results"][0]
+    assert result["ok"] is False
+    assert "conectada" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_reprocess_one_unknown_post_404s(
     publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
 ) -> None:

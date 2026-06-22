@@ -3498,7 +3498,7 @@ class DriveWatchesRepo:
 _CHANNEL_WATCH_COLS = (
     "id, tenant_id, platform, channel_url, channel_label, persona_id, "
     "language, last_polled_at, seen_video_ids_json, max_per_poll, enabled, "
-    "created_at, updated_at, polls_per_day"
+    "created_at, updated_at, polls_per_day, failed_video_attempts_json"
 )
 
 
@@ -3506,6 +3506,8 @@ def _channel_watch_from_row(row: aiosqlite.Row) -> ChannelWatchRow:
     d = dict(row)
     seen_blob = d.pop("seen_video_ids_json")
     d["seen_video_ids"] = json.loads(seen_blob) if seen_blob else []
+    failed_blob = d.pop("failed_video_attempts_json", None)
+    d["failed_video_attempts"] = json.loads(failed_blob) if failed_blob else {}
     d["enabled"] = bool(d["enabled"])
     return ChannelWatchRow.model_validate(d)
 
@@ -3535,7 +3537,7 @@ class ChannelWatchesRepo:
         conn = await self._db.connect()
         await conn.execute(
             f"INSERT INTO channel_watches ({_CHANNEL_WATCH_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?, 1, ?, ?, ?, '{}')",
             (
                 watch_id,
                 tenant_id,
@@ -3601,16 +3603,21 @@ class ChannelWatchesRepo:
         *,
         seen_video_ids: list[str],
         last_polled_at: str | None,
+        failed_video_attempts: dict[str, int] | None = None,
     ) -> None:
-        """Persist progress after a poll pass (seen-set + last_polled_at)."""
+        """Persist progress after a poll pass (seen-set + per-video failure
+        counts + last_polled_at). Omitting `failed_video_attempts` clears the
+        retry map — only the poller passes it, and it always passes the full
+        recomputed map."""
         tenant_id = current_tenant_id()
         conn = await self._db.connect()
         await conn.execute(
             "UPDATE channel_watches SET seen_video_ids_json = ?, "
-            "last_polled_at = ?, updated_at = ? "
+            "failed_video_attempts_json = ?, last_polled_at = ?, updated_at = ? "
             "WHERE id = ? AND tenant_id = ?",
             (
                 json.dumps(seen_video_ids),
+                json.dumps(failed_video_attempts or {}),
                 last_polled_at,
                 _now(),
                 watch_id,

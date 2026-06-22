@@ -180,6 +180,96 @@ async def test_ingest_failure_keeps_video_unseen_for_retry(
     assert refreshed.last_polled_at != "2026-06-10T10:00:00+00:00"
 
 
+@pytest.mark.asyncio
+async def test_failed_video_is_parked_after_retry_ceiling(
+    db: Database, watch_tenant: str
+) -> None:
+    """A permanently-unavailable video (yt-dlp 'This video is not available')
+    is retried a few times then PARKED into the seen-set, so it stops failing
+    on every poll. Mirrors the real k0fGua3TA8s loop."""
+    from nexoclip.channels.service import _MAX_INGEST_ATTEMPTS
+
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me",
+            persona_id="per_1", max_per_poll=3,
+        )
+        # Steady state: a good video `a` already seen, a dead video `b` keeps
+        # failing. Each poll lists both; `a` is deduped, `b` is retried.
+        await repo.mark_polled(
+            watch.id, seen_video_ids=["a"],
+            last_polled_at="2026-06-10T10:00:00+00:00",
+        )
+        rec = _Recorder(fail_ids={"b"})
+
+        # Poll up to (ceiling - 1) times: `b` stays unseen, count climbs.
+        for attempt in range(1, _MAX_INGEST_ATTEMPTS):
+            watch = await repo.get(watch.id)
+            assert watch is not None
+            await _poll_one_watch(
+                db=db, watch=watch, ingest_callback=rec,
+                list_vods=_lister(_vods("b", "a")),
+            )
+            refreshed = await repo.get(watch.id)
+            assert refreshed is not None
+            assert "b" not in refreshed.seen_video_ids
+            assert refreshed.failed_video_attempts == {"b": attempt}
+
+        # The ceiling-th failure parks `b`: into seen, out of the retry map.
+        watch = await repo.get(watch.id)
+        assert watch is not None
+        report = await _poll_one_watch(
+            db=db, watch=watch, ingest_callback=rec,
+            list_vods=_lister(_vods("b", "a")),
+        )
+        refreshed = await repo.get(watch.id)
+    assert report.videos_failed == 1
+    assert refreshed is not None
+    assert "b" in refreshed.seen_video_ids       # parked
+    assert "b" not in refreshed.failed_video_attempts  # retry map cleared
+
+
+@pytest.mark.asyncio
+async def test_successful_retry_clears_failure_count(
+    db: Database, watch_tenant: str
+) -> None:
+    """A video that fails once then succeeds is ingested and its failure
+    count is cleared — a transient error must not count against it forever."""
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        watch = await repo.create(
+            platform="youtube", channel_url="https://yt/@me",
+            persona_id="per_1", max_per_poll=3,
+        )
+        await repo.mark_polled(
+            watch.id, seen_video_ids=[],
+            last_polled_at="2026-06-10T10:00:00+00:00",
+        )
+
+        # Poll 1: `b` fails → count {b: 1}, unseen.
+        watch = await repo.get(watch.id)
+        assert watch is not None
+        rec = _Recorder(fail_ids={"b"})
+        await _poll_one_watch(
+            db=db, watch=watch, ingest_callback=rec, list_vods=_lister(_vods("b")),
+        )
+        mid = await repo.get(watch.id)
+        assert mid is not None
+        assert mid.failed_video_attempts == {"b": 1}
+
+        # Poll 2: ingest now succeeds → `b` seen, count cleared.
+        rec_ok = _Recorder()
+        await _poll_one_watch(
+            db=db, watch=mid, ingest_callback=rec_ok, list_vods=_lister(_vods("b")),
+        )
+        refreshed = await repo.get(watch.id)
+    assert rec_ok.ingested == ["b"]
+    assert refreshed is not None
+    assert "b" in refreshed.seen_video_ids
+    assert refreshed.failed_video_attempts == {}
+
+
 # ---- poll schedule (polls_per_day) ----
 
 

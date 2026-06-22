@@ -715,6 +715,11 @@ class ChannelWatchRow(BaseModel):
     language: str | None = None
     last_polled_at: str | None = None
     seen_video_ids: list[str] = Field(default_factory=list)
+    # Per-video ingest failure counts: {video_id: attempts}. A video that
+    # keeps failing (e.g. yt-dlp "This video is not available") is retried up
+    # to a ceiling then parked into `seen_video_ids` so it stops failing every
+    # poll. A successful ingest clears its entry.
+    failed_video_attempts: dict[str, int] = Field(default_factory=dict)
     max_per_poll: int = 3
     enabled: bool = True
     # How many times a day to poll this channel. The loop only runs the

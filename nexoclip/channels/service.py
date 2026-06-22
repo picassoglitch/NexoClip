@@ -44,6 +44,14 @@ _DEFAULT_LIST_WINDOW = 10
 # before the full 24h rather than always just after).
 _DUE_SLACK = _dt.timedelta(minutes=5)
 
+# How many polls a failing video is retried before it's parked. A transient
+# error (YouTube bot-check, a flaky network, a not-yet-published premiere)
+# usually clears within a poll or two; a genuinely-unavailable video (private
+# / deleted / region-locked — yt-dlp "This video is not available") never
+# will. After this many failures we add it to the seen-set and stop retrying
+# it, so it doesn't fail on every single poll forever.
+_MAX_INGEST_ATTEMPTS = 3
+
 
 ChannelIngestCallback = Callable[[str, str, str, str, str | None], Awaitable[None]]
 """(tenant_id, vod_url, video_id, persona_id, language) -> None.
@@ -336,6 +344,7 @@ async def _poll_one_watch(
         )
 
     seen = set(watch.seen_video_ids)
+    fail_counts = dict(watch.failed_video_attempts)
     new_vods = [v for v in vods if v.video_id not in seen]
 
     if watch.last_polled_at is None:
@@ -358,30 +367,53 @@ async def _poll_one_watch(
                 watch.tenant_id, v.url, v.video_id, watch.persona_id, watch.language
             )
             seen.add(v.video_id)
+            fail_counts.pop(v.video_id, None)  # cleared on success
             ingested += 1
         except Exception as e:
-            _log.warning(
-                "channel.ingest_failed",
-                watch_id=watch.id,
-                video_id=v.video_id,
-                vod_url=v.url,
-                error=str(e),
-            )
             failed += 1
+            attempts = fail_counts.get(v.video_id, 0) + 1
+            if attempts >= _MAX_INGEST_ATTEMPTS:
+                # Retried to the ceiling and still failing — treat as
+                # permanently unavailable. Park it in the seen-set so it
+                # stops being retried (and reported as a failure) every poll.
+                seen.add(v.video_id)
+                fail_counts.pop(v.video_id, None)
+                _log.warning(
+                    "channel.video_parked",
+                    watch_id=watch.id,
+                    video_id=v.video_id,
+                    vod_url=v.url,
+                    attempts=attempts,
+                    error=str(e),
+                )
+            else:
+                # Stays UNSEEN so it retries next poll, with the bumped count.
+                fail_counts[v.video_id] = attempts
+                _log.warning(
+                    "channel.ingest_failed",
+                    watch_id=watch.id,
+                    video_id=v.video_id,
+                    vod_url=v.url,
+                    attempts=attempts,
+                    error=str(e),
+                )
 
     # The listing succeeded (a listing failure returns early above), so the
     # poll itself ran — advance last_polled_at unconditionally. Per-video
-    # ingest failures must NOT freeze it: the failed videos stay UNSEEN
-    # (only successes are added to `seen` above) so they retry on the next
-    # scheduled poll. Freezing on any failure was the bug behind "última
-    # revisión: nunca" — one perpetually-failing video (e.g. a YouTube
-    # bot-check) kept the watch permanently "due", which both hid the real
-    # last-checked time AND re-listed the channel every loop tick.
+    # ingest failures must NOT freeze it: a transiently-failed video stays
+    # UNSEEN (only successes are added to `seen` above) so it retries on the
+    # next scheduled poll, with its bumped failure count persisted. After
+    # `_MAX_INGEST_ATTEMPTS` it's parked into `seen` instead, so a genuinely
+    # dead video stops failing every poll. Freezing on any failure was the bug
+    # behind "última revisión: nunca" — one perpetually-failing video (e.g. a
+    # YouTube bot-check) kept the watch permanently "due", which both hid the
+    # real last-checked time AND re-listed the channel every loop tick.
     new_polled_at = _now_iso()
     await ChannelWatchesRepo(db).mark_polled(
         watch.id,
         seen_video_ids=sorted(seen),
         last_polled_at=new_polled_at,
+        failed_video_attempts=fail_counts,
     )
 
     return ChannelPollReport(

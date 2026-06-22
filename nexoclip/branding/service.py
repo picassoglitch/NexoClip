@@ -13,10 +13,46 @@ from __future__ import annotations
 
 import structlog
 
-from nexoclip.db import BrandKitsRepo, Database, SpeakersRepo, VodSpeakersRepo
+from nexoclip.db import (
+    BrandKitsRepo,
+    Database,
+    SpeakersRepo,
+    TenantsRepo,
+    VodSpeakersRepo,
+)
 from nexoclip.db.models import BrandKitRow, CustomTriggerPhrases
 
 _log = structlog.get_logger(__name__)
+
+
+async def outro_enabled_for_clip(
+    db: Database, *, tenant_id: str, stream_id: str
+) -> bool:
+    """Whether the nexoclip end-card outro should be appended to this
+    clip's export.
+
+    Free tier ALWAYS gets it (returns True regardless of any stored
+    flag). Paid tiers respect the resolved brand kit's
+    `show_nexoclip_outro` (default True). Best-effort — any failure
+    defaults to True so a lookup hiccup never silently strips the
+    free-tier credit.
+    """
+    from nexoclip.tenancy import bound_tenant
+
+    try:
+        tenant = await TenantsRepo(db).get(tenant_id)
+        tier = (tenant.tier if tenant else "free") or "free"
+        if tier == "free":
+            return True
+        with bound_tenant(tenant_id):
+            kit = await resolve_brand_kit_for_candidate(
+                db, stream_id=stream_id, speaker_label=None
+            )
+        if kit is None:
+            return True
+        return bool(getattr(kit, "show_nexoclip_outro", True))
+    except Exception:  # noqa: BLE001 — best-effort; default to on
+        return True
 
 
 async def resolve_brand_kit_for_speaker(

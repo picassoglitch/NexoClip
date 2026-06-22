@@ -58,6 +58,7 @@ from .logo import (
 )
 from .service import (
     merged_trigger_phrases_for_speaker,
+    outro_enabled_for_clip,
     resolve_brand_kit_for_candidate,
     resolve_brand_kit_for_speaker,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "get_platform_preset",
     "is_rasterization_available",
     "merged_trigger_phrases_for_speaker",
+    "outro_enabled_for_clip",
     "platform_choices",
     "platform_target_choices",
     "preset_choices",

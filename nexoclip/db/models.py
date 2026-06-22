@@ -656,6 +656,12 @@ class BrandKitRow(BaseModel):
     # tenants keep crediting until they explicitly opt out).
     show_nexoclip_credit: bool = True
 
+    # Pro-tier toggle for the end-card "outro" splash appended to every
+    # exported clip (the bundled nexoclip end card). Free tier ALWAYS
+    # gets it regardless of this value; pro+ tiers respect it (default
+    # ON, mirroring show_nexoclip_credit).
+    show_nexoclip_outro: bool = True
+
     # Publishing safe trap (migration 042). When `safe_schedule_enabled`,
     # auto-publish schedules into the next compliant window and the drain
     # hard-gates blocked posts; otherwise the trap is advisory only.

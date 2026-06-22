@@ -318,3 +318,43 @@ async def test_poll_all_watches_isolates_per_tenant(
     )
     assert len(reports) == 1
     assert reports[0].videos_ingested == 1
+
+
+# ---- on-demand single-watch poll (dashboard "scan now") ----
+
+
+@pytest.mark.asyncio
+async def test_poll_watch_id_filter_targets_one_watch(
+    db: Database, watch_tenant: str
+) -> None:
+    """`watch_id` restricts the poll to a single watch — the on-demand
+    'scan now' button must not sweep the tenant's other channels."""
+    with bound_tenant(watch_tenant):
+        repo = ChannelWatchesRepo(db)
+        a = await repo.create(
+            platform="youtube", channel_url="https://yt/@a", persona_id="per_1",
+        )
+        await repo.create(
+            platform="youtube", channel_url="https://yt/@b", persona_id="per_1",
+        )
+
+    def _per_channel_lister(mapping: dict[str, list[ChannelVOD]]):
+        async def _list(platform: str, channel_url: str, *, limit: int):
+            return list(mapping.get(channel_url, [])[:limit])
+        return _list
+
+    rec = _Recorder()
+    reports = await poll_channel_watches(
+        db,
+        ingest_callback=rec,
+        list_vods=_per_channel_lister(
+            {"https://yt/@a": _vods("a1"), "https://yt/@b": _vods("b1")}
+        ),
+        tenant_id=watch_tenant,
+        watch_id=a.id,
+        respect_schedule=False,
+    )
+
+    assert rec.ingested == ["a1"]  # only watch A, not B
+    assert len(reports) == 1
+    assert reports[0].watch_id == a.id

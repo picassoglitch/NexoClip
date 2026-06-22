@@ -3320,6 +3320,20 @@ async def _burn_overlays_for_clip(
         # ffmpeg essays.
         reason = str(e)[:80].replace("\n", " ")
         return f"failed:{reason}"
+
+    # Append the nexoclip end card to the burned fallback artifact so
+    # the legacy-burn path matches the recorder path (which appends its
+    # own outro before publishing). Free tier always; paid tiers respect
+    # the brand-kit toggle. Best-effort — append_outro never raises and
+    # leaves clip_final.mp4 untouched on failure.
+    if burned:
+        from nexoclip.branding import outro_enabled_for_clip
+        from nexoclip.clip.outro import append_outro
+
+        if await outro_enabled_for_clip(
+            db, tenant_id=clip.tenant_id, stream_id=clip.stream_id
+        ):
+            await asyncio.to_thread(append_outro, target_path)
     return "burned" if burned else "skipped_no_overlays"
 
 
@@ -4130,6 +4144,11 @@ async def clip_download_legacy_inline(
             host = request.headers.get("host") or request.url.netloc
             base_url = f"{scheme}://{host}"
 
+        from nexoclip.branding import outro_enabled_for_clip
+        append_outro_enabled = await outro_enabled_for_clip(
+            db, tenant_id=clip.tenant_id, stream_id=clip.stream_id
+        )
+
         try:
             await record_clip_to_mp4(
                 clip_id=clip_id,
@@ -4140,6 +4159,7 @@ async def clip_download_legacy_inline(
                 auth_cookie_value=cookie_val or None,
                 width=target_w,
                 height=target_h,
+                append_outro_enabled=append_outro_enabled,
             )
         except PreviewRecordingError as e:
             # Slice O.31 — surface the recorder's error LOUDLY now so we
@@ -5149,6 +5169,49 @@ async def sources_schedule(
     return RedirectResponse(url="/dashboard/sources", status_code=303)
 
 
+@router.post("/sources/{watch_id}/poll", dependencies=[Depends(require_full_scope)])
+async def sources_poll_now(
+    request: Request,
+    watch_id: str,
+    background_tasks: BackgroundTasks,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Scan one watched channel for new VODs right now, ignoring its cadence.
+
+    The listing + per-VOD download can take minutes, so the poll runs as a
+    background task and the page redirects immediately with a 'scanning'
+    banner; new VODs appear on the streams page as they finish. Uses the
+    shared app DB + dispatcher (the request-scoped ones don't outlive the
+    response) and `poll_channel_watches`' own per-tenant binding, scoped to
+    this single watch via `watch_id` + `respect_schedule=False`.
+    """
+    from nexoclip.channels import make_channel_ingest_callback, poll_channel_watches
+    from nexoclip.settings import get_settings
+
+    if await ChannelWatchesRepo(db).get(watch_id) is None:
+        raise HTTPException(status_code=404, detail="channel watch not found")
+
+    app_db = request.app.state.db
+    dispatcher = request.app.state.job_dispatcher
+    output_dir = Path(get_settings().default_output_dir)
+    ingest_callback = make_channel_ingest_callback(
+        app_db, dispatcher, output_dir=output_dir
+    )
+
+    async def _run() -> None:
+        await poll_channel_watches(
+            app_db,
+            ingest_callback=ingest_callback,
+            tenant_id=tenant_id,
+            watch_id=watch_id,
+            respect_schedule=False,
+        )
+
+    background_tasks.add_task(_run)
+    return RedirectResponse(url="/dashboard/sources?scanning=1", status_code=303)
+
+
 @router.get("/brand-kits", response_class=HTMLResponse)
 async def brand_kits_list(
     request: Request,
@@ -5202,6 +5265,7 @@ async def brand_kits_create(
     auto_publish_delay_min: int = Form(60),
     forward_phrases: str = Form(""),
     retroactive_phrases: str = Form(""),
+    show_nexoclip_outro: str = Form("1"),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
@@ -5211,6 +5275,7 @@ async def brand_kits_create(
 
     caption_style = _preset_by_id(caption_preset).model_dump()
     kit = await BrandKitsRepo(db).create(
+        show_nexoclip_outro=bool(show_nexoclip_outro),
         name=name,
         primary_color=primary_color,
         accent_color=accent_color,
@@ -5288,6 +5353,7 @@ async def brand_kits_edit_submit(
     safe_schedule_enabled: str = Form(""),
     content_timezone: str = Form("UTC"),
     safety_preset: str = Form("recommended"),
+    show_nexoclip_outro: str = Form(""),
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
 ) -> Response:
@@ -5328,6 +5394,7 @@ async def brand_kits_edit_submit(
         safe_schedule_enabled=bool(safe_schedule_enabled),
         content_timezone=content_timezone or "UTC",
         safety_policy=safety_policy,
+        show_nexoclip_outro=bool(show_nexoclip_outro),
     )
     return RedirectResponse(url=f"/dashboard/brand-kits/{kit_id}", status_code=303)
 

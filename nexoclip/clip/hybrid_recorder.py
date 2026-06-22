@@ -90,6 +90,7 @@ async def record_clip_hybrid(
     fps: int = DEFAULT_FPS,
     progress_callback: Any = None,
     ass_file_path: Path | None = None,
+    append_outro_enabled: bool = True,
 ) -> Path:
     """Run the hybrid pipeline. Same signature shape as the legacy
     record_clip_to_mp4 so the background runner can swap one for the
@@ -213,6 +214,7 @@ async def record_clip_hybrid(
             fps=fps,
             duration_s=duration_s,
             ass_file_path=ass_file_path,
+            append_outro_enabled=append_outro_enabled,
         )
 
         await _emit_progress(progress_callback, 100)
@@ -334,6 +336,7 @@ def _ffmpeg_composite_alpha_over_source(
     fps: int,
     duration_s: float,
     ass_file_path: Path | None = None,
+    append_outro_enabled: bool = True,
 ) -> None:
     """Composite the alpha PNG sequence over the source video and mux
     the original audio. One ffmpeg pass; one file out.
@@ -496,6 +499,16 @@ def _ffmpeg_composite_alpha_over_source(
             raise HybridRecordingError(
                 f"ffmpeg returned rc=0 but {partial_path.name} is 0 bytes"
             )
+
+        # Append the nexoclip end card before publishing, when the
+        # caller (who resolved the tenant's tier + brand-kit toggle)
+        # asked for it. Best-effort: append_outro never raises and
+        # leaves `partial_path` untouched on failure, so a render still
+        # ships even if the outro can't.
+        if append_outro_enabled:
+            from .outro import append_outro
+
+            append_outro(partial_path)
 
         # Atomic publish. Same-FS rename is atomic on POSIX and Windows;
         # both paths share a parent so the rename can't cross devices.

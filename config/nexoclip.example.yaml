@@ -66,10 +66,13 @@ detection:
   # Works on any content (doesn't require the streamer to say "clip this").
   # Costs one LLM call per stream.
   viral:
-    enabled: false                  # opt-in; costs one LLM call per stream
+    enabled: true                   # production: ON — the only signal that
+                                    # works without chat (e.g. YouTube VODs);
+                                    # without it, chat-less sources yield ~0
+                                    # candidates. Costs one LLM call per stream.
     weight: 1.0
     quality: standard               # standard (Haiku) | premium (Opus)
-    max_moments: 15                 # hard cap on returned candidates
+    max_moments: 20                 # hard cap on returned candidates
     min_score: 0.5                  # drop low-confidence moments
 
   # Candidate merging

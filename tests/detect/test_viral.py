@@ -111,22 +111,46 @@ async def test_min_score_drops_low_confidence_moments() -> None:
     assert cands[0].evidence["viral_score"] == 0.9
 
 
-async def test_max_moments_caps_returned_list() -> None:
-    """Hard cap keeps the cut step from chewing through 50+ candidates."""
+async def test_max_moments_caps_short_video() -> None:
+    """On a short video the configured cap floors the returned list (keeps the
+    cut step from chewing through 50+ candidates)."""
     router = AsyncMock()
     router.complete = AsyncMock(
         return_value=ViralMomentList(moments=[_moment(ts=i * 10.0) for i in range(20)])
     )
 
+    short = make_stream().model_copy(update={"duration_s": 120.0})  # 2 min
     cands = await detect_viral_moments(
         tenant_id="default",
-        stream=make_stream(),
+        stream=short,
         transcript=make_transcript(),
         router=router,
         config=ViralConfig(enabled=True, max_moments=5, min_score=0.0),
     )
 
     assert len(cands) == 5
+
+
+async def test_cap_scales_with_duration_for_long_video() -> None:
+    """A long VOD isn't truncated to the short-video default — the cap scales
+    ~1 moment/minute so chat-less sources (e.g. YouTube) keep more of what the
+    detector genuinely found, instead of being clipped to max_moments."""
+    router = AsyncMock()
+    router.complete = AsyncMock(
+        return_value=ViralMomentList(moments=[_moment(ts=i * 60.0) for i in range(40)])
+    )
+
+    long = make_stream().model_copy(update={"duration_s": 1800.0})  # 30 min
+    cands = await detect_viral_moments(
+        tenant_id="default",
+        stream=long,
+        transcript=make_transcript(),
+        router=router,
+        config=ViralConfig(enabled=True, max_moments=20, min_score=0.0),
+    )
+
+    # 30-min video → cap scales to 30 (above the 20 default), so 30 kept.
+    assert len(cands) == 30
 
 
 async def test_llm_error_returns_empty_does_not_raise() -> None:

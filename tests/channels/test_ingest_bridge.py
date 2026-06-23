@@ -110,9 +110,10 @@ async def test_reingest_reuses_stream_id_no_duplicate_row(
         rows = await StreamsRepo(db).list_for_tenant()
     # One canonical row despite two ingest passes.
     assert len([r for r in rows if r.vod_url == url]) == 1
-    # Second pass reused the first pass's id (cache-hit, no re-download).
-    first_id = fake_ingest.stream_ids_seen[0]
-    assert first_id is None  # first call minted a fresh id
+    # First pass mints the id up-front (for the pending placeholder) and
+    # hands it to ingest_vod; second pass reuses it (cache-hit, no
+    # re-download). Both ingest calls see the same canonical id.
+    assert fake_ingest.stream_ids_seen[0] == rows[0].id
     assert fake_ingest.stream_ids_seen[1] == rows[0].id
 
 
@@ -144,3 +145,58 @@ async def test_download_failure_propagates(
     # retries it (and does NOT mark the VOD seen).
     with pytest.raises(IngestError):
         await cb(tenant, "https://kick.com/n3on/videos/boom", "vid3", "persona", "es")
+
+    # The up-front placeholder is flipped from "pending" to "failed" instead
+    # of hanging at "pending" forever on the Streams list.
+    with bound_tenant(tenant):
+        rows = await StreamsRepo(db).list_for_tenant()
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_detected_vod_visible_as_pending_during_download(
+    db: Database, tenant: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stream row lands as `pending` the moment the VOD is detected —
+    before the download completes — so it shows on the Streams list right
+    away (like a manual URL job), then flips to `ingested` once the download
+    lands."""
+    status_at_download: list[str] = []
+
+    async def _ingest(
+        *,
+        tenant_id: str,
+        vod_url: str,
+        output_dir: Path,
+        stream_id: str | None = None,
+        cookies_from_browser: str | None = None,
+        cookies_file: str | None = None,
+        db: Database | None = None,
+    ) -> Stream:
+        # The placeholder row must already exist (as "pending") by the time
+        # the download starts.
+        assert stream_id is not None and db is not None
+        with bound_tenant(tenant_id):
+            row = await StreamsRepo(db).get(stream_id)
+        status_at_download.append(row.status if row is not None else "MISSING")
+        return Stream(
+            id=stream_id,
+            tenant_id=tenant_id,
+            vod_url=vod_url,
+            platform="kick",
+            title="t",
+            duration_s=10.0,
+            source_video_path=output_dir / stream_id / "source" / "video.mp4",
+            source_audio_path=output_dir / stream_id / "source" / "audio.wav",
+        )
+
+    monkeypatch.setattr("nexoclip.ingest.ingest_vod", _ingest)
+    cb = make_channel_ingest_callback(db, _FakeDispatcher(), output_dir=tmp_path)
+    await cb(tenant, "https://kick.com/n3on/videos/pend", "vidp", "persona", "es")
+
+    assert status_at_download == ["pending"]
+    with bound_tenant(tenant):
+        rows = await StreamsRepo(db).list_for_tenant()
+    assert len(rows) == 1
+    assert rows[0].status == "ingested"  # overwritten with real metadata

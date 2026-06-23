@@ -2828,11 +2828,27 @@ async def _reprocess_failed_rows(
                 "error": "no es un clip de NexoClip reprocesable",
             })
             continue
+        # Re-schedule ONLY to platforms still connected on Zernio. The
+        # operator may have disconnected one (e.g. TikTok) since the
+        # original post — re-targeting it would just fail again and drag
+        # the whole clip down with it. Ship to whatever remains; skip the
+        # clip only when nothing is left to publish to.
+        connected = [p for p in platforms if account_map.get(p.lower())]
+        dropped = [p for p in platforms if p not in connected]
+        if not connected:
+            results.append({
+                "post_id": row.post_id, "ok": False,
+                "error": (
+                    "ninguna de sus plataformas sigue conectada ("
+                    + ", ".join(platforms) + ") — reconéctalas y reintenta"
+                ),
+            })
+            continue
         try:
             new_post_id = await _publish_clip(
                 client=client, db=db, request=request, tenant_id=tenant_id,
                 profile_id=profile_id, account_map=account_map,
-                clip_id=row.clip_id, platforms=platforms,
+                clip_id=row.clip_id, platforms=connected,
                 content=row.content or "", mode="schedule",
                 scheduled_for=when.isoformat(),
             )
@@ -2850,6 +2866,7 @@ async def _reprocess_failed_rows(
         results.append({
             "post_id": row.post_id, "ok": True,
             "new_post_id": new_post_id, "scheduled_for": when.isoformat(),
+            "platforms": connected, "dropped": dropped,
         })
     ok = sum(1 for r in results if r["ok"])
     _log.info(

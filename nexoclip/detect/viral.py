@@ -20,6 +20,7 @@ heuristic detectors found.
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 import structlog
@@ -202,7 +203,14 @@ async def detect_viral_moments(
         _log.warning("viral.skipped_llm_error", reason=str(e), stream_id=stream.id)
         return []
 
-    moments = response.moments[: config.max_moments]
+    # Scale the cap with video length so a longer VOD isn't truncated to a
+    # fixed handful: short-form cadence is ~1 clip/minute. The LLM is told
+    # not to pad and the min_score gate trims below, so this rarely binds —
+    # it just stops a 2-hour stream from being capped at the short-video
+    # default. No artificial ceiling; the detector keeps whatever it finds.
+    duration_cap = math.ceil(max(1.0, stream.duration_s / 60.0))
+    effective_max = max(config.max_moments, duration_cap)
+    moments = response.moments[:effective_max]
     moments = [m for m in moments if m.score >= config.min_score]
 
     candidates: list[Candidate] = []

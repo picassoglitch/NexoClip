@@ -9,17 +9,54 @@ runs unchanged, with publishing gated by the safe trap.
 
 from __future__ import annotations
 
+import contextlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
 from nexoclip.db import Database, EventsRepo, StreamsRepo
+from nexoclip.db.models import StreamRow
+from nexoclip.ids import new_id
 from nexoclip.jobs import JobDispatcher, PipelineKickoff
 from nexoclip.tenancy import bound_tenant
 
 from .service import ChannelIngestCallback
 
 _log = structlog.get_logger(__name__)
+
+
+def _pending_placeholder(
+    *,
+    stream_id: str,
+    tenant_id: str,
+    vod_url: str,
+    platform: str,
+    output_dir: Path,
+) -> StreamRow:
+    """A `status="pending"` StreamRow that makes a freshly-detected channel
+    VOD show on the Streams list immediately (with "Downloading…"), the same
+    way a manual URL job does — instead of staying invisible until the
+    download + audio extract finish.
+
+    The source paths match exactly where `ingest_vod(stream_id=...)` writes
+    (`<output_dir>/<id>/source/{video.mp4,audio.wav}`), so the upsert with
+    real metadata once the download lands is a no-op for those fields.
+    """
+    source_dir = output_dir / stream_id / "source"
+    return StreamRow(
+        id=stream_id,
+        tenant_id=tenant_id,
+        vod_url=vod_url,
+        platform=platform,
+        title=None,
+        channel=None,
+        duration_s=0.0,
+        source_video_path=str(source_dir / "video.mp4"),
+        source_audio_path=str(source_dir / "audio.wav"),
+        status="pending",
+        created_at=datetime.now(UTC).isoformat(),
+    )
 
 
 def make_channel_ingest_callback(
@@ -46,8 +83,7 @@ def make_channel_ingest_callback(
         persona_id: str,
         language: str | None,
     ) -> None:
-        from nexoclip.db.adapters import stream_to_row
-        from nexoclip.ingest import ingest_vod
+        from nexoclip.ingest import detect_platform, ingest_vod
 
         with bound_tenant(tenant_id):
             # Idempotency on (tenant, vod_url): if this VOD was already
@@ -57,25 +93,65 @@ def make_channel_ingest_callback(
             # VOD into a duplicate stream row — which is what a lost
             # seen-set or a retried pipeline failure was producing.
             existing = await StreamsRepo(db).find_by_vod_url(vod_url)
-            stream = await ingest_vod(
-                tenant_id=tenant_id,
-                vod_url=vod_url,
-                output_dir=output_dir,
-                stream_id=existing.id if existing is not None else None,
-                cookies_from_browser=cookies_from_browser,
-                cookies_file=cookies_file,
-                db=db,
-            )
-            row = await StreamsRepo(db).upsert(stream_to_row(stream))
             if existing is None:
+                # New VOD: write a "pending" placeholder + emit the detected
+                # event UP FRONT so the stream shows on the dashboard's
+                # Streams list the moment it's pulled, not only once the
+                # (potentially slow) download finishes. ingest_vod is
+                # idempotent on this stream_id; reconcile_metadata below
+                # backfills the placeholder with real metadata + flips it to
+                # "ingested" when the download lands.
+                stream_id = new_id("str")
+                await StreamsRepo(db).upsert(
+                    _pending_placeholder(
+                        stream_id=stream_id,
+                        tenant_id=tenant_id,
+                        vod_url=vod_url,
+                        platform=detect_platform(vod_url),
+                        output_dir=output_dir,
+                    )
+                )
                 await EventsRepo(db).emit(
                     type="channel.vod_detected",
                     payload={
-                        "stream_id": row.id,
+                        "stream_id": stream_id,
                         "video_id": video_id,
                         "vod_url": vod_url,
                     },
                 )
+            else:
+                stream_id = existing.id
+            try:
+                stream = await ingest_vod(
+                    tenant_id=tenant_id,
+                    vod_url=vod_url,
+                    output_dir=output_dir,
+                    stream_id=stream_id,
+                    cookies_from_browser=cookies_from_browser,
+                    cookies_file=cookies_file,
+                    db=db,
+                )
+            except Exception:
+                # A detected VOD whose download fails (e.g. "video not
+                # available") flips the placeholder from "pending" to "failed"
+                # instead of hanging at "pending" forever on the Streams list.
+                # Re-raise so the channel poller still counts the VOD failed
+                # and applies its own retry/park.
+                with contextlib.suppress(Exception):
+                    await StreamsRepo(db).set_status(
+                        stream_id, status="failed", only_if="pending"
+                    )
+                raise
+            # Backfill the real metadata (title / channel / duration) onto the
+            # placeholder and flip "pending" -> "ingested". A plain upsert is
+            # INSERT-OR-IGNORE, so it would NOT update the pre-inserted row —
+            # reconcile_metadata is the same path the URL-job pipeline uses.
+            await StreamsRepo(db).reconcile_metadata(
+                stream_id,
+                title=stream.title,
+                channel=stream.channel,
+                duration_s=stream.duration_s,
+            )
 
         kickoff = PipelineKickoff(
             tenant_id=tenant_id,

@@ -795,6 +795,33 @@ class StreamsRepo:
         )
         await conn.commit()
 
+    async def set_status(
+        self, stream_id: str, *, status: str, only_if: str | None = None
+    ) -> bool:
+        """Flip a stream's status (tenant-scoped). When `only_if` is given the
+        update is guarded — it changes the row ONLY if it is currently in that
+        status, so a placeholder isn't clobbered if something else already
+        advanced it. Returns True iff a row changed.
+
+        Needed because `upsert` is INSERT-OR-IGNORE and never updates an
+        existing row: e.g. flipping a detected-but-failed placeholder from
+        'pending' to 'failed' can't go through upsert."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        if only_if is None:
+            cur = await conn.execute(
+                "UPDATE streams SET status = ? WHERE id = ? AND tenant_id = ?",
+                (status, stream_id, tenant_id),
+            )
+        else:
+            cur = await conn.execute(
+                "UPDATE streams SET status = ? "
+                "WHERE id = ? AND tenant_id = ? AND status = ?",
+                (status, stream_id, tenant_id, only_if),
+            )
+        await conn.commit()
+        return (cur.rowcount or 0) == 1
+
     async def get(self, stream_id: str) -> StreamRow | None:
         tenant_id = current_tenant_id()
         conn = await self._db.connect()

@@ -68,13 +68,17 @@ def publish_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 async def _seed_clip(
     db: Database, tid: str, *, clip_id: str, persona_id: str,
     caption: str, hook: str, hashtags: list[str], now: str,
+    candidate_score: float = 0.7,
+    publishability_score: int | None = None,
+    publishability_status: str | None = None,
 ) -> None:
     """Approved clip + a single variant carrying caption/hook/hashtags."""
     with bound_tenant(tid):
         await CandidatesRepo(db).upsert_many([
             CandidateRow(
                 id=f"cnd_{clip_id}", stream_id="str_ap", tenant_id=tid,
-                ts=10.0, score=0.7, reason="voice", evidence={}, created_at=now,
+                ts=10.0, score=candidate_score, reason="voice", evidence={},
+                created_at=now,
             )
         ])
         await ClipsRepo(db).upsert_many([
@@ -85,6 +89,10 @@ async def _seed_clip(
                 path="/tmp/c.mp4", status="approved", created_at=now,
             )
         ])
+        if publishability_score is not None and publishability_status is not None:
+            await ClipsRepo(db).set_publishability(
+                clip_id, score=publishability_score, status=publishability_status,
+            )
         await VariantsRepo(db).replace_for_clip_persona(
             clip_id, persona_id,
             [VariantRow(
@@ -346,6 +354,77 @@ async def test_handsfree_now_mode_posts_immediately(
     payload = json.loads(post_route.calls.last.request.content.decode())
     assert payload["publishNow"] is True
     assert "scheduledFor" not in payload
+
+
+@pytest.mark.asyncio
+async def test_handsfree_publishes_low_signal_but_publish_ready_clip(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Auto-publish gates on the PUBLISHABILITY verdict, not the raw detector
+    score. A YouTube-style clip with a tiny candidate score (no chat heat) but
+    a publish_ready render must still go out — the old detector-score gate
+    silently dropped every such clip."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    now = _dt.datetime.now(_dt.UTC).isoformat()
+    await _seed_clip(
+        db, alice["id"], clip_id="clp_yt", persona_id="psn_ap",
+        caption="Cuerpo yt", hook="Hook yt", hashtags=["yt"], now=now,
+        candidate_score=0.1, publishability_score=55,
+        publishability_status="publish_ready",
+    )
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="now", daily_cap=10, score_threshold=0.5, tag_suffix="",
+    )
+    with respx.mock() as mock:
+        _mock_accounts(mock, "tiktok")
+        post_route = mock.post(f"{_ZBASE}/posts").mock(
+            side_effect=lambda r: httpx.Response(
+                201, json={"success": True, "post": {"_id": "post_yt"}}
+            )
+        )
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_yt", 0.1)],  # low detector score — must NOT gate
+        )
+    assert n == 1
+    assert post_route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handsfree_skips_reject_clip_despite_high_detector_score(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """A clip the publishability verdict marks `reject` is never auto-posted,
+    even when its detector score and raw publishability score are high (a
+    blocking integrity issue forces reject)."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    now = _dt.datetime.now(_dt.UTC).isoformat()
+    await _seed_clip(
+        db, alice["id"], clip_id="clp_bad", persona_id="psn_ap",
+        caption="Cuerpo", hook="Hook", hashtags=["x"], now=now,
+        candidate_score=0.9, publishability_score=80,
+        publishability_status="reject",
+    )
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="now", daily_cap=10, score_threshold=0.5, tag_suffix="",
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        _mock_accounts(mock, "tiktok")
+        post_route = mock.post(f"{_ZBASE}/posts").mock(
+            side_effect=lambda r: httpx.Response(
+                201, json={"success": True, "post": {"_id": "post_bad"}}
+            )
+        )
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_bad", 0.9)],
+        )
+    assert n == 0
+    assert post_route.call_count == 0
 
 
 @pytest.mark.asyncio

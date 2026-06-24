@@ -1848,19 +1848,48 @@ async def autopublish_hands_free_sweep(
         used = await _autopublish_count_today(db, tenant_id)
         pubs = ZernioPublishesRepo(db)
 
-        # Eligible clips: above threshold, not already posted, in the order
-        # given. The daily cap only bounds the `now` path (anti-spam on
-        # immediate posts); the queue drip is interval-spaced, not capped.
+        # Eligible clips: the PUBLISHABILITY verdict (slice I.3 — "is THIS
+        # render safe to ship?") gates auto-publish, NOT the raw detector
+        # score. A low-signal detection can still be fully publish-ready: a
+        # YouTube VOD has no chat heat, so its candidate score is ~0.1, but
+        # the rendered clip scores 55+/100. Gating on the detector score
+        # silently dropped every such clip. `score_threshold` (0-1) is the
+        # operator's floor on the publishability score; a `reject` verdict is
+        # always excluded; a not-yet-scored clip is allowed through rather
+        # than silently dropped. Not already posted; daily cap only bounds the
+        # `now` path (the queue drip is interval-spaced, not capped).
         eligible: list[str] = []
-        for clip_id, score in clip_scores:
-            if score < threshold:
-                continue
+        clips_by_id: dict[str, Any] = {}
+        skipped_unpublishable = 0
+        for clip_id, _score in clip_scores:
             if await pubs.exists_for_clip(tenant_id, clip_id):
                 continue
+            with bound_tenant(tenant_id):
+                clip = await ClipsRepo(db).get(clip_id)
+            if clip is None:
+                continue
+            pub = clip.publishability_score
+            if clip.publishability_status == "reject" or (
+                pub is not None and pub / 100.0 < threshold
+            ):
+                skipped_unpublishable += 1
+                continue
+            clips_by_id[clip_id] = clip
             eligible.append(clip_id)
         if cap and post_mode == "now":
             eligible = eligible[: max(0, cap - used)]
+        if skipped_unpublishable:
+            log.info(
+                "autopublish.handsfree.skipped_unpublishable",
+                tenant_id=tenant_id, threshold=threshold,
+                skipped=skipped_unpublishable, eligible=len(eligible),
+            )
         if not eligible:
+            log.info(
+                "autopublish.handsfree.nothing_eligible",
+                tenant_id=tenant_id, considered=len(clip_scores),
+                threshold=threshold,
+            )
             return 0
 
         # Queue mode → drip one post every 30 min (unique) / 60 min
@@ -1881,10 +1910,8 @@ async def autopublish_hands_free_sweep(
 
         for i, clip_id in enumerate(eligible):
             try:
+                clip = clips_by_id[clip_id]
                 with bound_tenant(tenant_id):
-                    clip = await ClipsRepo(db).get(clip_id)
-                    if clip is None:
-                        continue
                     composed = await build_post(
                         db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
                     )

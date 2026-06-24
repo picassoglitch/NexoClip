@@ -13,7 +13,10 @@ from nexoclip.db import (
     StreamsRepo,
 )
 from nexoclip.db.models import StreamRow
+from nexoclip.integrations.nexo_ai.service import sync_tenant_tier
 from nexoclip.tenancy import bound_tenant
+
+from .conftest import auth
 
 
 def _now() -> str:
@@ -325,6 +328,52 @@ async def test_rerun_kicks_off_pipeline_for_existing_stream(
     assert len(captured) == 1
     assert captured[0].stream.id == "str_rr1"
     assert captured[0].persona_id == "p1"
+
+
+async def test_rerun_reingests_failed_url_stream_without_artifacts(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    """A URL stream whose ingest failed (no on-disk stream.json — e.g. a
+    transient YouTube bot-gate) re-attempts a fresh download from the stored
+    VOD URL instead of 409'ing, and its row is reset to 'pending' so a
+    successful re-download reconciles back to 'ingested'. (The shared client's
+    pipeline runner is a no-op, so nothing actually downloads.)"""
+    from nexoclip.db import PersonasRepo
+
+    tid = tenants["alice"]["id"]
+    await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
+    url = "https://youtu.be/5ZY5-5FcpMo"
+    with bound_tenant(tid):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_yt", tenant_id=tid, vod_url=url, platform="youtube",
+                title=None, channel=None, duration_s=0.0,
+                # An output dir under tmp_path that has NO stream.json → the
+                # rerun handler's load_stream() fails → re-ingest fallback.
+                source_video_path=str(tmp_path / "str_yt" / "source" / "video.mp4"),
+                source_audio_path=str(tmp_path / "str_yt" / "source" / "audio.wav"),
+                status="failed", created_at=_now(),
+            )
+        )
+        await PersonasRepo(db).create(
+            persona_id="p1", name="P", primary_language="es",
+            target_languages=["es"], voice_prompt="v",
+        )
+    r = await client.post(
+        "/dashboard/streams/str_yt/rerun",
+        data={"persona_id": "p1"},
+        headers=auth(tenants["alice"]["token"]),
+        follow_redirects=False,
+    )
+    # 303 (re-ingest dispatched), NOT 409 (the old "can't resume" behavior).
+    assert r.status_code == 303, r.text
+    with bound_tenant(tid):
+        row = await StreamsRepo(db).get("str_yt")
+    # Reset so a successful re-download reconciles back to 'ingested'.
+    assert row is not None and row.status == "pending"
 
 
 async def test_default_pipeline_runner_passes_db_path(

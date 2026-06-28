@@ -84,6 +84,18 @@ class Settings(BaseSettings):
     # crashed before completion).
     delete_source_on_completion: bool = True
 
+    # Free-disk preflight — refuse to START a VOD download when the output
+    # volume has less than this many bytes free. A multi-hour VOD is 5-50 GB;
+    # starting a download onto a near-full volume just produces a truncated
+    # file that fails downstream and (until reclaimed) eats the last of the
+    # disk. Failing fast with an actionable "disk full" message is strictly
+    # better. Default 3 GiB — low enough to rarely false-block, high enough
+    # that anything below it would fail mid-download anyway. Set 0 to disable.
+    min_free_disk_bytes: int = Field(
+        default=3 * 1024 * 1024 * 1024,
+        validation_alias="NEXOCLIP_MIN_FREE_DISK_BYTES",
+    )
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None

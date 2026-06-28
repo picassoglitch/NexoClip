@@ -15,6 +15,7 @@ without re-downloading or re-extracting unless `force=True`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import shutil
 import subprocess
@@ -142,6 +143,11 @@ async def ingest_vod(
             cookies_file = settings.cookies_file or None
         if cookies_from_browser is None:
             cookies_from_browser = settings.cookies_from_browser or None
+
+    # Free-disk preflight — fail fast with an actionable message instead of
+    # downloading a multi-hour VOD onto a near-full volume (which just yields
+    # a truncated file that fails downstream). No-ops when the threshold is 0.
+    _assert_disk_headroom(output_dir)
 
     # Task 2a — telemetry. Wall-clock + file-size + downloader-id around
     # both the yt-dlp call and the audio extract so the dashboard can
@@ -529,6 +535,17 @@ def _download_vod(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info: dict[str, Any] = ydl.extract_info(vod_url, download=True) or {}
     except yt_dlp.utils.DownloadError as e:
+        # Sweep the partial download (`.part`, `.ytdl`, fragment files, and a
+        # half-written muxed file) before surfacing the error. A failed fetch
+        # of a multi-hour VOD otherwise leaves gigabytes behind that the next
+        # download has to fit around — the start of the disk-exhaustion
+        # spiral. Output files all share the outtmpl stem in this stream's
+        # own `source/` dir, so globbing the stem is safe. Best-effort.
+        stem = target_path.with_suffix("").name
+        for leftover in target_path.parent.glob(f"{stem}*"):
+            with contextlib.suppress(OSError):
+                if leftover.is_file():
+                    leftover.unlink()
         raise _explain_download_failure(
             err=e, vod_url=vod_url, platform=platform,
             cookies_from_browser=cookies_from_browser,
@@ -541,6 +558,30 @@ def _download_vod(
             target_path.unlink()
         actual.replace(target_path)
     return info
+
+
+def _assert_disk_headroom(output_dir: Path) -> None:
+    """Raise IngestError when the output volume is below the configured free-
+    space floor (`min_free_disk_bytes`). No-op when the floor is 0/unset or
+    the volume can't be statted (don't block ingest on an observability gap).
+    """
+    from nexoclip.settings import get_settings
+
+    floor = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+    if floor <= 0:
+        return
+    try:
+        free = shutil.disk_usage(output_dir).free
+    except OSError:
+        return
+    if free < floor:
+        gb = 1024 * 1024 * 1024
+        raise IngestError(
+            f"insufficient disk: {free / gb:.1f} GB free on the output volume, "
+            f"need at least {floor / gb:.1f} GB to start a download. Free space "
+            "(run the retention sweep, delete old streams, or expand the volume) "
+            "and retry."
+        )
 
 
 def _explain_download_failure(

@@ -39,6 +39,7 @@ from fastapi.templating import Jinja2Templates
 from nexoclip.db import (
     ClipsRepo,
     Database,
+    EventsRepo,
     TenantsRepo,
     ZernioBroadcastLogRepo,
     ZernioCalendarRepo,
@@ -125,6 +126,13 @@ _SUPPORTED_PLATFORMS = [
 # Platforms whose api id Zernio publishes to. Used to validate the
 # checkbox group on the publish path.
 _SUPPORTED_PLATFORM_IDS = frozenset(p[0] for p in _SUPPORTED_PLATFORMS)
+
+# Minimum minutes between consecutive hands-free "now"-mode posts. Firing a
+# whole batch of eligible clips at once trips TikTok's "wait 10 minutes"
+# rate limit (the burst failures seen in prod), so the first clip goes out
+# immediately and the rest are staggered at least this far apart. Sits just
+# above TikTok's 10-min cooldown.
+_NOW_MODE_BURST_INTERVAL_MIN = 12
 
 # Community channels — connectable like any platform, but NOT clip
 # targets (phase 11): they get Connect buttons + a notification toggle,
@@ -732,6 +740,9 @@ async def zernio_dashboard(
             "account_count": len(accounts),
             "connect_fetch_failed": connect_fetch_failed,
             "history": history,
+            # Clips still in `published` status — drives the "Republicar"
+            # action on the Published tab (reopen -> approved -> re-publish).
+            "published_clip_ids": sorted(c.id for c in published_clips),
             "publishable_clips": publishable,
             "supported_platforms": _SUPPORTED_PLATFORMS,
             "stats": stats,
@@ -1892,20 +1903,27 @@ async def autopublish_hands_free_sweep(
             )
             return 0
 
-        # Queue mode → drip one post every 30 min (unique) / 60 min
-        # (same-video variations) from the tenant's content strategy. No
-        # best-time slots, no daily cap — the interval is the only spacing.
-        # Now mode → fire immediately.
+        # Spacing rules:
+        #   Queue mode → drip one post every 30 min (unique) / 60 min
+        #     (same-video variations) from the tenant's content strategy. No
+        #     best-time slots, no daily cap — the interval is the only spacing.
+        #   Now mode   → publish the FIRST clip immediately, then stagger the
+        #     rest at a rate-limit-safe gap. Firing the whole batch at once
+        #     trips TikTok's "wait 10 minutes" limit (the burst failures in
+        #     prod), so only clip 0 is truly "now"; the tail is spaced.
         schedule_times: list[Any] = []
-        if post_mode != "now":
+        if post_mode != "now" or len(eligible) > 1:
             import datetime as _dt
 
             from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
 
+            interval = drip_interval_minutes(s.get("content_strategy"))
+            if post_mode == "now":
+                interval = max(interval, _NOW_MODE_BURST_INTERVAL_MIN)
             schedule_times = plan_drip_times(
                 len(eligible),
                 now=_dt.datetime.now(_dt.UTC),
-                interval_minutes=drip_interval_minutes(s.get("content_strategy")),
+                interval_minutes=interval,
             )
 
         for i, clip_id in enumerate(eligible):
@@ -1921,10 +1939,13 @@ async def autopublish_hands_free_sweep(
                     auth_cookie_value=None, db_path=resolve_db_target(settings),
                     auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
                 )
+                # Now mode: clip 0 fires immediately (when=None); the rest are
+                # staggered (i > 0). Queue mode: every clip is dripped.
+                first_now = post_mode == "now" and i == 0
                 when = (
-                    schedule_times[i].isoformat()
-                    if post_mode != "now" and i < len(schedule_times)
-                    else None
+                    None
+                    if first_now or i >= len(schedule_times)
+                    else schedule_times[i].isoformat()
                 )
                 # Size the signed URL's TTL to the scheduled time — a
                 # best-time slot can be days out, and the platform fetches
@@ -1935,7 +1956,7 @@ async def autopublish_hands_free_sweep(
                 )
                 result = await client.create_post(
                     profile_id=profile_id, content=content, media_url=media_url,
-                    platforms=post_targets, publish_now=(post_mode == "now"),
+                    platforms=post_targets, publish_now=(when is None),
                     title=composed.title,
                     scheduled_for=when,
                     timezone="UTC" if when else None,
@@ -3451,6 +3472,87 @@ async def zernio_mark_published(
     # Stay on the publish list (no forced tab change) — the clip just
     # leaves the grid; its row waits on the Published tab.
     return RedirectResponse(url="/dashboard/publish/zernio", status_code=303)
+
+
+async def _reopen_published_clip(db: Database, *, clip_id: str) -> bool:
+    """Flip one `published` clip back to `approved` so it re-enters the
+    publishable grid for a re-publish. Returns True if it moved.
+
+    Used by the failed/auto-publish recovery flow: a clip can be marked
+    `published` locally while the platform post never actually landed.
+    Reopening leaves the old publish-history rows intact (they're the
+    audit trail) — only the clip's status changes. Idempotent: a clip
+    that isn't `published` is left alone and returns False.
+    """
+    repo = ClipsRepo(db)
+    clip = await repo.get(clip_id)
+    if clip is None or clip.status != "published":
+        return False
+    await repo.update_status(clip_id, status="approved")
+    await EventsRepo(db).emit(
+        type="clip.approved",
+        payload={"clip_id": clip_id, "from": "published", "to": "approved",
+                 "reason": "reopen_for_republish"},
+    )
+    return True
+
+
+@router.post("/clip/{clip_id}/reopen")
+async def zernio_reopen_clip(
+    request: Request,
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reopen a published clip — flip it back to `approved` so it returns
+    to the Publicar uno / Publicar varios grid and can be re-published.
+
+    For clips an auto-publish (or a manual publish) marked `published`
+    even though the post failed to land. Local state only; nothing is
+    sent to or removed from Zernio.
+    """
+    clip = await ClipsRepo(db).get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if clip.status != "published":
+        raise HTTPException(
+            status_code=409,
+            detail=f"clip is {clip.status!r}, not 'published'",
+        )
+    await _reopen_published_clip(db, clip_id=clip_id)
+    _log.info("zernio.reopen tenant=%s clip=%s", tenant_id, clip_id)
+    return RedirectResponse(
+        url="/dashboard/publish/zernio?reopened=1", status_code=303,
+    )
+
+
+@router.post("/reopen-all")
+async def zernio_reopen_all(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    _t: None = Depends(require_paid_tier),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Reopen every published clip for the tenant in one shot — bulk
+    recovery after an auto-publish run marked a batch `published` that
+    never actually went out. Each moves `published` -> `approved`.
+    """
+    published = await ClipsRepo(db).list_for_tenant_with_status(
+        ["published"], limit=500,
+    )
+    reopened = 0
+    for clip in published:
+        if await _reopen_published_clip(db, clip_id=clip.id):
+            reopened += 1
+    _log.info(
+        "zernio.reopen_all tenant=%s reopened=%d", tenant_id, reopened,
+    )
+    return RedirectResponse(
+        url=f"/dashboard/publish/zernio?reopened={reopened}", status_code=303,
+    )
 
 
 @router.post("/post/{clip_id}")

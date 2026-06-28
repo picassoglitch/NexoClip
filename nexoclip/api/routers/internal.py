@@ -50,12 +50,17 @@ _SIGNED_CLIP_MAX_TTL_S = 35 * 24 * 3600
 # Floor TTL for an IMMEDIATE ("now") publish. The signed URL is baked
 # into the vendor (Zernio) post payload exactly once — it can't be
 # refreshed afterwards — and the vendor fetches the media server-side on
-# its own retry schedule. A 1h floor expired before a queued/rate-limited
-# fetch retried, so every retry 403'd forever and the post never shipped
-# (while the vendor's worker fleet hammered /api/internal/clip for days).
-# A 24h floor comfortably covers that retry tail. Same leak tradeoff as
-# the route ceiling above: the clip is about to be published anyway.
-_IMMEDIATE_PUBLISH_TTL_S = 24 * 3600
+# its own retry schedule, and re-fetches it again on every operator
+# "Reintentar"/"Reagendar" days later. A 1h floor expired before a
+# queued/rate-limited fetch retried; a 24h floor then *also* proved too
+# short — a prod auto-publish run on 2026-06-16/17 kept getting YouTube
+# "Failed to fetch ... 403" and TikTok "could not download" for ~10 DAYS
+# as the vendor + reschedules retried against URLs that expired 24h in.
+# Every retry past the floor 403s forever and the post never ships. We
+# now floor at 14 days so the baked URL outlives the full retry +
+# reschedule tail. Same leak tradeoff as the route ceiling above (and
+# well under it): the clip is about to be published to the world anyway.
+_IMMEDIATE_PUBLISH_TTL_S = 14 * 24 * 3600
 
 
 def signed_clip_ttl_for_schedule(

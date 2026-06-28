@@ -196,6 +196,21 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('reopened') %}
+<div class="nc-panel" style="border-color: var(--nc-green); margin-bottom: 12px;">
+  <div class="nc-panel__body" style="padding: 12px 16px;">
+    <i class="ti ti-refresh" aria-hidden="true" style="color: var(--nc-green);"></i>
+    {% set n = request.query_params.get('reopened') %}
+    {% if n == '0' %}
+    No había clips publicados para reabrir.
+    {% else %}
+    Reabriste {{ n }} clip{{ 's' if n != '1' else '' }} — vuelven a la lista de
+    <strong>Publicar</strong> como aprobados, listos para republicar.
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 {% if request.query_params.get('unlinked') %}
 <div class="nc-panel" style="border-color: var(--nc-orange); margin-bottom: 12px;">
   <div class="nc-panel__body" style="padding: 12px 16px;">
@@ -1000,7 +1015,19 @@
   <div class="nc-panel__header">
     <i class="ti ti-history" aria-hidden="true"></i>
     <span class="nc-panel__title">Publicados</span>
+    {% if published_clip_ids %}
+    <form action="/dashboard/publish/zernio/reopen-all" method="post"
+          style="margin-left:auto; display:inline;"
+          onsubmit="return confirm('¿Reabrir los {{ published_clip_ids|length }} clips publicados para volver a publicarlos? Vuelven a la lista de Publicar como aprobados (no se borra nada de lo ya publicado).');">
+      <button type="submit" class="nc-btn" style="padding:3px 10px; font-size:12px;"
+              title="Devuelve todos los clips publicados a la lista de Publicar para republicarlos">
+        <i class="ti ti-refresh" aria-hidden="true"></i>
+        <span>Republicar todos ({{ published_clip_ids|length }})</span>
+      </button>
+    </form>
+    {% else %}
     <span class="nc-chip nc-chip--muted" style="margin-left:auto;">próximos + recientes</span>
+    {% endif %}
   </div>
   <div class="nc-panel__body" style="padding: 0;">
     {% if history %}
@@ -1038,7 +1065,19 @@
             </span>
           </td>
           <td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ h.content or "—" }}</td>
-          <td style="text-align:right;">
+          <td style="text-align:right; white-space:nowrap;">
+            {% if h.clip_id and h.clip_id in published_clip_ids %}
+            <form action="/dashboard/publish/zernio/clip/{{ h.clip_id }}/reopen"
+                  method="post" style="display:inline;"
+                  onclick="event.stopPropagation();"
+                  onsubmit="return confirm('¿Reabrir este clip para volver a publicarlo? Vuelve a la lista de Publicar como aprobado.');">
+              <button type="submit" class="nc-btn" style="padding: 3px 10px; font-size: 12px;"
+                      title="Devuelve el clip a la lista de Publicar para republicarlo">
+                <i class="ti ti-refresh" aria-hidden="true"></i>
+                <span>Republicar</span>
+              </button>
+            </form>
+            {% endif %}
             <a href="{{ view_url }}"
                class="nc-btn" style="padding: 3px 10px; font-size: 12px; text-decoration:none;"
                onclick="event.stopPropagation();">

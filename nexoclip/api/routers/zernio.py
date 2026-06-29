@@ -464,6 +464,18 @@ async def _publish_clip(
     custom_content, platform_data = build_per_platform_payload(
         opts, platform_keys, title=title, tiktok_privacy=tiktok_privacy,
     )
+    # Per-platform caption fitting: a single caption can't satisfy both
+    # TikTok's 2,200 and X's 280, so fit the base caption to each platform's
+    # limit (and re-fit any explicit operator override) — otherwise the
+    # vendor rejects/truncates the over-long ones. See platform_specs.
+    from nexoclip.publish.platform_specs import (
+        fit_caption,
+        per_platform_caption_overrides,
+    )
+    fitted = per_platform_caption_overrides(content, platform_keys)
+    for p, v in (custom_content or {}).items():
+        fitted[p] = fit_caption(v, p)
+    custom_content = fitted or None
     try:
         result = await client.create_post(
             profile_id=profile_id,
@@ -1630,6 +1642,7 @@ async def zernio_autopublish_json(
         "enabled": False, "mode": "on_approve", "targets": None,
         "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
         "tag_suffix": "", "content_strategy": "unique",
+        "growth_engine": False, "growth_min_score": 40, "daily_clip_budget": None,
     }
     platforms: list[str] = []
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -1690,6 +1703,21 @@ async def zernio_autopublish_save(
     # Fixed @handles + brand hashtags appended to every auto-published /
     # auto-programmed caption. Capped so a runaway paste can't bloat posts.
     tag_suffix = str(data.get("tag_suffix") or "").strip()[:500]
+    # Growth Engine knobs (Phases 2 + 5). Off by default; min-score is the
+    # per-platform publish floor (0-100); budget is "how many clips today"
+    # (None / 0 = no pool cap).
+    growth_engine = bool(data.get("growth_engine"))
+    try:
+        growth_min_score = min(100, max(0, int(data.get("growth_min_score", 40))))
+    except (TypeError, ValueError):
+        growth_min_score = 40
+    raw_budget = data.get("daily_clip_budget")
+    try:
+        daily_clip_budget = int(raw_budget) if raw_budget not in (None, "") else None
+        if daily_clip_budget is not None:
+            daily_clip_budget = max(0, daily_clip_budget) or None
+    except (TypeError, ValueError):
+        daily_clip_budget = None
     await AutopublishSettingsRepo(db).upsert(
         tenant_id,
         enabled=bool(data.get("enabled")),
@@ -1700,8 +1728,114 @@ async def zernio_autopublish_save(
         score_threshold=score_threshold,
         tag_suffix=tag_suffix,
         content_strategy=content_strategy,
+        growth_engine=growth_engine,
+        growth_min_score=growth_min_score,
+        daily_clip_budget=daily_clip_budget,
     )
     return JSONResponse({"ok": True})
+
+
+@router.get("/autopublish/rules.json")
+async def zernio_pacing_rules_json(
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """The effective per-platform rulebook (defaults overlaid with the tenant's
+    saved overrides). `overridden` flags which platforms the tenant has tuned."""
+    from nexoclip.db import PlatformPacingRulesRepo
+
+    repo = PlatformPacingRulesRepo(db)
+    effective = await repo.effective_rules(tenant_id)
+    overrides = await repo.overrides(tenant_id)
+    rules = [
+        {**rule.model_dump(), "overridden": key in overrides}
+        for key, rule in sorted(effective.items())
+    ]
+    return JSONResponse({"ok": True, "rules": rules})
+
+
+@router.post("/autopublish/rules/save")
+async def zernio_pacing_rules_save(
+    request: Request,
+    tenant_id: str = Depends(tenant_binder),
+    _: None = Depends(require_full_scope),
+    db: Database = Depends(get_db),
+) -> Response:
+    """Upsert one platform's rule override, or reset it to the shipped default.
+
+    Body: {platform, max_per_day, min_gap_minutes, caption_max_chars,
+    hashtag_max, jitter_minutes, enabled} to save, or {platform, reset: true}
+    to drop the override."""
+    from nexoclip.db import PlatformPacingRulesRepo
+    from nexoclip.publish.pacing import PlatformRule, canonical_platform, default_rule_for
+
+    data = await _read_json(request)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "Body must be JSON"}, status_code=400)
+    platform = canonical_platform(str(data.get("platform") or ""))
+    if not platform:
+        return JSONResponse({"ok": False, "error": "platform required"}, status_code=400)
+
+    repo = PlatformPacingRulesRepo(db)
+    if data.get("reset"):
+        await repo.delete(tenant_id, platform)
+        return JSONResponse({"ok": True, "reset": True})
+
+    # Start from the current default so a partial body only overrides the knobs
+    # the operator actually changed.
+    base = default_rule_for(platform)
+
+    def _int(key: str, fallback: int, lo: int, hi: int) -> int:
+        try:
+            return min(hi, max(lo, int(data.get(key, fallback))))
+        except (TypeError, ValueError):
+            return fallback
+
+    rule = PlatformRule(
+        platform=platform,
+        max_per_day=_int("max_per_day", base.max_per_day, 0, 100),
+        min_gap_minutes=_int("min_gap_minutes", base.min_gap_minutes, 0, 1440),
+        caption_min_chars=_int("caption_min_chars", base.caption_min_chars, 0, 5000),
+        caption_max_chars=_int("caption_max_chars", base.caption_max_chars, 1, 5000),
+        hashtag_min=_int("hashtag_min", base.hashtag_min, 0, 30),
+        hashtag_max=_int("hashtag_max", base.hashtag_max, 0, 30),
+        jitter_minutes=_int("jitter_minutes", base.jitter_minutes, 0, 120),
+        caption_style=str(data.get("caption_style") or base.caption_style)[:40],
+        enabled=bool(data.get("enabled", True)),
+    )
+    await repo.upsert(tenant_id, rule)
+    return JSONResponse({"ok": True})
+
+
+@router.get("/clips/{clip_id}/growth.json")
+async def zernio_clip_growth_json(
+    clip_id: str,
+    tenant_id: str = Depends(tenant_binder),
+    db: Database = Depends(get_db),
+) -> Response:
+    """The cached Growth Score card for one clip (the pre-publish panel).
+    404 when the clip hasn't been scored yet."""
+    from nexoclip.db import GrowthScoresRepo
+
+    row = await GrowthScoresRepo(db).get(tenant_id, clip_id)
+    if row is None:
+        return JSONResponse(
+            {"ok": False, "error": "not_scored"}, status_code=404,
+        )
+    import json as _json
+
+    try:
+        card = _json.loads(row["card_json"])
+    except (ValueError, KeyError):
+        card = None
+    return JSONResponse({
+        "ok": True,
+        "clip_id": clip_id,
+        "overall_score": row["overall_score"],
+        "decision": row["decision"],
+        "content_tags": row["content_tags"],
+        "card": card,
+    })
 
 
 async def _autopublish_count_today(db: Database, tenant_id: str) -> int:
@@ -1824,6 +1958,10 @@ async def autopublish_hands_free_sweep(
         )
         from nexoclip.db import AutopublishSettingsRepo, ClipsRepo
         from nexoclip.publish.compose import build_post
+        from nexoclip.publish.platform_specs import (
+            fits_duration,
+            per_platform_caption_overrides,
+        )
         from nexoclip.tenancy import bound_tenant
 
         s = await AutopublishSettingsRepo(db).get(tenant_id)
@@ -1903,6 +2041,17 @@ async def autopublish_hands_free_sweep(
             )
             return 0
 
+        # Growth Engine (Phases 1-6): when the tenant opts in, route eligible
+        # clips through the per-platform rulebook + Growth Score + fatigue
+        # spacing + allocation instead of the flat interval drip below.
+        if s.get("growth_engine"):
+            return await _run_growth_engine(
+                db=db, tenant_id=tenant_id, base_url=base_url,
+                profile_id=profile_id, client=client, account_map=account_map,
+                targets=chosen, eligible=eligible, clips_by_id=clips_by_id,
+                settings_row=s, log=log,
+            )
+
         # Spacing rules:
         #   Queue mode → drip one post every 30 min (unique) / 60 min
         #     (same-video variations) from the tenant's content strategy. No
@@ -1934,6 +2083,25 @@ async def autopublish_hands_free_sweep(
                         db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
                     )
                 content = composed.caption
+                # Per-platform compliance: drop targets the clip is too long
+                # for (Bluesky 60s, IG/FB 90s, X 140s, YT Shorts 180s) and fit
+                # the caption to each platform's char limit (X 280, Threads
+                # 500, Bluesky ~300) so the post LANDS instead of being
+                # rejected/truncated by the vendor. See platform_specs.
+                clip_targets = [
+                    (p, a) for p, a in post_targets
+                    if fits_duration(p, clip.duration_s)
+                ]
+                if not clip_targets:
+                    log.info(
+                        "autopublish.handsfree.clip_too_long_for_all_targets",
+                        tenant_id=tenant_id, clip_id=clip_id,
+                        duration_s=clip.duration_s,
+                    )
+                    continue
+                custom_content = per_platform_caption_overrides(
+                    content, [p for p, _ in clip_targets]
+                )
                 await ensure_clip_rendered(
                     db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                     auth_cookie_value=None, db_path=resolve_db_target(settings),
@@ -1956,15 +2124,16 @@ async def autopublish_hands_free_sweep(
                 )
                 result = await client.create_post(
                     profile_id=profile_id, content=content, media_url=media_url,
-                    platforms=post_targets, publish_now=(when is None),
+                    platforms=clip_targets, publish_now=(when is None),
                     title=composed.title,
                     scheduled_for=when,
                     timezone="UTC" if when else None,
+                    custom_content=custom_content or None,
                 )
                 with bound_tenant(tenant_id):
                     await pubs.record(
                         post_id=result.post_id, tenant_id=tenant_id, clip_id=clip_id,
-                        platforms=[p for p, _ in post_targets], content=content,
+                        platforms=[p for p, _ in clip_targets], content=content,
                         status="scheduled" if when else None,
                     )
                     await ClipsRepo(db).update_status(clip_id, status="published")
@@ -1982,6 +2151,174 @@ async def autopublish_hands_free_sweep(
                 continue
     except Exception as e:  # the sweep must never break the pipeline
         log.warning("autopublish.handsfree.failed", tenant_id=tenant_id, error=str(e))
+    return published
+
+
+async def _run_growth_engine(
+    *,
+    db: Database,
+    tenant_id: str,
+    base_url: str,
+    profile_id: str,
+    client: Any,
+    account_map: dict[str, str],
+    targets: list[str],
+    eligible: list[str],
+    clips_by_id: dict[str, Any],
+    settings_row: dict[str, Any],
+    log: Any,
+) -> int:
+    """Execute the Growth Engine for a batch of eligible clips.
+
+    Scores each clip (Growth Score model), persists the card, plans the publish
+    schedule (`plan_growth_publish` — fatigue spacing → allocation → per-platform
+    pacing → per-platform assets), then renders + posts each scheduled (clip,
+    platform) through Zernio. One post's failure never aborts the batch; the
+    whole thing returns a count and never raises into the caller."""
+    import datetime as _dt
+    from pathlib import Path
+
+    from nexoclip.api._clip_render import ensure_clip_rendered
+    from nexoclip.api.routers.internal import (
+        mint_signed_clip_url,
+        sign_render_query,
+        signed_clip_ttl_for_schedule,
+    )
+    from nexoclip.clip.breakdown import clip_breakdown
+    from nexoclip.db import ClipsRepo, GrowthScoresRepo, PlatformPacingRulesRepo
+    from nexoclip.llm import LLMRouter, load_llm_config
+    from nexoclip.publish.compose import build_post
+    from nexoclip.publish.growth_engine import ClipContent, plan_growth_publish
+    from nexoclip.publish.pacing import canonical_platform
+    from nexoclip.score.growth import GrowthInput, compute_growth_score
+    from nexoclip.tenancy import bound_tenant
+
+    settings = get_settings()
+    # Canonical-keyed account map so a post's canonical platform ("twitter")
+    # resolves even when Zernio names the account "x".
+    accounts_canon = {canonical_platform(p): a for p, a in account_map.items()}
+    connected = [canonical_platform(p) for p in targets if canonical_platform(p) in accounts_canon]
+    if not connected:
+        log.info("autopublish.growth.no_connected_targets", tenant_id=tenant_id)
+        return 0
+
+    router = LLMRouter(
+        config=load_llm_config(),
+        call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
+        db=db,
+    )
+    rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+    gs_repo = GrowthScoresRepo(db)
+    recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
+
+    # Score + compose each eligible clip into a ClipContent.
+    contents: list[ClipContent] = []
+    for clip_id in eligible:
+        clip = clips_by_id[clip_id]
+        try:
+            with bound_tenant(tenant_id):
+                composed = await build_post(
+                    db, clip_id, handle_suffix=str(settings_row.get("tag_suffix") or ""),
+                )
+                bd = await clip_breakdown(db, clip_id)
+            card = await compute_growth_score(
+                GrowthInput(
+                    clip_id=clip_id,
+                    duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
+                    caption=composed.caption,
+                    hashtags=list(composed.hashtags),
+                    hook=composed.hook,
+                    title=composed.title,
+                    platforms=connected,
+                    heuristic_reason=bd.heuristic_reason,
+                    motion_score=bd.motion_score,
+                    face_presence=bd.face_presence,
+                    speaking_intensity=bd.speaking_intensity,
+                    reaction_confidence=bd.reaction_confidence,
+                    publishability_score=clip.publishability_score,
+                    recent_content_tags=recent_tags,
+                ),
+                tenant_id=tenant_id,
+                router=router,
+            )
+            with bound_tenant(tenant_id):
+                await gs_repo.record(
+                    tenant_id=tenant_id, clip_id=clip_id,
+                    overall_score=card.overall_score, decision=card.decision,
+                    content_tags=card.content_tags, card_json=card.model_dump_json(),
+                )
+            contents.append(
+                ClipContent(
+                    clip_id=clip_id, caption=composed.caption,
+                    hashtags=list(composed.hashtags), hook=composed.hook,
+                    title=composed.title, card=card,
+                )
+            )
+        except Exception as e:  # scoring one clip must not stop the batch
+            log.warning(
+                "autopublish.growth.score_failed",
+                tenant_id=tenant_id, clip_id=clip_id, error=str(e),
+            )
+            continue
+
+    if not contents:
+        return 0
+
+    budget = settings_row.get("daily_clip_budget") or None
+    min_score = int(settings_row.get("growth_min_score") or 40)
+    plan = plan_growth_publish(
+        contents, connected=connected, rules=rules,
+        now=_dt.datetime.now(_dt.UTC), budget=budget, min_score=min_score,
+        recent_tags=recent_tags,
+    )
+
+    pubs = ZernioPublishesRepo(db)
+    published = 0
+    for post in plan.posts:
+        clip = clips_by_id[post.clip_id]
+        try:
+            when = post.when.isoformat()
+            await ensure_clip_rendered(
+                db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
+                auth_cookie_value=None, db_path=resolve_db_target(settings),
+                auth_query=sign_render_query(clip_id=post.clip_id, tenant_id=tenant_id),
+            )
+            media_url = mint_signed_clip_url(
+                clip_id=post.clip_id, tenant_id=tenant_id, base_url=base_url,
+                ttl_seconds=signed_clip_ttl_for_schedule(when),
+            )
+            result = await client.create_post(
+                profile_id=profile_id,
+                content=post.asset.caption_with_tags(),
+                media_url=media_url,
+                platforms=[(post.platform, accounts_canon[post.platform])],
+                publish_now=False,
+                title=post.asset.title,
+                scheduled_for=when,
+                timezone="UTC",
+            )
+            with bound_tenant(tenant_id):
+                await pubs.record(
+                    post_id=result.post_id, tenant_id=tenant_id, clip_id=post.clip_id,
+                    platforms=[post.platform],
+                    content=post.asset.caption_with_tags(), status="scheduled",
+                )
+                await ClipsRepo(db).update_status(post.clip_id, status="published")
+            published += 1
+        except Exception as e:  # one post's failure must not stop the rest
+            log.warning(
+                "autopublish.growth.post_failed",
+                tenant_id=tenant_id, clip_id=post.clip_id,
+                platform=post.platform, error=str(e),
+            )
+            continue
+
+    log.info(
+        "autopublish.growth.done",
+        tenant_id=tenant_id, scored=len(contents), posts=len(plan.posts),
+        published=published, held_fatigue=len(plan.held_fatigue),
+        held_alloc=len(plan.held_allocation), queued=len(plan.queued),
+    )
     return published
 
 

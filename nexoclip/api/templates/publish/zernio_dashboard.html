@@ -1046,8 +1046,20 @@
             <span class="nc-mono nc-mono--muted"{% if when_ts %} data-localtime="{{ when_ts }}"{% endif %}>{{ (when_ts or "")[:19] }}</span>
             {% if h.status == "scheduled" and h.scheduled_for %}<span class="nc-text--muted" style="font-size:10px;"> · programado</span>{% endif %}
           </td>
-          <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-            {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
+          <td style="max-width:260px;">
+            {# Visual recognition — a thumbnail beats remembering the caption.
+               Lazy-loads; hides itself if the thumbnail was reclaimed. #}
+            <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+              {% if h.clip_id %}
+              <img src="/dashboard/clips/{{ h.clip_id }}/thumbnail" alt=""
+                   loading="lazy" onerror="this.style.display='none'"
+                   style="width:44px; height:58px; object-fit:cover; border-radius:6px;
+                          flex:0 0 auto; background:rgba(255,255,255,0.05);">
+              {% endif %}
+              <span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                {{ h.title or (h.clip_id or "")[:14] ~ "…" }}
+              </span>
+            </div>
           </td>
           <td>
             {% if h.kind == "manual" %}

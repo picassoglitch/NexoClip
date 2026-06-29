@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
+import os
 import shutil
 import time
 from pathlib import Path
@@ -169,6 +170,48 @@ def reclaim_stream_source(
     return freed
 
 
+def _source_recently_active(
+    *,
+    stream_dir: Path,
+    video: Path | None,
+    audio: Path | None,
+    now: float,
+    grace_s: float,
+) -> bool:
+    """True if a stream's source is being ACTIVELY written — an in-flight
+    download we must never delete.
+
+    Robust to HLS/DASH (Twitch/Kick/YouTube VODs): those have NO final
+    `video.mp4` yet while downloading, only `video.mp4.part-FragNNNN`
+    fragments, so checking `video.mp4`'s mtime alone misses them and the
+    reclaimer would yank the dir out mid-download (yt-dlp then floods
+    'Unable to rename ...part-FragNNNN'). We instead look at the whole
+    `source/` dir: its own mtime (churns as fragments are created/renamed)
+    and the newest mtime among its files. Short-circuits on the first
+    recent thing it finds.
+    """
+    src_dir = stream_dir / "source"
+    for p in (src_dir, video, audio):
+        if p is None:
+            continue
+        try:
+            if now - p.stat().st_mtime < grace_s:
+                return True
+        except OSError:
+            continue
+    try:
+        with os.scandir(src_dir) as it:
+            for entry in it:
+                try:
+                    if now - entry.stat().st_mtime < grace_s:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
 async def reclaim_sources_until_free(
     db: Database,
     *,
@@ -187,8 +230,10 @@ async def reclaim_sources_until_free(
         can't reach the target, we log loudly: the operator needs a bigger
         volume or object-storage offload, not more deletion.
       * Oldest-first, so the most recently-active streams are last to go.
-      * Skips a source whose file was written within `active_grace_s` — that
-        is an in-flight download we must not yank out from under.
+      * Skips any source whose `source/` dir saw activity within
+        `active_grace_s` — an in-flight download (incl. an HLS/DASH fetch that
+        has only `.part-Frag*` fragments and no `video.mp4` yet) we must not
+        yank out from under. See `_source_recently_active`.
 
     Returns (bytes_freed, target_reached). No-op (0, True) when already above
     target or when target_free_bytes <= 0.
@@ -219,15 +264,16 @@ async def reclaim_sources_until_free(
             break
         video = Path(row["source_video_path"]) if row["source_video_path"] else None
         audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
-        # Don't reclaim a source that's still being written (active download).
-        if video is not None and video.exists():
-            try:
-                if now - video.stat().st_mtime < active_grace_s:
-                    continue
-            except OSError:
-                pass
+        stream_dir = output_dir / row["id"]
+        # Don't reclaim a source that's still being written (active download) —
+        # incl. an HLS/DASH fetch that has only .part-Frag* files, no video.mp4.
+        if _source_recently_active(
+            stream_dir=stream_dir, video=video, audio=audio,
+            now=now, grace_s=active_grace_s,
+        ):
+            continue
         freed += reclaim_stream_source(
-            stream_dir=output_dir / row["id"],
+            stream_dir=stream_dir,
             source_video_path=video,
             source_audio_path=audio,
         )

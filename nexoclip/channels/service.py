@@ -75,7 +75,10 @@ def _list_channel_vods_sync(channel_url: str, limit: int) -> list[dict[str, obje
     # Imported here so yt-dlp stays out of module-load time.
     import yt_dlp
 
-    opts = {
+    from nexoclip.settings import get_settings
+
+    s = get_settings()
+    opts: dict[str, object] = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
@@ -83,6 +86,22 @@ def _list_channel_vods_sync(channel_url: str, limit: int) -> list[dict[str, obje
         "extract_flat": "in_playlist",
         "playlistend": limit,
     }
+    # Same egress auth as the VOD download path — a channel listing hits the
+    # same bot-gate / Cloudflare, so route it through the residential proxy
+    # and any configured cookies. Without this, auto-polling silently 403s.
+    proxy = (getattr(s, "ytdlp_proxy", None) or "").strip()
+    if proxy:
+        opts["proxy"] = proxy
+    if s.cookies_file:
+        opts["cookiefile"] = str(s.cookies_file)
+    elif s.cookies_from_browser:
+        opts["cookiesfrombrowser"] = (s.cookies_from_browser.strip().lower(),)
+    # Same free YouTube bot-gate dodge as the download path (player_client
+    # / PO-token) — a channel listing hits the same gate.
+    from nexoclip.ingest.service import youtube_extractor_args
+    yt_args = youtube_extractor_args(s)
+    if yt_args:
+        opts["extractor_args"] = {"youtube": yt_args}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
     entries = (info or {}).get("entries") or []
@@ -133,8 +152,15 @@ def _fetch_kick_vods_sync(slug: str) -> list[dict[str, Any]]:
     # missing wheel only bites the Kick path, not the whole service.
     from curl_cffi import requests as _creq
 
+    from nexoclip.settings import get_settings
+
     url = f"https://kick.com/api/v2/channels/{slug}/videos"
-    resp = _creq.get(url, impersonate="chrome", timeout=30)
+    # Route through the same residential proxy as the yt-dlp paths so Kick's
+    # Cloudflare sees a home IP, not the datacenter. curl_cffi takes the
+    # standard requests `proxies` mapping.
+    proxy = (getattr(get_settings(), "ytdlp_proxy", None) or "").strip()
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    resp = _creq.get(url, impersonate="chrome", timeout=30, proxies=proxies)
     resp.raise_for_status()
     data = resp.json()
     return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []

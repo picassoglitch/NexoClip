@@ -1958,13 +1958,40 @@ async def streams_rerun(
     try:
         stream = load_stream(output_dir / stream_id)
     except Exception as e:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Stream {stream_id!r} has no on-disk artifacts at "
-                f"{output_dir / stream_id} — can't resume. Re-upload the file."
-            ),
-        ) from e
+        # No on-disk artifacts — the original ingest never completed (e.g. a
+        # transient YouTube "confirm you're not a bot" gate failed the
+        # download). For a URL source we re-attempt the ingest from the stored
+        # VOD URL: build a stub Stream and let the pipeline's first step
+        # re-download. The bot-gate is usually transient, so a retry typically
+        # lands. Uploads / live have no re-fetchable source, so those still
+        # need to be re-added.
+        refetchable = bool(stream_row.vod_url) and stream_row.platform not in (
+            "upload", "live", "live_ended",
+        )
+        if not refetchable:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Stream {stream_id!r} has no on-disk artifacts at "
+                    f"{output_dir / stream_id} and no re-fetchable source — "
+                    f"re-add it to retry."
+                ),
+            ) from e
+        from nexoclip.ingest import Stream as StreamModel
+
+        stream = StreamModel(
+            id=stream_id,
+            tenant_id=tenant_id,
+            vod_url=stream_row.vod_url,
+            platform=stream_row.platform,  # type: ignore[arg-type]
+            duration_s=stream_row.duration_s or 0.0,
+            source_video_path=Path(stream_row.source_video_path),
+            source_audio_path=Path(stream_row.source_audio_path),
+        )
+        # Reset a prior 'failed'/'pending' row so the pipeline's
+        # reconcile_metadata flips it back to 'ingested' on a successful
+        # re-download (reconcile only advances a row that's still 'pending').
+        await StreamsRepo(db).set_status(stream_id, status="pending")
 
     # Slice F.7-G — pass the persona's primary_language into the runner
     # so Whisper transcribes in the right language. The pipeline default

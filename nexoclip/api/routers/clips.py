@@ -21,6 +21,12 @@ router = APIRouter(prefix="/clips", tags=["clips"])
 # clips.status moves through: cut -> ready_for_review -> approved | rejected
 # -> (publish) -> published. The dashboard drives transitions; the worker
 # (Task 11) writes `published` after a successful Buffer post.
+#
+# `published` is terminal for the *generic* transition graph (the editor's
+# Complete/finalize and PATCH /clips both refuse it). Reopening a published
+# clip back to `approved` for a re-publish is a deliberate recovery action
+# behind its own Publish-Center endpoint ("Republicar"), which writes the
+# status directly — see api/routers/zernio.py._reopen_published_clip.
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "cut": {"ready_for_review", "rejected"},
     "ready_for_review": {"approved", "rejected"},

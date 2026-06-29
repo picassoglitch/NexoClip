@@ -205,3 +205,40 @@ def test_plan_reason_is_populated() -> None:
     )
     assert plan.reason  # not empty
     assert "reaction" in plan.reason
+
+
+# ---- Monetization length lift (max_clip_duration_s) ----
+
+
+def test_default_ceiling_keeps_60s_cap_for_story() -> None:
+    # Default ceiling (60) must leave behavior EXACTLY as before: a story
+    # band caps at 60s.
+    cand = _candidate(500.0, reason="voice", type="drama")  # -> story
+    plan = plan_clip_window(
+        candidate=cand, transcript=None, stream_duration_s=2000.0,
+    )
+    assert plan.kind == "story"
+    assert plan.duration_s <= 60.0 + 1e-6
+
+
+def test_lifted_ceiling_lets_story_exceed_60s() -> None:
+    cand = _candidate(500.0, reason="voice", type="drama")  # -> story
+    plan = plan_clip_window(
+        candidate=cand, transcript=None, stream_duration_s=2000.0,
+        max_clip_duration_s=90.0,
+    )
+    assert plan.kind == "story"
+    # Clears the >60s TikTok Creator Rewards floor, within the new ceiling.
+    assert plan.duration_s > 60.0
+    assert plan.duration_s <= 90.0 + 1e-6
+
+
+def test_lifted_ceiling_does_not_stretch_punchy_reaction() -> None:
+    cand = _candidate(500.0, reason="visual")  # -> reaction (punchy)
+    plan = plan_clip_window(
+        candidate=cand, transcript=None, stream_duration_s=2000.0,
+        max_clip_duration_s=90.0,
+    )
+    assert plan.kind == "reaction"
+    # Punchy bands stay short even when the ceiling is lifted.
+    assert plan.duration_s <= WINDOW_BANDS["reaction"].max_s + 1e-6

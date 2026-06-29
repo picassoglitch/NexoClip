@@ -15,6 +15,7 @@ without re-downloading or re-extracting unless `force=True`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import shutil
 import subprocess
@@ -142,6 +143,28 @@ async def ingest_vod(
             cookies_file = settings.cookies_file or None
         if cookies_from_browser is None:
             cookies_from_browser = settings.cookies_from_browser or None
+
+    # Free-disk preflight, self-healing: if we're low, shed the oldest raw
+    # sources FIRST (the disk budget), then fail fast only if still below the
+    # hard floor. Prevents a near-full volume from blocking new ingests when
+    # there are stale sources sitting around to reclaim.
+    if db is not None:
+        from nexoclip.settings import get_settings as _gs
+
+        floor = int(getattr(_gs(), "min_free_disk_bytes", 0) or 0)
+        if floor > 0:
+            try:
+                free = shutil.disk_usage(output_dir).free
+            except OSError:
+                free = floor  # can't stat → don't try to reclaim
+            if free < floor:
+                from nexoclip.retention import reclaim_sources_until_free
+
+                with contextlib.suppress(Exception):  # reclaim is best-effort
+                    await reclaim_sources_until_free(
+                        db, output_dir=output_dir, target_free_bytes=floor * 2,
+                    )
+    _assert_disk_headroom(output_dir)
 
     # Task 2a — telemetry. Wall-clock + file-size + downloader-id around
     # both the yt-dlp call and the audio extract so the dashboard can
@@ -396,6 +419,26 @@ async def ingest_uploaded(
     return stream
 
 
+def youtube_extractor_args(settings: Any) -> dict[str, list[str]] | None:
+    """Build yt-dlp's `extractor_args["youtube"]` from the free bot-gate
+    knobs — a player_client switch and an optional self-hosted PO-token
+    provider. Both are FREE and need no proxy/cookies; YouTube-scoped, so
+    they never affect other extractors. Returns None when neither is set.
+
+    Shared by the VOD download and the channel-VOD listing so both egress
+    paths dodge the gate the same way.
+    """
+    yt: dict[str, list[str]] = {}
+    clients = (getattr(settings, "ytdlp_player_client", None) or "").strip()
+    if clients:
+        yt["player_client"] = [c.strip() for c in clients.split(",") if c.strip()]
+    po_url = (getattr(settings, "ytdlp_po_provider_url", None) or "").strip()
+    if po_url:
+        # The bgutil yt-dlp plugin reads its provider base URL from here.
+        yt["getpot_bgutil_baseurl"] = [po_url]
+    return yt or None
+
+
 def _download_vod(
     *,
     vod_url: str,
@@ -477,6 +520,21 @@ def _download_vod(
         "concurrent_fragment_downloads": concurrent_frags,
     }
 
+    # Residential proxy — the sustainable fix for datacenter-IP bot-gating
+    # (YouTube "confirm you're not a bot", Kick Cloudflare 403). Routes the
+    # whole fetch through a home-looking IP so we don't depend on cookies
+    # that expire. Unset → direct. See Settings.ytdlp_proxy.
+    proxy = (getattr(s, "ytdlp_proxy", None) or "").strip()
+    if proxy:
+        ydl_opts["proxy"] = proxy
+
+    # FREE bot-gate mitigation: a YouTube player_client switch (+ optional
+    # PO-token provider) often clears the gate with NO proxy and NO cookies.
+    # YouTube-scoped, so it never affects Twitch/Kick. See Settings.
+    yt_args = youtube_extractor_args(s)
+    if yt_args:
+        ydl_opts["extractor_args"] = {"youtube": yt_args}
+
     # Task 2b — aria2c external downloader. Probe at request time so
     # the operator can flip the env var without restarting (the
     # `get_settings` cache survives but the PATH probe doesn't).
@@ -529,6 +587,17 @@ def _download_vod(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info: dict[str, Any] = ydl.extract_info(vod_url, download=True) or {}
     except yt_dlp.utils.DownloadError as e:
+        # Sweep the partial download (`.part`, `.ytdl`, fragment files, and a
+        # half-written muxed file) before surfacing the error. A failed fetch
+        # of a multi-hour VOD otherwise leaves gigabytes behind that the next
+        # download has to fit around — the start of the disk-exhaustion
+        # spiral. Output files all share the outtmpl stem in this stream's
+        # own `source/` dir, so globbing the stem is safe. Best-effort.
+        stem = target_path.with_suffix("").name
+        for leftover in target_path.parent.glob(f"{stem}*"):
+            with contextlib.suppress(OSError):
+                if leftover.is_file():
+                    leftover.unlink()
         raise _explain_download_failure(
             err=e, vod_url=vod_url, platform=platform,
             cookies_from_browser=cookies_from_browser,
@@ -541,6 +610,30 @@ def _download_vod(
             target_path.unlink()
         actual.replace(target_path)
     return info
+
+
+def _assert_disk_headroom(output_dir: Path) -> None:
+    """Raise IngestError when the output volume is below the configured free-
+    space floor (`min_free_disk_bytes`). No-op when the floor is 0/unset or
+    the volume can't be statted (don't block ingest on an observability gap).
+    """
+    from nexoclip.settings import get_settings
+
+    floor = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+    if floor <= 0:
+        return
+    try:
+        free = shutil.disk_usage(output_dir).free
+    except OSError:
+        return
+    if free < floor:
+        gb = 1024 * 1024 * 1024
+        raise IngestError(
+            f"insufficient disk: {free / gb:.1f} GB free on the output volume, "
+            f"need at least {floor / gb:.1f} GB to start a download. Free space "
+            "(run the retention sweep, delete old streams, or expand the volume) "
+            "and retry."
+        )
 
 
 def _explain_download_failure(

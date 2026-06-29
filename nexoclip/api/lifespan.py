@@ -65,6 +65,12 @@ _DEFAULT_RETENTION_INITIAL_DELAY_S = 120.0
 # that orphaned a job heals within a minute, not on the next interval.
 _DEFAULT_RECOVERY_INTERVAL_S = 600.0
 _DEFAULT_RECOVERY_INITIAL_DELAY_S = 45.0
+# Disk watchdog — far more frequent than the daily retention sweep because
+# its job is to keep the volume from FILLING (a size budget), not to age out
+# old artifacts (a time budget). Each tick sheds the oldest raw sources when
+# free space is below the high-water mark. Cheap when there's nothing to do.
+_DEFAULT_DISK_WATCHDOG_INTERVAL_S = 900.0
+_DEFAULT_DISK_WATCHDOG_INITIAL_DELAY_S = 60.0
 
 
 async def _webhook_loop(db: Database, interval_s: float) -> None:
@@ -210,6 +216,40 @@ async def _recovery_loop(
             _log.warning("recovery_loop_iteration_failed", error=str(e))
 
 
+async def _disk_watchdog_loop(
+    db: Database,
+    output_dir: Path,
+    interval_s: float,
+    initial_delay_s: float = _DEFAULT_DISK_WATCHDOG_INITIAL_DELAY_S,
+) -> None:
+    """Keep the output volume under its disk budget by shedding the oldest
+    raw sources whenever free space drops below the high-water mark.
+
+    This is the proactive guard that stops the volume from filling at all —
+    independent of the daily retention sweep (which only ages out artifacts)
+    and the per-ingest preflight (which only fires when something downloads).
+    Sources only; user clips/transcripts are never touched here. No-ops when
+    `target_free_disk_bytes` is 0.
+    """
+    from nexoclip.retention import reclaim_sources_until_free
+    from nexoclip.settings import get_settings
+
+    first = True
+    while True:
+        try:
+            await asyncio.sleep(initial_delay_s if first else interval_s)
+            first = False
+            target = int(getattr(get_settings(), "target_free_disk_bytes", 0) or 0)
+            if target > 0:
+                await reclaim_sources_until_free(
+                    db, output_dir=output_dir, target_free_bytes=target,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _log.warning("disk_watchdog_loop_iteration_failed", error=str(e))
+
+
 @asynccontextmanager
 async def background_drains_lifespan(
     app: FastAPI,
@@ -220,6 +260,7 @@ async def background_drains_lifespan(
     channel_poll_interval_s: float = _DEFAULT_CHANNEL_POLL_INTERVAL_S,
     retention_interval_s: float = _DEFAULT_RETENTION_INTERVAL_S,
     recovery_interval_s: float = _DEFAULT_RECOVERY_INTERVAL_S,
+    disk_watchdog_interval_s: float = _DEFAULT_DISK_WATCHDOG_INTERVAL_S,
 ) -> AsyncIterator[None]:
     """Start the background loops on boot; cancel + await on shutdown."""
     db: Database = app.state.db
@@ -247,6 +288,10 @@ async def background_drains_lifespan(
         asyncio.create_task(
             _retention_loop(db, output_dir, retention_interval_s),
             name="nexoclip-retention-loop",
+        ),
+        asyncio.create_task(
+            _disk_watchdog_loop(db, output_dir, disk_watchdog_interval_s),
+            name="nexoclip-disk-watchdog-loop",
         ),
     ]
     # The channel-poll + recovery loops need the pipeline dispatcher + output

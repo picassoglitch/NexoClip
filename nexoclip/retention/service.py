@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
+import shutil
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -165,6 +167,88 @@ def reclaim_stream_source(
         if p is not None and src_dir not in p.parents:
             freed += _safe_unlink(p)
     return freed
+
+
+async def reclaim_sources_until_free(
+    db: Database,
+    *,
+    output_dir: Path,
+    target_free_bytes: int,
+    active_grace_s: float = 600.0,
+) -> tuple[int, bool]:
+    """Disk-budget enforcer: evict the OLDEST raw stream sources (video +
+    audio) until the output volume has at least `target_free_bytes` free.
+
+    This is what keeps the volume from filling regardless of user/stream
+    count — time-window retention only bounds AGE, not total size. It is
+    deliberately conservative:
+      * Sources ONLY. Never touches clips/transcripts (user output) — those
+        stay on their own retention windows. If shedding every source still
+        can't reach the target, we log loudly: the operator needs a bigger
+        volume or object-storage offload, not more deletion.
+      * Oldest-first, so the most recently-active streams are last to go.
+      * Skips a source whose file was written within `active_grace_s` — that
+        is an in-flight download we must not yank out from under.
+
+    Returns (bytes_freed, target_reached). No-op (0, True) when already above
+    target or when target_free_bytes <= 0.
+    """
+    output_dir = Path(output_dir).resolve()
+    if target_free_bytes <= 0:
+        return 0, True
+    try:
+        free = shutil.disk_usage(output_dir).free
+    except OSError:
+        return 0, True
+    if free >= target_free_bytes:
+        return 0, True
+
+    conn = await db.connect()
+    cur = await conn.execute(
+        "SELECT id, source_video_path, source_audio_path FROM streams "
+        "ORDER BY created_at ASC"
+    )
+    rows = await cur.fetchall()
+    now = time.time()
+    freed = 0
+    for row in rows:
+        try:
+            if shutil.disk_usage(output_dir).free >= target_free_bytes:
+                break
+        except OSError:
+            break
+        video = Path(row["source_video_path"]) if row["source_video_path"] else None
+        audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
+        # Don't reclaim a source that's still being written (active download).
+        if video is not None and video.exists():
+            try:
+                if now - video.stat().st_mtime < active_grace_s:
+                    continue
+            except OSError:
+                pass
+        freed += reclaim_stream_source(
+            stream_dir=output_dir / row["id"],
+            source_video_path=video,
+            source_audio_path=audio,
+        )
+
+    try:
+        reached = shutil.disk_usage(output_dir).free >= target_free_bytes
+    except OSError:
+        reached = False
+    if freed:
+        _log.info(
+            "retention.reclaim_until_free",
+            bytes_freed=freed, target_bytes=target_free_bytes, reached=reached,
+        )
+    if not reached:
+        _log.warning(
+            "retention.reclaim_until_free.target_unmet",
+            target_bytes=target_free_bytes,
+            hint="all reclaimable sources shed and still low — grow the "
+                 "volume or enable object-storage offload",
+        )
+    return freed, reached
 
 
 async def sweep_retention(

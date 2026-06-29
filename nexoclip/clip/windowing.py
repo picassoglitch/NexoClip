@@ -118,6 +118,23 @@ def classify_window_kind(candidate: Candidate) -> WindowKind:
     return "default"
 
 
+def _lift_band(band: WindowBand, kind: WindowKind, ceiling: float) -> WindowBand:
+    """Apply the monetization length lift to a SUBSTANTIVE band.
+
+    When `ceiling` > 60s, raise the band's max_s to the ceiling and pull its
+    target up toward it (so the clip actually clears 60s, not just *may*).
+    Punchy bands (reaction/quote) and a default/no-lift ceiling are returned
+    unchanged — keeping behavior identical when the operator hasn't opted in.
+    """
+    if ceiling <= 60.0 or kind not in ("story", "retroactive", "default"):
+        return band
+    return WindowBand(
+        min_s=band.min_s,
+        max_s=ceiling,
+        target_s=min(ceiling, max(band.target_s, ceiling - 5.0)),
+    )
+
+
 def plan_clip_window(
     *,
     candidate: Candidate,
@@ -125,9 +142,13 @@ def plan_clip_window(
     stream_duration_s: float,
     fallback_pre_roll_s: float = 30.0,
     fallback_post_roll_s: float = 15.0,
+    max_clip_duration_s: float = 60.0,
 ) -> WindowPlan:
     """Pick the window kind, build the target window, snap to clean
     transcript boundaries, and clamp to the VOD bounds.
+
+    `max_clip_duration_s` lifts the substantive bands so clips can run past
+    60s (TikTok Creator Rewards eligibility). Default 60.0 = no change.
     """
     if stream_duration_s <= 0:
         return WindowPlan(
@@ -135,8 +156,13 @@ def plan_clip_window(
         )
 
     kind = classify_window_kind(candidate)
-    band = WINDOW_BANDS[kind]
+    ceiling = max(60.0, float(max_clip_duration_s))
+    band = _lift_band(WINDOW_BANDS[kind], kind, ceiling)
     ts = candidate.timestamp
+    # When the operator lifts the ceiling, a default clip should reach the
+    # monetization length too — extend its post-roll so its window targets the
+    # lifted band instead of the legacy 30/15 = 45s. No lift → exact legacy.
+    lifted = ceiling > 60.0 and kind in ("story", "retroactive", "default")
 
     # ---- 1. Initial target window per kind ----
     if kind == "retroactive":
@@ -145,7 +171,7 @@ def plan_clip_window(
         start_s = max(0.0, ts - band.target_s)
         end_s = min(stream_duration_s, ts)
         reason_parts: list[str] = [f"retroactive (≤{band.max_s:.0f}s)"]
-    elif kind == "default":
+    elif kind == "default" and not lifted:
         # Legacy 30/15 split — passes through the caller's overrides
         # so the existing ClipConfig fields still mean something.
         start_s = max(0.0, ts - fallback_pre_roll_s)
@@ -178,7 +204,7 @@ def plan_clip_window(
 
     # ---- 3. Enforce band min/max ----
     duration = end_s - start_s
-    if kind != "default":  # default doesn't have a strict cap
+    if kind != "default" or lifted:  # legacy default has no strict cap
         if duration < band.min_s:
             # Too short after snapping — pad to min by extending POST-side
             # (keep the start where the boundary was found).

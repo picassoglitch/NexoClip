@@ -84,6 +84,33 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
                 "pipeline.failed event write failed for stream=%s",
                 kickoff.stream.id,
             )
+        # Reclaim the heavy source VOD on FAILURE too — not just on success.
+        # The source MP4 + audio is 5-50 GB per multi-hour stream. Without
+        # this, a failed long-VOD ingest sits on disk until the 7-day
+        # retention sweep; a burst of failures (e.g. expired cookies, a slow
+        # disk) fills the volume and every later download then truncates /
+        # no-spaces — the self-reinforcing disk-exhaustion spiral behind a
+        # wall of "failed" streams. A retry re-downloads from the row, so
+        # dropping the source here is safe. Gated on the same flag as the
+        # success-path cleanup; cleanup failure must never mask the original.
+        if get_settings().delete_source_on_completion:
+            try:
+                from nexoclip.retention import reclaim_stream_source
+
+                freed = reclaim_stream_source(
+                    stream_dir=kickoff.output_dir / kickoff.stream.id,
+                    source_video_path=kickoff.stream.source_video_path,
+                    source_audio_path=kickoff.stream.source_audio_path,
+                )
+                _log.info(
+                    "pipeline.failed.source_reclaimed stream=%s bytes_freed=%d",
+                    kickoff.stream.id, freed,
+                )
+            except Exception:
+                _log.exception(
+                    "source reclaim after failure failed for stream=%s",
+                    kickoff.stream.id,
+                )
         # Always re-raise so FastAPI logs the full traceback for the
         # operator to debug from Railway logs.
         raise

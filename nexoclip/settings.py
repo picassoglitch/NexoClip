@@ -84,6 +84,31 @@ class Settings(BaseSettings):
     # crashed before completion).
     delete_source_on_completion: bool = True
 
+    # Free-disk preflight — refuse to START a VOD download when the output
+    # volume has less than this many bytes free. A multi-hour VOD is 5-50 GB;
+    # starting a download onto a near-full volume just produces a truncated
+    # file that fails downstream and (until reclaimed) eats the last of the
+    # disk. Failing fast with an actionable "disk full" message is strictly
+    # better. Default 3 GiB — low enough to rarely false-block, high enough
+    # that anything below it would fail mid-download anyway. Set 0 to disable.
+    min_free_disk_bytes: int = Field(
+        default=3 * 1024 * 1024 * 1024,
+        validation_alias="NEXOCLIP_MIN_FREE_DISK_BYTES",
+    )
+
+    # Disk-budget HIGH-WATER mark. The volume self-regulates against THIS,
+    # not just the hard floor above: whenever free space drops below it, the
+    # background watchdog (and the ingest preflight) evict the OLDEST raw
+    # sources — heaviest, post-processing-disposable artifact — until free is
+    # back above it. This is what bounds total disk regardless of how many
+    # users/streams pile up; time-window retention only bounds AGE, not size.
+    # Default 10 GiB headroom; must be >= min_free_disk_bytes. Set 0 to
+    # disable the proactive watchdog (the hard floor + 24h sweep still apply).
+    target_free_disk_bytes: int = Field(
+        default=10 * 1024 * 1024 * 1024,
+        validation_alias="NEXOCLIP_TARGET_FREE_DISK_BYTES",
+    )
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None
@@ -256,6 +281,38 @@ class Settings(BaseSettings):
     # extension). yt-dlp reads the file directly so the browser can stay
     # open. When both this and cookies_from_browser are set, the file wins.
     cookies_file: str | None = None
+
+    # Route ALL yt-dlp egress (VOD download + channel listing) and the Kick
+    # API call through a proxy. A RESIDENTIAL/mobile proxy makes the request
+    # look like a home connection instead of a datacenter — which is what
+    # actually stops YouTube's "confirm you're not a bot" gate and Kick's
+    # Cloudflare 403, WITHOUT cookies (which expire and get accounts banned).
+    # This is the sustainable fix; cookies become an optional fallback for
+    # login-walled content (e.g. X video). Format is a full proxy URL:
+    #   http://user:pass@host:port  or  socks5://user:pass@host:port
+    # Unset → direct connection (current behavior).
+    ytdlp_proxy: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PROXY"
+    )
+
+    # FREE, zero-infra YouTube bot-gate mitigation (no proxy, no cookies).
+    # yt-dlp can dodge the "confirm you're not a bot" gate by extracting via a
+    # different YouTube player client. Comma-separated, tried in order, e.g.
+    # "tv,web_safari,mweb" (good gate-dodgers as of 2026; `web`/`android` now
+    # demand a PO token). Maps to extractor_args youtube:player_client.
+    # YouTube-SCOPED — never touches Twitch/Kick. Unset → yt-dlp's default.
+    ytdlp_player_client: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PLAYER_CLIENT"
+    )
+
+    # Base URL of a self-hosted bgutil PO-token provider (needs the yt-dlp
+    # plugin `bgutil-ytdlp-pot-provider` installed + the provider running as a
+    # small sidecar). Lets yt-dlp mint the Proof-of-Origin tokens YouTube
+    # increasingly requires WITHOUT a browser or cookies. Maps to
+    # extractor_args youtube:getpot_bgutil_baseurl. Unset → no PO provider.
+    ytdlp_po_provider_url: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PO_PROVIDER_URL"
+    )
 
     # Task 2b — VOD download speed.
     #

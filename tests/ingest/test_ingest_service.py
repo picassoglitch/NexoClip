@@ -238,3 +238,201 @@ def test_ingest_uses_ffprobe_duration_over_metadata(
         )
     )
     assert stream.duration_s == pytest.approx(590.0)
+
+
+# ---- Free-disk preflight (disk-exhaustion guard) ----
+
+
+def test_disk_headroom_raises_when_below_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil as _shutil
+
+    from nexoclip.errors import IngestError
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "min_free_disk_bytes", 3 * 1024**3, raising=False)
+    monkeypatch.setattr(
+        _shutil, "disk_usage",
+        lambda _p: _shutil._ntuple_diskusage(100, 99, 1 * 1024**3),  # 1 GB free
+    )
+    with pytest.raises(IngestError, match="insufficient disk"):
+        ingest_service._assert_disk_headroom(Path("."))
+
+
+def test_disk_headroom_passes_with_room(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil as _shutil
+
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "min_free_disk_bytes", 3 * 1024**3, raising=False)
+    monkeypatch.setattr(
+        _shutil, "disk_usage",
+        lambda _p: _shutil._ntuple_diskusage(100, 50, 50 * 1024**3),  # 50 GB free
+    )
+    ingest_service._assert_disk_headroom(Path("."))  # no raise
+
+
+def test_disk_headroom_disabled_when_floor_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil as _shutil
+
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "min_free_disk_bytes", 0, raising=False)
+    # disk_usage must not even be consulted when disabled.
+    def _boom(_p: object) -> object:
+        raise AssertionError("disk_usage should not be called when floor=0")
+
+    monkeypatch.setattr(_shutil, "disk_usage", _boom)
+    ingest_service._assert_disk_headroom(Path("."))  # no raise
+
+
+# ---- Partial-download cleanup on failure (disk-exhaustion guard) ----
+
+
+def test_download_failure_sweeps_partial_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed yt-dlp download must not leave partial files behind."""
+    import yt_dlp
+
+    from nexoclip.errors import IngestError
+
+    target = tmp_path / "source" / "video.mp4"
+    target.parent.mkdir(parents=True)
+
+    class _FakeYDL:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeYDL:
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def extract_info(self, *_a: object, **_k: object) -> dict[str, Any]:
+            # Simulate yt-dlp writing partials, then failing mid-fetch.
+            (target.parent / "video.mp4.part").write_bytes(b"x" * 1000)
+            (target.parent / "video.f137.mp4").write_bytes(b"x" * 1000)
+            (target.parent / "video.ytdl").write_bytes(b"x")
+            raise yt_dlp.utils.DownloadError("boom: connection reset")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+
+    with pytest.raises(IngestError, match="yt-dlp failed"):
+        ingest_service._download_vod(
+            vod_url="https://twitch.tv/videos/1",
+            target_path=target,
+            cookies_from_browser=None,
+            cookies_file=None,
+            platform="twitch",
+        )
+    # Every partial under source/ is gone — nothing left to eat the disk.
+    leftovers = [p.name for p in target.parent.glob("video*")]
+    assert leftovers == [], f"partial files not cleaned: {leftovers}"
+
+
+# ---- Residential proxy wiring (sustainable bot-gate fix) ----
+
+
+def _capture_ydl_opts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+    """Patch yt_dlp.YoutubeDL to capture the opts and return a valid download."""
+    import yt_dlp
+
+    captured: dict[str, Any] = {}
+    target = tmp_path / "source" / "video.mp4"
+
+    class _FakeYDL:
+        def __init__(self, opts: dict[str, Any], *_a: object, **_k: object) -> None:
+            captured.update(opts)
+
+        def __enter__(self) -> _FakeYDL:
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def extract_info(self, *_a: object, **_k: object) -> dict[str, Any]:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"\x00\x00data")
+            return {"requested_downloads": [{"filepath": str(target)}]}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    return captured
+
+
+def test_download_vod_sets_proxy_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(
+        get_settings(), "ytdlp_proxy", "http://u:p@proxy.host:1234", raising=False
+    )
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://twitch.tv/videos/1",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="twitch",
+    )
+    assert captured.get("proxy") == "http://u:p@proxy.host:1234"
+
+
+def test_download_vod_no_proxy_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "ytdlp_proxy", None, raising=False)
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://twitch.tv/videos/1",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="twitch",
+    )
+    assert "proxy" not in captured
+
+
+# ---- Free YouTube bot-gate dodge (player_client / PO-token) ----
+
+
+def test_youtube_extractor_args_player_client() -> None:
+    class _S:
+        ytdlp_player_client = "tv, web_safari ,mweb"
+        ytdlp_po_provider_url = None
+
+    out = ingest_service.youtube_extractor_args(_S())
+    assert out == {"player_client": ["tv", "web_safari", "mweb"]}
+
+
+def test_youtube_extractor_args_po_provider() -> None:
+    class _S:
+        ytdlp_player_client = None
+        ytdlp_po_provider_url = "http://pot:4416"
+
+    out = ingest_service.youtube_extractor_args(_S())
+    assert out == {"getpot_bgutil_baseurl": ["http://pot:4416"]}
+
+
+def test_youtube_extractor_args_none_when_unset() -> None:
+    class _S:
+        ytdlp_player_client = None
+        ytdlp_po_provider_url = ""
+
+    assert ingest_service.youtube_extractor_args(_S()) is None
+
+
+def test_download_vod_sets_youtube_extractor_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(
+        get_settings(), "ytdlp_player_client", "tv,web_safari", raising=False
+    )
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://www.youtube.com/watch?v=abc",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="youtube",
+    )
+    assert captured.get("extractor_args") == {"youtube": {"player_client": ["tv", "web_safari"]}}

@@ -36,45 +36,9 @@ FIRST_COMMENT_PLATFORMS = frozenset({"facebook", "instagram", "linkedin", "youtu
 # Fallback posting hours (UTC) when an account has no best-time data:
 # spread through the engagement day, cap-many per day. Used by the
 # internal service-API batch (`hub_batch`) and the manual "best hour"
-# suggestion — the dashboard auto-publish queue now drips on an interval
-# (see `plan_drip_times`) instead.
+# suggestion. The dashboard publishing paths now schedule through the
+# per-platform rulebook (nexoclip.publish.pacing), not a flat interval drip.
 _FALLBACK_HOURS = (10, 13, 16, 19, 22, 7)
-
-# Auto-publish queue cadence: how many minutes between consecutive drip
-# posts, keyed by the tenant's content strategy.
-#   unique      — distinct videos          → one every 30 min
-#   variations  — same video, re-edited     → one every 60 min (so the
-#                 near-duplicates don't bunch up, across platforms too)
-DRIP_INTERVAL_MINUTES = {"unique": 30, "variations": 60}
-
-
-def drip_interval_minutes(content_strategy: str | None) -> int:
-    """Minutes between drip posts for a tenant's content strategy.
-    Unknown / unset falls back to the 'unique' cadence (30 min)."""
-    return DRIP_INTERVAL_MINUTES.get(
-        (content_strategy or "unique"), DRIP_INTERVAL_MINUTES["unique"]
-    )
-
-
-def plan_drip_times(
-    count: int,
-    *,
-    now: _dt.datetime,
-    interval_minutes: int,
-) -> list[_dt.datetime]:
-    """Schedule `count` posts as a steady drip — one every
-    `interval_minutes`, the first one interval out from `now`.
-
-    This is the auto-publish queue cadence. Unlike the best-time planner
-    it ignores analytics slots and the daily cap entirely: the interval is
-    the ONLY spacing rule, so a long batch simply runs continuously (e.g.
-    48 posts/day at 30-min). The interval lives on one global timeline, not
-    per platform — the same-video-with-variations tactic relies on that to
-    keep near-duplicates an hour apart even when they target different
-    platforms. Deterministic, so callers/tests can predict every slot."""
-    step = _dt.timedelta(minutes=max(1, interval_minutes))
-    start = now + step
-    return [start + step * i for i in range(max(0, count))]
 
 
 class HubPublishError(Exception):
@@ -459,10 +423,26 @@ async def hub_batch(
         except ZernioError:
             best_slots = None  # no analytics → fallback spread
 
+    # Bound the caller's cap by the per-platform rulebook so the internal API
+    # can't out-pace platform norms either: the tightest involved platform's
+    # max_per_day is a hard ceiling (account health is the top priority).
+    from nexoclip.db import PlatformPacingRulesRepo
+    from nexoclip.publish.pacing import canonical_platform, default_rule_for
+
+    rulebook = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+    rulebook_cap = min(
+        (
+            (rulebook.get(canonical_platform(p)) or default_rule_for(p)).max_per_day
+            for p in platform_keys
+        ),
+        default=cap_per_day,
+    )
+    effective_cap = max(1, min(cap_per_day, rulebook_cap))
+
     times = plan_batch_times(
         len(clips),
         now=now_dt,
-        cap_per_day=max(cap_per_day, 1),
+        cap_per_day=effective_cap,
         existing_today=existing_today,
         best_slots=best_slots,
     )
@@ -589,8 +569,9 @@ def plan_batch_times(
     """Distribute `count` posts across days, at most `cap_per_day` per
     UTC day (counting `existing_today` already-planned posts on day 0).
 
-    Used by the internal service-API batch (`hub_batch`); the dashboard
-    auto-publish queue drips on a fixed interval instead (`plan_drip_times`).
+    Used by the internal service-API batch (`hub_batch`), with its cap bounded
+    by the per-platform rulebook; the dashboard publishing paths schedule
+    through the rulebook directly (`nexoclip.publish.pacing`).
 
     Two distinct hour sources, never blended into each other day-by-day:
 

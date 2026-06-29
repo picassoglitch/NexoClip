@@ -68,6 +68,11 @@ routing:
     primary: anthropic
     fallbacks: []
 
+  growth_score:                                 # Pre-publish Growth Score card (per-platform fit + verdict)
+    default_quality: premium
+    primary: anthropic
+    fallbacks: []
+
 # Reliability
 retry:
   max_attempts: 3

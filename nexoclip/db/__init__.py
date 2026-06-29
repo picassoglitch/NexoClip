@@ -10,6 +10,7 @@ from .connection import Database, IntegrityViolation
 from .migrations import MigrationError, apply_migrations, schema_version
 from .repos import (
     ApiTokensRepo,
+    AutoprogLocksRepo,
     AutopublishSettingsRepo,
     BrandKitsRepo,
     CandidatesRepo,
@@ -19,10 +20,12 @@ from .repos import (
     DriveExportSettingsRepo,
     DriveWatchesRepo,
     EventsRepo,
+    GrowthScoresRepo,
     HubPublishJobsRepo,
     LiveStreamKeysRepo,
     LLMCallsRepo,
     PersonasRepo,
+    PlatformPacingRulesRepo,
     PlatformSettingsRepo,
     PublishJobsRepo,
     PublishMetricsRepo,
@@ -50,6 +53,7 @@ from .session import db_session
 
 __all__ = [
     "ApiTokensRepo",
+    "AutoprogLocksRepo",
     "AutopublishSettingsRepo",
     "BrandKitsRepo",
     "CandidatesRepo",
@@ -60,12 +64,14 @@ __all__ = [
     "DriveExportSettingsRepo",
     "DriveWatchesRepo",
     "EventsRepo",
+    "GrowthScoresRepo",
     "HubPublishJobsRepo",
     "IntegrityViolation",
     "LLMCallsRepo",
     "LiveStreamKeysRepo",
     "MigrationError",
     "PersonasRepo",
+    "PlatformPacingRulesRepo",
     "PlatformSettingsRepo",
     "PublishJobsRepo",
     "PublishMetricsRepo",

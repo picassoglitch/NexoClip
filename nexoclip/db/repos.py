@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import aiosqlite
 from pydantic import BaseModel
@@ -28,6 +28,9 @@ from nexoclip.ids import new_id
 from nexoclip.tenancy import current_tenant_id
 
 from .connection import Database
+
+if TYPE_CHECKING:
+    from nexoclip.publish.pacing import PlatformRule
 from .models import (
     ApiTokenRow,
     BrandKitRow,
@@ -3898,6 +3901,33 @@ class ZernioPublishesRepo:
         )
         return await cur.fetchone() is not None
 
+    async def count_by_platform_today(self, tenant_id: str) -> dict[str, int]:
+        """Posts already scheduled/published for THIS UTC day, per platform.
+
+        The per-platform daily-cap accounting for the rulebook scheduler: a
+        post counts toward the day of its `scheduled_for` (or `created_at` when
+        it fired now), excluding failed/deleted rows. With the per-platform
+        posting model each row is one platform, but we split the csv anyway so
+        older multi-platform rows still count. Platform ids are canonicalized
+        (twitter, not "x") to match the rulebook keys."""
+        from nexoclip.publish.pacing import canonical_platform
+
+        day = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d")
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT platforms, scheduled_for, created_at FROM zernio_publishes "
+            "WHERE tenant_id = ? AND COALESCE(status, '') NOT IN ('failed', 'deleted') "
+            "AND substr(COALESCE(scheduled_for, created_at), 1, 10) = ?",
+            (tenant_id, day),
+        )
+        out: dict[str, int] = {}
+        for row in await cur.fetchall():
+            for p in str(dict(row).get("platforms") or "").split(","):
+                key = canonical_platform(p)
+                if key:
+                    out[key] = out.get(key, 0) + 1
+        return out
+
     async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
         """Tenant-FREE lookup by Zernio post id.
 
@@ -3934,6 +3964,17 @@ class ZernioPublishesRepo:
             "platforms_json = COALESCE(?, platforms_json), updated_at = ? "
             "WHERE post_id = ?",
             (status, platforms_json, _now(), post_id),
+        )
+        await conn.commit()
+
+    async def delete(self, post_id: str) -> None:
+        """Hard-delete a publish record by post id (tenant-free; post_id is the
+        PK). Used by queue reprocessing: a canceled post's row must be REMOVED,
+        not tombstoned, so `exists_for_clip` stops blocking the clip from being
+        re-scheduled (it matches any row regardless of status)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM zernio_publishes WHERE post_id = ?", (post_id,)
         )
         await conn.commit()
 
@@ -3992,7 +4033,8 @@ class AutopublishSettingsRepo:
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, tag_suffix, content_strategy, updated_at "
+            "score_threshold, tag_suffix, "
+            "growth_engine, growth_min_score, daily_clip_budget, updated_at "
             "FROM autopublish_settings "
             "WHERE tenant_id = ?",
             (tenant_id,),
@@ -4002,6 +4044,7 @@ class AutopublishSettingsRepo:
             return None
         d = dict(row)
         d["enabled"] = bool(d.get("enabled"))
+        d["growth_engine"] = bool(d.get("growth_engine"))
         return d
 
     async def upsert(
@@ -4015,26 +4058,251 @@ class AutopublishSettingsRepo:
         daily_cap: int,
         score_threshold: float = 0.6,
         tag_suffix: str = "",
-        content_strategy: str = "unique",
+        growth_engine: bool = False,
+        growth_min_score: int = 40,
+        daily_clip_budget: int | None = None,
     ) -> None:
         conn = await self._db.connect()
         await conn.execute(
             "INSERT INTO autopublish_settings "
             "(tenant_id, enabled, mode, targets, post_mode, daily_cap, "
-            "score_threshold, tag_suffix, content_strategy, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "score_threshold, tag_suffix, "
+            "growth_engine, growth_min_score, daily_clip_budget, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(tenant_id) DO UPDATE SET "
             "enabled = excluded.enabled, mode = excluded.mode, "
             "targets = excluded.targets, post_mode = excluded.post_mode, "
             "daily_cap = excluded.daily_cap, "
             "score_threshold = excluded.score_threshold, "
             "tag_suffix = excluded.tag_suffix, "
-            "content_strategy = excluded.content_strategy, "
+            "growth_engine = excluded.growth_engine, "
+            "growth_min_score = excluded.growth_min_score, "
+            "daily_clip_budget = excluded.daily_clip_budget, "
             "updated_at = excluded.updated_at",
             (
                 tenant_id, 1 if enabled else 0, mode, targets, post_mode,
-                daily_cap, score_threshold, tag_suffix, content_strategy, _now(),
+                daily_cap, score_threshold, tag_suffix,
+                1 if growth_engine else 0, growth_min_score, daily_clip_budget,
+                _now(),
             ),
+        )
+        await conn.commit()
+
+
+class PlatformPacingRulesRepo:
+    """Per-tenant per-platform publishing rulebook overrides (migration 052).
+
+    Rows are OVERRIDES: `effective_rules` overlays them onto the shipped
+    `DEFAULT_PLATFORM_RULES`, so an untuned tenant gets the conservative
+    defaults and a tuned platform gets exactly its saved row. Platform ids are
+    stored canonical (twitter, not "x")."""
+
+    _COLS = (
+        "platform", "max_per_day", "min_gap_minutes", "caption_min_chars",
+        "caption_max_chars", "hashtag_min", "hashtag_max", "jitter_minutes",
+        "caption_style", "enabled",
+    )
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def overrides(self, tenant_id: str) -> dict[str, PlatformRule]:
+        """The tenant's saved rule rows as PlatformRule objects, keyed by
+        canonical platform id. Empty dict when nothing is tuned."""
+        from nexoclip.publish.pacing import PlatformRule, canonical_platform
+
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT " + ", ".join(self._COLS) + " FROM platform_pacing_rules "
+            "WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        rows = await cur.fetchall()
+        out: dict[str, PlatformRule] = {}
+        for row in rows:
+            d = dict(row)
+            d["enabled"] = bool(d.get("enabled"))
+            key = canonical_platform(str(d["platform"]))
+            out[key] = PlatformRule(**{**d, "platform": key})
+        return out
+
+    async def effective_rules(self, tenant_id: str) -> dict[str, PlatformRule]:
+        """Defaults overlaid with this tenant's overrides — the rulebook the
+        scheduler/allocator should actually use."""
+        from nexoclip.publish.pacing import DEFAULT_PLATFORM_RULES
+
+        rules = dict(DEFAULT_PLATFORM_RULES)
+        rules.update(await self.overrides(tenant_id))
+        return rules
+
+    async def upsert(self, tenant_id: str, rule: PlatformRule) -> None:
+        from nexoclip.publish.pacing import canonical_platform
+
+        key = canonical_platform(rule.platform)
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO platform_pacing_rules "
+            "(tenant_id, platform, max_per_day, min_gap_minutes, "
+            "caption_min_chars, caption_max_chars, hashtag_min, hashtag_max, "
+            "jitter_minutes, caption_style, enabled, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_id, platform) DO UPDATE SET "
+            "max_per_day = excluded.max_per_day, "
+            "min_gap_minutes = excluded.min_gap_minutes, "
+            "caption_min_chars = excluded.caption_min_chars, "
+            "caption_max_chars = excluded.caption_max_chars, "
+            "hashtag_min = excluded.hashtag_min, "
+            "hashtag_max = excluded.hashtag_max, "
+            "jitter_minutes = excluded.jitter_minutes, "
+            "caption_style = excluded.caption_style, "
+            "enabled = excluded.enabled, updated_at = excluded.updated_at",
+            (
+                tenant_id, key, rule.max_per_day, rule.min_gap_minutes,
+                rule.caption_min_chars, rule.caption_max_chars, rule.hashtag_min,
+                rule.hashtag_max, rule.jitter_minutes, rule.caption_style,
+                1 if rule.enabled else 0, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def delete(self, tenant_id: str, platform: str) -> None:
+        """Drop a platform's override → it reverts to the shipped default."""
+        from nexoclip.publish.pacing import canonical_platform
+
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM platform_pacing_rules WHERE tenant_id = ? AND platform = ?",
+            (tenant_id, canonical_platform(platform)),
+        )
+        await conn.commit()
+
+
+class GrowthScoresRepo:
+    """Pre-publish Growth Score cache, one row per clip (migration 053).
+
+    Stores the whole `GrowthScoreCard` as JSON plus the two hot columns the
+    allocator + fatigue passes query (overall_score, content_tags). Idempotent
+    per clip: `record` overwrites."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def record(
+        self,
+        *,
+        tenant_id: str,
+        clip_id: str,
+        overall_score: int,
+        decision: str,
+        content_tags: list[str],
+        card_json: str,
+    ) -> None:
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO clip_growth_scores "
+            "(clip_id, tenant_id, overall_score, decision, content_tags, "
+            "card_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(clip_id) DO UPDATE SET "
+            "overall_score = excluded.overall_score, "
+            "decision = excluded.decision, content_tags = excluded.content_tags, "
+            "card_json = excluded.card_json, created_at = excluded.created_at",
+            (
+                clip_id, tenant_id, overall_score, decision,
+                json.dumps(content_tags), card_json, _now(),
+            ),
+        )
+        await conn.commit()
+
+    async def get(self, tenant_id: str, clip_id: str) -> dict[str, Any] | None:
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT clip_id, tenant_id, overall_score, decision, content_tags, "
+            "card_json, created_at FROM clip_growth_scores "
+            "WHERE tenant_id = ? AND clip_id = ?",
+            (tenant_id, clip_id),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["content_tags"] = json.loads(d.get("content_tags") or "[]")
+        return d
+
+    async def recent_content_tags(
+        self, tenant_id: str, *, limit: int = 12
+    ) -> list[list[str]]:
+        """Content tags of the most recently scored clips — the fatigue history
+        that spaces similar themes. Newest first."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT content_tags FROM clip_growth_scores WHERE tenant_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (tenant_id, int(limit)),
+        )
+        rows = await cur.fetchall()
+        out: list[list[str]] = []
+        for row in rows:
+            try:
+                tags = json.loads(dict(row).get("content_tags") or "[]")
+            except (ValueError, TypeError):
+                tags = []
+            if isinstance(tags, list):
+                out.append([str(t) for t in tags])
+        return out
+
+
+class AutoprogLocksRepo:
+    """Cross-worker lock for the bulk auto-program run (migration 055).
+
+    `acquire` is atomic and portable: clear any stale lock, then INSERT … ON
+    CONFLICT DO NOTHING and read back the token. We won iff the stored token is
+    ours. `refresh` heartbeats a long run so it isn't reclaimed mid-flight;
+    `release` drops the lock when the run ends."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def acquire(self, tenant_id: str, *, stale_seconds: int = 1200) -> str | None:
+        """Try to take the lock. Returns a token on success, None if a fresh
+        lock is already held by another run."""
+        import secrets
+
+        token = secrets.token_hex(12)
+        cutoff = (
+            _dt.datetime.now(_dt.UTC) - _dt.timedelta(seconds=stale_seconds)
+        ).isoformat()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM autoprog_locks WHERE claimed_at < ?", (cutoff,)
+        )
+        await conn.execute(
+            "INSERT INTO autoprog_locks (tenant_id, token, claimed_at) "
+            "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+            (tenant_id, token, _now()),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT token FROM autoprog_locks WHERE tenant_id = ?", (tenant_id,)
+        )
+        row = await cur.fetchone()
+        return token if row is not None and row[0] == token else None
+
+    async def refresh(self, tenant_id: str, token: str) -> None:
+        """Heartbeat — bump claimed_at so a long run keeps its lock."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "UPDATE autoprog_locks SET claimed_at = ? "
+            "WHERE tenant_id = ? AND token = ?",
+            (_now(), tenant_id, token),
+        )
+        await conn.commit()
+
+    async def release(self, tenant_id: str, token: str) -> None:
+        """Drop the lock (only if we still hold it)."""
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM autoprog_locks WHERE tenant_id = ? AND token = ?",
+            (tenant_id, token),
         )
         await conn.commit()
 

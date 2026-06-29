@@ -58,6 +58,11 @@ channel_app = typer.Typer(
     help="Connected creator channels — auto-ingest new VODs (YouTube/Twitch/Kick).",
     no_args_is_help=True,
 )
+publish_app = typer.Typer(
+    name="publish",
+    help="Publishing ops — reprocess the scheduled queue, etc.",
+    no_args_is_help=True,
+)
 app.add_typer(db_app)
 app.add_typer(tenants_app)
 app.add_typer(tokens_app)
@@ -66,6 +71,7 @@ app.add_typer(mcp_app)
 app.add_typer(retention_app)
 app.add_typer(drive_app)
 app.add_typer(channel_app)
+app.add_typer(publish_app)
 
 
 @mcp_app.command("serve")
@@ -254,6 +260,137 @@ def webhooks_community_digest_cmd(
                 if await send_weekly_digest(db, row["tenant_id"], client=client):
                     sent += 1
             typer.echo(f"community-digest tenants={len(rows)} sent={sent}")
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
+@publish_app.command("reprocess-queue")
+def publish_reprocess_queue_cmd(
+    tenant_id: str = typer.Option(..., "--tenant", help="Tenant id to reprocess."),
+    db_path: Path | None = typer.Option(None, "--db-path"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Report what would change; touch nothing."
+    ),
+    reschedule: bool = typer.Option(
+        True, "--reschedule/--no-reschedule",
+        help="After cleanup, re-render + re-schedule via the rulebook. "
+        "Use --no-reschedule to do cleanup only, then click 'Auto-programar "
+        "todo' in the dashboard (the proven web render path).",
+    ),
+) -> None:
+    """Reprocess the scheduled queue through the new pipeline.
+
+    Cancels the tenant's scheduled Zernio posts, resets each clip (approved +
+    fresh overlay: hook + captions + source-credit marca), invalidates the
+    cached render (local + object storage) so the re-render bakes the new
+    overlays + the real outro, then (unless --no-reschedule) re-renders and
+    re-schedules them under the per-platform rulebook.
+    """
+    import time
+
+    from nexoclip.db import (
+        AutoprogLocksRepo,
+        AutopublishSettingsRepo,
+        TenantsRepo,
+        apply_migrations,
+    )
+    from nexoclip.integrations.zernio.client import ZernioClient
+    from nexoclip.publish.reprocess import reprocess_scheduled_queue
+    from nexoclip.settings import get_settings
+
+    settings = get_settings()
+    if not settings.zernio_api_key:
+        typer.echo("error: NEXOCLIP_ZERNIO_API_KEY is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> None:
+        db = _open_db(db_path)
+        try:
+            await apply_migrations(db)
+            client = ZernioClient(
+                api_key=settings.zernio_api_key or "",
+                base_url=settings.zernio_base_url,
+            )
+            summary = await reprocess_scheduled_queue(
+                db, tenant_id, client=client, settings=settings, dry_run=dry_run,
+            )
+            typer.echo(
+                f"scheduled_found={summary.scheduled_found} "
+                f"canceled={summary.canceled} cancel_failed={summary.cancel_failed} "
+                f"clips_reset={summary.clips_reset}"
+            )
+            if dry_run:
+                typer.echo(f"[dry-run] would reprocess {len(summary.clip_ids)} clip(s)")
+                return
+            if not reschedule:
+                typer.echo(
+                    "cleanup done — click 'Auto-programar todo' in the Publish "
+                    "Center to re-render + re-schedule the reset clips."
+                )
+                return
+            if not summary.clip_ids:
+                typer.echo("nothing to re-schedule")
+                return
+
+            # Re-schedule through the rulebook — reuse the dashboard auto-program
+            # worker (renders each clip + plans per-platform caps/gaps). Imported
+            # lazily so the publish service stays free of the API layer.
+            from nexoclip.api.routers.zernio import (
+                _AUTOPROG,
+                _account_map,
+                _build_client,
+                _connected_platforms,
+                _run_growth_autoprog,
+            )
+            from nexoclip.tiers import zernio_account_limit
+
+            tenant = await TenantsRepo(db).get(tenant_id)
+            profile_id = tenant.zernio_profile_id if tenant else None
+            base_url = (settings.public_url or "").rstrip("/")
+            if not profile_id or not base_url:
+                typer.echo(
+                    "warn: no Zernio profile or public_url — clips were reset but "
+                    "not re-scheduled. Click 'Auto-programar todo' in the dashboard.",
+                    err=True,
+                )
+                return
+            sched_client = _build_client()
+            accounts = await sched_client.list_accounts(profile_id=profile_id)
+            account_map = _account_map(accounts)
+            connected = _connected_platforms(accounts)
+            s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+            want = [t for t in str(s.get("targets") or "").split(",") if t.strip()]
+            targets = [t for t in want if t in connected] or sorted(connected)
+            limit = zernio_account_limit(tenant.tier if tenant else "free")
+            if limit is not None:
+                targets = targets[:limit]
+
+            lock_token = await AutoprogLocksRepo(db).acquire(tenant_id)
+            if lock_token is None:
+                typer.echo(
+                    "warn: an auto-program run is already in progress; clips were "
+                    "reset but not re-scheduled. Retry shortly.", err=True,
+                )
+                return
+            _AUTOPROG[tenant_id] = {
+                "state": "running", "total": len(summary.clip_ids),
+                "done": 0, "scheduled": 0, "failed": 0, "results": [],
+                "heartbeat": time.monotonic(),
+            }
+            await _run_growth_autoprog(
+                tenant_id=tenant_id, clip_ids=summary.clip_ids, targets=targets,
+                handle_suffix=str(s.get("tag_suffix") or ""), account_map=account_map,
+                profile_id=profile_id,
+                tenant_tier=(tenant.tier if tenant else None),
+                base_url=base_url, session_cookie=None, db_target=db.target,
+                lock_token=lock_token,
+            )
+            prog = _AUTOPROG.get(tenant_id, {})
+            typer.echo(
+                f"rescheduled={prog.get('scheduled', 0)} failed={prog.get('failed', 0)}"
+            )
         finally:
             await db.close()
 

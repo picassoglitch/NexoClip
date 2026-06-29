@@ -123,3 +123,71 @@ class RescoreVerdict(BaseModel):
             "Surfaces in the dashboard's confidence-breakdown panel."
         ),
     )
+
+
+class PlatformGrowthScore(BaseModel):
+    """One platform's slice of the Growth Score card.
+
+    `score` is 0-100, the clip's predicted fit for THIS platform (Phase 6
+    priority). `verdict` gates whether we publish there at all (Phase 5):
+    'publish' or 'skip'. The impression range is a rough expectation surfaced
+    to the operator, never a promise.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    platform: str = Field(description="Canonical platform id, e.g. tiktok.")
+    score: int = Field(ge=0, le=100)
+    verdict: str = Field(description="'publish' or 'skip'.")
+    label: str = Field(
+        description="Excellent | Very Good | Good | Weak | Skip — matches the score band."
+    )
+    expected_impressions_low: int = Field(ge=0, default=0)
+    expected_impressions_high: int = Field(ge=0, default=0)
+    reason: str = Field(min_length=1, max_length=240)
+
+
+class GrowthRecommendation(BaseModel):
+    """One actionable tweak before publishing (the spec's checklist:
+    delay X, remove N hashtags, shorten caption, new thumbnail, …)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: str = Field(
+        description=(
+            "Machine key: delay | trim_hashtags | shorten_caption | "
+            "new_thumbnail | change_first_frame | rewrite_hook | other."
+        )
+    )
+    detail: str = Field(min_length=1, max_length=200, description="Human-readable tweak.")
+
+
+class GrowthScoreCard(BaseModel):
+    """The pre-publish Growth Score — the killer feature.
+
+    Computed BEFORE publishing so the engine can optimize (delay, trim, reframe)
+    and decide whether a clip belongs on each platform at all. The hierarchy the
+    model is told to honour: never hurt account health, then maximize
+    impressions, watch time, and engagement, in that order.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    overall_score: int = Field(ge=0, le=100, description="Headline growth score.")
+    decision: str = Field(
+        description=(
+            "publish_all | publish_select | archive | skip — the Phase-5 "
+            "publish/don't-publish verdict across platforms."
+        )
+    )
+    platforms: list[PlatformGrowthScore] = Field(default_factory=list)
+    recommendations: list[GrowthRecommendation] = Field(default_factory=list)
+    content_tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "3-6 short descriptors of WHAT this clip is (game, map, weapon, "
+            "creator, bit, emotion). Drives content-fatigue spacing — keep them "
+            "stable and comparable across clips, lowercase, no '#'."
+        ),
+    )
+    summary: str = Field(default="", max_length=300)

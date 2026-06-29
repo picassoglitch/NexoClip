@@ -40,8 +40,15 @@ def _cmd(**over):
 
 def test_bundled_asset_exists() -> None:
     """The end card ships with the app — the whole feature is moot
-    without it on disk."""
-    assert outro_asset_path().exists(), "assets/outro.mp4 must be bundled"
+    without it on disk. Guard against the 22-byte placeholder stub
+    silently shipping again (it can't be probed, so append_outro
+    no-ops and clips lose the outro): a real MP4 is comfortably > 1 KB."""
+    asset = outro_asset_path()
+    assert asset.exists(), "assets/outro.mp4 must be bundled"
+    assert asset.stat().st_size > 1024, (
+        "assets/outro.mp4 looks like a placeholder, not a real video — "
+        "append_outro will silently no-op on an unprobeable file"
+    )
 
 
 # ---- build_outro_command (pure) -------------------------------------

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,10 @@ from nexoclip.settings import get_settings, resolve_db_target
 from ..deps import get_db, require_full_scope, tenant_binder
 from ..status_gate import require_paid_tier
 from .clips import _VALID_STATUS_TRANSITIONS
-from .internal import mint_signed_clip_url, signed_clip_ttl_for_schedule
+from .internal import (
+    resolve_publish_media_url,
+    signed_clip_ttl_for_schedule,
+)
 
 _log = logging.getLogger("nexoclip.api.zernio")
 
@@ -406,7 +410,7 @@ async def _publish_clip(
         cookie_val = session_cookie
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
-        await ensure_clip_rendered(
+        rendered_path = await ensure_clip_rendered(
             db=db,
             clip=clip,
             tenant_id=tenant_id,
@@ -436,10 +440,11 @@ async def _publish_clip(
         ttl_seconds = signed_clip_ttl_for_schedule(
             scheduled_for if mode == "schedule" else None
         )
-        media_url = mint_signed_clip_url(
+        media_url = await resolve_publish_media_url(
             clip_id=clip_id,
             tenant_id=tenant_id,
             base_url=base,
+            rendered_path=rendered_path,
             ttl_seconds=ttl_seconds,
         )
     except RuntimeError as e:
@@ -1952,7 +1957,7 @@ async def autopublish_hands_free_sweep(
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
         from nexoclip.api.routers.internal import (
-            mint_signed_clip_url,
+            resolve_publish_media_url,
             sign_render_query,
             signed_clip_ttl_for_schedule,
         )
@@ -2102,7 +2107,7 @@ async def autopublish_hands_free_sweep(
                 custom_content = per_platform_caption_overrides(
                     content, [p for p, _ in clip_targets]
                 )
-                await ensure_clip_rendered(
+                rendered_path = await ensure_clip_rendered(
                     db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                     auth_cookie_value=None, db_path=resolve_db_target(settings),
                     auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
@@ -2115,11 +2120,12 @@ async def autopublish_hands_free_sweep(
                     if first_now or i >= len(schedule_times)
                     else schedule_times[i].isoformat()
                 )
-                # Size the signed URL's TTL to the scheduled time — a
-                # best-time slot can be days out, and the platform fetches
-                # the media then, not now. A flat 1h TTL would expire first.
-                media_url = mint_signed_clip_url(
+                # Off-box durable URL when object storage is on, else the local
+                # signed URL. TTL sized to the schedule (best-time slots are
+                # days out; the platform fetches then, not now).
+                media_url = await resolve_publish_media_url(
                     clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
+                    rendered_path=rendered_path,
                     ttl_seconds=signed_clip_ttl_for_schedule(when),
                 )
                 result = await client.create_post(
@@ -2180,7 +2186,7 @@ async def _run_growth_engine(
 
     from nexoclip.api._clip_render import ensure_clip_rendered
     from nexoclip.api.routers.internal import (
-        mint_signed_clip_url,
+        resolve_publish_media_url,
         sign_render_query,
         signed_clip_ttl_for_schedule,
     )
@@ -2278,13 +2284,14 @@ async def _run_growth_engine(
         clip = clips_by_id[post.clip_id]
         try:
             when = post.when.isoformat()
-            await ensure_clip_rendered(
+            rendered_path = await ensure_clip_rendered(
                 db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                 auth_cookie_value=None, db_path=resolve_db_target(settings),
                 auth_query=sign_render_query(clip_id=post.clip_id, tenant_id=tenant_id),
             )
-            media_url = mint_signed_clip_url(
+            media_url = await resolve_publish_media_url(
                 clip_id=post.clip_id, tenant_id=tenant_id, base_url=base_url,
+                rendered_path=rendered_path,
                 ttl_seconds=signed_clip_ttl_for_schedule(when),
             )
             result = await client.create_post(
@@ -3389,6 +3396,15 @@ async def zernio_compose_clip(
 _AUTOPROG: dict[str, dict[str, Any]] = {}
 _AUTOPROG_TASKS: set[asyncio.Task[None]] = set()
 
+# A `running` auto-program record is only honored while it keeps advancing.
+# The worker bumps `heartbeat` (monotonic seconds) at start + after every
+# clip; if it hasn't advanced in this long the run is treated as DEAD (a hung
+# render / stalled Zernio call / killed task) and a new run may override it.
+# Without this, one stuck run wedged the tenant at "Ya hay una programación
+# en curso" until a full redeploy. Generous — a single clip render is seconds,
+# never minutes.
+_AUTOPROG_STALE_S = 600.0
+
 
 async def _run_autoprog(
     *,
@@ -3416,6 +3432,10 @@ async def _run_autoprog(
         client = _build_client()
         with bound_tenant(tenant_id):
             for clip_id, when_iso in schedule:
+                # Heartbeat at the START too — proves we're actively working
+                # this clip so a slow render (CPU-contended) isn't misread as
+                # a hung run and overridden mid-flight.
+                prog["heartbeat"] = time.monotonic()
                 try:
                     composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
                     post_id = await _publish_clip(
@@ -3443,6 +3463,10 @@ async def _run_autoprog(
                         {"clip_id": clip_id, "ok": False, "error": str(e)}
                     )
                 prog["done"] += 1
+                # Heartbeat: proves the run is still advancing so the
+                # one-run-per-tenant lock stays honored (and a hung run
+                # eventually releases it). See _AUTOPROG_STALE_S.
+                prog["heartbeat"] = time.monotonic()
         prog["state"] = "done"
         _log.info(
             "zernio.autoprogram tenant=%s total=%d scheduled=%d failed=%d",
@@ -3487,12 +3511,21 @@ async def zernio_schedule_auto(
         )
 
     # One auto-program run per tenant at a time — a second click while a run
-    # is live would double-schedule clips.
+    # is live would double-schedule clips. But honor the lock ONLY while the
+    # run is still advancing: a hung/killed run (no heartbeat past the stale
+    # window) is treated as dead so the tenant isn't wedged at "en curso"
+    # until a redeploy.
     cur = _AUTOPROG.get(tenant_id)
     if cur and cur.get("state") == "running":
-        return JSONResponse(
-            {"ok": False, "error": "Ya hay una programación en curso."},
-            status_code=409,
+        last = float(cur.get("heartbeat") or 0.0)
+        if time.monotonic() - last < _AUTOPROG_STALE_S:
+            return JSONResponse(
+                {"ok": False, "error": "Ya hay una programación en curso."},
+                status_code=409,
+            )
+        _log.warning(
+            "zernio.autoprogram.stale_run_overridden tenant=%s last_hb_age_s=%.0f",
+            tenant_id, time.monotonic() - last,
         )
 
     clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
@@ -3549,6 +3582,7 @@ async def zernio_schedule_auto(
     _AUTOPROG[tenant_id] = {
         "state": "running", "total": len(schedule),
         "done": 0, "scheduled": 0, "failed": 0, "results": [],
+        "heartbeat": time.monotonic(),
     }
     task = asyncio.create_task(
         _run_autoprog(

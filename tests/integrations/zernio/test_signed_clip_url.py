@@ -188,6 +188,82 @@ def test_clip_route_accepts_a_scheduled_url_days_out() -> None:
     )  # raises on failure
 
 
+async def test_resolver_falls_back_to_local_url_without_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """No object storage configured → the local signed-URL path (unchanged)."""
+    import nexoclip.integrations.storage as storage_mod
+    from nexoclip.api.routers.internal import resolve_publish_media_url
+
+    monkeypatch.setattr(storage_mod, "build_artifact_store", lambda _s: None)
+    url = await resolve_publish_media_url(
+        clip_id="clp_x", tenant_id="ten_a", base_url="https://nexoclip.test",
+        rendered_path=__import__("pathlib").Path("x.mp4"), ttl_seconds=600,
+    )
+    assert url.startswith("https://nexoclip.test/api/internal/clip/clp_x")
+
+
+async def test_resolver_uploads_once_and_returns_public_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a public bucket → upload once, return the STABLE public url."""
+    import nexoclip.integrations.storage as storage_mod
+    from nexoclip.api.routers.internal import resolve_publish_media_url
+
+    uploads: list[str] = []
+
+    class _Store:
+        async def exists(self, *, key: str) -> bool:
+            return key in uploads
+
+        async def upload(self, *, local_path: object, key: str, content_type: str) -> None:
+            uploads.append(key)
+
+        def public_url(self, key: str) -> str:
+            return f"https://pub.r2.dev/{key}"
+
+        async def presigned_url(self, *, key: str, ttl_seconds: int) -> str:
+            raise AssertionError("public url should win over presigned")
+
+    monkeypatch.setattr(storage_mod, "build_artifact_store", lambda _s: _Store())
+    import pathlib
+    url = await resolve_publish_media_url(
+        clip_id="clp_x", tenant_id="ten_a", base_url="https://nexoclip.test",
+        rendered_path=pathlib.Path("x.mp4"), ttl_seconds=600,
+    )
+    assert url == "https://pub.r2.dev/clips/ten_a/clp_x/clip_render_1080.mp4"
+    assert len(uploads) == 1  # uploaded once
+
+
+async def test_resolver_presigns_when_no_public_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bucket without a public base → presigned (≤7d) url, still off-box."""
+    import nexoclip.integrations.storage as storage_mod
+    from nexoclip.api.routers.internal import resolve_publish_media_url
+
+    class _Store:
+        async def exists(self, *, key: str) -> bool:
+            return True  # already uploaded
+
+        async def upload(self, **_k: object) -> None:
+            raise AssertionError("must not re-upload an existing object")
+
+        def public_url(self, key: str) -> None:
+            return None
+
+        async def presigned_url(self, *, key: str, ttl_seconds: int) -> str:
+            return f"https://bucket/{key}?presigned&ttl={ttl_seconds}"
+
+    monkeypatch.setattr(storage_mod, "build_artifact_store", lambda _s: _Store())
+    import pathlib
+    url = await resolve_publish_media_url(
+        clip_id="clp_x", tenant_id="ten_a", base_url="https://nexoclip.test",
+        rendered_path=pathlib.Path("x.mp4"), ttl_seconds=600,
+    )
+    assert "presigned" in url and "clips/ten_a/clp_x" in url
+
+
 def test_mint_refuses_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         get_settings(), "internal_signing_secret", "", raising=False,

@@ -59,7 +59,10 @@ from nexoclip.settings import get_settings, resolve_db_target
 from ..deps import get_db, require_full_scope, tenant_binder
 from ..status_gate import require_paid_tier
 from .clips import _VALID_STATUS_TRANSITIONS
-from .internal import mint_signed_clip_url, signed_clip_ttl_for_schedule
+from .internal import (
+    resolve_publish_media_url,
+    signed_clip_ttl_for_schedule,
+)
 
 _log = logging.getLogger("nexoclip.api.zernio")
 
@@ -407,7 +410,7 @@ async def _publish_clip(
         cookie_val = session_cookie
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
-        await ensure_clip_rendered(
+        rendered_path = await ensure_clip_rendered(
             db=db,
             clip=clip,
             tenant_id=tenant_id,
@@ -437,10 +440,11 @@ async def _publish_clip(
         ttl_seconds = signed_clip_ttl_for_schedule(
             scheduled_for if mode == "schedule" else None
         )
-        media_url = mint_signed_clip_url(
+        media_url = await resolve_publish_media_url(
             clip_id=clip_id,
             tenant_id=tenant_id,
             base_url=base,
+            rendered_path=rendered_path,
             ttl_seconds=ttl_seconds,
         )
     except RuntimeError as e:
@@ -1953,7 +1957,7 @@ async def autopublish_hands_free_sweep(
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
         from nexoclip.api.routers.internal import (
-            mint_signed_clip_url,
+            resolve_publish_media_url,
             sign_render_query,
             signed_clip_ttl_for_schedule,
         )
@@ -2103,7 +2107,7 @@ async def autopublish_hands_free_sweep(
                 custom_content = per_platform_caption_overrides(
                     content, [p for p, _ in clip_targets]
                 )
-                await ensure_clip_rendered(
+                rendered_path = await ensure_clip_rendered(
                     db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                     auth_cookie_value=None, db_path=resolve_db_target(settings),
                     auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
@@ -2116,11 +2120,12 @@ async def autopublish_hands_free_sweep(
                     if first_now or i >= len(schedule_times)
                     else schedule_times[i].isoformat()
                 )
-                # Size the signed URL's TTL to the scheduled time — a
-                # best-time slot can be days out, and the platform fetches
-                # the media then, not now. A flat 1h TTL would expire first.
-                media_url = mint_signed_clip_url(
+                # Off-box durable URL when object storage is on, else the local
+                # signed URL. TTL sized to the schedule (best-time slots are
+                # days out; the platform fetches then, not now).
+                media_url = await resolve_publish_media_url(
                     clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
+                    rendered_path=rendered_path,
                     ttl_seconds=signed_clip_ttl_for_schedule(when),
                 )
                 result = await client.create_post(
@@ -2181,7 +2186,7 @@ async def _run_growth_engine(
 
     from nexoclip.api._clip_render import ensure_clip_rendered
     from nexoclip.api.routers.internal import (
-        mint_signed_clip_url,
+        resolve_publish_media_url,
         sign_render_query,
         signed_clip_ttl_for_schedule,
     )
@@ -2279,13 +2284,14 @@ async def _run_growth_engine(
         clip = clips_by_id[post.clip_id]
         try:
             when = post.when.isoformat()
-            await ensure_clip_rendered(
+            rendered_path = await ensure_clip_rendered(
                 db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                 auth_cookie_value=None, db_path=resolve_db_target(settings),
                 auth_query=sign_render_query(clip_id=post.clip_id, tenant_id=tenant_id),
             )
-            media_url = mint_signed_clip_url(
+            media_url = await resolve_publish_media_url(
                 clip_id=post.clip_id, tenant_id=tenant_id, base_url=base_url,
+                rendered_path=rendered_path,
                 ttl_seconds=signed_clip_ttl_for_schedule(when),
             )
             result = await client.create_post(

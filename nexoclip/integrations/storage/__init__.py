@@ -95,6 +95,8 @@ class ArtifactStore(Protocol):
 
     async def presigned_url(self, *, key: str, ttl_seconds: int) -> str: ...
 
+    def public_url(self, key: str) -> str | None: ...
+
     async def exists(self, *, key: str) -> bool: ...
 
     async def delete(self, *, key: str) -> None: ...
@@ -105,14 +107,34 @@ class S3ArtifactStore:
     Storage, MinIO, S3, …). All boto3 calls are sync, so they run in a worker
     thread. `prefix` namespaces every key (e.g. `artifacts/<...>`)."""
 
-    def __init__(self, *, client: Any, bucket: str, prefix: str = "artifacts") -> None:
+    # S3 SigV4 caps presigned-URL validity at 7 days. Past that the URL is
+    # rejected, so we clamp — and prefer a stable public URL when available.
+    _PRESIGN_MAX_TTL_S = 7 * 24 * 3600
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        bucket: str,
+        prefix: str = "artifacts",
+        public_base_url: str | None = None,
+    ) -> None:
         self._client = client
         self._bucket = bucket
         self._prefix = prefix.strip("/")
+        self._public_base = (public_base_url or "").rstrip("/") or None
 
     def _full(self, key: str) -> str:
         k = key.strip("/")
         return f"{self._prefix}/{k}" if self._prefix else k
+
+    def public_url(self, key: str) -> str | None:
+        """Stable, non-expiring URL for the object — only when a public base
+        (R2 public bucket / custom domain) is configured. None otherwise, so
+        the caller falls back to a presigned (≤7d) url."""
+        if not self._public_base:
+            return None
+        return f"{self._public_base}/{self._full(key)}"
 
     async def upload(
         self, *, local_path: Path, key: str, content_type: str | None = None
@@ -136,11 +158,12 @@ class S3ArtifactStore:
         return await asyncio.to_thread(_dl)
 
     async def presigned_url(self, *, key: str, ttl_seconds: int) -> str:
+        ttl = max(1, min(int(ttl_seconds), self._PRESIGN_MAX_TTL_S))
         return await asyncio.to_thread(
             self._client.generate_presigned_url,
             "get_object",
             {"Bucket": self._bucket, "Key": self._full(key)},
-            int(ttl_seconds),
+            ttl,
         )
 
     async def exists(self, *, key: str) -> bool:
@@ -185,6 +208,7 @@ def build_artifact_store(settings: Settings) -> ArtifactStore | None:
         client=client,
         bucket=bucket,
         prefix=(getattr(settings, "object_storage_prefix", None) or "artifacts"),
+        public_base_url=getattr(settings, "object_storage_public_base_url", None),
     )
 
 

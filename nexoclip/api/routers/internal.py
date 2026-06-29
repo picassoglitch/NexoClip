@@ -159,6 +159,47 @@ def mint_signed_clip_url(
     )
 
 
+def artifact_key_for_clip(tenant_id: str, clip_id: str) -> str:
+    """Bucket key for a clip's burned-in publish render. Tenant-namespaced."""
+    return f"clips/{tenant_id}/{clip_id}/clip_render_1080.mp4"
+
+
+async def resolve_publish_media_url(
+    *,
+    clip_id: str,
+    tenant_id: str,
+    base_url: str,
+    rendered_path: Path,
+    ttl_seconds: int,
+) -> str:
+    """The media URL handed to the publisher (Zernio) for a clip.
+
+    With object storage configured (Phase 1): upload the rendered MP4 to the
+    bucket once, then return a STABLE public URL (or a presigned ≤7d url as a
+    fallback). The vendor fetches a durable object — no load on our box, and
+    no time-boxed local endpoint to 403 on its multi-day retry tail.
+
+    Without object storage: the local signed-URL path (`mint_signed_clip_url`),
+    unchanged — fully backward compatible.
+    """
+    from nexoclip.integrations.storage import build_artifact_store
+
+    store = build_artifact_store(get_settings())
+    if store is None:
+        return mint_signed_clip_url(
+            clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
+            ttl_seconds=ttl_seconds,
+        )
+    key = artifact_key_for_clip(tenant_id, clip_id)
+    if not await store.exists(key=key):
+        await store.upload(
+            local_path=rendered_path, key=key, content_type="video/mp4",
+        )
+    return store.public_url(key) or await store.presigned_url(
+        key=key, ttl_seconds=ttl_seconds,
+    )
+
+
 def sign_render_query(
     *, clip_id: str, tenant_id: str, ttl_seconds: int = 600
 ) -> str:

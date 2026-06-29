@@ -252,6 +252,16 @@ class Settings(BaseSettings):
     object_storage_region: str = Field(
         default="auto", validation_alias="NEXOCLIP_OBJECT_STORAGE_REGION"
     )
+    # Public base URL of the bucket (R2 public bucket r2.dev URL or a custom
+    # domain bound to it). When set, the publisher gets a STABLE, non-expiring
+    # object URL — the proper 403 fix, since presigned urls cap at 7 days
+    # (SigV4) which is shorter than the vendor's retry tail. The clip is
+    # public the moment it's published anyway, so the leak window is moot.
+    # Unset → fall back to presigned (≤7d) urls.
+    #   NEXOCLIP_OBJECT_STORAGE_PUBLIC_BASE_URL=https://pub-<hash>.r2.dev
+    object_storage_public_base_url: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_OBJECT_STORAGE_PUBLIC_BASE_URL"
+    )
     # Presigned-URL lifetime handed to the publisher. Generous by default —
     # the object is durable, so this only bounds how long ONE url is valid;
     # the vendor's retry/reschedule tail can be days (see the 14d local-serve

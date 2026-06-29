@@ -390,3 +390,49 @@ def test_download_vod_no_proxy_when_unset(
         cookies_from_browser=None, cookies_file=None, platform="twitch",
     )
     assert "proxy" not in captured
+
+
+# ---- Free YouTube bot-gate dodge (player_client / PO-token) ----
+
+
+def test_youtube_extractor_args_player_client() -> None:
+    class _S:
+        ytdlp_player_client = "tv, web_safari ,mweb"
+        ytdlp_po_provider_url = None
+
+    out = ingest_service.youtube_extractor_args(_S())
+    assert out == {"player_client": ["tv", "web_safari", "mweb"]}
+
+
+def test_youtube_extractor_args_po_provider() -> None:
+    class _S:
+        ytdlp_player_client = None
+        ytdlp_po_provider_url = "http://pot:4416"
+
+    out = ingest_service.youtube_extractor_args(_S())
+    assert out == {"getpot_bgutil_baseurl": ["http://pot:4416"]}
+
+
+def test_youtube_extractor_args_none_when_unset() -> None:
+    class _S:
+        ytdlp_player_client = None
+        ytdlp_po_provider_url = ""
+
+    assert ingest_service.youtube_extractor_args(_S()) is None
+
+
+def test_download_vod_sets_youtube_extractor_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(
+        get_settings(), "ytdlp_player_client", "tv,web_safari", raising=False
+    )
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://www.youtube.com/watch?v=abc",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="youtube",
+    )
+    assert captured.get("extractor_args") == {"youtube": {"player_client": ["tv", "web_safari"]}}

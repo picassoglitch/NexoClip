@@ -88,6 +88,12 @@ def _list_channel_vods_sync(channel_url: str, limit: int) -> list[dict[str, obje
         opts["cookiefile"] = str(s.cookies_file)
     elif s.cookies_from_browser:
         opts["cookiesfrombrowser"] = (s.cookies_from_browser.strip().lower(),)
+    # Same free YouTube bot-gate dodge as the download path (player_client
+    # / PO-token) — a channel listing hits the same gate.
+    from nexoclip.ingest.service import youtube_extractor_args
+    yt_args = youtube_extractor_args(s)
+    if yt_args:
+        opts["extractor_args"] = {"youtube": yt_args}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
     entries = (info or {}).get("entries") or []

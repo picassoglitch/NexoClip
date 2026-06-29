@@ -282,6 +282,25 @@ class Settings(BaseSettings):
         default=None, validation_alias="NEXOCLIP_YTDLP_PROXY"
     )
 
+    # FREE, zero-infra YouTube bot-gate mitigation (no proxy, no cookies).
+    # yt-dlp can dodge the "confirm you're not a bot" gate by extracting via a
+    # different YouTube player client. Comma-separated, tried in order, e.g.
+    # "tv,web_safari,mweb" (good gate-dodgers as of 2026; `web`/`android` now
+    # demand a PO token). Maps to extractor_args youtube:player_client.
+    # YouTube-SCOPED — never touches Twitch/Kick. Unset → yt-dlp's default.
+    ytdlp_player_client: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PLAYER_CLIENT"
+    )
+
+    # Base URL of a self-hosted bgutil PO-token provider (needs the yt-dlp
+    # plugin `bgutil-ytdlp-pot-provider` installed + the provider running as a
+    # small sidecar). Lets yt-dlp mint the Proof-of-Origin tokens YouTube
+    # increasingly requires WITHOUT a browser or cookies. Maps to
+    # extractor_args youtube:getpot_bgutil_baseurl. Unset → no PO provider.
+    ytdlp_po_provider_url: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PO_PROVIDER_URL"
+    )
+
     # Task 2b — VOD download speed.
     #
     # `ytdlp_concurrent_fragments` — yt-dlp's `concurrent_fragment_downloads`

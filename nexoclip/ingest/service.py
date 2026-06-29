@@ -402,6 +402,26 @@ async def ingest_uploaded(
     return stream
 
 
+def youtube_extractor_args(settings: Any) -> dict[str, list[str]] | None:
+    """Build yt-dlp's `extractor_args["youtube"]` from the free bot-gate
+    knobs — a player_client switch and an optional self-hosted PO-token
+    provider. Both are FREE and need no proxy/cookies; YouTube-scoped, so
+    they never affect other extractors. Returns None when neither is set.
+
+    Shared by the VOD download and the channel-VOD listing so both egress
+    paths dodge the gate the same way.
+    """
+    yt: dict[str, list[str]] = {}
+    clients = (getattr(settings, "ytdlp_player_client", None) or "").strip()
+    if clients:
+        yt["player_client"] = [c.strip() for c in clients.split(",") if c.strip()]
+    po_url = (getattr(settings, "ytdlp_po_provider_url", None) or "").strip()
+    if po_url:
+        # The bgutil yt-dlp plugin reads its provider base URL from here.
+        yt["getpot_bgutil_baseurl"] = [po_url]
+    return yt or None
+
+
 def _download_vod(
     *,
     vod_url: str,
@@ -490,6 +510,13 @@ def _download_vod(
     proxy = (getattr(s, "ytdlp_proxy", None) or "").strip()
     if proxy:
         ydl_opts["proxy"] = proxy
+
+    # FREE bot-gate mitigation: a YouTube player_client switch (+ optional
+    # PO-token provider) often clears the gate with NO proxy and NO cookies.
+    # YouTube-scoped, so it never affects Twitch/Kick. See Settings.
+    yt_args = youtube_extractor_args(s)
+    if yt_args:
+        ydl_opts["extractor_args"] = {"youtube": yt_args}
 
     # Task 2b — aria2c external downloader. Probe at request time so
     # the operator can flip the env var without restarting (the

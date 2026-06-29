@@ -931,9 +931,14 @@ def process(
 
 def _open_db(db_path: str | Path | None) -> Database:
     from nexoclip.db import Database
-    from nexoclip.settings import get_settings
+    from nexoclip.settings import get_settings, resolve_db_target
 
-    return Database(Path(db_path) if db_path else Path(get_settings().db_path))
+    if db_path:
+        return Database(Path(db_path))
+    # Prod runs on Postgres (DATABASE_URL); only `db_path` would open the
+    # SQLite fallback. Use the same resolver the web app does so CLI commands
+    # hit the SAME database the running service does — not an empty local file.
+    return Database(resolve_db_target(get_settings()))
 
 
 @db_app.command("init")

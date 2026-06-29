@@ -270,6 +270,61 @@ async def test_schedule_auto_schedules_all_approved_with_enrichment(
 
 
 @pytest.mark.asyncio
+async def test_schedule_auto_409s_while_a_run_is_fresh(
+    publish_env: None, client: httpx.AsyncClient, db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """A live run (recent heartbeat) blocks a second click — no double-schedule."""
+    import time as _time
+
+    from nexoclip.api.routers import zernio as zr
+
+    tid = tenants["alice"]["id"]
+    await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
+    await TenantsRepo(db).set_zernio_profile(tid, profile_id="prof_alice", profile_name="A")
+    zr._AUTOPROG[tid] = {"state": "running", "heartbeat": _time.monotonic()}
+    try:
+        resp = await client.post(
+            "/dashboard/publish/zernio/schedule/auto",
+            headers=auth(tenants["alice"]["token"]),
+        )
+        assert resp.status_code == 409
+        assert "en curso" in resp.json()["error"]
+    finally:
+        zr._AUTOPROG.pop(tid, None)
+
+
+@pytest.mark.asyncio
+async def test_schedule_auto_overrides_a_stale_run(
+    publish_env: None, client: httpx.AsyncClient, db: Database,
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """A hung run (heartbeat past the stale window) is treated as dead so the
+    tenant isn't wedged at 'en curso' until a redeploy."""
+    import time as _time
+
+    from nexoclip.api.routers import zernio as zr
+
+    tid = tenants["alice"]["id"]
+    await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
+    await TenantsRepo(db).set_zernio_profile(tid, profile_id="prof_alice", profile_name="A")
+    # Heartbeat older than the stale window → dead run.
+    zr._AUTOPROG[tid] = {
+        "state": "running",
+        "heartbeat": _time.monotonic() - zr._AUTOPROG_STALE_S - 60.0,
+    }
+    try:
+        resp = await client.post(
+            "/dashboard/publish/zernio/schedule/auto",
+            headers=auth(tenants["alice"]["token"]),
+        )
+        # Override allowed → not a 409. (No approved clips → clean done/ok.)
+        assert resp.status_code == 200, resp.text
+    finally:
+        zr._AUTOPROG.pop(tid, None)
+
+
+@pytest.mark.asyncio
 async def test_schedule_auto_no_clips_is_clean_ok(
     publish_env: None, client: httpx.AsyncClient, db: Database,
     tenants: dict[str, dict[str, str]],

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -3389,6 +3390,15 @@ async def zernio_compose_clip(
 _AUTOPROG: dict[str, dict[str, Any]] = {}
 _AUTOPROG_TASKS: set[asyncio.Task[None]] = set()
 
+# A `running` auto-program record is only honored while it keeps advancing.
+# The worker bumps `heartbeat` (monotonic seconds) at start + after every
+# clip; if it hasn't advanced in this long the run is treated as DEAD (a hung
+# render / stalled Zernio call / killed task) and a new run may override it.
+# Without this, one stuck run wedged the tenant at "Ya hay una programación
+# en curso" until a full redeploy. Generous — a single clip render is seconds,
+# never minutes.
+_AUTOPROG_STALE_S = 600.0
+
 
 async def _run_autoprog(
     *,
@@ -3416,6 +3426,10 @@ async def _run_autoprog(
         client = _build_client()
         with bound_tenant(tenant_id):
             for clip_id, when_iso in schedule:
+                # Heartbeat at the START too — proves we're actively working
+                # this clip so a slow render (CPU-contended) isn't misread as
+                # a hung run and overridden mid-flight.
+                prog["heartbeat"] = time.monotonic()
                 try:
                     composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
                     post_id = await _publish_clip(
@@ -3443,6 +3457,10 @@ async def _run_autoprog(
                         {"clip_id": clip_id, "ok": False, "error": str(e)}
                     )
                 prog["done"] += 1
+                # Heartbeat: proves the run is still advancing so the
+                # one-run-per-tenant lock stays honored (and a hung run
+                # eventually releases it). See _AUTOPROG_STALE_S.
+                prog["heartbeat"] = time.monotonic()
         prog["state"] = "done"
         _log.info(
             "zernio.autoprogram tenant=%s total=%d scheduled=%d failed=%d",
@@ -3487,12 +3505,21 @@ async def zernio_schedule_auto(
         )
 
     # One auto-program run per tenant at a time — a second click while a run
-    # is live would double-schedule clips.
+    # is live would double-schedule clips. But honor the lock ONLY while the
+    # run is still advancing: a hung/killed run (no heartbeat past the stale
+    # window) is treated as dead so the tenant isn't wedged at "en curso"
+    # until a redeploy.
     cur = _AUTOPROG.get(tenant_id)
     if cur and cur.get("state") == "running":
-        return JSONResponse(
-            {"ok": False, "error": "Ya hay una programación en curso."},
-            status_code=409,
+        last = float(cur.get("heartbeat") or 0.0)
+        if time.monotonic() - last < _AUTOPROG_STALE_S:
+            return JSONResponse(
+                {"ok": False, "error": "Ya hay una programación en curso."},
+                status_code=409,
+            )
+        _log.warning(
+            "zernio.autoprogram.stale_run_overridden tenant=%s last_hb_age_s=%.0f",
+            tenant_id, time.monotonic() - last,
         )
 
     clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
@@ -3549,6 +3576,7 @@ async def zernio_schedule_auto(
     _AUTOPROG[tenant_id] = {
         "state": "running", "total": len(schedule),
         "done": 0, "scheduled": 0, "failed": 0, "results": [],
+        "heartbeat": time.monotonic(),
     }
     task = asyncio.create_task(
         _run_autoprog(

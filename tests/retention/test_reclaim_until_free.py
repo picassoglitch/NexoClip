@@ -111,6 +111,41 @@ async def test_skips_actively_downloading_source(
     assert reached is False
 
 
+async def test_skips_active_hls_download_with_only_fragments(
+    retention_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: an in-flight HLS/DASH download has only .part-Frag* files
+    and NO video.mp4 yet. The reclaimer must NOT evict it — doing so deleted
+    fragments mid-download and flooded yt-dlp 'Unable to rename ...part-Frag'.
+    """
+    t = await TenantsRepo(retention_db).create(name="Aldo")
+    # Seed an OLD row whose source is mid-HLS-download: fragments, no video.mp4.
+    sid = "str_hls"
+    src = tmp_path / sid / "source"
+    src.mkdir(parents=True)
+    (src / "video.mp4.part-Frag2302.part").write_bytes(b"\x00" * 4096)
+    (src / "video.mp4.part-Frag2303").write_bytes(b"\x00" * 4096)
+    with bound_tenant(t.id):
+        await StreamsRepo(retention_db).upsert(
+            StreamRow(
+                id=sid, tenant_id=t.id,
+                vod_url="https://twitch.tv/videos/1", platform="twitch",
+                title="t", channel="c", duration_s=0.0,
+                source_video_path=str(src / "video.mp4"),  # doesn't exist yet
+                source_audio_path=str(src / "audio.wav"),
+                status="pending", created_at=days_ago_iso(30),
+            )
+        )
+    monkeypatch.setattr(shutil, "disk_usage", _fake_usage([1024]))  # always low
+    freed, _reached = await reclaim_sources_until_free(
+        retention_db, output_dir=tmp_path, target_free_bytes=10 * 1024**3,
+    )
+    # The actively-downloading fragments survive.
+    assert (src / "video.mp4.part-Frag2302.part").exists()
+    assert (src / "video.mp4.part-Frag2303").exists()
+    assert freed == 0
+
+
 async def test_disabled_when_target_zero(
     retention_db: Database, tmp_path: Path
 ) -> None:

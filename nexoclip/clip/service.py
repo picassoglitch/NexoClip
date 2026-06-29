@@ -299,6 +299,7 @@ def _cut_one_sync(
             stream_duration_s=stream.duration_s,
             fallback_pre_roll_s=cfg.pre_roll_s,
             fallback_post_roll_s=cfg.post_roll_s,
+            max_clip_duration_s=getattr(cfg, "max_clip_duration_s", 60.0),
         )
         start, end, duration = plan.start_s, plan.end_s, plan.duration_s
         window_plan_evidence: dict[str, object] | None = {

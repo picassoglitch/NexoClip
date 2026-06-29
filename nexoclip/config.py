@@ -281,6 +281,15 @@ class ClipConfig(BaseModel):
 
     pre_roll_s: float = Field(default=30.0, ge=0.0)
     post_roll_s: float = Field(default=15.0, ge=0.0)
+    # Ceiling for substantive clip windows (story / default / retroactive).
+    # Default 60.0 keeps current behavior EXACTLY (every band already caps at
+    # 60s). Raise it (e.g. 75-90) to let substantive clips run past 60s so
+    # they clear platforms that only pay ABOVE 60s — notably TikTok Creator
+    # Rewards (videos must be >1 min to earn). Punchy bands (reaction/quote)
+    # are never lifted: stretching a snappy moment tanks completion + reach.
+    # The publish-time per-platform duration guard then auto-routes a longer
+    # clip away from shorter surfaces (Bluesky 60s, IG/FB 90s).
+    max_clip_duration_s: float = Field(default=60.0, ge=10.0)
     output_aspect: str = Field(default="9:16", description="Phase 0 only supports 9:16.")
     output_width: int = Field(default=1080, gt=0)
     output_height: int = Field(default=1920, gt=0)

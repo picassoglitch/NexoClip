@@ -2030,6 +2030,31 @@ async def autopublish_hands_free_sweep(
     return published
 
 
+async def _platform_perf_weights(db: Database, tenant_id: str) -> dict[str, float]:
+    """Continuous-learning allocation weights from real per-platform analytics.
+
+    Never raises — on any failure (no analytics, Zernio down) returns {} so the
+    planner falls back to full, unbiased allocation. Cold-start safe: platforms
+    without enough mature data stay at weight 1.0."""
+    try:
+        from nexoclip.publish.analytics_service import internal_analytics
+        from nexoclip.score.performance import (
+            compute_platform_performance,
+            platform_weights,
+        )
+
+        analytics = await internal_analytics(db, tenant_id, client=_build_client())
+        perf = compute_platform_performance(analytics.get("posts", []))
+        return platform_weights(perf)
+    except Exception as e:  # learning is best-effort; never block publishing
+        import structlog
+
+        structlog.get_logger("nexoclip.api.zernio").info(
+            "perf_weights.unavailable", tenant_id=tenant_id, error=str(e),
+        )
+        return {}
+
+
 async def _run_growth_engine(
     *,
     db: Database,
@@ -2096,6 +2121,9 @@ async def _run_growth_engine(
     # daily cap so two VODs in one day can't blow past it (caps hold ACROSS
     # sweeps, not just within one).
     existing_today = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
+    # Continuous learning: shift volume toward platforms that actually earn
+    # views (a mature 0-view platform gets fewer clips). Best-effort.
+    weights = await _platform_perf_weights(db, tenant_id)
 
     # Score + compose each eligible clip into a ClipContent.
     contents: list[ClipContent] = []
@@ -2157,6 +2185,7 @@ async def _run_growth_engine(
         contents, connected=connected, rules=rules,
         now=_dt.datetime.now(_dt.UTC), budget=budget, min_score=min_score,
         existing_today=existing_today, recent_tags=recent_tags,
+        platform_weights=weights,
     )
 
     pubs = ZernioPublishesRepo(db)
@@ -3372,6 +3401,7 @@ async def _run_growth_autoprog(
             gs_repo = GrowthScoresRepo(db)
             recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
             existing_today = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
+            weights = await _platform_perf_weights(db, tenant_id)
 
             # Score + compose each clip into a ClipContent.
             contents: list[ClipContent] = []
@@ -3426,7 +3456,7 @@ async def _run_growth_autoprog(
             plan = plan_backlog_schedule(
                 contents, connected=targets_canon, rules=rules,
                 now=_dt.datetime.now(_dt.UTC), min_score=min_score,
-                existing_today=existing_today,
+                existing_today=existing_today, platform_weights=weights,
                 recent_tags=recent_tags if growth_on else None,
             )
             prog["total"] = len(plan.posts)

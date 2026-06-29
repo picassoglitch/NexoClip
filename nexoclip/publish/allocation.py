@@ -61,6 +61,7 @@ def allocate(
     budget: int | None = None,
     existing_today: dict[str, int] | None = None,
     min_score: float = 0.0,
+    platform_weights: dict[str, float] | None = None,
 ) -> AllocationPlan:
     """Distribute clips across platforms under the rulebook.
 
@@ -77,12 +78,17 @@ def allocate(
             from each platform's `max_per_day` capacity.
         min_score: Phase-5 publish floor — a (clip, platform) fit below this is
             never scheduled (the clip is held off that platform).
+        platform_weights: continuous-learning multipliers (0-1) per platform;
+            a platform's remaining daily capacity is scaled by its weight so a
+            consistently low-performing platform gets fewer clips (never zero —
+            it keeps a trickle to keep re-testing). Absent → full capacity.
 
     Returns an `AllocationPlan`: chosen clips per platform, plus the clips that
     queued (outside the pool) or were held (in the pool, no platform took them).
     """
     rules = rules or {}
     existing_today = existing_today or {}
+    weights = platform_weights or {}
     target = {canonical_platform(p) for p in platforms}
 
     # Rank clips by their overall growth score to form today's pool.
@@ -102,7 +108,11 @@ def allocate(
         if not rule.enabled:
             capacity[p] = 0
             continue
-        capacity[p] = max(0, rule.max_per_day - int(existing_today.get(p, 0)))
+        cap = max(0, rule.max_per_day - int(existing_today.get(p, 0)))
+        w = weights.get(p, 1.0)
+        # Scale by the learned performance weight; a positive capacity never
+        # drops below 1 (keep a trickle so a recovering platform re-samples).
+        capacity[p] = max(1, round(cap * w)) if (cap > 0 and w > 0) else round(cap * w)
 
     # Greedily fill each platform with its best-fitting in-pool clips. We walk
     # fits globally by descending fit score so the strongest matches claim

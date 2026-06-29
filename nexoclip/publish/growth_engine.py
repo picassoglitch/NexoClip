@@ -19,6 +19,7 @@ whole decision is unit-testable without a DB, an LLM, or Zernio.
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import random as _random
 from dataclasses import dataclass, field
 
@@ -81,13 +82,16 @@ def plan_growth_publish(
     min_score: int = 40,
     existing_today: dict[str, int] | None = None,
     recent_tags: list[list[str]] | None = None,
+    platform_weights: dict[str, float] | None = None,
     fatigue_threshold: float = 0.6,
     fatigue_window: int = 2,
     rng: _random.Random | None = None,
 ) -> GrowthPlan:
     """Plan today's publishing for a batch of scored clips. See module docstring
     for the pipeline. `existing_today` is per-platform posts already placed
-    today (subtracted from each platform's cap)."""
+    today (subtracted from each platform's cap). `platform_weights` are the
+    continuous-learning multipliers that shift volume toward platforms that
+    actually earn views."""
     existing_today = dict(existing_today or {})
     target = [canonical_platform(p) for p in connected]
     by_id = {c.clip_id: c for c in clips}
@@ -125,6 +129,7 @@ def plan_growth_publish(
     plan = allocate(
         fits, platforms=target, rules=rules, budget=budget,
         existing_today=existing_today, min_score=float(min_score),
+        platform_weights=platform_weights,
     )
 
     # --- Phase 1 + 3: schedule each platform's clips under its rulebook and
@@ -172,6 +177,7 @@ def plan_backlog_schedule(
     min_score: int = 0,
     existing_today: dict[str, int] | None = None,
     recent_tags: list[list[str]] | None = None,
+    platform_weights: dict[str, float] | None = None,
     fatigue_threshold: float = 0.6,
     fatigue_window: int = 2,
     rng: _random.Random | None = None,
@@ -209,6 +215,7 @@ def plan_backlog_schedule(
     held = set(held_fatigue)
     fresh = [c for c in ordered if c.clip_id not in held]
 
+    weights = platform_weights or {}
     posts: list[ScheduledPost] = []
     scheduled_ids: set[str] = set()
     for platform in target:
@@ -225,6 +232,14 @@ def plan_backlog_schedule(
                 ):
                     eligible.append((c.clip_id, int(ps.score)))
                     break
+        # Continuous learning: a low-performing platform receives only its
+        # top-weight fraction of the backlog (best clips first — `fresh` is
+        # score-ordered), shifting volume to platforms that earn views. A
+        # positive list never drops below 1 (keep re-testing).
+        w = weights.get(platform, 1.0)
+        if w < 1.0 and eligible:
+            keep = max(1, math.ceil(len(eligible) * w))
+            eligible = eligible[:keep]
         times = plan_platform_times(
             len(eligible), rule=rule, now=now,
             existing_today=int(existing_today.get(platform, 0)), rng=rng,

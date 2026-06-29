@@ -2030,6 +2030,46 @@ async def autopublish_hands_free_sweep(
     return published
 
 
+async def _cooled_down_platforms(
+    db: Database, tenant_id: str, *, profile_id: str | None,
+) -> set[str]:
+    """Platforms to SKIP right now because they're flagging abuse/rate-limits.
+
+    Refreshes cooldowns from Zernio's failed posts (a `user_abuse` failure —
+    rate limit, velocity cap, daily-upload limit — parks the platform for the
+    wait it asked for), then returns the still-active cooled-down set. The
+    scheduler drops these platforms so the engine stops feeding one that's
+    actively throttling/ghosting us. Best-effort — never raises."""
+    import datetime as _dt
+
+    from nexoclip.db import PlatformCooldownsRepo
+    from nexoclip.integrations.zernio.errors import cooldowns_from_failed_post
+    from nexoclip.publish.pacing import canonical_platform
+
+    repo = PlatformCooldownsRepo(db)
+    try:
+        client = _build_client()
+        failed = await client.list_failed(profile_id=profile_id)
+        now = _dt.datetime.now(_dt.UTC)
+        for post in failed:
+            for platform, delta in cooldowns_from_failed_post(post).items():
+                await repo.set_cooldown(
+                    tenant_id, platform,
+                    until=(now + delta).isoformat(), reason="rate_limit",
+                )
+    except Exception as e:  # detection is best-effort
+        import structlog
+
+        structlog.get_logger("nexoclip.api.zernio").info(
+            "cooldown.refresh_failed", tenant_id=tenant_id, error=str(e),
+        )
+    try:
+        active = await repo.active(tenant_id)
+    except Exception:
+        return set()
+    return {canonical_platform(p) for p in active}
+
+
 async def _platform_perf_weights(db: Database, tenant_id: str) -> dict[str, float]:
     """Continuous-learning allocation weights from real per-platform analytics.
 
@@ -2101,6 +2141,13 @@ async def _run_growth_engine(
     # resolves even when Zernio names the account "x".
     accounts_canon = {canonical_platform(p): a for p, a in account_map.items()}
     connected = [canonical_platform(p) for p in targets if canonical_platform(p) in accounts_canon]
+    # Abuse/rate-limit backoff: skip any platform currently in cooldown so we
+    # don't feed one that's throttling/ghosting us.
+    cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
+    if cooled:
+        connected = [p for p in connected if p not in cooled]
+        log.info("autopublish.growth.cooldown_skip", tenant_id=tenant_id,
+                 cooled=sorted(cooled))
     if not connected:
         log.info("autopublish.growth.no_connected_targets", tenant_id=tenant_id)
         return 0
@@ -3402,6 +3449,14 @@ async def _run_growth_autoprog(
             recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
             existing_today = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
             weights = await _platform_perf_weights(db, tenant_id)
+            # Abuse/rate-limit backoff: drop platforms in cooldown.
+            cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
+            if cooled:
+                targets_canon = [p for p in targets_canon if p not in cooled]
+                _log.info(
+                    "zernio.autoprogram.cooldown_skip tenant=%s cooled=%s",
+                    tenant_id, sorted(cooled),
+                )
 
             # Score + compose each clip into a ClipContent.
             contents: list[ClipContent] = []

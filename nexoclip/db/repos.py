@@ -4177,6 +4177,47 @@ class PlatformPacingRulesRepo:
         await conn.commit()
 
 
+class PlatformCooldownsRepo:
+    """Per-tenant per-platform publish cooldowns (migration 057) — the
+    abuse/rate-limit backoff. A platform with a future `until` is parked: the
+    scheduler skips it so we stop feeding a platform that's flagging us."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def set_cooldown(
+        self, tenant_id: str, platform: str, *, until: str, reason: str | None = None
+    ) -> None:
+        from nexoclip.publish.pacing import canonical_platform
+
+        conn = await self._db.connect()
+        await conn.execute(
+            "INSERT INTO platform_cooldowns (tenant_id, platform, until, reason, "
+            "updated_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(tenant_id, platform) DO UPDATE SET "
+            "until = excluded.until, reason = excluded.reason, "
+            "updated_at = excluded.updated_at",
+            (tenant_id, canonical_platform(platform), until, reason, _now()),
+        )
+        await conn.commit()
+
+    async def active(self, tenant_id: str) -> dict[str, str]:
+        """{platform: until_iso} for platforms still cooling down (until > now).
+        Platforms whose cooldown has lapsed are omitted (and pruned)."""
+        now = _dt.datetime.now(_dt.UTC).isoformat()
+        conn = await self._db.connect()
+        await conn.execute(
+            "DELETE FROM platform_cooldowns WHERE tenant_id = ? AND until <= ?",
+            (tenant_id, now),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT platform, until FROM platform_cooldowns WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        return {str(r[0]): str(r[1]) for r in await cur.fetchall()}
+
+
 class GrowthScoresRepo:
     """Pre-publish Growth Score cache, one row per clip (migration 053).
 

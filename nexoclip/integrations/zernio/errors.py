@@ -12,7 +12,12 @@ internal API surfaces to NexoOBS / Nexo AI.
 """
 from __future__ import annotations
 
+import datetime as _dt
+import re
 from typing import Any, Final
+
+# Default backoff for a user_abuse failure with no parseable wait time.
+_DEFAULT_ABUSE_COOLDOWN = _dt.timedelta(hours=6)
 
 # errorCategory enum from the OpenAPI PlatformTarget schema. New values
 # may appear; anything unmapped falls back to `unknown` handling.
@@ -125,6 +130,40 @@ def summarize_failed_platforms(post: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def parse_cooldown(message: str | None) -> _dt.timedelta:
+    """How long to park a platform after a user_abuse failure, read from the
+    error text. "wait 1438 minutes" → 1438m; "2 hours" → 2h; "tomorrow" /
+    "daily ... limit" → 24h. Falls back to a sane default when unparseable."""
+    msg = (message or "").lower()
+    m = re.search(r"(\d+)\s*(minute|min|hour|hr|day)", msg)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        if unit.startswith("min"):
+            return _dt.timedelta(minutes=n)
+        if unit in ("hour", "hr"):
+            return _dt.timedelta(hours=n)
+        return _dt.timedelta(days=n)
+    if "tomorrow" in msg or "daily" in msg or "per day" in msg:
+        return _dt.timedelta(hours=24)
+    return _DEFAULT_ABUSE_COOLDOWN
+
+
+def cooldowns_from_failed_post(post: dict[str, Any]) -> dict[str, _dt.timedelta]:
+    """{platform: cooldown} for every platform on `post` that failed with a
+    user_abuse signal. Empty when nothing abuse-related failed."""
+    out: dict[str, _dt.timedelta] = {}
+    for row in summarize_failed_platforms(post):
+        if row.get("category") != "user_abuse":
+            continue
+        platform = row.get("platform")
+        if isinstance(platform, str) and platform:
+            out[platform.lower()] = parse_cooldown(
+                row.get("error") if isinstance(row.get("error"), str) else None
+            )
+    return out
+
+
 def post_is_auto_retryable(post: dict[str, Any]) -> bool:
     """A post qualifies for the once-only auto-retry when AT LEAST one
     failed platform is transient and NONE need human action — retrying
@@ -138,7 +177,9 @@ def post_is_auto_retryable(post: dict[str, Any]) -> bool:
 __all__ = [
     "TRANSIENT_CATEGORIES",
     "classify_category",
+    "cooldowns_from_failed_post",
     "is_transient",
+    "parse_cooldown",
     "post_is_auto_retryable",
     "spanish_hint",
     "summarize_failed_platforms",

@@ -483,6 +483,14 @@ def _download_vod(
         "concurrent_fragment_downloads": concurrent_frags,
     }
 
+    # Residential proxy — the sustainable fix for datacenter-IP bot-gating
+    # (YouTube "confirm you're not a bot", Kick Cloudflare 403). Routes the
+    # whole fetch through a home-looking IP so we don't depend on cookies
+    # that expire. Unset → direct. See Settings.ytdlp_proxy.
+    proxy = (getattr(s, "ytdlp_proxy", None) or "").strip()
+    if proxy:
+        ydl_opts["proxy"] = proxy
+
     # Task 2b — aria2c external downloader. Probe at request time so
     # the operator can flip the env var without restarting (the
     # `get_settings` cache survives but the PATH probe doesn't).

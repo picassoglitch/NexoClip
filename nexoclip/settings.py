@@ -269,6 +269,19 @@ class Settings(BaseSettings):
     # open. When both this and cookies_from_browser are set, the file wins.
     cookies_file: str | None = None
 
+    # Route ALL yt-dlp egress (VOD download + channel listing) and the Kick
+    # API call through a proxy. A RESIDENTIAL/mobile proxy makes the request
+    # look like a home connection instead of a datacenter — which is what
+    # actually stops YouTube's "confirm you're not a bot" gate and Kick's
+    # Cloudflare 403, WITHOUT cookies (which expire and get accounts banned).
+    # This is the sustainable fix; cookies become an optional fallback for
+    # login-walled content (e.g. X video). Format is a full proxy URL:
+    #   http://user:pass@host:port  or  socks5://user:pass@host:port
+    # Unset → direct connection (current behavior).
+    ytdlp_proxy: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_YTDLP_PROXY"
+    )
+
     # Task 2b — VOD download speed.
     #
     # `ytdlp_concurrent_fragments` — yt-dlp's `concurrent_fragment_downloads`

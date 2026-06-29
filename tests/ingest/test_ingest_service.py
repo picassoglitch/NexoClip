@@ -329,3 +329,64 @@ def test_download_failure_sweeps_partial_files(
     # Every partial under source/ is gone — nothing left to eat the disk.
     leftovers = [p.name for p in target.parent.glob("video*")]
     assert leftovers == [], f"partial files not cleaned: {leftovers}"
+
+
+# ---- Residential proxy wiring (sustainable bot-gate fix) ----
+
+
+def _capture_ydl_opts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+    """Patch yt_dlp.YoutubeDL to capture the opts and return a valid download."""
+    import yt_dlp
+
+    captured: dict[str, Any] = {}
+    target = tmp_path / "source" / "video.mp4"
+
+    class _FakeYDL:
+        def __init__(self, opts: dict[str, Any], *_a: object, **_k: object) -> None:
+            captured.update(opts)
+
+        def __enter__(self) -> _FakeYDL:
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def extract_info(self, *_a: object, **_k: object) -> dict[str, Any]:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"\x00\x00data")
+            return {"requested_downloads": [{"filepath": str(target)}]}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+    return captured
+
+
+def test_download_vod_sets_proxy_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(
+        get_settings(), "ytdlp_proxy", "http://u:p@proxy.host:1234", raising=False
+    )
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://twitch.tv/videos/1",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="twitch",
+    )
+    assert captured.get("proxy") == "http://u:p@proxy.host:1234"
+
+
+def test_download_vod_no_proxy_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "ytdlp_proxy", None, raising=False)
+    captured = _capture_ydl_opts(monkeypatch, tmp_path)
+    ingest_service._download_vod(
+        vod_url="https://twitch.tv/videos/1",
+        target_path=tmp_path / "source" / "video.mp4",
+        cookies_from_browser=None, cookies_file=None, platform="twitch",
+    )
+    assert "proxy" not in captured

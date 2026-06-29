@@ -225,6 +225,42 @@ class Settings(BaseSettings):
         default="auto", validation_alias="NEXOCLIP_LIVE_STORAGE_REGION"
     )
 
+    # Phase 1 (object-storage offload) — the general ARTIFACT store. Renders
+    # (and later sources/clips) are pushed here so the local Railway volume is
+    # only bounded scratch, and the publisher fetches a presigned BUCKET url
+    # (durable object, generous expiry, $0 R2 egress, zero load on our box)
+    # instead of our time-boxed `/api/internal/clip` endpoint. Vendor-neutral
+    # S3 (Cloudflare R2 recommended). When the bucket is UNSET, everything
+    # falls back to local-disk serving (current behavior) — fully optional.
+    #   NEXOCLIP_OBJECT_STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+    #   NEXOCLIP_OBJECT_STORAGE_REGION=auto  (+ R2 API access key id / secret)
+    object_storage_bucket: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_OBJECT_STORAGE_BUCKET"
+    )
+    object_storage_endpoint: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_OBJECT_STORAGE_ENDPOINT"
+    )
+    object_storage_access_key_id: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_OBJECT_STORAGE_ACCESS_KEY_ID"
+    )
+    object_storage_secret_access_key: str | None = Field(
+        default=None, validation_alias="NEXOCLIP_OBJECT_STORAGE_SECRET_ACCESS_KEY"
+    )
+    object_storage_prefix: str = Field(
+        default="artifacts", validation_alias="NEXOCLIP_OBJECT_STORAGE_PREFIX"
+    )
+    object_storage_region: str = Field(
+        default="auto", validation_alias="NEXOCLIP_OBJECT_STORAGE_REGION"
+    )
+    # Presigned-URL lifetime handed to the publisher. Generous by default —
+    # the object is durable, so this only bounds how long ONE url is valid;
+    # the vendor's retry/reschedule tail can be days (see the 14d local-serve
+    # floor this replaces).
+    object_storage_presign_ttl_s: int = Field(
+        default=14 * 24 * 3600,
+        validation_alias="NEXOCLIP_OBJECT_STORAGE_PRESIGN_TTL_S",
+    )
+
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline
     # work via FastAPI BackgroundTasks on this host (current behavior).
     # "modal" hands the job off to a Modal app (planned in F.10+ once

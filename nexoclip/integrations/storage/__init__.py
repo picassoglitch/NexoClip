@@ -18,6 +18,7 @@ configured; otherwise None, and live ingest falls back to reading a shared
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -74,6 +75,117 @@ class S3RecordingStore:
         dest = dest_dir / Path(key).name
         self._client.download_file(self._bucket, key, str(dest))
         return dest
+
+
+@runtime_checkable
+class ArtifactStore(Protocol):
+    """Durable off-box store for pipeline artifacts (renders, sources, clips).
+
+    The local Railway volume is only bounded scratch; the authoritative copy
+    of a servable artifact lives here, addressed by an opaque `key`. The
+    publisher fetches a presigned GET url for the object instead of pulling
+    from our own time-boxed endpoint.
+    """
+
+    async def upload(
+        self, *, local_path: Path, key: str, content_type: str | None = None
+    ) -> None: ...
+
+    async def download(self, *, key: str, dest: Path) -> Path | None: ...
+
+    async def presigned_url(self, *, key: str, ttl_seconds: int) -> str: ...
+
+    async def exists(self, *, key: str) -> bool: ...
+
+    async def delete(self, *, key: str) -> None: ...
+
+
+class S3ArtifactStore:
+    """`ArtifactStore` over any S3-compatible bucket (Cloudflare R2, Supabase
+    Storage, MinIO, S3, …). All boto3 calls are sync, so they run in a worker
+    thread. `prefix` namespaces every key (e.g. `artifacts/<...>`)."""
+
+    def __init__(self, *, client: Any, bucket: str, prefix: str = "artifacts") -> None:
+        self._client = client
+        self._bucket = bucket
+        self._prefix = prefix.strip("/")
+
+    def _full(self, key: str) -> str:
+        k = key.strip("/")
+        return f"{self._prefix}/{k}" if self._prefix else k
+
+    async def upload(
+        self, *, local_path: Path, key: str, content_type: str | None = None
+    ) -> None:
+        extra = {"ContentType": content_type} if content_type else None
+        await asyncio.to_thread(
+            self._client.upload_file,
+            str(local_path), self._bucket, self._full(key),
+            extra,  # ExtraArgs (positional in boto3.upload_file)
+        )
+
+    async def download(self, *, key: str, dest: Path) -> Path | None:
+        def _dl() -> Path | None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self._client.download_file(self._bucket, self._full(key), str(dest))
+            except Exception:
+                return None
+            return dest
+
+        return await asyncio.to_thread(_dl)
+
+    async def presigned_url(self, *, key: str, ttl_seconds: int) -> str:
+        return await asyncio.to_thread(
+            self._client.generate_presigned_url,
+            "get_object",
+            {"Bucket": self._bucket, "Key": self._full(key)},
+            int(ttl_seconds),
+        )
+
+    async def exists(self, *, key: str) -> bool:
+        def _head() -> bool:
+            try:
+                self._client.head_object(Bucket=self._bucket, Key=self._full(key))
+            except Exception:
+                return False
+            return True
+
+        return await asyncio.to_thread(_head)
+
+    async def delete(self, *, key: str) -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(
+                self._client.delete_object,
+                Bucket=self._bucket, Key=self._full(key),
+            )
+
+
+def build_artifact_store(settings: Settings) -> ArtifactStore | None:
+    """Construct the artifact store from settings, or None when no bucket is
+    configured (→ the pipeline serves artifacts from the local volume, the
+    current behavior). boto3 is imported lazily."""
+    bucket = (getattr(settings, "object_storage_bucket", None) or "").strip()
+    if not bucket:
+        return None
+
+    import boto3  # lazy: only a hard dep when object storage is configured
+
+    endpoint = (getattr(settings, "object_storage_endpoint", None) or "").strip()
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint or None,
+        aws_access_key_id=getattr(settings, "object_storage_access_key_id", None),
+        aws_secret_access_key=getattr(
+            settings, "object_storage_secret_access_key", None
+        ),
+        region_name=(getattr(settings, "object_storage_region", None) or "auto"),
+    )
+    return S3ArtifactStore(
+        client=client,
+        bucket=bucket,
+        prefix=(getattr(settings, "object_storage_prefix", None) or "artifacts"),
+    )
 
 
 def build_recording_store(settings: Settings) -> RecordingStore | None:

@@ -271,6 +271,17 @@ class Settings(BaseSettings):
         validation_alias="NEXOCLIP_OBJECT_STORAGE_PRESIGN_TTL_S",
     )
 
+    # Global cap on concurrently-running heavy pipelines (download + Whisper
+    # + ffmpeg render). The in-process dispatcher gates every launch — API,
+    # channel-poll, AND recovery-sweep — through one semaphore, so a redeploy
+    # that re-dispatches a backlog (or a channel-poll burst) can't stampede
+    # CPU/RAM/disk like the 11 vCPU spike we saw. Excess launches queue and
+    # run as slots free. Default 2 — tune to the host's cores. Under Modal
+    # (Phase 2) each job is isolated, so this becomes a dispatch-rate guard.
+    max_concurrent_pipelines: int = Field(
+        default=2, ge=1, validation_alias="NEXOCLIP_MAX_CONCURRENT_PIPELINES"
+    )
+
     # Slice F.8 — JobDispatcher selection. "in_process" runs pipeline
     # work via FastAPI BackgroundTasks on this host (current behavior).
     # "modal" hands the job off to a Modal app (planned in F.10+ once

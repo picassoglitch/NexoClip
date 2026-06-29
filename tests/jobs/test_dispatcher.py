@@ -76,8 +76,12 @@ def test_in_process_with_background_tasks_defers_call() -> None:
     assert len(probe.calls) == 0, "runner ran inline; should have been deferred"
     assert len(bt.deferred) == 1
     func, args = bt.deferred[0]
-    assert func is probe
+    # Deferred through the concurrency-guarded wrapper (not the raw runner),
+    # but the kickoff is threaded through and running it invokes the runner.
+    assert func == dispatcher._guarded_run
     assert args == (kickoff,)
+    asyncio.run(func(*args))
+    assert probe.calls == [kickoff]
 
 
 def test_in_process_without_background_tasks_runs_inline() -> None:
@@ -147,3 +151,49 @@ def test_factory_requires_runner_for_in_process(monkeypatch: pytest.MonkeyPatch)
     get_settings.cache_clear()
     with pytest.raises(NexoClipError, match="runner"):
         get_dispatcher(runner=None)
+
+
+# ---- Global concurrency cap ----
+
+
+@pytest.mark.asyncio
+async def test_dispatch_bounds_concurrency_to_cap() -> None:
+    """At most `max_concurrency` runners execute heavy work at once; the
+    rest queue on the semaphore and run as slots free."""
+    live = 0
+    peak = 0
+
+    async def _slow_runner(_kickoff: PipelineKickoff) -> None:
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            live -= 1
+
+    disp = InProcessJobDispatcher(_slow_runner, max_concurrency=2)
+    # Fire 8 launches concurrently (recovery/CLI path → inline await, wrapped
+    # in tasks just like the recovery sweep does).
+    await asyncio.gather(
+        *(asyncio.create_task(disp.dispatch_pipeline(_make_kickoff())) for _ in range(8))
+    )
+    assert peak <= 2, f"peak concurrency {peak} exceeded cap of 2"
+    assert peak >= 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_runs_all_launches_despite_cap() -> None:
+    """The cap throttles, it never drops work — all 8 still run."""
+    ran = 0
+
+    async def _runner(_kickoff: PipelineKickoff) -> None:
+        nonlocal ran
+        ran += 1
+        await asyncio.sleep(0)
+
+    disp = InProcessJobDispatcher(_runner, max_concurrency=1)
+    await asyncio.gather(
+        *(asyncio.create_task(disp.dispatch_pipeline(_make_kickoff())) for _ in range(8))
+    )
+    assert ran == 8

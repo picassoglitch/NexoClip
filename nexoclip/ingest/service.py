@@ -144,9 +144,26 @@ async def ingest_vod(
         if cookies_from_browser is None:
             cookies_from_browser = settings.cookies_from_browser or None
 
-    # Free-disk preflight — fail fast with an actionable message instead of
-    # downloading a multi-hour VOD onto a near-full volume (which just yields
-    # a truncated file that fails downstream). No-ops when the threshold is 0.
+    # Free-disk preflight, self-healing: if we're low, shed the oldest raw
+    # sources FIRST (the disk budget), then fail fast only if still below the
+    # hard floor. Prevents a near-full volume from blocking new ingests when
+    # there are stale sources sitting around to reclaim.
+    if db is not None:
+        from nexoclip.settings import get_settings as _gs
+
+        floor = int(getattr(_gs(), "min_free_disk_bytes", 0) or 0)
+        if floor > 0:
+            try:
+                free = shutil.disk_usage(output_dir).free
+            except OSError:
+                free = floor  # can't stat → don't try to reclaim
+            if free < floor:
+                from nexoclip.retention import reclaim_sources_until_free
+
+                with contextlib.suppress(Exception):  # reclaim is best-effort
+                    await reclaim_sources_until_free(
+                        db, output_dir=output_dir, target_free_bytes=floor * 2,
+                    )
     _assert_disk_headroom(output_dir)
 
     # Task 2a — telemetry. Wall-clock + file-size + downloader-id around

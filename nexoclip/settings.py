@@ -96,6 +96,19 @@ class Settings(BaseSettings):
         validation_alias="NEXOCLIP_MIN_FREE_DISK_BYTES",
     )
 
+    # Disk-budget HIGH-WATER mark. The volume self-regulates against THIS,
+    # not just the hard floor above: whenever free space drops below it, the
+    # background watchdog (and the ingest preflight) evict the OLDEST raw
+    # sources — heaviest, post-processing-disposable artifact — until free is
+    # back above it. This is what bounds total disk regardless of how many
+    # users/streams pile up; time-window retention only bounds AGE, not size.
+    # Default 10 GiB headroom; must be >= min_free_disk_bytes. Set 0 to
+    # disable the proactive watchdog (the hard floor + 24h sweep still apply).
+    target_free_disk_bytes: int = Field(
+        default=10 * 1024 * 1024 * 1024,
+        validation_alias="NEXOCLIP_TARGET_FREE_DISK_BYTES",
+    )
+
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
     deepgram_api_key: str | None = None

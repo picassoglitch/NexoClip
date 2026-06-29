@@ -36,6 +36,7 @@ from .service import (
     DEFAULT_RETENTION_VOD_DAYS,
     RetentionPolicy,
     RetentionReport,
+    reclaim_sources_until_free,
     reclaim_stream_source,
     sweep_retention,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "DEFAULT_RETENTION_VOD_DAYS",
     "RetentionPolicy",
     "RetentionReport",
+    "reclaim_sources_until_free",
     "reclaim_stream_source",
     "sweep_retention",
 ]

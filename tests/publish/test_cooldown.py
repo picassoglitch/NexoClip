@@ -9,6 +9,7 @@ import pytest
 from nexoclip.db import Database, PlatformCooldownsRepo, apply_migrations
 from nexoclip.integrations.zernio.errors import (
     cooldowns_from_failed_post,
+    failure_anchor,
     parse_cooldown,
 )
 
@@ -41,6 +42,31 @@ def test_cooldowns_from_failed_post_only_user_abuse() -> None:
     cds = cooldowns_from_failed_post(post)
     assert set(cds) == {"youtube"}  # only the abuse one
     assert cds["youtube"] == _dt.timedelta(minutes=60)
+
+
+def test_failure_anchor_parses_and_prefers_failure_time() -> None:
+    """Cooldowns run from WHEN the post failed, not from when a sweep
+    re-reads the (never-shrinking) failed list — anchoring at read time
+    re-armed every cooldown forever. failedAt wins over createdAt; a Z
+    suffix parses; the result is aware UTC."""
+    post = {
+        "createdAt": "2026-07-01T10:00:00Z",
+        "failedAt": "2026-07-02T08:30:00Z",
+    }
+    anchor = failure_anchor(post)
+    assert anchor == _dt.datetime(2026, 7, 2, 8, 30, tzinfo=_dt.UTC)
+
+    # Falls back through updatedAt/createdAt when failedAt is absent.
+    assert failure_anchor({"createdAt": "2026-07-01T10:00:00Z"}) == _dt.datetime(
+        2026, 7, 1, 10, 0, tzinfo=_dt.UTC
+    )
+
+
+def test_failure_anchor_none_when_unparseable() -> None:
+    """No timestamp → None. The caller must SKIP the post (guessing
+    "now" recreates the eternal re-arm this fixes)."""
+    assert failure_anchor({}) is None
+    assert failure_anchor({"failedAt": "not-a-date", "updatedAt": ""}) is None
 
 
 @pytest.mark.asyncio

@@ -164,6 +164,30 @@ def cooldowns_from_failed_post(post: dict[str, Any]) -> dict[str, _dt.timedelta]
     return out
 
 
+def failure_anchor(post: dict[str, Any]) -> _dt.datetime | None:
+    """WHEN this post failed, best-effort, as an aware UTC datetime.
+
+    The cooldown a failed post implies runs from the FAILURE moment, not
+    from whenever a sweep happens to re-read Zernio's failed list — the
+    list never shrinks (the once-only auto-retry of a rate-limited post
+    just fails again), so anchoring at read time re-armed every cooldown
+    on every sweep and parked the platform forever. None when the post
+    carries no parseable timestamp; callers must then SKIP the post
+    rather than guess "now" (guessing recreates the eternal re-arm)."""
+    for key in ("failedAt", "updatedAt", "createdAt", "scheduledFor"):
+        raw = post.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            ts = _dt.datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_dt.UTC)
+        return ts.astimezone(_dt.UTC)
+    return None
+
+
 def post_is_auto_retryable(post: dict[str, Any]) -> bool:
     """A post qualifies for the once-only auto-retry when AT LEAST one
     failed platform is transient and NONE need human action — retrying
@@ -178,6 +202,7 @@ __all__ = [
     "TRANSIENT_CATEGORIES",
     "classify_category",
     "cooldowns_from_failed_post",
+    "failure_anchor",
     "is_transient",
     "parse_cooldown",
     "post_is_auto_retryable",

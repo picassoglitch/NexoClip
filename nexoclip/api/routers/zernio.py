@@ -2043,7 +2043,10 @@ async def _cooled_down_platforms(
     import datetime as _dt
 
     from nexoclip.db import PlatformCooldownsRepo
-    from nexoclip.integrations.zernio.errors import cooldowns_from_failed_post
+    from nexoclip.integrations.zernio.errors import (
+        cooldowns_from_failed_post,
+        failure_anchor,
+    )
     from nexoclip.publish.pacing import canonical_platform
 
     repo = PlatformCooldownsRepo(db)
@@ -2051,12 +2054,33 @@ async def _cooled_down_platforms(
         client = _build_client()
         failed = await client.list_failed(profile_id=profile_id)
         now = _dt.datetime.now(_dt.UTC)
+        # Cooldowns run from each post's FAILURE time, never from `now`:
+        # Zernio's failed list never shrinks, so `now + delta` re-armed
+        # every cooldown on every sweep and a single "wait 1438 minutes"
+        # failure parked the platform forever. A post with no parseable
+        # timestamp is skipped outright — guessing "now" recreates the
+        # eternal re-arm. Multiple failures on one platform keep the
+        # longest wait; already-lapsed cooldowns are not written at all.
+        until_by_platform: dict[str, _dt.datetime] = {}
         for post in failed:
-            for platform, delta in cooldowns_from_failed_post(post).items():
-                await repo.set_cooldown(
-                    tenant_id, platform,
-                    until=(now + delta).isoformat(), reason="rate_limit",
-                )
+            deltas = cooldowns_from_failed_post(post)
+            if not deltas:
+                continue
+            anchor = failure_anchor(post)
+            if anchor is None:
+                continue
+            for platform, delta in deltas.items():
+                until = anchor + delta
+                if until <= now:
+                    continue
+                prior = until_by_platform.get(platform)
+                if prior is None or until > prior:
+                    until_by_platform[platform] = until
+        for platform, until in until_by_platform.items():
+            await repo.set_cooldown(
+                tenant_id, platform,
+                until=until.isoformat(), reason="rate_limit",
+            )
     except Exception as e:  # detection is best-effort
         import structlog
 
@@ -2211,7 +2235,11 @@ async def _run_growth_engine(
                 card = fallback_card(inp)
             contents.append(
                 ClipContent(
-                    clip_id=clip_id, caption=composed.caption,
+                    # sans-tags: the asset matrix carries hashtags
+                    # separately and `caption_with_tags()` appends them at
+                    # post time — the full caption here shipped every tag
+                    # block twice.
+                    clip_id=clip_id, caption=composed.caption_sans_tags,
                     hashtags=list(composed.hashtags), hook=composed.hook,
                     title=composed.title, card=card,
                 )
@@ -2262,10 +2290,15 @@ async def _run_growth_engine(
                 timezone="UTC",
             )
             with bound_tenant(tenant_id):
+                # scheduled_for is load-bearing: the per-platform daily-cap
+                # accounting (count_by_platform_today) and the Publicados
+                # "programado" ordering both key off it — omitting it counted
+                # future posts against TODAY's cap and hid them from the tab.
                 await pubs.record(
                     post_id=result.post_id, tenant_id=tenant_id, clip_id=post.clip_id,
                     platforms=[post.platform],
                     content=post.asset.caption_with_tags(), status="scheduled",
+                    scheduled_for=when,
                 )
                 await ClipsRepo(db).update_status(post.clip_id, status="published")
             published += 1
@@ -3496,7 +3529,9 @@ async def _run_growth_autoprog(
                         card = fallback_card(inp)
                     contents.append(
                         ClipContent(
-                            clip_id=clip_id, caption=composed.caption,
+                            # sans-tags — see _run_growth_engine: the asset's
+                            # caption_with_tags() appends the hashtags once.
+                            clip_id=clip_id, caption=composed.caption_sans_tags,
                             hashtags=list(composed.hashtags), hook=composed.hook,
                             title=composed.title, card=card,
                         )
@@ -3703,8 +3738,21 @@ async def zernio_cancel_scheduled(
     db: Database = Depends(get_db),
 ) -> Response:
     """Cancel a scheduled/queued post (DELETE /posts/{id} — Zernio only
-    allows it for non-published posts). Also tombstones a matching
-    local row so it leaves our history immediately."""
+    allows it for non-published posts). Tombstones the matching local
+    row so it leaves our history immediately, and puts the clip BACK in
+    the approved pool — cancelling means "re-schedule this later", not
+    "bury this clip forever" (the tombstone used to leave the clip in
+    'published' with no surface able to touch it again)."""
+    # Ownership gate BEFORE the vendor call: the Zernio API key is
+    # company-wide, so without this any tenant could delete any other
+    # tenant's scheduled post by id. 404 (not 403) to match the rest of
+    # the dashboard's don't-advertise-existence convention. A post with
+    # no local row (scheduled directly on Zernio) stays cancellable —
+    # we have nothing to check it against.
+    pubs = ZernioPublishesRepo(db)
+    row = await pubs.get_by_post_id(post_id)
+    if row is not None and row.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="not found")
     client = _build_client()
     try:
         await client.delete_post(post_id)
@@ -3721,11 +3769,21 @@ async def zernio_cancel_scheduled(
         return JSONResponse(
             {"ok": False, "error": f"Couldn't cancel: {e}"}, status_code=502,
         )
-    # Best-effort local tombstone (the post may have been scheduled
-    # directly on Zernio with no local row).
-    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
-    if row is not None and row.tenant_id == tenant_id:
-        await ZernioPublishesRepo(db).set_status(post_id, status="cancelled")
+    if row is not None:
+        await pubs.set_status(post_id, status="cancelled")
+        # Return the clip to the approved pool so auto-program/hands-free
+        # can pick it up again (exists_for_clip now ignores cancelled
+        # rows) — but only when this was its LAST live post; a clip still
+        # scheduled on other platforms stays 'published'. Guarded to
+        # 'published' so we don't stomp a state some other flow moved the
+        # clip into meanwhile.
+        if not await pubs.exists_for_clip(tenant_id, row.clip_id):
+            from nexoclip.tenancy import bound_tenant
+
+            with bound_tenant(tenant_id):
+                clip = await ClipsRepo(db).get(row.clip_id)
+                if clip is not None and clip.status == "published":
+                    await ClipsRepo(db).update_status(row.clip_id, status="approved")
     _log.info("zernio.schedule.cancelled tenant=%s post=%s", tenant_id, post_id)
     return JSONResponse({"ok": True})
 

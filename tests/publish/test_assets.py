@@ -71,3 +71,49 @@ def test_caption_with_tags_appends() -> None:
     )
     out = assets["tiktok"].caption_with_tags()
     assert "#gaming" in out and "#viral" in out
+
+
+def test_caption_with_tags_fits_the_platform_band() -> None:
+    """The band applies to the POSTED content. Clamping the prose to 280
+    and then appending tags overflowed X's hard cap → vendor rejection
+    on every hands-free post with hashtags."""
+    long_caption = "palabra " * 60  # ~480 chars
+    assets = build_platform_assets(
+        clip_id="c", base_caption=long_caption,
+        base_hashtags=["clips", "gaming"], base_title=None,
+        hook="", platforms=["twitter", "tiktok"],
+    )
+    for key, cap in (("twitter", 280), ("tiktok", 150)):
+        posted = assets[key].caption_with_tags()
+        assert len(posted) <= cap, f"{key}: {len(posted)} > {cap}"
+        assert "#clips" in posted  # tags still ride along
+
+
+def test_caption_band_drops_tags_that_alone_overflow() -> None:
+    """Degenerate case: a tag line near the whole band → trailing tags
+    are dropped rather than posting a caption of nothing but hashtags."""
+    assets = build_platform_assets(
+        clip_id="c", base_caption="short",
+        base_hashtags=["x" * 100, "y" * 100], base_title=None,
+        hook="", platforms=["tiktok"],  # band = 150
+    )
+    posted = assets["tiktok"].caption_with_tags()
+    assert len(posted) <= 150
+    assert "short" in posted
+
+
+def test_youtube_title_survives_empty_caption() -> None:
+    """Operator-precedence regression: with an empty caption, the
+    `a or b or c if cond else ""` parse discarded an existing
+    base_title/hook and YouTube posts went out untitled."""
+    assets = build_platform_assets(
+        clip_id="c", base_caption="", base_hashtags=[],
+        base_title="Mi mejor jugada", hook="", platforms=["youtube"],
+    )
+    assert assets["youtube"].title == "Mi mejor jugada"
+
+    assets = build_platform_assets(
+        clip_id="c", base_caption="", base_hashtags=[],
+        base_title=None, hook="INSANE clutch", platforms=["youtube"],
+    )
+    assert assets["youtube"].title == "INSANE clutch"

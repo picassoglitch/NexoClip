@@ -77,16 +77,20 @@ class PlatformRule(BaseModel):
             return []
         return tags[: self.hashtag_max]
 
-    def clamp_caption(self, caption: str) -> str:
+    def clamp_caption(self, caption: str, *, max_chars: int | None = None) -> str:
         """Trim a caption to this platform's max length, on a word boundary
-        when one is close to the cut so we don't slice a word in half."""
+        when one is close to the cut so we don't slice a word in half.
+        `max_chars` overrides the platform band for callers that must
+        reserve room inside it (the asset matrix reserves the appended
+        hashtag line's length)."""
+        limit = self.caption_max_chars if max_chars is None else max(0, max_chars)
         text = (caption or "").strip()
-        if len(text) <= self.caption_max_chars:
+        if len(text) <= limit:
             return text
-        cut = text[: self.caption_max_chars].rstrip()
+        cut = text[:limit].rstrip()
         # Prefer the last whitespace if it isn't far back (avoid a tiny tail).
         sp = cut.rfind(" ")
-        if sp >= self.caption_max_chars - 24:
+        if sp >= limit - 24:
             cut = cut[:sp].rstrip()
         return cut
 

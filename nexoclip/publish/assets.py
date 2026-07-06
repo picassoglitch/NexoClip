@@ -56,7 +56,9 @@ def _platform_title(
         # Only YouTube consumes a separate title in our payload today; others
         # carry everything in the caption.
         return base_title
-    raw = (base_title or hook or caption.splitlines()[0] if caption else "") or ""
+    # NB: the ternary binds the whole `or` chain, so without parentheses an
+    # empty caption discarded an existing base_title/hook.
+    raw = (base_title or hook or (caption.splitlines()[0] if caption else "")) or ""
     raw = raw.strip()
     if not raw:
         return base_title
@@ -88,8 +90,19 @@ def build_platform_assets(
         if key in out:
             continue
         rule = rules.get(key) or default_rule_for(key)
-        caption = rule.clamp_caption(base_caption)
         hashtags = rule.clamp_hashtags(base_hashtags)
+        # The caption band applies to the POSTED content — which is
+        # `caption_with_tags()`, caption + "\n\n" + tag line. Reserve the
+        # tag line's length before clamping the prose, otherwise a
+        # 280-clamped caption plus appended tags overflows X's hard cap
+        # and the vendor rejects the post. If the tags alone would eat
+        # the whole band, drop trailing tags until prose fits.
+        tag_line = " ".join(f"#{h.lstrip('#')}" for h in hashtags)
+        while hashtags and len(tag_line) + 2 >= rule.caption_max_chars:
+            hashtags = hashtags[:-1]
+            tag_line = " ".join(f"#{h.lstrip('#')}" for h in hashtags)
+        reserve = (len(tag_line) + 2) if tag_line else 0
+        caption = rule.clamp_caption(base_caption, max_chars=rule.caption_max_chars - reserve)
         title = _platform_title(base_title, hook, base_caption, rule)
         fc = first_comment if key in FIRST_COMMENT_PLATFORMS else None
         out[key] = PlatformAsset(

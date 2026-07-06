@@ -3891,12 +3891,17 @@ class ZernioPublishesRepo:
         ]
 
     async def exists_for_clip(self, tenant_id: str, clip_id: str) -> bool:
-        """True if this clip already has a publish record — the idempotency
-        guard for hands-free auto-publish (don't re-post on pipeline re-runs)."""
+        """True if this clip already has a LIVE publish record — the
+        idempotency guard for hands-free auto-publish (don't re-post on
+        pipeline re-runs). Cancelled/deleted rows don't count: an operator
+        who cancels a scheduled post is putting the clip back in play, and
+        a tombstone that still blocked scheduling black-holed the clip
+        permanently (no UI path could ever re-schedule it)."""
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT 1 FROM zernio_publishes "
-            "WHERE tenant_id = ? AND clip_id = ? LIMIT 1",
+            "WHERE tenant_id = ? AND clip_id = ? "
+            "AND COALESCE(status, '') NOT IN ('cancelled', 'deleted') LIMIT 1",
             (tenant_id, clip_id),
         )
         return await cur.fetchone() is not None
@@ -3906,17 +3911,20 @@ class ZernioPublishesRepo:
 
         The per-platform daily-cap accounting for the rulebook scheduler: a
         post counts toward the day of its `scheduled_for` (or `created_at` when
-        it fired now), excluding failed/deleted rows. With the per-platform
-        posting model each row is one platform, but we split the csv anyway so
-        older multi-platform rows still count. Platform ids are canonicalized
-        (twitter, not "x") to match the rulebook keys."""
+        it fired now), excluding failed/deleted/cancelled rows (a cancelled
+        post frees its slot — that's the point of cancelling to make room).
+        With the per-platform posting model each row is one platform, but we
+        split the csv anyway so older multi-platform rows still count.
+        Platform ids are canonicalized (twitter, not "x") to match the
+        rulebook keys."""
         from nexoclip.publish.pacing import canonical_platform
 
         day = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d")
         conn = await self._db.connect()
         cur = await conn.execute(
             "SELECT platforms, scheduled_for, created_at FROM zernio_publishes "
-            "WHERE tenant_id = ? AND COALESCE(status, '') NOT IN ('failed', 'deleted') "
+            "WHERE tenant_id = ? "
+            "AND COALESCE(status, '') NOT IN ('failed', 'deleted', 'cancelled') "
             "AND substr(COALESCE(scheduled_for, created_at), 1, 10) = ?",
             (tenant_id, day),
         )
@@ -3969,9 +3977,11 @@ class ZernioPublishesRepo:
 
     async def delete(self, post_id: str) -> None:
         """Hard-delete a publish record by post id (tenant-free; post_id is the
-        PK). Used by queue reprocessing: a canceled post's row must be REMOVED,
-        not tombstoned, so `exists_for_clip` stops blocking the clip from being
-        re-scheduled (it matches any row regardless of status)."""
+        PK). Used by queue reprocessing to scrub a cancelled post's row from
+        history entirely. (Since `exists_for_clip` learned to ignore
+        cancelled/deleted rows, a tombstone would unblock re-scheduling too —
+        reprocess deletes anyway to keep the reprocessed queue's history
+        clean.)"""
         conn = await self._db.connect()
         await conn.execute(
             "DELETE FROM zernio_publishes WHERE post_id = ?", (post_id,)

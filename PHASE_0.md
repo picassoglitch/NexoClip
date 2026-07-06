@@ -1,5 +1,7 @@
 # Phase 0 — The Spike (1 week)
 
+**COMPLETED** — kept for historical reference; see README for current status.
+
 **Goal:** A single command — `nexoclip process <vod_url>` — that takes a Kick VOD URL and outputs a folder of vertical clips with cloud-LLM-generated Spanish captions, plus a JSON manifest.
 
 **Out of scope for Phase 0** (these come in Phase 1+):

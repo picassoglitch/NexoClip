@@ -144,6 +144,8 @@ score = await router.score_clip(
 | **Standard vision** *(NEW)* | Smart crop, thumbnail picking — runs on every clip in Pro tier | Claude Haiku-class (vision-capable) | GPT-4o-mini (vision) |
 | **Premium vision** *(NEW)* | Multimodal scoring + multimodal variants — Pro premium toggle | Claude Opus-class (vision) | GPT-4o (vision) |
 
+> *(OpenAI fallback removed in implementation — Anthropic is the only provider; see §"single-vendor" note below. The Fallback column is historical.)*
+
 ### 6.3 Two-stage scoring strategy (cost-controlled)
 
 This is the key design pattern that makes vision affordable:

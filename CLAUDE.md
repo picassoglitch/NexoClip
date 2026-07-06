@@ -53,32 +53,41 @@ The spec is the source of truth for *what* to build. PHASE_0.md is the source of
 
 ```
 nexoclip/
-├── ingest/        # VOD download, chat replay, audio extraction
-├── transcribe/    # Whisper STT
-├── detect/        # voice/chat/audio/visual triggers
-├── clip/          # ffmpeg cut, reformat, captions
+├── ingest/        # VOD download, chat replay, audio extraction, platform detection
+├── transcribe/    # STT — AssemblyAI (default) + local faster-whisper provider
+├── diarize/       # speaker diarization (pyannote subprocess, optional extra)
+├── detect/        # voice/chat/audio/visual trigger fusion + vision-LLM rescore (scoring lives here — no separate score/ module)
+├── clip/          # ffmpeg cut, reformat, captions, overlays, hybrid recorder
+├── vision/        # local CV (PySceneDetect, OpenCV motion, face presence)
 ├── llm/           # LLMRouter + Anthropic provider client
 ├── variants/      # variant generator (uses llm.router)
-├── vision/        # local CV (PySceneDetect, MediaPipe, OpenCV) — Phase 1+
-├── score/         # multimodal scoring — Phase 2
-├── queue/         # SQLite/Aurora models, scheduler — Phase 1+
-├── publish/       # platform adapters — Phase 1+
-├── api/           # FastAPI REST + Pydantic schemas — Phase 1+
-├── mcp/           # MCP server — Phase 2+
-├── events/        # event log + webhooks — Phase 1+
-├── tenancy/       # tenant context + enforcement — Phase 1+
-├── auth/          # Phase 3+
-├── billing/       # Phase 5
-└── workers/       # GPU + CPU workers — Phase 3+
+├── branding/      # brand kits — colors, handles, thumbnail compositing
+├── channels/      # channel auto-ingest — watch YT/Twitch/Kick for new VODs
+├── drive/         # Google Drive folder watches (upload automation path)
+├── jobs/          # pipeline job dispatch (DB-backed, restart-safe)
+├── recovery/      # re-dispatch orphaned in-process ingest jobs after restart
+├── retention/     # retention sweeper — deletes aged artifacts, bounds disk
+├── publish/       # publish surfaces (Zernio-backed) + safe-trap scheduling
+├── safety/        # anti-shadowban posting windows (spacing, caps, jitter)
+├── metrics/       # per-platform engagement-metrics ingestion
+├── governance/    # budget governor — LLM spend ceilings, caps, cooldowns
+├── cost/          # LLM-spend projections for the dashboard cost cards
+├── db/            # SQLite/Postgres persistence — migrations + repos
+├── events/        # append-only event log
+├── webhooks/      # HMAC-signed webhook dispatch to subscriber URLs
+├── tenancy/       # tenant context + enforcement
+├── api/           # FastAPI REST + HTMX dashboard + Pydantic schemas
+├── mcp_server/    # MCP server — thin translation layer over the REST surface
+└── integrations/  # external systems — nexo_ai (auth/tiers), zernio, storage, nexoobs
 ```
+
+Still phase-pending (no directory yet): `auth/` (Phase 3+ — nexo-ai SSO covers it today), `billing/` (Phase 5), `workers/` (Phase 3+ GPU/CPU workers).
 
 Each module has:
 - `__init__.py` — re-exports the public surface
 - `service.py` — business logic (the functions routes/MCP/CLI all call)
 - `models.py` — Pydantic schemas (or SQLAlchemy if persistent)
 - `<specific>.py` — concrete implementations
-
-Phase 0 only needs `ingest`, `transcribe`, `detect`, `clip`, `llm`, `variants`. Skip the rest until their phase.
 
 ---
 

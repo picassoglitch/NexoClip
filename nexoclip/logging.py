@@ -31,11 +31,24 @@ def configure_logging(level: str = "INFO", fmt: str = "console") -> None:
         force=True,
     )
 
+    # Admin log tracker — mirror WARNING+ records into the in-memory
+    # ring buffer behind /dashboard/_health/logs. Two hooks because the
+    # two log worlds don't meet: the stdlib handler sees uvicorn +
+    # third-party records, the structlog processor (added below, before
+    # the renderer) sees our own app logs, which go straight to stderr
+    # via PrintLoggerFactory and never touch stdlib logging.
+    from nexoclip.logbuffer import StdlibCaptureHandler, structlog_capture
+
+    capture_handler = StdlibCaptureHandler()
+    capture_handler.setLevel(logging.WARNING)
+    logging.getLogger().addHandler(capture_handler)
+
     processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.StackInfoRenderer(),
         structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog_capture,
     ]
     if fmt.lower() == "json":
         processors.append(structlog.processors.JSONRenderer())

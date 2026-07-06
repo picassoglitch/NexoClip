@@ -116,6 +116,7 @@ async def record_clip_to_mp4(
     height: int = DEFAULT_HEIGHT,
     fps: int = DEFAULT_FPS,
     progress_callback: "object | None" = None,
+    ass_file_path: Path | None = None,
     append_outro_enabled: bool = True,
 ) -> Path:
     """Record the render page for `clip_id` to an MP4 at `output_path`.
@@ -265,6 +266,7 @@ async def record_clip_to_mp4(
                 fps=fps,
                 duration_s=canonical_duration,
                 progress_callback=progress_callback,
+                ass_file_path=ass_file_path,
                 append_outro_enabled=append_outro_enabled,
             )
             capture_ended = _dt.datetime.now(_dt.UTC)
@@ -319,6 +321,9 @@ async def record_clip_to_mp4(
             "file_duration_s": probed_duration,
             "canonical_duration_s": canonical_duration,
             "audio_source_path": str(audio_source_path),
+            # R16 parity — which ASS file (if any) was burned, so a
+            # caption-less export is diagnosable from the manifest.
+            "ass_file_path": str(ass_file_path) if ass_file_path else None,
             "expected_fps": fps,
         },
         "render": {
@@ -384,6 +389,7 @@ async def _record_via_seek_and_shoot(
     fps: int,
     duration_s: float,
     progress_callback: "object | None" = None,
+    ass_file_path: Path | None = None,
     append_outro_enabled: bool = True,
 ) -> None:
     """Deterministic frame-by-frame export.
@@ -493,6 +499,7 @@ async def _record_via_seek_and_shoot(
             output_path=output_path,
             duration_s=duration_s,
             fps=fps,
+            ass_file_path=ass_file_path,
             append_outro_enabled=append_outro_enabled,
         )
 
@@ -504,6 +511,7 @@ async def _encode_image_sequence(
     output_path: Path,
     duration_s: float,
     fps: int,
+    ass_file_path: Path | None = None,
     append_outro_enabled: bool = True,
 ) -> None:
     """Encode <frames_dir>/frame_NNNNNNNN.jpg into the final MP4.
@@ -524,6 +532,20 @@ async def _encode_image_sequence(
     # pass. Keeps the download endpoint from ever sampling a growing
     # file's size for Content-Length and then over-shooting it.
     partial_path = output_path.with_suffix(".partial.mp4")
+    # R16 parity for the fallback path. Since R16 the render page never
+    # draws captions — libass burns them from a server-generated ASS
+    # file. The hybrid composite got that filter; this legacy encode
+    # didn't, so every hybrid failure that fell back here shipped a
+    # caption-less MP4 (operator saw captions in the preview, the
+    # published file had none). Same `ass=` filter + shared escaping.
+    if ass_file_path is not None and ass_file_path.exists():
+        from .captions_ass import escape_ass_path_for_filter
+
+        vf_args = [
+            "-vf", f"ass='{escape_ass_path_for_filter(ass_file_path)}'",
+        ]
+    else:
+        vf_args = []
     cmd = [
         ffmpeg,
         "-y",
@@ -545,6 +567,8 @@ async def _encode_image_sequence(
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
         "-vsync", "cfr",
+        # Caption burn-in (see vf_args above) — empty when no ASS file.
+        *vf_args,
         # Audio: lossless copy from source. Normalize to 48kHz AAC
         # ONLY if the source isn't already AAC — modal social
         # platforms (TikTok / Reels / Shorts) standardize on 48kHz so

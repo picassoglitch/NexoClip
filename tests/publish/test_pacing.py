@@ -123,6 +123,66 @@ def test_existing_posts_today_delays_first_slot() -> None:
     assert times[0] >= _NOW + _dt.timedelta(minutes=rule.min_gap_minutes - rule.jitter_minutes)
 
 
+def test_existing_by_day_rolls_past_already_full_future_days() -> None:
+    # Tomorrow already carries a full day from a PREVIOUS sweep — this run's
+    # overflow must roll past it, not stack a second batch on top.
+    rule = PlatformRule(platform="t", max_per_day=3, min_gap_minutes=60, jitter_minutes=0)
+    tomorrow = (_NOW.date() + _dt.timedelta(days=1)).isoformat()
+    times = plan_platform_times(
+        4, rule=rule, now=_NOW, existing_today=3, existing_by_day={tomorrow: 3},
+    )
+    assert len(times) == 4
+    assert all(t.date() >= _NOW.date() + _dt.timedelta(days=2) for t in times)
+
+
+def test_existing_by_day_partial_day_gets_only_the_remainder() -> None:
+    rule = PlatformRule(platform="t", max_per_day=3, min_gap_minutes=60, jitter_minutes=0)
+    tomorrow = (_NOW.date() + _dt.timedelta(days=1)).isoformat()
+    times = plan_platform_times(
+        5, rule=rule, now=_NOW, existing_today=3, existing_by_day={tomorrow: 2},
+    )
+    day1 = [t for t in times if t.date().isoformat() == tomorrow]
+    assert len(day1) == 1  # 3 cap - 2 already placed
+    assert all(n <= 3 for n in _count_by_day(times).values())
+
+
+def test_today_defers_to_existing_today_never_double_counted() -> None:
+    # Callers pass the repo's from_day=today map, which INCLUDES today's
+    # count — today must come from existing_today alone, not both.
+    rule = PlatformRule(platform="t", max_per_day=3, min_gap_minutes=30, jitter_minutes=0)
+    today = _NOW.date().isoformat()
+    times = plan_platform_times(
+        3, rule=rule, now=_NOW, existing_today=2, existing_by_day={today: 2},
+    )
+    day0 = [t for t in times if t.date() == _NOW.date()]
+    assert len(day0) == 1  # cap 3 - existing 2, not 3 - (2+2)
+
+
+def _count_by_day(times: list[_dt.datetime]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for t in times:
+        out[t.date().isoformat()] = out.get(t.date().isoformat(), 0) + 1
+    return out
+
+
+def test_two_consecutive_runs_never_exceed_daily_cap() -> None:
+    # The production bug: run 1 (VOD A) rolls 3 posts to tomorrow, run 2
+    # (VOD B, same day) rolled 3 MORE onto tomorrow — 6 vs max_per_day 3.
+    # With the second run seeded from the first's per-day counts, the
+    # combined schedule never exceeds the cap on ANY day.
+    rule = PlatformRule(platform="t", max_per_day=3, min_gap_minutes=60, jitter_minutes=0)
+    run1 = plan_platform_times(7, rule=rule, now=_NOW)
+    by_day = _count_by_day(run1)
+    run2 = plan_platform_times(
+        5, rule=rule, now=_NOW + _dt.timedelta(minutes=30),
+        existing_today=by_day.get(_NOW.date().isoformat(), 0),
+        existing_by_day=by_day,
+    )
+    combined = _count_by_day(run1 + run2)
+    assert len(run1) + len(run2) == 12
+    assert all(n <= 3 for n in combined.values())
+
+
 # ---- jitter ----
 
 

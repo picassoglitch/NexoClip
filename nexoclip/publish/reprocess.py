@@ -54,6 +54,10 @@ class ReprocessSummary:
     cancel_failed: int = 0
     clips_reset: int = 0
     clip_ids: list[str] = field(default_factory=list)
+    # Clips whose SOURCE file is gone (retention reclaimed it) — left fully
+    # untouched (post still scheduled, render still cached) because a reset
+    # could never re-render and would strand them with nothing servable.
+    skipped_missing_source: list[str] = field(default_factory=list)
     dry_run: bool = False
 
 
@@ -105,19 +109,41 @@ async def reprocess_scheduled_queue(
     schedule. Returns a summary (and the reset clip ids, for the caller to
     re-schedule). `dry_run` reports what would happen and changes nothing."""
     pubs = ZernioPublishesRepo(db)
+    clips_repo = ClipsRepo(db)
     with bound_tenant(tenant_id):
         rows = await pubs.list_for_tenant(limit=1000, status="scheduled")
 
     # Distinct source clips behind the scheduled posts (order-preserving).
-    clip_ids: list[str] = []
+    all_clip_ids: list[str] = []
     seen: set[str] = set()
     for r in rows:
         if r.clip_id and r.clip_id not in seen:
             seen.add(r.clip_id)
-            clip_ids.append(r.clip_id)
+            all_clip_ids.append(r.clip_id)
+
+    # Re-render feasibility gate BEFORE anything destructive: reprocessing
+    # deletes the cached render AND the object-storage key, so a clip whose
+    # source file retention already reclaimed (or whose row is gone) would
+    # hard-fail ensure_clip_rendered later and be stranded with NOTHING
+    # servable. Those clips (and their posts) are left completely untouched —
+    # the stale-but-live scheduled post beats a dead clip.
+    clip_ids: list[str] = []
+    skipped: list[str] = []
+    for clip_id in all_clip_ids:
+        with bound_tenant(tenant_id):
+            clip = await clips_repo.get(clip_id)
+        src = Path(getattr(clip, "path", "") or "") if clip is not None else None
+        if src is None or not src.exists():
+            skipped.append(clip_id)
+        else:
+            clip_ids.append(clip_id)
+    skip_set = set(skipped)
+    scheduled_found = len(rows)  # every scheduled post found, incl. skipped
+    rows = [r for r in rows if r.clip_id not in skip_set]
 
     summary = ReprocessSummary(
-        scheduled_found=len(rows), clip_ids=clip_ids, dry_run=dry_run,
+        scheduled_found=scheduled_found, clip_ids=clip_ids,
+        skipped_missing_source=skipped, dry_run=dry_run,
     )
     if dry_run or not rows:
         return summary
@@ -138,7 +164,6 @@ async def reprocess_scheduled_queue(
             )
 
     # 2. Reset + re-stamp + invalidate each clip.
-    clips_repo = ClipsRepo(db)
     for clip_id in clip_ids:
         try:
             with bound_tenant(tenant_id):
@@ -157,8 +182,10 @@ async def reprocess_scheduled_queue(
                 tenant_id, clip_id, e,
             )
     _log.info(
-        "reprocess.done tenant=%s scheduled=%d canceled=%d failed=%d reset=%d",
+        "reprocess.done tenant=%s scheduled=%d canceled=%d failed=%d reset=%d "
+        "skipped_missing_source=%d",
         tenant_id, summary.scheduled_found, summary.canceled,
         summary.cancel_failed, summary.clips_reset,
+        len(summary.skipped_missing_source),
     )
     return summary

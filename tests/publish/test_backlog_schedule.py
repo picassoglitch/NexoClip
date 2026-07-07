@@ -85,6 +85,38 @@ def test_best_clips_get_earliest_slots() -> None:
     assert order[0] == "high"  # best clip first
 
 
+def test_two_consecutive_runs_respect_future_day_caps() -> None:
+    # Re-running auto-program (run 1 already rolled overflow onto future days)
+    # must NOT stack a second max_per_day batch onto those days. Run 2 is
+    # seeded with run 1's per-day counts (what the callers now fetch via
+    # ZernioPublishesRepo.count_by_platform_by_day).
+    cap = DEFAULT_PLATFORM_RULES["youtube"].max_per_day  # 3
+    run1 = plan_backlog_schedule(
+        [_synthetic_clip(f"a{i}", 80, ["youtube"]) for i in range(7)],
+        connected=["youtube"], rules=DEFAULT_PLATFORM_RULES, now=_NOW,
+        rng=random.Random(6),
+    )
+    by_day: dict[str, int] = {}
+    for p in run1.posts:
+        d = p.when.date().isoformat()
+        by_day[d] = by_day.get(d, 0) + 1
+    run2 = plan_backlog_schedule(
+        [_synthetic_clip(f"b{i}", 80, ["youtube"]) for i in range(7)],
+        connected=["youtube"], rules=DEFAULT_PLATFORM_RULES,
+        now=_NOW + _dt.timedelta(hours=1),
+        existing_today={"youtube": by_day.get(_NOW.date().isoformat(), 0)},
+        existing_by_day={"youtube": by_day},
+        rng=random.Random(7),
+    )
+    combined = dict(by_day)
+    for p in run2.posts:
+        d = p.when.date().isoformat()
+        combined[d] = combined.get(d, 0) + 1
+    assert len(run1.posts) == 7
+    assert len(run2.posts) == 7
+    assert all(n <= cap for n in combined.values())
+
+
 def test_assets_conformed_per_platform() -> None:
     clips = [_synthetic_clip("c1", 80, ["youtube"])]
     plan = plan_backlog_schedule(

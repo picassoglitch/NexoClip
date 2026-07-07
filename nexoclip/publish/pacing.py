@@ -171,6 +171,7 @@ def plan_platform_times(
     rule: PlatformRule,
     now: _dt.datetime,
     existing_today: int = 0,
+    existing_by_day: dict[str, int] | None = None,
     rng: _random.Random | None = None,
 ) -> list[_dt.datetime]:
     """Schedule `count` posts on ONE platform under its hard rulebook.
@@ -186,6 +187,13 @@ def plan_platform_times(
         posts yet today, since the gap spaces consecutive posts, not the first;
         if `existing_today > 0` the first stays a gap out to be safe.
 
+    `existing_by_day` maps 'YYYY-MM-DD' → posts a PREVIOUS planning run already
+    placed on that day. Without it, a second sweep the same day (a new VOD)
+    rolled its own `max_per_day` worth of overflow onto days that were already
+    full — stacking twice the cap on every future day. Today's count still comes
+    from `existing_today` (the authoritative today number the callers already
+    compute); `existing_by_day` seeds every OTHER day the timeline touches.
+
     Each slot is then nudged by `jitter_delta` so the cadence reads as human.
     Jitter never reorders posts and never pulls one before `now`. Returns the
     sorted list; `[]` when `count <= 0` or the platform's daily cap is 0.
@@ -195,6 +203,15 @@ def plan_platform_times(
     if count <= 0 or rule.max_per_day <= 0:
         return []
     r = rng or _random
+    by_day = existing_by_day or {}
+
+    def _seed(d: _dt.date) -> int:
+        # `now`'s own day defers to existing_today (never double-count a
+        # caller that included today in both); other days pull their prior
+        # sweeps' load from the by-day map.
+        if d == now.date():
+            return existing_today
+        return max(0, int(by_day.get(d.isoformat(), 0)))
 
     def _jit() -> _dt.timedelta:
         # Non-negative jitter (0..jitter_minutes) ADDED to each gap, so the gap
@@ -210,16 +227,19 @@ def plan_platform_times(
     # platform already has posts today, stay a full gap out to be safe (we only
     # know the count of prior posts, not their times).
     cursor = now + _jit() if existing_today <= 0 else now + gap + _jit()
-    placed_on_day = existing_today
     day = cursor.date()
+    placed_on_day = _seed(day)
 
     while len(out) < count:
         if cursor.date() != day:
             day = cursor.date()
-            placed_on_day = 0
+            placed_on_day = _seed(day)
         if placed_on_day >= rule.max_per_day:
             # Day is full: roll to early next day (then the gap cadence spreads
             # posts through it). The cap is enforced on this clean timeline.
+            # The rolled-into day starts at ITS seed, so a day a prior sweep
+            # already filled rolls again — the loop walks forward until a day
+            # with spare capacity.
             next_day = _dt.datetime.combine(
                 day + _dt.timedelta(days=1),
                 _dt.time(hour=0, minute=0),
@@ -227,7 +247,7 @@ def plan_platform_times(
             )
             cursor = next_day + _jit()
             day = cursor.date()
-            placed_on_day = 0
+            placed_on_day = _seed(day)
             continue
         out.append(cursor)
         placed_on_day += 1

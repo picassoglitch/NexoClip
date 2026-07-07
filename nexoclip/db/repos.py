@@ -3936,6 +3936,44 @@ class ZernioPublishesRepo:
                     out[key] = out.get(key, 0) + 1
         return out
 
+    async def count_by_platform_by_day(
+        self, tenant_id: str, *, from_day: str
+    ) -> dict[str, dict[str, int]]:
+        """Live posts per platform per UTC day, from `from_day` (YYYY-MM-DD)
+        onward → {platform: {day: count}}.
+
+        The cross-sweep counterpart of `count_by_platform_today`: the rulebook
+        scheduler rolls overflow onto FUTURE days, and a later planning run
+        (same day, new VOD) can't see those rows through the today-only count —
+        so each run stacked another `max_per_day` onto every future day. Same
+        accounting rules as today's count: a post lands on the day of its
+        `scheduled_for` (or `created_at` when it fired now), failed/deleted/
+        cancelled rows free their slot, csv platforms are split and
+        canonicalized. substr() keeps the day-bucketing portable across SQLite
+        and Postgres (ISO-8601 strings sort/prefix identically on both)."""
+        from nexoclip.publish.pacing import canonical_platform
+
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT platforms, scheduled_for, created_at FROM zernio_publishes "
+            "WHERE tenant_id = ? "
+            "AND COALESCE(status, '') NOT IN ('failed', 'deleted', 'cancelled') "
+            "AND substr(COALESCE(scheduled_for, created_at), 1, 10) >= ?",
+            (tenant_id, from_day),
+        )
+        out: dict[str, dict[str, int]] = {}
+        for row in await cur.fetchall():
+            d = dict(row)
+            day = str(d.get("scheduled_for") or d.get("created_at") or "")[:10]
+            if not day:
+                continue
+            for p in str(d.get("platforms") or "").split(","):
+                key = canonical_platform(p)
+                if key:
+                    per_day = out.setdefault(key, {})
+                    per_day[day] = per_day.get(day, 0) + 1
+        return out
+
     async def get_by_post_id(self, post_id: str) -> ZernioPublishRow | None:
         """Tenant-FREE lookup by Zernio post id.
 
@@ -5183,3 +5221,23 @@ class HubPublishJobsRepo:
         )
         row = await cur.fetchone()
         return int(row["n"]) if row else 0
+
+    async def recent_times_for_platform(
+        self, tenant_id: str, *, platform: str, limit: int = 10
+    ) -> list[str]:
+        """Effective post times (ISO strings, newest-first) of the latest
+        non-failed hub posts targeting `platform` — scheduled_for when set,
+        else created_at. Feeds `next_best_time`'s min-gap check so best-time
+        publishes never cluster tighter than the platform rulebook allows.
+        ISO-8601 strings order lexicographically, so ORDER BY is portable."""
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT COALESCE(scheduled_for, created_at) AS at "
+            "FROM hub_publish_jobs "
+            "WHERE tenant_id = ? "
+            "AND (',' || targets || ',') LIKE ? "
+            "AND status != 'failed' "
+            "ORDER BY COALESCE(scheduled_for, created_at) DESC LIMIT ?",
+            (tenant_id, f"%,{platform},%", int(limit)),
+        )
+        return [str(r["at"]) for r in await cur.fetchall() if r["at"]]

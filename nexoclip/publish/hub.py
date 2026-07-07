@@ -191,19 +191,44 @@ def _map_zernio_error(e: ZernioError, *, during: str) -> HubPublishError:
     )
 
 
+def _parse_iso_times(raw: list[str]) -> list[_dt.datetime]:
+    """ISO strings → tz-aware datetimes for `next_best_time`'s gap check.
+    Naive timestamps are pinned to UTC (everything we persist is UTC ISO);
+    unparseable ones are dropped rather than failing the publish."""
+    out: list[_dt.datetime] = []
+    for s in raw:
+        try:
+            t = _dt.datetime.fromisoformat(str(s))
+        except ValueError:
+            continue
+        out.append(t if t.tzinfo is not None else t.replace(tzinfo=_dt.UTC))
+    return out
+
+
 def next_best_time(
     slots: list[dict[str, Any]],
     *,
     now: _dt.datetime,
     not_before: _dt.datetime | None = None,
+    min_gap_minutes: int = 0,
+    recent_times: list[_dt.datetime] | None = None,
 ) -> _dt.datetime | None:
     """Earliest future datetime matching the highest-engagement slot.
 
     Slots are {day_of_week: 0=Mon..6=Sun, hour: UTC}. Picks the best-
     engagement slot's next occurrence after max(now, not_before);
     returns None when there's no usable slot data (caller falls back).
+
+    `min_gap_minutes` + `recent_times` make the pick rulebook-aware: a
+    candidate closer than the platform's min gap to ANY known scheduled/
+    published time (past or future — scheduled posts sit ahead of now) is
+    skipped, falling through to the next-ranked slot. Otherwise repeated
+    best-time publishes all landed on the same top slot, clustering tighter
+    than the tenant's rulebook allows.
     """
     floor = max(now, not_before) if not_before else now
+    gap = _dt.timedelta(minutes=max(0, min_gap_minutes))
+    taken = [t for t in (recent_times or []) if t.tzinfo is not None]
     best: _dt.datetime | None = None
     ranked = sorted(
         (s for s in slots if isinstance(s.get("hour"), int)),
@@ -219,6 +244,8 @@ def next_best_time(
         candidate = candidate + _dt.timedelta(days=days_ahead)
         if candidate <= floor:
             candidate += _dt.timedelta(days=7)
+        if gap and any(abs(candidate - t) < gap for t in taken):
+            continue  # violates min_gap against an existing post → next slot
         if best is None or candidate < best:
             best = candidate
     return best
@@ -295,7 +322,36 @@ async def hub_publish(
                 )
             except ZernioError:
                 slots = []  # analytics add-on missing / no data → fallback
-            best = next_best_time(slots, now=now_dt)
+            # Single-platform best-time picks respect that platform's
+            # min_gap against the tenant's recent/scheduled hub posts —
+            # otherwise every use_best_time publish landed on the same top
+            # slot, clustering tighter than the rulebook allows. Multi-
+            # platform posts have no single gap to enforce (mirrors the
+            # platform=None analytics call above), so they stay as-is.
+            gap_minutes = 0
+            recent: list[_dt.datetime] = []
+            if len(platform_keys) == 1:
+                from nexoclip.db import PlatformPacingRulesRepo
+                from nexoclip.publish.pacing import (
+                    canonical_platform,
+                    default_rule_for,
+                )
+
+                key = canonical_platform(platform_keys[0])
+                rules = await PlatformPacingRulesRepo(db).effective_rules(
+                    tenant_id
+                )
+                rule = rules.get(key) or default_rule_for(key)
+                gap_minutes = rule.min_gap_minutes
+                recent = _parse_iso_times(
+                    await jobs.recent_times_for_platform(
+                        tenant_id, platform=platform_keys[0],
+                    )
+                )
+            best = next_best_time(
+                slots, now=now_dt,
+                min_gap_minutes=gap_minutes, recent_times=recent,
+            )
             effective_scheduled = (
                 best or _next_fallback_hour(now_dt)
             ).isoformat()

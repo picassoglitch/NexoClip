@@ -401,6 +401,19 @@ async def _publish_clip(
         cookie_val = request.cookies.get("nexoclip_token", "") or None
     else:
         cookie_val = session_cookie
+    # Background callers (auto-program worker) may hold no session cookie, or
+    # one that outlives the request but not the render — so also mint a signed
+    # render query. 1800s, not the 600s default: the render can first wait up
+    # to 240s for an in-flight render, then hybrid-fail into the ~5min legacy
+    # recorder — past 600s the auth-gated /render page 403s mid-render.
+    # Best-effort: without the signing secret the cookie path still applies.
+    auth_query = ""
+    if request is None:
+        with contextlib.suppress(RuntimeError):
+            from nexoclip.api.routers.internal import sign_render_query
+            auth_query = sign_render_query(
+                clip_id=clip_id, tenant_id=tenant_id, ttl_seconds=1800,
+            )
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
         rendered_path = await ensure_clip_rendered(
@@ -410,6 +423,7 @@ async def _publish_clip(
             base_url=base,
             auth_cookie_value=cookie_val,
             db_path=resolve_db_target(settings),
+            auth_query=auth_query,
         )
     except RuntimeError as e:
         _log.error(
@@ -2191,7 +2205,13 @@ async def _run_growth_engine(
     # Per-platform posts already placed today → subtracted from each platform's
     # daily cap so two VODs in one day can't blow past it (caps hold ACROSS
     # sweeps, not just within one).
-    existing_today = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
+    pubs_repo = ZernioPublishesRepo(db)
+    existing_today = await pubs_repo.count_by_platform_today(tenant_id)
+    # …and the FUTURE days prior sweeps already rolled overflow onto, so this
+    # run's overflow lands on top of theirs instead of stacking past the cap.
+    existing_by_day = await pubs_repo.count_by_platform_by_day(
+        tenant_id, from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+    )
     # Continuous learning: shift volume toward platforms that actually earn
     # views (a mature 0-view platform gets fewer clips). Best-effort.
     weights = await _platform_perf_weights(db, tenant_id)
@@ -2259,8 +2279,8 @@ async def _run_growth_engine(
     plan = plan_growth_publish(
         contents, connected=connected, rules=rules,
         now=_dt.datetime.now(_dt.UTC), budget=budget, min_score=min_score,
-        existing_today=existing_today, recent_tags=recent_tags,
-        platform_weights=weights,
+        existing_today=existing_today, existing_by_day=existing_by_day,
+        recent_tags=recent_tags, platform_weights=weights,
     )
 
     pubs = ZernioPublishesRepo(db)
@@ -2272,7 +2292,13 @@ async def _run_growth_engine(
             rendered_path = await ensure_clip_rendered(
                 db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                 auth_cookie_value=None, db_path=resolve_db_target(settings),
-                auth_query=sign_render_query(clip_id=post.clip_id, tenant_id=tenant_id),
+                # 1800s, not the 600s default: a background render can wait
+                # up to 240s for an in-flight render, then hybrid-fail into
+                # the ~5min legacy recorder — past 600s the auth-gated
+                # /render page 403s mid-render and the publish dies.
+                auth_query=sign_render_query(
+                    clip_id=post.clip_id, tenant_id=tenant_id, ttl_seconds=1800,
+                ),
             )
             media_url = await resolve_publish_media_url(
                 clip_id=post.clip_id, tenant_id=tenant_id, base_url=base_url,
@@ -3359,7 +3385,11 @@ async def zernio_next_best_json(
     analytics when available, else the sane fallback spread."""
     import datetime as _dt
 
-    from nexoclip.publish.hub import _next_fallback_hour, next_best_time
+    from nexoclip.publish.hub import (
+        _next_fallback_hour,
+        _parse_iso_times,
+        next_best_time,
+    )
 
     now_dt = _dt.datetime.now(_dt.UTC)
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -3370,7 +3400,32 @@ async def zernio_next_best_json(
             slots = await _build_client().best_time_slots(
                 profile_id=profile_id, platform=(platform or None),
             )
-    best = next_best_time(slots, now=now_dt) or _next_fallback_hour(now_dt)
+    # Platform-specific suggestions respect the platform's min_gap against
+    # the tenant's already scheduled/published posts — clicking "Sugerir
+    # mejor hora" for several clips otherwise stacked them all on the same
+    # top slot, tighter than the rulebook allows. Platform-less asks have
+    # no single gap to enforce.
+    gap_minutes = 0
+    recent: list[Any] = []
+    if platform:
+        from nexoclip.db import PlatformPacingRulesRepo
+        from nexoclip.publish.pacing import canonical_platform, default_rule_for
+        from nexoclip.tenancy import bound_tenant
+
+        key = canonical_platform(platform)
+        rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+        gap_minutes = (rules.get(key) or default_rule_for(key)).min_gap_minutes
+        with bound_tenant(tenant_id):
+            rows = await ZernioPublishesRepo(db).list_for_tenant(limit=100)
+        recent = _parse_iso_times([
+            r.scheduled_for or r.created_at
+            for r in rows
+            if (r.status or "") not in ("failed", "deleted", "cancelled")
+            and key in {canonical_platform(p) for p in (r.platforms or "").split(",")}
+        ])
+    best = next_best_time(
+        slots, now=now_dt, min_gap_minutes=gap_minutes, recent_times=recent,
+    ) or _next_fallback_hour(now_dt)
     return JSONResponse({"ok": True, "iso": best.isoformat()})
 
 
@@ -3480,7 +3535,14 @@ async def _run_growth_autoprog(
             rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
             gs_repo = GrowthScoresRepo(db)
             recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
-            existing_today = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
+            pubs_repo = ZernioPublishesRepo(db)
+            existing_today = await pubs_repo.count_by_platform_today(tenant_id)
+            # Future days a previous run already filled — without this, each
+            # auto-program re-run stacked another max_per_day onto every day.
+            existing_by_day = await pubs_repo.count_by_platform_by_day(
+                tenant_id,
+                from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+            )
             weights = await _platform_perf_weights(db, tenant_id)
             # Abuse/rate-limit backoff: drop platforms in cooldown.
             cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
@@ -3546,7 +3608,8 @@ async def _run_growth_autoprog(
             plan = plan_backlog_schedule(
                 contents, connected=targets_canon, rules=rules,
                 now=_dt.datetime.now(_dt.UTC), min_score=min_score,
-                existing_today=existing_today, platform_weights=weights,
+                existing_today=existing_today, existing_by_day=existing_by_day,
+                platform_weights=weights,
                 recent_tags=recent_tags if growth_on else None,
             )
             prog["total"] = len(plan.posts)
@@ -3833,6 +3896,14 @@ async def zernio_disconnect_account(
 ) -> Response:
     """Disconnect ONE connected account on Zernio (DELETE /accounts/{id}),
     so the operator manages connections without leaving NexoClip."""
+    # Ownership gate BEFORE the vendor call: the Zernio API key is
+    # company-wide, so DELETE /accounts/{id} would happily disconnect
+    # ANOTHER tenant's account. `_account_platform` resolves the id
+    # against THIS tenant's profile only — None means not theirs (or no
+    # profile at all). 404, not 403, per the don't-advertise-existence
+    # convention.
+    if await _account_platform(db, tenant_id, account_id) is None:
+        raise HTTPException(status_code=404, detail="not found")
     client = _build_client()
     try:
         await client.disconnect_account(account_id)
@@ -3869,6 +3940,25 @@ async def zernio_claim_existing(
     profile_id = (profile_id or "").strip()
     if not profile_id:
         raise HTTPException(status_code=400, detail="profileId is required.")
+
+    # Ownership gate BEFORE any vendor lookup: profileIds follow a derivable
+    # pattern, so without this any tenant could claim ANOTHER tenant's
+    # profile and publish through / read their connected accounts. A profile
+    # already bound to a different tenant row is off-limits; unbound (the
+    # legitimate re-claim after a DB wipe / unlink) or bound to THIS tenant
+    # is fine. 404 with the same message as an unknown profileId so probing
+    # can't distinguish "someone else's" from "doesn't exist" — and gating
+    # before list_accounts keeps the 402 branch below from leaking another
+    # tenant's connected-account count.
+    bound = await TenantsRepo(db).find_by_zernio_profile(profile_id)
+    if bound is not None and bound.id != tenant_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No connected accounts found for profileId '{profile_id}'. "
+                f"Check the value or click Connect to start fresh."
+            ),
+        )
 
     client = _build_client()
     try:

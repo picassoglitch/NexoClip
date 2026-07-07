@@ -332,6 +332,47 @@ async def test_events_cross_tenant_isolated(migrated_db: Database) -> None:
         assert await repo.list_for_tenant() == []
 
 
+# ---------- Clips: status counts ----------
+
+
+async def test_clips_count_for_tenant_with_status(migrated_db: Database) -> None:
+    """The un-capped COUNT companion to list_for_tenant_with_status —
+    labels the Auto-programar button with the REAL backlog size instead
+    of the 60-row display page. Tenant-scoped like everything else."""
+    from nexoclip.db import ClipsRepo
+    from nexoclip.db.models import ClipRow
+
+    await _seed_two_tenants(migrated_db)
+    with bound_tenant("ten_a"):
+        await StreamsRepo(migrated_db).upsert(
+            StreamRow(
+                id="str_c", tenant_id="ten_a", vod_url="https://kick.com/x",
+                platform="kick", title="t", channel="c", duration_s=60.0,
+                source_video_path="/tmp/v", source_audio_path="/tmp/a",
+                status="ingested", created_at=_now(),
+            )
+        )
+        await ClipsRepo(migrated_db).upsert_many(
+            [
+                ClipRow(
+                    id=f"clp_{i}", stream_id="str_c", tenant_id="ten_a",
+                    start_s=0.0, end_s=10.0, duration_s=10.0,
+                    width=1080, height=1920, path=f"/tmp/{i}.mp4",
+                    status=status, created_at=_now(),
+                )
+                for i, status in enumerate(["approved", "approved", "published"])
+            ]
+        )
+        repo = ClipsRepo(migrated_db)
+        assert await repo.count_for_tenant_with_status(["approved"]) == 2
+        assert await repo.count_for_tenant_with_status(["approved", "published"]) == 3
+        assert await repo.count_for_tenant_with_status([]) == 0
+    with bound_tenant("ten_b"):
+        assert await ClipsRepo(migrated_db).count_for_tenant_with_status(
+            ["approved"]
+        ) == 0  # tenant-isolated
+
+
 # ---------- Foreign keys + cascades ----------
 
 

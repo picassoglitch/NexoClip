@@ -611,6 +611,10 @@
       <p class="nc-text--muted" style="margin: 0 0 8px 0;">
         Elige plataformas para cada clip — cada etiqueta se activa por su cuenta.
         Toca Publicar seleccionados y salen todos a la vez.
+        {% if publishable_total and publishable_total > publishable_clips|length %}
+        <br>Mostrando los {{ publishable_clips|length }} más recientes de
+        {{ publishable_total }} aprobados — Auto-programar los toma todos.
+        {% endif %}
       </p>
       <div id="zn-bulk-rows">
         {% for c in publishable_clips %}
@@ -682,7 +686,9 @@
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
         <button type="button" class="nc-btn nc-btn--primary" id="zn-autoprog-btn" style="padding:8px 16px;">
           <i class="ti ti-calendar-bolt" aria-hidden="true"></i>
-          <span>Auto-programar <span id="zn-autoprog-count">{{ publishable_clips|length if publishable_clips else 0 }}</span> clip(s)</span>
+          {#- Real backlog COUNT, not the 60-row display page — a 300-clip
+              backlog used to read "Auto-programar 60". -#}
+          <span>Auto-programar <span id="zn-autoprog-count">{{ publishable_total or (publishable_clips|length if publishable_clips else 0) }}</span> clip(s)</span>
         </button>
         <span class="nc-text--muted" id="zn-autoprog-msg" style="font-size:13px;"></span>
       </div>

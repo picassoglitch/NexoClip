@@ -1678,6 +1678,47 @@
     .nc-director__score { flex-direction: row; justify-content: flex-start; }
   }
 
+  /* Growth Engine — pre-publish Growth Score card (Phase 6). Hidden until
+     the clip has been scored by the hands-free Growth Engine. */
+  .nc-growth {
+    border: 1px solid var(--nc-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    background: linear-gradient(180deg, rgba(120, 220, 160, 0.06), rgba(0,0,0,0));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .nc-growth__head { display: flex; align-items: baseline; gap: 10px; }
+  .nc-growth__title {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--nc-text-muted);
+  }
+  .nc-growth__overall { font-size: 26px; font-weight: 800; margin-left: auto; }
+  .nc-growth__overall--excellent, .nc-growth__plat--excellent .nc-growth__plat-score { color: #00d97a; }
+  .nc-growth__overall--very-good, .nc-growth__plat--very-good .nc-growth__plat-score { color: #6fe3a0; }
+  .nc-growth__overall--good, .nc-growth__plat--good .nc-growth__plat-score { color: #ffd23f; }
+  .nc-growth__overall--weak, .nc-growth__plat--weak .nc-growth__plat-score { color: #ffb800; }
+  .nc-growth__overall--skip, .nc-growth__plat--skip .nc-growth__plat-score { color: #ff8a8a; }
+  .nc-growth__decision {
+    font-size: 12px; font-weight: 600; text-transform: capitalize;
+    color: var(--nc-text-muted);
+  }
+  .nc-growth__platforms { display: flex; flex-direction: column; gap: 4px; }
+  .nc-growth__plat {
+    display: grid; grid-template-columns: 1fr 40px 1fr auto; gap: 8px;
+    align-items: center; padding: 5px 8px; border-radius: 6px;
+    background: var(--nc-bg-base); font-size: 13px;
+  }
+  .nc-growth__plat.is-skip { opacity: 0.5; }
+  .nc-growth__plat-name { text-transform: capitalize; font-weight: 600; }
+  .nc-growth__plat-score { font-weight: 800; text-align: right; }
+  .nc-growth__plat-label { font-size: 11px; color: var(--nc-text-muted); }
+  .nc-growth__plat-imp { font-size: 11px; color: var(--nc-text-muted); font-variant-numeric: tabular-nums; }
+  .nc-growth__recs { display: flex; flex-direction: column; gap: 3px; }
+  .nc-growth__rec { font-size: 12px; color: var(--nc-text); }
+  .nc-growth__rec-check { color: #00d97a; font-weight: 800; }
+  .nc-growth__summary { font-size: 12px; color: var(--nc-text-muted); font-style: italic; }
+
   /* Slice I.3 — Export checklist + status-aware Ship button. */
   .nc-export-checklist {
     border: 1px solid var(--nc-border);
@@ -3143,6 +3184,83 @@
   </div>
 </div>
 {% endif %}
+
+{# ---- Growth Engine — pre-publish Growth Score card (Phase 6) ----
+   The killer feature: a per-platform growth verdict computed BEFORE
+   publishing. Populated async from the growth.json endpoint; stays
+   hidden until the hands-free Growth Engine has scored this clip. #}
+<div class="nc-growth" id="nc-growth-card" data-clip-id="{{ clip.id }}" hidden>
+  <div class="nc-growth__head">
+    <span class="nc-growth__title">Growth Score</span>
+    <span class="nc-growth__overall" id="nc-growth-overall">—</span>
+  </div>
+  <div class="nc-growth__decision" id="nc-growth-decision"></div>
+  <div class="nc-growth__platforms" id="nc-growth-platforms"></div>
+  <div class="nc-growth__recs" id="nc-growth-recs"></div>
+  <div class="nc-growth__summary" id="nc-growth-summary"></div>
+</div>
+<script>
+(function () {
+  var card = document.getElementById("nc-growth-card");
+  if (!card) { return; }
+  var clipId = card.getAttribute("data-clip-id");
+  function band(s) {
+    s = s || 0;
+    return s >= 90 ? "excellent" : s >= 80 ? "very-good"
+      : s >= 65 ? "good" : s >= 40 ? "weak" : "skip";
+  }
+  function fmtK(n) {
+    n = n || 0;
+    return n >= 1000 ? (Math.round(n / 100) / 10) + "k" : String(n);
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch];
+    });
+  }
+  fetch("/dashboard/publish/zernio/clips/" + encodeURIComponent(clipId) + "/growth.json",
+        { credentials: "same-origin" })
+    .then(function (r) { if (!r.ok) { throw new Error("not_scored"); } return r.json(); })
+    .then(function (b) {
+      var c = b.card || {};
+      card.hidden = false;
+      var overall = (c.overall_score != null ? c.overall_score : b.overall_score) || 0;
+      var oEl = document.getElementById("nc-growth-overall");
+      oEl.textContent = overall + "/100";
+      oEl.className = "nc-growth__overall nc-growth__overall--" + band(overall);
+      var dec = (c.decision || b.decision || "").replace(/_/g, " ");
+      document.getElementById("nc-growth-decision").textContent = dec ? ("→ " + dec) : "";
+      var ph = document.getElementById("nc-growth-platforms");
+      ph.innerHTML = "";
+      (c.platforms || []).slice().sort(function (a, d) { return (d.score || 0) - (a.score || 0); })
+        .forEach(function (p) {
+          var row = document.createElement("div");
+          row.className = "nc-growth__plat nc-growth__plat--" + band(p.score)
+            + (p.verdict === "skip" ? " is-skip" : "");
+          var imp = p.expected_impressions_high
+            ? (fmtK(p.expected_impressions_low) + "–" + fmtK(p.expected_impressions_high))
+            : "";
+          row.innerHTML =
+            '<span class="nc-growth__plat-name">' + esc(p.platform) + '</span>'
+            + '<span class="nc-growth__plat-score">' + (p.score || 0) + '</span>'
+            + '<span class="nc-growth__plat-label">' + esc(p.label || "") + '</span>'
+            + '<span class="nc-growth__plat-imp">' + imp + '</span>';
+          ph.appendChild(row);
+        });
+      var rh = document.getElementById("nc-growth-recs");
+      rh.innerHTML = "";
+      (c.recommendations || []).forEach(function (rec) {
+        var li = document.createElement("div");
+        li.className = "nc-growth__rec";
+        li.innerHTML = '<span class="nc-growth__rec-check">✓</span> '
+          + esc(rec.detail || rec.action || "");
+        rh.appendChild(li);
+      });
+      document.getElementById("nc-growth-summary").textContent = c.summary || "";
+    })
+    .catch(function () { /* not scored yet → card stays hidden */ });
+})();
+</script>
 
 {# ---- Slice G.3 — Framing intelligence label ----
    Shows what kind of export the system decided is right for THIS

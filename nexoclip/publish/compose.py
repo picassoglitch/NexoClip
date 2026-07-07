@@ -28,12 +28,19 @@ from nexoclip.db import Database, VariantsRepo
 class ComposedPost:
     """The final text for one post: a platform `title` (used where the
     platform supports one, e.g. YouTube), the full `caption` body, the
-    `hashtags` (with leading `#`), and the bare `hook` line."""
+    `hashtags` (with leading `#`), and the bare `hook` line.
+
+    `caption` embeds the hashtag line (ready to post as-is — the
+    on_approve/dashboard paths post it directly). `caption_sans_tags` is
+    the same caption WITHOUT the tag line, for callers that carry
+    hashtags separately and append them at post time (the growth-engine
+    asset matrix) — posting `caption` there duplicated every tag block."""
 
     title: str | None
     caption: str
     hashtags: list[str] = field(default_factory=list)
     hook: str = ""
+    caption_sans_tags: str = ""
 
 
 def _as_hashtag(tag: str) -> str:
@@ -88,10 +95,16 @@ async def build_post(
     caption = assemble_caption(
         hook=hook, body=body, hashtags=hashtags, handle_suffix=handle_suffix
     )
+    caption_sans_tags = assemble_caption(
+        hook=hook, body=body, hashtags=[], handle_suffix=handle_suffix
+    )
     # Title falls back to the first line of the body so YouTube still gets
     # a usable title even when no hook exists.
     title = hook or (body.splitlines()[0][:140] if body else None) or None
-    return ComposedPost(title=title, caption=caption, hashtags=hashtags, hook=hook)
+    return ComposedPost(
+        title=title, caption=caption, hashtags=hashtags, hook=hook,
+        caption_sans_tags=caption_sans_tags,
+    )
 
 
 async def generate_hook_line(

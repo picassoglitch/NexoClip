@@ -83,3 +83,101 @@ async def test_record_is_idempotent_on_post_id(db: Database) -> None:
     with bound_tenant("ten_A"):
         rows = await repo.list_for_tenant()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_exists_for_clip_ignores_cancelled_rows(db: Database) -> None:
+    """A cancelled post must NOT block the clip from being re-scheduled —
+    the tombstone used to black-hole the clip permanently (every
+    scheduling surface skipped it, with no UI path back)."""
+    repo = ZernioPublishesRepo(db)
+    await repo.record(
+        post_id="post_c1", tenant_id="ten_A", clip_id="clp_9",
+        platforms=["tiktok"], content=None, status="scheduled",
+    )
+    assert await repo.exists_for_clip("ten_A", "clp_9") is True
+
+    await repo.set_status("post_c1", status="cancelled")
+    assert await repo.exists_for_clip("ten_A", "clp_9") is False
+
+
+@pytest.mark.asyncio
+async def test_count_by_platform_today_skips_cancelled_and_future(
+    db: Database,
+) -> None:
+    """The daily-cap accounting: a cancelled post frees its slot (that's
+    the point of cancelling to make room), and a post scheduled for a
+    FUTURE day doesn't consume today's cap."""
+    import datetime as _dt
+
+    repo = ZernioPublishesRepo(db)
+    now = _dt.datetime.now(_dt.UTC)
+    today = now.isoformat()
+    tomorrow = (now + _dt.timedelta(days=1)).isoformat()
+
+    await repo.record(
+        post_id="p_live", tenant_id="ten_A", clip_id="clp_a",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=today,
+    )
+    await repo.record(
+        post_id="p_tomorrow", tenant_id="ten_A", clip_id="clp_b",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=tomorrow,
+    )
+    await repo.record(
+        post_id="p_cancel", tenant_id="ten_A", clip_id="clp_c",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=today,
+    )
+    await repo.set_status("p_cancel", status="cancelled")
+
+    counts = await repo.count_by_platform_today("ten_A")
+    assert counts.get("tiktok", 0) == 1  # only today's live post
+
+
+@pytest.mark.asyncio
+async def test_count_by_platform_by_day_buckets_future_days(
+    db: Database,
+) -> None:
+    """The cross-sweep cap accounting: FUTURE days a previous planning run
+    already rolled overflow onto must be visible to the next run, per
+    platform per day, with cancelled rows freeing their slot and platform
+    ids canonicalized — else two sweeps stack 2x max_per_day on a day."""
+    import datetime as _dt
+
+    repo = ZernioPublishesRepo(db)
+    now = _dt.datetime.now(_dt.UTC)
+    today = now.strftime("%Y-%m-%d")
+    d1 = (now + _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    d2 = (now + _dt.timedelta(days=2)).strftime("%Y-%m-%d")
+
+    await repo.record(
+        post_id="q_today", tenant_id="ten_A", clip_id="c1",
+        platforms=["youtube"], content=None, status="scheduled",
+        scheduled_for=now.isoformat(),
+    )
+    for i in range(2):
+        await repo.record(
+            post_id=f"q_d1_{i}", tenant_id="ten_A", clip_id=f"c{2 + i}",
+            platforms=["shorts"],  # alias → canonical "youtube"
+            content=None, status="scheduled",
+            scheduled_for=(now + _dt.timedelta(days=1)).isoformat(),
+        )
+    await repo.record(
+        post_id="q_d2", tenant_id="ten_A", clip_id="c4",
+        platforms=["youtube"], content=None, status="scheduled",
+        scheduled_for=(now + _dt.timedelta(days=2)).isoformat(),
+    )
+    await repo.set_status("q_d2", status="cancelled")  # frees its slot
+    # Another tenant's rows never leak into this tenant's day counts.
+    await repo.record(
+        post_id="q_other", tenant_id="ten_B", clip_id="cb",
+        platforms=["youtube"], content=None, status="scheduled",
+        scheduled_for=(now + _dt.timedelta(days=1)).isoformat(),
+    )
+
+    by_day = await repo.count_by_platform_by_day("ten_A", from_day=today)
+    assert by_day.get("youtube", {}).get(today) == 1
+    assert by_day.get("youtube", {}).get(d1) == 2
+    assert d2 not in by_day.get("youtube", {})  # cancelled → not counted

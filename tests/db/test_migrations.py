@@ -11,7 +11,7 @@ from nexoclip.db.migrations import MigrationError, _discover_migrations
 
 from .._db_backend import pg_enabled
 
-_CURRENT_HEAD = 51  # bumped each time we add a migration (051_channel_failed_video_attempts)
+_CURRENT_HEAD = 57  # bumped each time we add a migration (057_platform_cooldowns)
 
 # These assert SQLite implementation details (sqlite_master, PRAGMA). The
 # Postgres schema + FK enforcement are covered by test_pg_migration.py.
@@ -59,6 +59,10 @@ async def test_schema_creates_all_phase_1_through_3_tables(migrated_db: Database
         "webhook_subscriptions",  # Phase 2
         "publish_metrics",  # Phase 3 #1
         "webhook_secret_versions",  # Phase 3 #2
+        "platform_pacing_rules",  # Growth Engine Phase 1
+        "clip_growth_scores",  # Growth Engine Phase 5/6
+        "autoprog_locks",  # bulk auto-program idempotency lock
+        "platform_cooldowns",  # abuse/rate-limit backoff
     }
     assert expected <= names, f"missing tables: {expected - names}"
 

@@ -36,45 +36,9 @@ FIRST_COMMENT_PLATFORMS = frozenset({"facebook", "instagram", "linkedin", "youtu
 # Fallback posting hours (UTC) when an account has no best-time data:
 # spread through the engagement day, cap-many per day. Used by the
 # internal service-API batch (`hub_batch`) and the manual "best hour"
-# suggestion — the dashboard auto-publish queue now drips on an interval
-# (see `plan_drip_times`) instead.
+# suggestion. The dashboard publishing paths now schedule through the
+# per-platform rulebook (nexoclip.publish.pacing), not a flat interval drip.
 _FALLBACK_HOURS = (10, 13, 16, 19, 22, 7)
-
-# Auto-publish queue cadence: how many minutes between consecutive drip
-# posts, keyed by the tenant's content strategy.
-#   unique      — distinct videos          → one every 30 min
-#   variations  — same video, re-edited     → one every 60 min (so the
-#                 near-duplicates don't bunch up, across platforms too)
-DRIP_INTERVAL_MINUTES = {"unique": 30, "variations": 60}
-
-
-def drip_interval_minutes(content_strategy: str | None) -> int:
-    """Minutes between drip posts for a tenant's content strategy.
-    Unknown / unset falls back to the 'unique' cadence (30 min)."""
-    return DRIP_INTERVAL_MINUTES.get(
-        (content_strategy or "unique"), DRIP_INTERVAL_MINUTES["unique"]
-    )
-
-
-def plan_drip_times(
-    count: int,
-    *,
-    now: _dt.datetime,
-    interval_minutes: int,
-) -> list[_dt.datetime]:
-    """Schedule `count` posts as a steady drip — one every
-    `interval_minutes`, the first one interval out from `now`.
-
-    This is the auto-publish queue cadence. Unlike the best-time planner
-    it ignores analytics slots and the daily cap entirely: the interval is
-    the ONLY spacing rule, so a long batch simply runs continuously (e.g.
-    48 posts/day at 30-min). The interval lives on one global timeline, not
-    per platform — the same-video-with-variations tactic relies on that to
-    keep near-duplicates an hour apart even when they target different
-    platforms. Deterministic, so callers/tests can predict every slot."""
-    step = _dt.timedelta(minutes=max(1, interval_minutes))
-    start = now + step
-    return [start + step * i for i in range(max(0, count))]
 
 
 class HubPublishError(Exception):
@@ -227,19 +191,44 @@ def _map_zernio_error(e: ZernioError, *, during: str) -> HubPublishError:
     )
 
 
+def _parse_iso_times(raw: list[str]) -> list[_dt.datetime]:
+    """ISO strings → tz-aware datetimes for `next_best_time`'s gap check.
+    Naive timestamps are pinned to UTC (everything we persist is UTC ISO);
+    unparseable ones are dropped rather than failing the publish."""
+    out: list[_dt.datetime] = []
+    for s in raw:
+        try:
+            t = _dt.datetime.fromisoformat(str(s))
+        except ValueError:
+            continue
+        out.append(t if t.tzinfo is not None else t.replace(tzinfo=_dt.UTC))
+    return out
+
+
 def next_best_time(
     slots: list[dict[str, Any]],
     *,
     now: _dt.datetime,
     not_before: _dt.datetime | None = None,
+    min_gap_minutes: int = 0,
+    recent_times: list[_dt.datetime] | None = None,
 ) -> _dt.datetime | None:
     """Earliest future datetime matching the highest-engagement slot.
 
     Slots are {day_of_week: 0=Mon..6=Sun, hour: UTC}. Picks the best-
     engagement slot's next occurrence after max(now, not_before);
     returns None when there's no usable slot data (caller falls back).
+
+    `min_gap_minutes` + `recent_times` make the pick rulebook-aware: a
+    candidate closer than the platform's min gap to ANY known scheduled/
+    published time (past or future — scheduled posts sit ahead of now) is
+    skipped, falling through to the next-ranked slot. Otherwise repeated
+    best-time publishes all landed on the same top slot, clustering tighter
+    than the tenant's rulebook allows.
     """
     floor = max(now, not_before) if not_before else now
+    gap = _dt.timedelta(minutes=max(0, min_gap_minutes))
+    taken = [t for t in (recent_times or []) if t.tzinfo is not None]
     best: _dt.datetime | None = None
     ranked = sorted(
         (s for s in slots if isinstance(s.get("hour"), int)),
@@ -255,6 +244,8 @@ def next_best_time(
         candidate = candidate + _dt.timedelta(days=days_ahead)
         if candidate <= floor:
             candidate += _dt.timedelta(days=7)
+        if gap and any(abs(candidate - t) < gap for t in taken):
+            continue  # violates min_gap against an existing post → next slot
         if best is None or candidate < best:
             best = candidate
     return best
@@ -331,7 +322,36 @@ async def hub_publish(
                 )
             except ZernioError:
                 slots = []  # analytics add-on missing / no data → fallback
-            best = next_best_time(slots, now=now_dt)
+            # Single-platform best-time picks respect that platform's
+            # min_gap against the tenant's recent/scheduled hub posts —
+            # otherwise every use_best_time publish landed on the same top
+            # slot, clustering tighter than the rulebook allows. Multi-
+            # platform posts have no single gap to enforce (mirrors the
+            # platform=None analytics call above), so they stay as-is.
+            gap_minutes = 0
+            recent: list[_dt.datetime] = []
+            if len(platform_keys) == 1:
+                from nexoclip.db import PlatformPacingRulesRepo
+                from nexoclip.publish.pacing import (
+                    canonical_platform,
+                    default_rule_for,
+                )
+
+                key = canonical_platform(platform_keys[0])
+                rules = await PlatformPacingRulesRepo(db).effective_rules(
+                    tenant_id
+                )
+                rule = rules.get(key) or default_rule_for(key)
+                gap_minutes = rule.min_gap_minutes
+                recent = _parse_iso_times(
+                    await jobs.recent_times_for_platform(
+                        tenant_id, platform=platform_keys[0],
+                    )
+                )
+            best = next_best_time(
+                slots, now=now_dt,
+                min_gap_minutes=gap_minutes, recent_times=recent,
+            )
             effective_scheduled = (
                 best or _next_fallback_hour(now_dt)
             ).isoformat()
@@ -459,10 +479,26 @@ async def hub_batch(
         except ZernioError:
             best_slots = None  # no analytics → fallback spread
 
+    # Bound the caller's cap by the per-platform rulebook so the internal API
+    # can't out-pace platform norms either: the tightest involved platform's
+    # max_per_day is a hard ceiling (account health is the top priority).
+    from nexoclip.db import PlatformPacingRulesRepo
+    from nexoclip.publish.pacing import canonical_platform, default_rule_for
+
+    rulebook = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+    rulebook_cap = min(
+        (
+            (rulebook.get(canonical_platform(p)) or default_rule_for(p)).max_per_day
+            for p in platform_keys
+        ),
+        default=cap_per_day,
+    )
+    effective_cap = max(1, min(cap_per_day, rulebook_cap))
+
     times = plan_batch_times(
         len(clips),
         now=now_dt,
-        cap_per_day=max(cap_per_day, 1),
+        cap_per_day=effective_cap,
         existing_today=existing_today,
         best_slots=best_slots,
     )
@@ -589,8 +625,9 @@ def plan_batch_times(
     """Distribute `count` posts across days, at most `cap_per_day` per
     UTC day (counting `existing_today` already-planned posts on day 0).
 
-    Used by the internal service-API batch (`hub_batch`); the dashboard
-    auto-publish queue drips on a fixed interval instead (`plan_drip_times`).
+    Used by the internal service-API batch (`hub_batch`), with its cap bounded
+    by the per-platform rulebook; the dashboard publishing paths schedule
+    through the rulebook directly (`nexoclip.publish.pacing`).
 
     Two distinct hour sources, never blended into each other day-by-day:
 

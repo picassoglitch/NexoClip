@@ -8,7 +8,6 @@ resolution, media-URL validation, and service-token parsing.
 from __future__ import annotations
 
 import datetime as _dt
-from itertools import pairwise
 
 import httpx
 import pytest
@@ -16,10 +15,8 @@ import respx
 
 from nexoclip.publish.hub import (
     HubPublishError,
-    drip_interval_minutes,
     next_best_time,
     plan_batch_times,
-    plan_drip_times,
     validate_media_url,
 )
 from nexoclip.settings import Settings
@@ -123,48 +120,6 @@ def test_engagement_short_falls_back_as_last_resort() -> None:
     assert len(eng) + len(fallback) == 8
 
 
-# ---- plan_drip_times (auto-publish queue cadence) ----
-
-
-def test_drip_interval_minutes_maps_strategy() -> None:
-    assert drip_interval_minutes("unique") == 30
-    assert drip_interval_minutes("variations") == 60
-    # Unknown / unset → the 'unique' cadence.
-    assert drip_interval_minutes(None) == 30
-    assert drip_interval_minutes("nonsense") == 30
-
-
-def test_drip_unique_is_one_every_30_min() -> None:
-    times = plan_drip_times(4, now=_NOW, interval_minutes=30)
-    assert len(times) == 4
-    # First post one interval out, then a steady 30-min cadence.
-    assert times[0] == _NOW + _dt.timedelta(minutes=30)
-    deltas = {b - a for a, b in pairwise(times)}
-    assert deltas == {_dt.timedelta(minutes=30)}
-
-
-def test_drip_variations_is_one_every_hour() -> None:
-    times = plan_drip_times(3, now=_NOW, interval_minutes=60)
-    assert times[0] == _NOW + _dt.timedelta(hours=1)
-    deltas = {b - a for a, b in pairwise(times)}
-    assert deltas == {_dt.timedelta(hours=1)}
-
-
-def test_drip_has_no_daily_cap() -> None:
-    # 60 unique posts at 30 min would span > 1 day; the drip keeps going,
-    # never bounded to a per-day count.
-    times = plan_drip_times(60, now=_NOW, interval_minutes=30)
-    assert len(times) == 60
-    assert times[-1] == _NOW + _dt.timedelta(minutes=30 * 60)
-    # More than a day's worth land on day 0 — no cap clamped them.
-    day0 = sum(1 for t in times if t.date() == _NOW.date())
-    assert day0 > 24
-
-
-def test_drip_zero_count_is_empty() -> None:
-    assert plan_drip_times(0, now=_NOW, interval_minutes=30) == []
-
-
 # ---- next_best_time ----
 
 
@@ -190,6 +145,48 @@ def test_next_best_time_rolls_a_week_when_slot_already_passed() -> None:
 def test_next_best_time_none_without_usable_slots() -> None:
     assert next_best_time([], now=_NOW) is None
     assert next_best_time([{"day_of_week": "x", "hour": "y"}], now=_NOW) is None
+
+
+def test_next_best_time_skips_slot_violating_min_gap() -> None:
+    # Top slot Wed 18:00, but a post is already scheduled 17:30 — closer than
+    # the platform's 240-min gap. Fall through to the NEXT-ranked slot instead
+    # of clustering (the rulebook's whole point).
+    slots = [
+        {"day_of_week": 2, "hour": 18, "avg_engagement": 510.3, "post_count": 15},
+        {"day_of_week": 4, "hour": 9, "avg_engagement": 342.5, "post_count": 12},
+    ]
+    taken = _NOW.replace(hour=17, minute=30)  # Wed 17:30, already scheduled
+    best = next_best_time(
+        slots, now=_NOW, min_gap_minutes=240, recent_times=[taken],
+    )
+    assert best is not None
+    assert (best.weekday(), best.hour) == (4, 9)  # second slot won
+
+
+def test_next_best_time_gap_none_when_all_slots_violate() -> None:
+    # Every ranked slot violates the gap → None, so the caller's fallback
+    # spread takes over rather than forcing a clustered slot.
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    taken = _NOW.replace(hour=18)
+    assert next_best_time(
+        slots, now=_NOW, min_gap_minutes=240, recent_times=[taken],
+    ) is None
+
+
+def test_next_best_time_gap_checks_future_scheduled_posts_too() -> None:
+    # The clash can sit AHEAD of the candidate (a post scheduled for 19:00
+    # blocks an 18:00 pick just as much as one at 17:30 does).
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    future_taken = _NOW.replace(hour=19)
+    assert next_best_time(
+        slots, now=_NOW, min_gap_minutes=120, recent_times=[future_taken],
+    ) is None
+
+
+def test_next_best_time_ignores_gap_when_no_recent_times() -> None:
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    best = next_best_time(slots, now=_NOW, min_gap_minutes=240, recent_times=[])
+    assert best is not None and (best.weekday(), best.hour) == (2, 18)
 
 
 # ---- validate_media_url ----

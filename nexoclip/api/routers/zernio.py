@@ -131,13 +131,6 @@ _SUPPORTED_PLATFORMS = [
 # checkbox group on the publish path.
 _SUPPORTED_PLATFORM_IDS = frozenset(p[0] for p in _SUPPORTED_PLATFORMS)
 
-# Minimum minutes between consecutive hands-free "now"-mode posts. Firing a
-# whole batch of eligible clips at once trips TikTok's "wait 10 minutes"
-# rate limit (the burst failures seen in prod), so the first clip goes out
-# immediately and the rest are staggered at least this far apart. Sits just
-# above TikTok's 10-min cooldown.
-_NOW_MODE_BURST_INTERVAL_MIN = 12
-
 # Community channels — connectable like any platform, but NOT clip
 # targets (phase 11): they get Connect buttons + a notification toggle,
 # never publish chips.
@@ -408,6 +401,19 @@ async def _publish_clip(
         cookie_val = request.cookies.get("nexoclip_token", "") or None
     else:
         cookie_val = session_cookie
+    # Background callers (auto-program worker) may hold no session cookie, or
+    # one that outlives the request but not the render — so also mint a signed
+    # render query. 1800s, not the 600s default: the render can first wait up
+    # to 240s for an in-flight render, then hybrid-fail into the ~5min legacy
+    # recorder — past 600s the auth-gated /render page 403s mid-render.
+    # Best-effort: without the signing secret the cookie path still applies.
+    auth_query = ""
+    if request is None:
+        with contextlib.suppress(RuntimeError):
+            from nexoclip.api.routers.internal import sign_render_query
+            auth_query = sign_render_query(
+                clip_id=clip_id, tenant_id=tenant_id, ttl_seconds=1800,
+            )
     try:
         from nexoclip.api._clip_render import ensure_clip_rendered
         rendered_path = await ensure_clip_rendered(
@@ -417,6 +423,7 @@ async def _publish_clip(
             base_url=base,
             auth_cookie_value=cookie_val,
             db_path=resolve_db_target(settings),
+            auth_query=auth_query,
         )
     except RuntimeError as e:
         _log.error(
@@ -1631,7 +1638,6 @@ async def zernio_community_save_settings(
 
 _AUTOPUBLISH_MODES = ("on_approve", "hands_free")
 _AUTOPUBLISH_POST_MODES = ("queue", "now")
-_AUTOPUBLISH_CONTENT_STRATEGIES = ("unique", "variations")
 
 
 @router.get("/autopublish.json")
@@ -1646,7 +1652,7 @@ async def zernio_autopublish_json(
     s = await AutopublishSettingsRepo(db).get(tenant_id) or {
         "enabled": False, "mode": "on_approve", "targets": None,
         "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
-        "tag_suffix": "", "content_strategy": "unique",
+        "tag_suffix": "",
         "growth_engine": False, "growth_min_score": 40, "daily_clip_budget": None,
     }
     platforms: list[str] = []
@@ -1688,9 +1694,6 @@ async def zernio_autopublish_save(
     post_mode = str(data.get("post_mode") or "queue")
     if post_mode not in _AUTOPUBLISH_POST_MODES:
         post_mode = "queue"
-    content_strategy = str(data.get("content_strategy") or "unique")
-    if content_strategy not in _AUTOPUBLISH_CONTENT_STRATEGIES:
-        content_strategy = "unique"
     raw_targets = data.get("targets")
     targets = (
         ",".join(str(t).strip().lower() for t in raw_targets if str(t).strip())
@@ -1732,7 +1735,6 @@ async def zernio_autopublish_save(
         daily_cap=daily_cap,
         score_threshold=score_threshold,
         tag_suffix=tag_suffix,
-        content_strategy=content_strategy,
         growth_engine=growth_engine,
         growth_min_score=growth_min_score,
         daily_clip_budget=daily_clip_budget,
@@ -1955,18 +1957,7 @@ async def autopublish_hands_free_sweep(
     log = structlog.get_logger("nexoclip.api.zernio")
     published = 0
     try:
-        from nexoclip.api._clip_render import ensure_clip_rendered
-        from nexoclip.api.routers.internal import (
-            resolve_publish_media_url,
-            sign_render_query,
-            signed_clip_ttl_for_schedule,
-        )
         from nexoclip.db import AutopublishSettingsRepo, ClipsRepo
-        from nexoclip.publish.compose import build_post
-        from nexoclip.publish.platform_specs import (
-            fits_duration,
-            per_platform_caption_overrides,
-        )
         from nexoclip.tenancy import bound_tenant
 
         s = await AutopublishSettingsRepo(db).get(tenant_id)
@@ -1989,17 +1980,11 @@ async def autopublish_hands_free_sweep(
         # Auto-programar scheduler). Without this, hands_free with no target
         # platforms picked silently posts nothing.
         chosen = [p for p in want if p in connected] or sorted(connected)
-        post_targets = [
-            (p, account_map[p]) for p in chosen if p in account_map
-        ]
-        if not post_targets:
+        if not [p for p in chosen if p in account_map]:
             log.info("autopublish.handsfree.no_targets", tenant_id=tenant_id, want=want)
             return 0
 
         threshold = float(s.get("score_threshold") or 0.6)
-        cap = int(s.get("daily_cap") or 0)
-        post_mode = s["post_mode"]
-        used = await _autopublish_count_today(db, tenant_id)
         pubs = ZernioPublishesRepo(db)
 
         # Eligible clips: the PUBLISHABILITY verdict (slice I.3 — "is THIS
@@ -2010,8 +1995,8 @@ async def autopublish_hands_free_sweep(
         # silently dropped every such clip. `score_threshold` (0-1) is the
         # operator's floor on the publishability score; a `reject` verdict is
         # always excluded; a not-yet-scored clip is allowed through rather
-        # than silently dropped. Not already posted; daily cap only bounds the
-        # `now` path (the queue drip is interval-spaced, not capped).
+        # than silently dropped. Not already posted. Per-platform daily caps +
+        # gaps are enforced downstream by the rulebook planner, not here.
         eligible: list[str] = []
         clips_by_id: dict[str, Any] = {}
         skipped_unpublishable = 0
@@ -2030,8 +2015,6 @@ async def autopublish_hands_free_sweep(
                 continue
             clips_by_id[clip_id] = clip
             eligible.append(clip_id)
-        if cap and post_mode == "now":
-            eligible = eligible[: max(0, cap - used)]
         if skipped_unpublishable:
             log.info(
                 "autopublish.handsfree.skipped_unpublishable",
@@ -2046,118 +2029,108 @@ async def autopublish_hands_free_sweep(
             )
             return 0
 
-        # Growth Engine (Phases 1-6): when the tenant opts in, route eligible
-        # clips through the per-platform rulebook + Growth Score + fatigue
-        # spacing + allocation instead of the flat interval drip below.
-        if s.get("growth_engine"):
-            return await _run_growth_engine(
-                db=db, tenant_id=tenant_id, base_url=base_url,
-                profile_id=profile_id, client=client, account_map=account_map,
-                targets=chosen, eligible=eligible, clips_by_id=clips_by_id,
-                settings_row=s, log=log,
-            )
-
-        # Spacing rules:
-        #   Queue mode → drip one post every 30 min (unique) / 60 min
-        #     (same-video variations) from the tenant's content strategy. No
-        #     best-time slots, no daily cap — the interval is the only spacing.
-        #   Now mode   → publish the FIRST clip immediately, then stagger the
-        #     rest at a rate-limit-safe gap. Firing the whole batch at once
-        #     trips TikTok's "wait 10 minutes" limit (the burst failures in
-        #     prod), so only clip 0 is truly "now"; the tail is spaced.
-        schedule_times: list[Any] = []
-        if post_mode != "now" or len(eligible) > 1:
-            import datetime as _dt
-
-            from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
-
-            interval = drip_interval_minutes(s.get("content_strategy"))
-            if post_mode == "now":
-                interval = max(interval, _NOW_MODE_BURST_INTERVAL_MIN)
-            schedule_times = plan_drip_times(
-                len(eligible),
-                now=_dt.datetime.now(_dt.UTC),
-                interval_minutes=interval,
-            )
-
-        for i, clip_id in enumerate(eligible):
-            try:
-                clip = clips_by_id[clip_id]
-                with bound_tenant(tenant_id):
-                    composed = await build_post(
-                        db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
-                    )
-                content = composed.caption
-                # Per-platform compliance: drop targets the clip is too long
-                # for (Bluesky 60s, IG/FB 90s, X 140s, YT Shorts 180s) and fit
-                # the caption to each platform's char limit (X 280, Threads
-                # 500, Bluesky ~300) so the post LANDS instead of being
-                # rejected/truncated by the vendor. See platform_specs.
-                clip_targets = [
-                    (p, a) for p, a in post_targets
-                    if fits_duration(p, clip.duration_s)
-                ]
-                if not clip_targets:
-                    log.info(
-                        "autopublish.handsfree.clip_too_long_for_all_targets",
-                        tenant_id=tenant_id, clip_id=clip_id,
-                        duration_s=clip.duration_s,
-                    )
-                    continue
-                custom_content = per_platform_caption_overrides(
-                    content, [p for p, _ in clip_targets]
-                )
-                rendered_path = await ensure_clip_rendered(
-                    db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
-                    auth_cookie_value=None, db_path=resolve_db_target(settings),
-                    auth_query=sign_render_query(clip_id=clip_id, tenant_id=tenant_id),
-                )
-                # Now mode: clip 0 fires immediately (when=None); the rest are
-                # staggered (i > 0). Queue mode: every clip is dripped.
-                first_now = post_mode == "now" and i == 0
-                when = (
-                    None
-                    if first_now or i >= len(schedule_times)
-                    else schedule_times[i].isoformat()
-                )
-                # Off-box durable URL when object storage is on, else the local
-                # signed URL. TTL sized to the schedule (best-time slots are
-                # days out; the platform fetches then, not now).
-                media_url = await resolve_publish_media_url(
-                    clip_id=clip_id, tenant_id=tenant_id, base_url=base_url,
-                    rendered_path=rendered_path,
-                    ttl_seconds=signed_clip_ttl_for_schedule(when),
-                )
-                result = await client.create_post(
-                    profile_id=profile_id, content=content, media_url=media_url,
-                    platforms=clip_targets, publish_now=(when is None),
-                    title=composed.title,
-                    scheduled_for=when,
-                    timezone="UTC" if when else None,
-                    custom_content=custom_content or None,
-                )
-                with bound_tenant(tenant_id):
-                    await pubs.record(
-                        post_id=result.post_id, tenant_id=tenant_id, clip_id=clip_id,
-                        platforms=[p for p, _ in clip_targets], content=content,
-                        status="scheduled" if when else None,
-                    )
-                    await ClipsRepo(db).update_status(clip_id, status="published")
-                published += 1
-                log.info(
-                    "autopublish.handsfree.posted",
-                    tenant_id=tenant_id, clip_id=clip_id, post_id=result.post_id,
-                    mode=post_mode, scheduled_for=when,
-                )
-            except Exception as e:  # one clip's failure must not stop the sweep
-                log.warning(
-                    "autopublish.handsfree.clip_failed",
-                    tenant_id=tenant_id, clip_id=clip_id, error=str(e),
-                )
-                continue
+        # The ONE hands-free scheduling path: the per-platform rulebook +
+        # fatigue spacing + allocation + per-platform assets. LLM Growth Scores
+        # when the tenant has the Growth Engine on, else a publishability
+        # fallback (no LLM). The old flat interval drip is gone.
+        return await _run_growth_engine(
+            db=db, tenant_id=tenant_id, base_url=base_url,
+            profile_id=profile_id, client=client, account_map=account_map,
+            targets=chosen, eligible=eligible, clips_by_id=clips_by_id,
+            settings_row=s, growth_on=bool(s.get("growth_engine")), log=log,
+        )
     except Exception as e:  # the sweep must never break the pipeline
         log.warning("autopublish.handsfree.failed", tenant_id=tenant_id, error=str(e))
     return published
+
+
+async def _cooled_down_platforms(
+    db: Database, tenant_id: str, *, profile_id: str | None,
+) -> set[str]:
+    """Platforms to SKIP right now because they're flagging abuse/rate-limits.
+
+    Refreshes cooldowns from Zernio's failed posts (a `user_abuse` failure —
+    rate limit, velocity cap, daily-upload limit — parks the platform for the
+    wait it asked for), then returns the still-active cooled-down set. The
+    scheduler drops these platforms so the engine stops feeding one that's
+    actively throttling/ghosting us. Best-effort — never raises."""
+    import datetime as _dt
+
+    from nexoclip.db import PlatformCooldownsRepo
+    from nexoclip.integrations.zernio.errors import (
+        cooldowns_from_failed_post,
+        failure_anchor,
+    )
+    from nexoclip.publish.pacing import canonical_platform
+
+    repo = PlatformCooldownsRepo(db)
+    try:
+        client = _build_client()
+        failed = await client.list_failed(profile_id=profile_id)
+        now = _dt.datetime.now(_dt.UTC)
+        # Cooldowns run from each post's FAILURE time, never from `now`:
+        # Zernio's failed list never shrinks, so `now + delta` re-armed
+        # every cooldown on every sweep and a single "wait 1438 minutes"
+        # failure parked the platform forever. A post with no parseable
+        # timestamp is skipped outright — guessing "now" recreates the
+        # eternal re-arm. Multiple failures on one platform keep the
+        # longest wait; already-lapsed cooldowns are not written at all.
+        until_by_platform: dict[str, _dt.datetime] = {}
+        for post in failed:
+            deltas = cooldowns_from_failed_post(post)
+            if not deltas:
+                continue
+            anchor = failure_anchor(post)
+            if anchor is None:
+                continue
+            for platform, delta in deltas.items():
+                until = anchor + delta
+                if until <= now:
+                    continue
+                prior = until_by_platform.get(platform)
+                if prior is None or until > prior:
+                    until_by_platform[platform] = until
+        for platform, until in until_by_platform.items():
+            await repo.set_cooldown(
+                tenant_id, platform,
+                until=until.isoformat(), reason="rate_limit",
+            )
+    except Exception as e:  # detection is best-effort
+        import structlog
+
+        structlog.get_logger("nexoclip.api.zernio").info(
+            "cooldown.refresh_failed", tenant_id=tenant_id, error=str(e),
+        )
+    try:
+        active = await repo.active(tenant_id)
+    except Exception:
+        return set()
+    return {canonical_platform(p) for p in active}
+
+
+async def _platform_perf_weights(db: Database, tenant_id: str) -> dict[str, float]:
+    """Continuous-learning allocation weights from real per-platform analytics.
+
+    Never raises — on any failure (no analytics, Zernio down) returns {} so the
+    planner falls back to full, unbiased allocation. Cold-start safe: platforms
+    without enough mature data stay at weight 1.0."""
+    try:
+        from nexoclip.publish.analytics_service import internal_analytics
+        from nexoclip.score.performance import (
+            compute_platform_performance,
+            platform_weights,
+        )
+
+        analytics = await internal_analytics(db, tenant_id, client=_build_client())
+        perf = compute_platform_performance(analytics.get("posts", []))
+        return platform_weights(perf)
+    except Exception as e:  # learning is best-effort; never block publishing
+        import structlog
+
+        structlog.get_logger("nexoclip.api.zernio").info(
+            "perf_weights.unavailable", tenant_id=tenant_id, error=str(e),
+        )
+        return {}
 
 
 async def _run_growth_engine(
@@ -2172,15 +2145,17 @@ async def _run_growth_engine(
     eligible: list[str],
     clips_by_id: dict[str, Any],
     settings_row: dict[str, Any],
+    growth_on: bool,
     log: Any,
 ) -> int:
-    """Execute the Growth Engine for a batch of eligible clips.
+    """Execute the rulebook-aware sweep for a batch of eligible clips.
 
-    Scores each clip (Growth Score model), persists the card, plans the publish
-    schedule (`plan_growth_publish` — fatigue spacing → allocation → per-platform
-    pacing → per-platform assets), then renders + posts each scheduled (clip,
-    platform) through Zernio. One post's failure never aborts the batch; the
-    whole thing returns a count and never raises into the caller."""
+    The ONE hands-free scheduling path (the flat-drip route is gone). Scores
+    each clip — the LLM Growth Score when the tenant has the Growth Engine on,
+    else a cheap publishability-derived fallback (no LLM) — then plans with
+    `plan_growth_publish` (fatigue spacing → allocation → per-platform pacing →
+    per-platform assets) and renders + posts each scheduled (clip, platform)
+    through Zernio. One post's failure never aborts the batch; never raises."""
     import datetime as _dt
     from pathlib import Path
 
@@ -2196,7 +2171,7 @@ async def _run_growth_engine(
     from nexoclip.publish.compose import build_post
     from nexoclip.publish.growth_engine import ClipContent, plan_growth_publish
     from nexoclip.publish.pacing import canonical_platform
-    from nexoclip.score.growth import GrowthInput, compute_growth_score
+    from nexoclip.score.growth import GrowthInput, compute_growth_score, fallback_card
     from nexoclip.tenancy import bound_tenant
 
     settings = get_settings()
@@ -2204,18 +2179,42 @@ async def _run_growth_engine(
     # resolves even when Zernio names the account "x".
     accounts_canon = {canonical_platform(p): a for p, a in account_map.items()}
     connected = [canonical_platform(p) for p in targets if canonical_platform(p) in accounts_canon]
+    # Abuse/rate-limit backoff: skip any platform currently in cooldown so we
+    # don't feed one that's throttling/ghosting us.
+    cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
+    if cooled:
+        connected = [p for p in connected if p not in cooled]
+        log.info("autopublish.growth.cooldown_skip", tenant_id=tenant_id,
+                 cooled=sorted(cooled))
     if not connected:
         log.info("autopublish.growth.no_connected_targets", tenant_id=tenant_id)
         return 0
 
-    router = LLMRouter(
-        config=load_llm_config(),
-        call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
-        db=db,
+    router = (
+        LLMRouter(
+            config=load_llm_config(),
+            call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
+            db=db,
+        )
+        if growth_on
+        else None
     )
     rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
     gs_repo = GrowthScoresRepo(db)
     recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
+    # Per-platform posts already placed today → subtracted from each platform's
+    # daily cap so two VODs in one day can't blow past it (caps hold ACROSS
+    # sweeps, not just within one).
+    pubs_repo = ZernioPublishesRepo(db)
+    existing_today = await pubs_repo.count_by_platform_today(tenant_id)
+    # …and the FUTURE days prior sweeps already rolled overflow onto, so this
+    # run's overflow lands on top of theirs instead of stacking past the cap.
+    existing_by_day = await pubs_repo.count_by_platform_by_day(
+        tenant_id, from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+    )
+    # Continuous learning: shift volume toward platforms that actually earn
+    # views (a mature 0-view platform gets fewer clips). Best-effort.
+    weights = await _platform_perf_weights(db, tenant_id)
 
     # Score + compose each eligible clip into a ClipContent.
     contents: list[ClipContent] = []
@@ -2226,36 +2225,41 @@ async def _run_growth_engine(
                 composed = await build_post(
                     db, clip_id, handle_suffix=str(settings_row.get("tag_suffix") or ""),
                 )
-                bd = await clip_breakdown(db, clip_id)
-            card = await compute_growth_score(
-                GrowthInput(
-                    clip_id=clip_id,
-                    duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
-                    caption=composed.caption,
-                    hashtags=list(composed.hashtags),
-                    hook=composed.hook,
-                    title=composed.title,
-                    platforms=connected,
-                    heuristic_reason=bd.heuristic_reason,
-                    motion_score=bd.motion_score,
-                    face_presence=bd.face_presence,
+            inp = GrowthInput(
+                clip_id=clip_id,
+                duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
+                caption=composed.caption, hashtags=list(composed.hashtags),
+                hook=composed.hook, platforms=connected,
+                publishability_score=clip.publishability_score,
+                recent_content_tags=recent_tags,
+            )
+            if growth_on and router is not None:
+                with bound_tenant(tenant_id):
+                    bd = await clip_breakdown(db, clip_id)
+                from dataclasses import replace
+
+                inp = replace(
+                    inp, heuristic_reason=bd.heuristic_reason,
+                    motion_score=bd.motion_score, face_presence=bd.face_presence,
                     speaking_intensity=bd.speaking_intensity,
                     reaction_confidence=bd.reaction_confidence,
-                    publishability_score=clip.publishability_score,
-                    recent_content_tags=recent_tags,
-                ),
-                tenant_id=tenant_id,
-                router=router,
-            )
-            with bound_tenant(tenant_id):
-                await gs_repo.record(
-                    tenant_id=tenant_id, clip_id=clip_id,
-                    overall_score=card.overall_score, decision=card.decision,
-                    content_tags=card.content_tags, card_json=card.model_dump_json(),
                 )
+                card = await compute_growth_score(inp, tenant_id=tenant_id, router=router)
+                with bound_tenant(tenant_id):
+                    await gs_repo.record(
+                        tenant_id=tenant_id, clip_id=clip_id,
+                        overall_score=card.overall_score, decision=card.decision,
+                        content_tags=card.content_tags, card_json=card.model_dump_json(),
+                    )
+            else:
+                card = fallback_card(inp)
             contents.append(
                 ClipContent(
-                    clip_id=clip_id, caption=composed.caption,
+                    # sans-tags: the asset matrix carries hashtags
+                    # separately and `caption_with_tags()` appends them at
+                    # post time — the full caption here shipped every tag
+                    # block twice.
+                    clip_id=clip_id, caption=composed.caption_sans_tags,
                     hashtags=list(composed.hashtags), hook=composed.hook,
                     title=composed.title, card=card,
                 )
@@ -2270,12 +2274,13 @@ async def _run_growth_engine(
     if not contents:
         return 0
 
-    budget = settings_row.get("daily_clip_budget") or None
-    min_score = int(settings_row.get("growth_min_score") or 40)
+    budget = (settings_row.get("daily_clip_budget") or None) if growth_on else None
+    min_score = int(settings_row.get("growth_min_score") or 40) if growth_on else 0
     plan = plan_growth_publish(
         contents, connected=connected, rules=rules,
         now=_dt.datetime.now(_dt.UTC), budget=budget, min_score=min_score,
-        recent_tags=recent_tags,
+        existing_today=existing_today, existing_by_day=existing_by_day,
+        recent_tags=recent_tags, platform_weights=weights,
     )
 
     pubs = ZernioPublishesRepo(db)
@@ -2287,7 +2292,13 @@ async def _run_growth_engine(
             rendered_path = await ensure_clip_rendered(
                 db=db, clip=clip, tenant_id=tenant_id, base_url=base_url,
                 auth_cookie_value=None, db_path=resolve_db_target(settings),
-                auth_query=sign_render_query(clip_id=post.clip_id, tenant_id=tenant_id),
+                # 1800s, not the 600s default: a background render can wait
+                # up to 240s for an in-flight render, then hybrid-fail into
+                # the ~5min legacy recorder — past 600s the auth-gated
+                # /render page 403s mid-render and the publish dies.
+                auth_query=sign_render_query(
+                    clip_id=post.clip_id, tenant_id=tenant_id, ttl_seconds=1800,
+                ),
             )
             media_url = await resolve_publish_media_url(
                 clip_id=post.clip_id, tenant_id=tenant_id, base_url=base_url,
@@ -2305,10 +2316,15 @@ async def _run_growth_engine(
                 timezone="UTC",
             )
             with bound_tenant(tenant_id):
+                # scheduled_for is load-bearing: the per-platform daily-cap
+                # accounting (count_by_platform_today) and the Publicados
+                # "programado" ordering both key off it — omitting it counted
+                # future posts against TODAY's cap and hid them from the tab.
                 await pubs.record(
                     post_id=result.post_id, tenant_id=tenant_id, clip_id=post.clip_id,
                     platforms=[post.platform],
                     content=post.asset.caption_with_tags(), status="scheduled",
+                    scheduled_for=when,
                 )
                 await ClipsRepo(db).update_status(post.clip_id, status="published")
             published += 1
@@ -3188,8 +3204,13 @@ async def _reprocess_failed_rows(
     Per-clip failures don't abort the batch."""
     import datetime as _dt
 
-    from nexoclip.db import AutopublishSettingsRepo
-    from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
+    from nexoclip.db import PlatformPacingRulesRepo
+    from nexoclip.publish.pacing import (
+        PlatformRule,
+        canonical_platform,
+        default_rule_for,
+        plan_platform_times,
+    )
 
     if not rows:
         return {"ok": True, "reprocessed": 0, "results": []}
@@ -3203,11 +3224,33 @@ async def _reprocess_failed_rows(
             status_code=502, detail=f"Zernio setup failed: {e}",
         ) from e
 
-    s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
-    times = plan_drip_times(
-        len(rows),
-        now=_dt.datetime.now(_dt.UTC),
-        interval_minutes=drip_interval_minutes(s.get("content_strategy")),
+    # Re-schedule the failed posts under the rulebook (not the old flat drip):
+    # space them by the TIGHTEST involved platform's min_gap + daily cap, so a
+    # big failed backlog rolls across days instead of dogpiling one window.
+    rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+    involved = [
+        rules.get(canonical_platform(p)) or default_rule_for(p)
+        for row in rows
+        for p in (row.platforms or "").split(",") if p
+    ] or [default_rule_for("youtube")]
+    tight = PlatformRule(
+        platform="_reprocess",
+        max_per_day=max(1, min(r.max_per_day for r in involved)),
+        min_gap_minutes=max(r.min_gap_minutes for r in involved),
+        jitter_minutes=max(r.jitter_minutes for r in involved),
+    )
+    # Count today's posts on the involved platforms against the day-0 cap (the
+    # most-loaded one, conservatively) so a reprocess can't push past it.
+    today_counts = await ZernioPublishesRepo(db).count_by_platform_today(tenant_id)
+    involved_keys = {
+        canonical_platform(p)
+        for row in rows
+        for p in (row.platforms or "").split(",") if p
+    }
+    existing_today = max((today_counts.get(p, 0) for p in involved_keys), default=0)
+    times = plan_platform_times(
+        len(rows), rule=tight, now=_dt.datetime.now(_dt.UTC),
+        existing_today=existing_today,
     )
 
     pubs = ZernioPublishesRepo(db)
@@ -3342,7 +3385,11 @@ async def zernio_next_best_json(
     analytics when available, else the sane fallback spread."""
     import datetime as _dt
 
-    from nexoclip.publish.hub import _next_fallback_hour, next_best_time
+    from nexoclip.publish.hub import (
+        _next_fallback_hour,
+        _parse_iso_times,
+        next_best_time,
+    )
 
     now_dt = _dt.datetime.now(_dt.UTC)
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -3353,7 +3400,32 @@ async def zernio_next_best_json(
             slots = await _build_client().best_time_slots(
                 profile_id=profile_id, platform=(platform or None),
             )
-    best = next_best_time(slots, now=now_dt) or _next_fallback_hour(now_dt)
+    # Platform-specific suggestions respect the platform's min_gap against
+    # the tenant's already scheduled/published posts — clicking "Sugerir
+    # mejor hora" for several clips otherwise stacked them all on the same
+    # top slot, tighter than the rulebook allows. Platform-less asks have
+    # no single gap to enforce.
+    gap_minutes = 0
+    recent: list[Any] = []
+    if platform:
+        from nexoclip.db import PlatformPacingRulesRepo
+        from nexoclip.publish.pacing import canonical_platform, default_rule_for
+        from nexoclip.tenancy import bound_tenant
+
+        key = canonical_platform(platform)
+        rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+        gap_minutes = (rules.get(key) or default_rule_for(key)).min_gap_minutes
+        with bound_tenant(tenant_id):
+            rows = await ZernioPublishesRepo(db).list_for_tenant(limit=100)
+        recent = _parse_iso_times([
+            r.scheduled_for or r.created_at
+            for r in rows
+            if (r.status or "") not in ("failed", "deleted", "cancelled")
+            and key in {canonical_platform(p) for p in (r.platforms or "").split(",")}
+        ])
+    best = next_best_time(
+        slots, now=now_dt, min_gap_minutes=gap_minutes, recent_times=recent,
+    ) or _next_fallback_hour(now_dt)
     return JSONResponse({"ok": True, "iso": best.isoformat()})
 
 
@@ -3396,20 +3468,10 @@ async def zernio_compose_clip(
 _AUTOPROG: dict[str, dict[str, Any]] = {}
 _AUTOPROG_TASKS: set[asyncio.Task[None]] = set()
 
-# A `running` auto-program record is only honored while it keeps advancing.
-# The worker bumps `heartbeat` (monotonic seconds) at start + after every
-# clip; if it hasn't advanced in this long the run is treated as DEAD (a hung
-# render / stalled Zernio call / killed task) and a new run may override it.
-# Without this, one stuck run wedged the tenant at "Ya hay una programación
-# en curso" until a full redeploy. Generous — a single clip render is seconds,
-# never minutes.
-_AUTOPROG_STALE_S = 600.0
-
-
-async def _run_autoprog(
+async def _run_growth_autoprog(
     *,
     tenant_id: str,
-    schedule: list[tuple[str, str]],
+    clip_ids: list[str],
     targets: list[str],
     handle_suffix: str,
     account_map: dict[str, str],
@@ -3418,65 +3480,184 @@ async def _run_autoprog(
     base_url: str,
     session_cookie: str | None,
     db_target: str,
+    lock_token: str,
 ) -> None:
-    """Background worker for /schedule/auto: enrich + publish each clip,
-    updating the shared progress record as it goes. Never raises into the
-    event loop — per-clip failures land on the record; the run ends 'done'
-    (or 'error' on a setup failure)."""
+    """Rulebook-aware bulk auto-program (replaces the flat 30-min drip).
+
+    Scores each approved clip (LLM Growth Score when the tenant has the Growth
+    Engine on, else a publishability-derived fallback), then plans the whole
+    backlog with `plan_backlog_schedule`: per-platform `max_per_day` + `min_gap`,
+    rolling overflow across days, best clips first, cross-posted to every
+    allowed platform — so a 39-clip YouTube backlog spreads over ~2 weeks at
+    ~3/day instead of 39 posts in one day. Posts each scheduled (clip, platform)
+    through the shared `_publish_clip`. Holds the cross-worker lock for the run
+    and releases it at the end. Never raises into the event loop."""
+    import datetime as _dt
+    from dataclasses import replace
+
+    from nexoclip.clip.breakdown import clip_breakdown
+    from nexoclip.db import (
+        AutoprogLocksRepo,
+        AutopublishSettingsRepo,
+        ClipsRepo,
+        GrowthScoresRepo,
+        PlatformPacingRulesRepo,
+    )
     from nexoclip.publish.compose import build_post
+    from nexoclip.publish.growth_engine import ClipContent, plan_backlog_schedule
+    from nexoclip.publish.pacing import canonical_platform
+    from nexoclip.score.growth import GrowthInput, compute_growth_score, fallback_card
     from nexoclip.tenancy import bound_tenant
 
     prog = _AUTOPROG[tenant_id]
     db = Database(db_target)
+    locks = AutoprogLocksRepo(db)
+    targets_canon = [canonical_platform(p) for p in targets]
     try:
+        settings = get_settings()
+        s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+        growth_on = bool(s.get("growth_engine"))
+        min_score = int(s.get("growth_min_score") or 40) if growth_on else 0
+        router = None
+        if growth_on:
+            from pathlib import Path
+
+            from nexoclip.llm import LLMRouter, load_llm_config
+
+            router = LLMRouter(
+                config=load_llm_config(),
+                call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
+                db=db,
+            )
+
         client = _build_client()
         with bound_tenant(tenant_id):
-            for clip_id, when_iso in schedule:
-                # Heartbeat at the START too — proves we're actively working
-                # this clip so a slow render (CPU-contended) isn't misread as
-                # a hung run and overridden mid-flight.
+            rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
+            gs_repo = GrowthScoresRepo(db)
+            recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
+            pubs_repo = ZernioPublishesRepo(db)
+            existing_today = await pubs_repo.count_by_platform_today(tenant_id)
+            # Future days a previous run already filled — without this, each
+            # auto-program re-run stacked another max_per_day onto every day.
+            existing_by_day = await pubs_repo.count_by_platform_by_day(
+                tenant_id,
+                from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+            )
+            weights = await _platform_perf_weights(db, tenant_id)
+            # Abuse/rate-limit backoff: drop platforms in cooldown.
+            cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
+            if cooled:
+                targets_canon = [p for p in targets_canon if p not in cooled]
+                _log.info(
+                    "zernio.autoprogram.cooldown_skip tenant=%s cooled=%s",
+                    tenant_id, sorted(cooled),
+                )
+
+            # Score + compose each clip into a ClipContent.
+            contents: list[ClipContent] = []
+            for clip_id in clip_ids:
                 prog["heartbeat"] = time.monotonic()
+                await locks.refresh(tenant_id, lock_token)
                 try:
+                    clip = await ClipsRepo(db).get(clip_id)
+                    if clip is None:
+                        continue
                     composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
-                    post_id = await _publish_clip(
+                    inp = GrowthInput(
+                        clip_id=clip_id,
+                        duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
+                        caption=composed.caption, hashtags=list(composed.hashtags),
+                        hook=composed.hook,
+                        platforms=targets_canon,
+                        publishability_score=clip.publishability_score,
+                        recent_content_tags=recent_tags,
+                    )
+                    if growth_on and router is not None:
+                        bd = await clip_breakdown(db, clip_id)
+                        inp = replace(
+                            inp, heuristic_reason=bd.heuristic_reason,
+                            motion_score=bd.motion_score,
+                            face_presence=bd.face_presence,
+                            speaking_intensity=bd.speaking_intensity,
+                            reaction_confidence=bd.reaction_confidence,
+                        )
+                        card = await compute_growth_score(inp, tenant_id=tenant_id, router=router)
+                        await gs_repo.record(
+                            tenant_id=tenant_id, clip_id=clip_id,
+                            overall_score=card.overall_score, decision=card.decision,
+                            content_tags=card.content_tags, card_json=card.model_dump_json(),
+                        )
+                    else:
+                        card = fallback_card(inp)
+                    contents.append(
+                        ClipContent(
+                            # sans-tags — see _run_growth_engine: the asset's
+                            # caption_with_tags() appends the hashtags once.
+                            clip_id=clip_id, caption=composed.caption_sans_tags,
+                            hashtags=list(composed.hashtags), hook=composed.hook,
+                            title=composed.title, card=card,
+                        )
+                    )
+                except Exception as e:  # scoring one clip must not stop the run
+                    _log.warning(
+                        "zernio.autoprogram.score_failed tenant=%s clip=%s err=%s",
+                        tenant_id, clip_id, e,
+                    )
+                    continue
+
+            plan = plan_backlog_schedule(
+                contents, connected=targets_canon, rules=rules,
+                now=_dt.datetime.now(_dt.UTC), min_score=min_score,
+                existing_today=existing_today, existing_by_day=existing_by_day,
+                platform_weights=weights,
+                recent_tags=recent_tags if growth_on else None,
+            )
+            prog["total"] = len(plan.posts)
+
+            for post in plan.posts:
+                prog["heartbeat"] = time.monotonic()
+                await locks.refresh(tenant_id, lock_token)
+                try:
+                    await _publish_clip(
                         client=client, db=db, request=None, tenant_id=tenant_id,
                         profile_id=profile_id, account_map=account_map,
-                        clip_id=clip_id, platforms=targets,
-                        content=composed.caption, title=composed.title,
-                        mode="schedule", scheduled_for=when_iso,
+                        clip_id=post.clip_id, platforms=[post.platform],
+                        content=post.asset.caption_with_tags(), title=post.asset.title,
+                        mode="schedule", scheduled_for=post.when.isoformat(),
                         tenant_tier=tenant_tier, base_url=base_url,
                         session_cookie=session_cookie,
                     )
                     prog["scheduled"] += 1
                     prog["results"].append({
-                        "clip_id": clip_id, "ok": True, "post_id": post_id,
-                        "scheduled_for": when_iso,
+                        "clip_id": post.clip_id, "ok": True,
+                        "platform": post.platform,
+                        "scheduled_for": post.when.isoformat(),
                     })
                 except HTTPException as e:
                     prog["failed"] += 1
                     prog["results"].append(
-                        {"clip_id": clip_id, "ok": False, "error": str(e.detail)}
+                        {"clip_id": post.clip_id, "ok": False, "error": str(e.detail)}
                     )
-                except Exception as e:  # one clip's failure must not abort the batch
+                except Exception as e:  # one post's failure must not abort the run
                     prog["failed"] += 1
                     prog["results"].append(
-                        {"clip_id": clip_id, "ok": False, "error": str(e)}
+                        {"clip_id": post.clip_id, "ok": False, "error": str(e)}
                     )
                 prog["done"] += 1
-                # Heartbeat: proves the run is still advancing so the
-                # one-run-per-tenant lock stays honored (and a hung run
-                # eventually releases it). See _AUTOPROG_STALE_S.
-                prog["heartbeat"] = time.monotonic()
         prog["state"] = "done"
         _log.info(
-            "zernio.autoprogram tenant=%s total=%d scheduled=%d failed=%d",
+            "zernio.autoprogram.growth tenant=%s posts=%d scheduled=%d failed=%d "
+            "held_fatigue=%d held=%d",
             tenant_id, prog["total"], prog["scheduled"], prog["failed"],
+            len(plan.held_fatigue), len(plan.held_allocation),
         )
     except Exception as e:
         prog["state"] = "error"
         prog["error"] = str(e)
-        _log.exception("zernio.autoprogram.run_failed tenant=%s", tenant_id)
+        _log.exception("zernio.autoprogram.growth_run_failed tenant=%s", tenant_id)
     finally:
+        with contextlib.suppress(Exception):
+            await locks.release(tenant_id, lock_token)
         with contextlib.suppress(Exception):
             await db.close()
 
@@ -3489,18 +3670,17 @@ async def zernio_schedule_auto(
     _t: None = Depends(require_paid_tier),
     db: Database = Depends(get_db),
 ) -> Response:
-    """Auto-program every approved clip as an interval drip.
+    """Auto-program the approved backlog under the per-platform rulebook.
 
-    Spreads the available clips with `plan_drip_times` — one post every
-    30 min (unique) or 60 min (same-video variations), per the tenant's
-    content strategy, with no daily cap — and enriches each post (viral
-    hook + caption + AI hashtags + the fixed handle/hashtag suffix). One
-    clip's failure is collected, not fatal. Targets the autopublish target
-    platforms ∩ connected, else all connected accounts."""
-    import datetime as _dt
-
-    from nexoclip.db import AutopublishSettingsRepo
-    from nexoclip.publish.hub import drip_interval_minutes, plan_drip_times
+    Runs the rulebook-aware planner (`plan_backlog_schedule`): each connected
+    platform gets its publishable clips paced by its own `max_per_day` +
+    `min_gap`, rolling overflow across days, best clips first — so a big YouTube
+    backlog spreads over weeks at a few per day instead of dozens in one day at
+    30-min intervals. Idempotent: a cross-worker DB lock blocks concurrent runs
+    and clips already posted to Zernio are skipped. Targets the autopublish
+    target platforms ∩ connected (∩ the per-tier account cap), else all
+    connected. The slow scoring/render/publish loop runs in the background."""
+    from nexoclip.db import AutoprogLocksRepo, AutopublishSettingsRepo
 
     settings = get_settings()
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -3510,95 +3690,90 @@ async def zernio_schedule_auto(
             {"ok": False, "error": "Conecta tus redes primero."}, status_code=409,
         )
 
-    # One auto-program run per tenant at a time — a second click while a run
-    # is live would double-schedule clips. But honor the lock ONLY while the
-    # run is still advancing: a hung/killed run (no heartbeat past the stale
-    # window) is treated as dead so the tenant isn't wedged at "en curso"
-    # until a redeploy.
-    cur = _AUTOPROG.get(tenant_id)
-    if cur and cur.get("state") == "running":
-        last = float(cur.get("heartbeat") or 0.0)
-        if time.monotonic() - last < _AUTOPROG_STALE_S:
-            return JSONResponse(
-                {"ok": False, "error": "Ya hay una programación en curso."},
-                status_code=409,
-            )
-        _log.warning(
-            "zernio.autoprogram.stale_run_overridden tenant=%s last_hb_age_s=%.0f",
-            tenant_id, time.monotonic() - last,
+    # One auto-program run per tenant at a time. The lock is now in the DB
+    # (migration 055) so it holds across web workers — the old in-memory flag
+    # let two near-simultaneous clicks on different workers each schedule a
+    # full series (the double-booked queue). A stale lock (crashed run) is
+    # reclaimed automatically inside acquire().
+    lock_token = await AutoprogLocksRepo(db).acquire(tenant_id)
+    if lock_token is None:
+        return JSONResponse(
+            {"ok": False, "error": "Ya hay una programación en curso."},
+            status_code=409,
         )
 
-    clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
-    if not clips:
-        return JSONResponse({
-            "ok": True, "state": "done", "total": 0,
-            "scheduled": 0, "skipped": 0, "results": [],
-            "message": "No hay clips aprobados para programar.",
-        })
-
-    client = _build_client()
     try:
-        accounts = await client.list_accounts(profile_id=profile_id)
-    except ZernioError as e:
-        _log.warning("zernio.autoprogram.accounts_failed tenant=%s err=%s", tenant_id, e)
-        return JSONResponse(
-            {"ok": False, "error": f"Couldn't read your accounts: {e}"},
-            status_code=502,
-        )
-    account_map = _account_map(accounts)
-    connected = _connected_platforms(accounts)
-    if not connected:
-        return JSONResponse(
-            {"ok": False, "error": "No tienes redes conectadas."}, status_code=409,
-        )
+        clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
+        # Idempotency: never re-schedule a clip that already has a Zernio
+        # post (scheduled or published). Without this, re-running while the
+        # previous run is mid-flight would double-book the same clips.
+        pubs = ZernioPublishesRepo(db)
+        fresh_clips = [
+            c for c in clips if not await pubs.exists_for_clip(tenant_id, c.id)
+        ]
+        if not fresh_clips:
+            await AutoprogLocksRepo(db).release(tenant_id, lock_token)
+            return JSONResponse({
+                "ok": True, "state": "done", "total": 0,
+                "scheduled": 0, "skipped": len(clips), "results": [],
+                "message": "No hay clips aprobados nuevos para programar.",
+            })
 
-    # Target platforms: the autopublish targets ∩ connected, else all
-    # connected. The per-tier account cap also caps platforms-per-post.
-    s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
-    want = [t for t in str(s.get("targets") or "").split(",") if t.strip()]
-    targets = [t for t in want if t in connected] or sorted(connected)
-    limit = _account_limit(request)
-    if limit is not None:
-        targets = targets[:limit]
-    handle_suffix = str(s.get("tag_suffix") or "")
+        client = _build_client()
+        try:
+            accounts = await client.list_accounts(profile_id=profile_id)
+        except ZernioError as e:
+            await AutoprogLocksRepo(db).release(tenant_id, lock_token)
+            _log.warning("zernio.autoprogram.accounts_failed tenant=%s err=%s", tenant_id, e)
+            return JSONResponse(
+                {"ok": False, "error": f"Couldn't read your accounts: {e}"},
+                status_code=502,
+            )
+        account_map = _account_map(accounts)
+        connected = _connected_platforms(accounts)
+        if not connected:
+            await AutoprogLocksRepo(db).release(tenant_id, lock_token)
+            return JSONResponse(
+                {"ok": False, "error": "No tienes redes conectadas."}, status_code=409,
+            )
 
-    # Drip the approved clips one every 30/60 min from the tenant's
-    # content strategy — no best-time slots, no daily cap.
-    now_dt = _dt.datetime.now(_dt.UTC)
-    times = plan_drip_times(
-        len(clips), now=now_dt,
-        interval_minutes=drip_interval_minutes(s.get("content_strategy")),
-    )
+        # Target platforms: the autopublish targets ∩ connected, else all
+        # connected. The per-tier account cap also caps platforms-per-post.
+        s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
+        want = [t for t in str(s.get("targets") or "").split(",") if t.strip()]
+        targets = [t for t in want if t in connected] or sorted(connected)
+        limit = _account_limit(request)
+        if limit is not None:
+            targets = targets[:limit]
+        handle_suffix = str(s.get("tag_suffix") or "")
+    except Exception:
+        await AutoprogLocksRepo(db).release(tenant_id, lock_token)
+        raise
 
-    # The per-clip loop (LLM enrichment + render + Zernio publish) is slow —
-    # minutes for a big queue. Run it in the background and return immediately;
-    # the UI polls /schedule/auto/progress for live counts. The request's
-    # tier/base-url/cookie are captured now (the request is gone by the time
-    # the task runs).
-    schedule = [
-        (clip.id, when.isoformat())
-        for clip, when in zip(clips, times, strict=False)
-    ]
+    # The scoring + render + publish loop is slow (minutes for a big backlog),
+    # so run it in the background and return immediately; the UI polls
+    # /schedule/auto/progress for live counts. The rulebook-aware planner
+    # (per-platform caps + gaps, spread across days) runs inside the worker.
     _AUTOPROG[tenant_id] = {
-        "state": "running", "total": len(schedule),
+        "state": "running", "total": len(fresh_clips),
         "done": 0, "scheduled": 0, "failed": 0, "results": [],
         "heartbeat": time.monotonic(),
     }
     task = asyncio.create_task(
-        _run_autoprog(
-            tenant_id=tenant_id, schedule=schedule, targets=targets,
-            handle_suffix=handle_suffix, account_map=account_map,
+        _run_growth_autoprog(
+            tenant_id=tenant_id, clip_ids=[c.id for c in fresh_clips],
+            targets=targets, handle_suffix=handle_suffix, account_map=account_map,
             profile_id=profile_id,
             tenant_tier=getattr(request.state, "tenant_tier", None),
             base_url=_public_base_url(request),
             session_cookie=request.cookies.get("nexoclip_token", "") or None,
-            db_target=db.target,
+            db_target=db.target, lock_token=lock_token,
         )
     )
     # Hold a reference so the task isn't garbage-collected mid-run.
     _AUTOPROG_TASKS.add(task)
     task.add_done_callback(_AUTOPROG_TASKS.discard)
-    return JSONResponse({"ok": True, "state": "running", "total": len(schedule)})
+    return JSONResponse({"ok": True, "state": "running", "total": len(fresh_clips)})
 
 
 @router.get("/schedule/auto/progress")
@@ -3626,8 +3801,21 @@ async def zernio_cancel_scheduled(
     db: Database = Depends(get_db),
 ) -> Response:
     """Cancel a scheduled/queued post (DELETE /posts/{id} — Zernio only
-    allows it for non-published posts). Also tombstones a matching
-    local row so it leaves our history immediately."""
+    allows it for non-published posts). Tombstones the matching local
+    row so it leaves our history immediately, and puts the clip BACK in
+    the approved pool — cancelling means "re-schedule this later", not
+    "bury this clip forever" (the tombstone used to leave the clip in
+    'published' with no surface able to touch it again)."""
+    # Ownership gate BEFORE the vendor call: the Zernio API key is
+    # company-wide, so without this any tenant could delete any other
+    # tenant's scheduled post by id. 404 (not 403) to match the rest of
+    # the dashboard's don't-advertise-existence convention. A post with
+    # no local row (scheduled directly on Zernio) stays cancellable —
+    # we have nothing to check it against.
+    pubs = ZernioPublishesRepo(db)
+    row = await pubs.get_by_post_id(post_id)
+    if row is not None and row.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="not found")
     client = _build_client()
     try:
         await client.delete_post(post_id)
@@ -3644,11 +3832,21 @@ async def zernio_cancel_scheduled(
         return JSONResponse(
             {"ok": False, "error": f"Couldn't cancel: {e}"}, status_code=502,
         )
-    # Best-effort local tombstone (the post may have been scheduled
-    # directly on Zernio with no local row).
-    row = await ZernioPublishesRepo(db).get_by_post_id(post_id)
-    if row is not None and row.tenant_id == tenant_id:
-        await ZernioPublishesRepo(db).set_status(post_id, status="cancelled")
+    if row is not None:
+        await pubs.set_status(post_id, status="cancelled")
+        # Return the clip to the approved pool so auto-program/hands-free
+        # can pick it up again (exists_for_clip now ignores cancelled
+        # rows) — but only when this was its LAST live post; a clip still
+        # scheduled on other platforms stays 'published'. Guarded to
+        # 'published' so we don't stomp a state some other flow moved the
+        # clip into meanwhile.
+        if not await pubs.exists_for_clip(tenant_id, row.clip_id):
+            from nexoclip.tenancy import bound_tenant
+
+            with bound_tenant(tenant_id):
+                clip = await ClipsRepo(db).get(row.clip_id)
+                if clip is not None and clip.status == "published":
+                    await ClipsRepo(db).update_status(row.clip_id, status="approved")
     _log.info("zernio.schedule.cancelled tenant=%s post=%s", tenant_id, post_id)
     return JSONResponse({"ok": True})
 
@@ -3698,6 +3896,14 @@ async def zernio_disconnect_account(
 ) -> Response:
     """Disconnect ONE connected account on Zernio (DELETE /accounts/{id}),
     so the operator manages connections without leaving NexoClip."""
+    # Ownership gate BEFORE the vendor call: the Zernio API key is
+    # company-wide, so DELETE /accounts/{id} would happily disconnect
+    # ANOTHER tenant's account. `_account_platform` resolves the id
+    # against THIS tenant's profile only — None means not theirs (or no
+    # profile at all). 404, not 403, per the don't-advertise-existence
+    # convention.
+    if await _account_platform(db, tenant_id, account_id) is None:
+        raise HTTPException(status_code=404, detail="not found")
     client = _build_client()
     try:
         await client.disconnect_account(account_id)
@@ -3734,6 +3940,25 @@ async def zernio_claim_existing(
     profile_id = (profile_id or "").strip()
     if not profile_id:
         raise HTTPException(status_code=400, detail="profileId is required.")
+
+    # Ownership gate BEFORE any vendor lookup: profileIds follow a derivable
+    # pattern, so without this any tenant could claim ANOTHER tenant's
+    # profile and publish through / read their connected accounts. A profile
+    # already bound to a different tenant row is off-limits; unbound (the
+    # legitimate re-claim after a DB wipe / unlink) or bound to THIS tenant
+    # is fine. 404 with the same message as an unknown profileId so probing
+    # can't distinguish "someone else's" from "doesn't exist" — and gating
+    # before list_accounts keeps the 402 branch below from leaking another
+    # tenant's connected-account count.
+    bound = await TenantsRepo(db).find_by_zernio_profile(profile_id)
+    if bound is not None and bound.id != tenant_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No connected accounts found for profileId '{profile_id}'. "
+                f"Check the value or click Connect to start fresh."
+            ),
+        )
 
     client = _build_client()
     try:

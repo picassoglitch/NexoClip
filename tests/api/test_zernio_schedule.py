@@ -293,3 +293,93 @@ async def test_cancel_published_post_is_409(
         )
     assert resp.status_code == 409
     assert resp.json()["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_other_tenants_post_is_404_and_never_reaches_zernio(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+    tenants: dict[str, dict[str, str]],
+) -> None:
+    """Tenant isolation: the Zernio API key is company-wide, so the
+    ownership gate must fire BEFORE the vendor delete — a 404 with zero
+    outbound calls (no DELETE route is mocked; a call would error)."""
+    await ZernioPublishesRepo(db).record(
+        post_id="post_of_bob",
+        tenant_id=tenants["bob"]["id"],
+        clip_id="clp_bob",
+        platforms=["tiktok"],
+        content="de bob",
+        status="scheduled",
+    )
+    with respx.mock():
+        resp = await client.post(
+            "/dashboard/publish/zernio/schedule/cancel/post_of_bob",
+            headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 404
+    row = await ZernioPublishesRepo(db).get_by_post_id("post_of_bob")
+    assert row is not None and row.status == "scheduled"  # untouched
+
+
+@pytest.mark.asyncio
+async def test_cancel_returns_clip_to_approved_pool(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    """Cancelling a clip's last live post puts the clip back in play:
+    status back to 'approved' and exists_for_clip no longer blocks —
+    previously the clip stayed 'published' behind a cancelled tombstone
+    with no surface able to ever schedule it again."""
+    import datetime as _dt
+
+    from nexoclip.db import ClipsRepo, StreamsRepo
+    from nexoclip.db.models import ClipRow, StreamRow
+    from nexoclip.tenancy import bound_tenant
+
+    tid = alice["id"]
+    now = _dt.datetime.now(_dt.UTC).isoformat()
+    with bound_tenant(tid):
+        await StreamsRepo(db).upsert(
+            StreamRow(
+                id="str_cx", tenant_id=tid, vod_url="https://kick.com/x",
+                platform="kick", title="t", channel="c", duration_s=60.0,
+                source_video_path="/tmp/v", source_audio_path="/tmp/a",
+                status="ingested", created_at=now,
+            )
+        )
+        await ClipsRepo(db).upsert_many(
+            [
+                ClipRow(
+                    id="clp_cx", stream_id="str_cx", tenant_id=tid,
+                    start_s=0.0, end_s=10.0, duration_s=10.0,
+                    width=1080, height=1920, path="/tmp/c.mp4",
+                    status="published", created_at=now,
+                )
+            ]
+        )
+    await ZernioPublishesRepo(db).record(
+        post_id="post_cx", tenant_id=tid, clip_id="clp_cx",
+        platforms=["tiktok"], content="programada", status="scheduled",
+        scheduled_for=now,
+    )
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.delete(f"{_ZBASE}/posts/post_cx").mock(
+            return_value=httpx.Response(200, json={"message": "deleted"})
+        )
+        resp = await client.post(
+            "/dashboard/publish/zernio/schedule/cancel/post_cx",
+            headers=auth(alice["token"]),
+        )
+    assert resp.status_code == 200
+
+    pubs = ZernioPublishesRepo(db)
+    assert await pubs.exists_for_clip(tid, "clp_cx") is False  # re-schedulable
+    with bound_tenant(tid):
+        clip = await ClipsRepo(db).get("clp_cx")
+    assert clip is not None and clip.status == "approved"

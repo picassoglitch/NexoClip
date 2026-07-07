@@ -1045,6 +1045,69 @@ async def queue_health(
     )
 
 
+@router.get("/_health/logs", response_class=HTMLResponse, include_in_schema=False)
+async def logs_health(
+    request: Request,
+    level: str = "all",
+    q: str = "",
+) -> Response:
+    """Admin log tracker. Recent WARNING+ records from the in-process
+    ring buffer (structlog + stdlib capture — see nexoclip/logbuffer.py),
+    filterable by level and free-text. Same operator-only tier as
+    /_health/queue: non-admins get a 404, not a 403, so the page's
+    existence isn't advertised."""
+    if not getattr(request.state, "is_admin", False):
+        raise HTTPException(status_code=404, detail="not found")
+
+    from nexoclip.logbuffer import get_log_buffer
+
+    buffer = get_log_buffer()
+    entries = buffer.snapshot()
+
+    if level == "error":
+        entries = [e for e in entries if e.level in ("error", "critical")]
+    elif level == "warning":
+        entries = [e for e in entries if e.level == "warning"]
+
+    needle = q.strip().lower()
+    if needle:
+        entries = [
+            e
+            for e in entries
+            if needle in e.event.lower()
+            or needle in e.logger.lower()
+            or any(
+                needle in k.lower() or needle in v.lower()
+                for k, v in e.fields.items()
+            )
+        ]
+
+    counts = buffer.counts()
+    # Header chip: errors in the last hour → danger; any errors in 24h
+    # or warnings in the last hour → warn; else ok.
+    if counts["errors_1h"] > 0:
+        bucket = "danger"
+    elif counts["errors_24h"] > 0 or counts["warnings_1h"] > 0:
+        bucket = "warn"
+    else:
+        bucket = "ok"
+
+    return templates.TemplateResponse(
+        request,
+        "logs_health.html",
+        {
+            "entries": entries[:200],
+            "shown": min(len(entries), 200),
+            "matched": len(entries),
+            "counts": counts,
+            "bucket": bucket,
+            "level": level,
+            "q": q,
+            "buffer_started_at": buffer.started_at,
+        },
+    )
+
+
 # ---------- Streams ----------
 
 

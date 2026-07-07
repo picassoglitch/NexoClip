@@ -319,8 +319,16 @@ def publish_reprocess_queue_cmd(
             typer.echo(
                 f"scheduled_found={summary.scheduled_found} "
                 f"canceled={summary.canceled} cancel_failed={summary.cancel_failed} "
-                f"clips_reset={summary.clips_reset}"
+                f"clips_reset={summary.clips_reset} "
+                f"skipped_missing_source={len(summary.skipped_missing_source)}"
             )
+            if summary.skipped_missing_source:
+                # Left untouched: their source file is gone, so a reset could
+                # never re-render — the live scheduled post stays as-is.
+                typer.echo(
+                    "skipped (source missing): "
+                    + ", ".join(summary.skipped_missing_source)
+                )
             if dry_run:
                 typer.echo(f"[dry-run] would reprocess {len(summary.clip_ids)} clip(s)")
                 return

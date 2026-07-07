@@ -81,6 +81,7 @@ def plan_growth_publish(
     budget: int | None = None,
     min_score: int = 40,
     existing_today: dict[str, int] | None = None,
+    existing_by_day: dict[str, dict[str, int]] | None = None,
     recent_tags: list[list[str]] | None = None,
     platform_weights: dict[str, float] | None = None,
     fatigue_threshold: float = 0.6,
@@ -89,10 +90,13 @@ def plan_growth_publish(
 ) -> GrowthPlan:
     """Plan today's publishing for a batch of scored clips. See module docstring
     for the pipeline. `existing_today` is per-platform posts already placed
-    today (subtracted from each platform's cap). `platform_weights` are the
-    continuous-learning multipliers that shift volume toward platforms that
-    actually earn views."""
+    today (subtracted from each platform's cap); `existing_by_day` is the
+    per-platform {YYYY-MM-DD: count} of posts prior sweeps already scheduled
+    on FUTURE days, so overflow rolled forward never stacks past a day's cap
+    across runs. `platform_weights` are the continuous-learning multipliers
+    that shift volume toward platforms that actually earn views."""
     existing_today = dict(existing_today or {})
+    existing_by_day = dict(existing_by_day or {})
     target = [canonical_platform(p) for p in connected]
     by_id = {c.clip_id: c for c in clips}
 
@@ -142,7 +146,8 @@ def plan_growth_publish(
         rule = rules.get(platform) or default_rule_for(platform)
         times = plan_platform_times(
             len(clip_ids), rule=rule, now=now,
-            existing_today=int(existing_today.get(platform, 0)), rng=rng,
+            existing_today=int(existing_today.get(platform, 0)),
+            existing_by_day=existing_by_day.get(platform), rng=rng,
         )
         for clip_id, when in zip(clip_ids, times, strict=False):
             content = by_id[clip_id]
@@ -176,6 +181,7 @@ def plan_backlog_schedule(
     now: _dt.datetime,
     min_score: int = 0,
     existing_today: dict[str, int] | None = None,
+    existing_by_day: dict[str, dict[str, int]] | None = None,
     recent_tags: list[list[str]] | None = None,
     platform_weights: dict[str, float] | None = None,
     fatigue_threshold: float = 0.6,
@@ -195,8 +201,13 @@ def plan_backlog_schedule(
     This is what the dashboard's "Auto-program everything" button uses, so a
     39-clip YouTube backlog becomes ~3/day, 5h apart, over ~2 weeks — instead
     of 39 posts in one day every 30 minutes. Pure + deterministic given `rng`.
+
+    `existing_by_day` ({platform: {YYYY-MM-DD: count}}) carries what PRIOR
+    runs already scheduled on future days, so re-running the auto-program
+    never stacks a second batch past `max_per_day` on any day.
     """
     existing_today = dict(existing_today or {})
+    existing_by_day = dict(existing_by_day or {})
     target = [canonical_platform(p) for p in connected]
     by_id = {c.clip_id: c for c in clips}
 
@@ -242,7 +253,8 @@ def plan_backlog_schedule(
             eligible = eligible[:keep]
         times = plan_platform_times(
             len(eligible), rule=rule, now=now,
-            existing_today=int(existing_today.get(platform, 0)), rng=rng,
+            existing_today=int(existing_today.get(platform, 0)),
+            existing_by_day=existing_by_day.get(platform), rng=rng,
         )
         for (clip_id, score), when in zip(eligible, times, strict=False):
             content = by_id[clip_id]

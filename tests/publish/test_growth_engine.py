@@ -87,6 +87,43 @@ def test_fatigue_holds_similar_clips() -> None:
     assert {p.clip_id for p in plan.posts} == {"c1", "c2"}
 
 
+def test_two_consecutive_sweeps_respect_future_day_caps() -> None:
+    # Two hands-free sweeps the same day (two VODs), starting in the evening
+    # so min_gap pushes part of each allocation past midnight: sweep 1 spills
+    # 2 posts onto tomorrow, and sweep 2 — seeded with sweep 1's per-day
+    # counts — must top tomorrow up to the cap at most, never past it.
+    from nexoclip.publish.pacing import PlatformRule
+
+    rules = {"tiktok": PlatformRule(
+        platform="tiktok", max_per_day=3, min_gap_minutes=240, jitter_minutes=0,
+    )}
+    evening = _NOW.replace(hour=20)  # 20:00 → gap-spaced posts cross midnight
+    run1 = plan_growth_publish(
+        [_clip(f"a{i}", 90, {"tiktok": (90, "publish")}, [f"ta{i}"]) for i in range(3)],
+        connected=["tiktok"], rules=rules, now=evening, rng=random.Random(6),
+    )
+    by_day: dict[str, int] = {}
+    for p in run1.posts:
+        d = p.when.date().isoformat()
+        by_day[d] = by_day.get(d, 0) + 1
+    tomorrow = (evening.date() + _dt.timedelta(days=1)).isoformat()
+    assert by_day.get(tomorrow, 0) >= 1  # premise: run 1 spilled forward
+    run2 = plan_growth_publish(
+        [_clip(f"b{i}", 90, {"tiktok": (90, "publish")}, [f"tb{i}"]) for i in range(3)],
+        connected=["tiktok"], rules=rules,
+        now=evening + _dt.timedelta(minutes=30),
+        existing_today={"tiktok": by_day.get(evening.date().isoformat(), 0)},
+        existing_by_day={"tiktok": by_day},
+        rng=random.Random(7),
+    )
+    combined = dict(by_day)
+    for p in run2.posts:
+        d = p.when.date().isoformat()
+        combined[d] = combined.get(d, 0) + 1
+    assert run2.posts  # premise: sweep 2 still had capacity to place
+    assert all(n <= 3 for n in combined.values())
+
+
 def test_schedule_honours_min_gap_and_assets_conformed() -> None:
     clips = [
         _clip("c1", 95, {"tiktok": (95, "publish")}, ["a"]),

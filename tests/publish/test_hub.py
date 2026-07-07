@@ -147,6 +147,48 @@ def test_next_best_time_none_without_usable_slots() -> None:
     assert next_best_time([{"day_of_week": "x", "hour": "y"}], now=_NOW) is None
 
 
+def test_next_best_time_skips_slot_violating_min_gap() -> None:
+    # Top slot Wed 18:00, but a post is already scheduled 17:30 — closer than
+    # the platform's 240-min gap. Fall through to the NEXT-ranked slot instead
+    # of clustering (the rulebook's whole point).
+    slots = [
+        {"day_of_week": 2, "hour": 18, "avg_engagement": 510.3, "post_count": 15},
+        {"day_of_week": 4, "hour": 9, "avg_engagement": 342.5, "post_count": 12},
+    ]
+    taken = _NOW.replace(hour=17, minute=30)  # Wed 17:30, already scheduled
+    best = next_best_time(
+        slots, now=_NOW, min_gap_minutes=240, recent_times=[taken],
+    )
+    assert best is not None
+    assert (best.weekday(), best.hour) == (4, 9)  # second slot won
+
+
+def test_next_best_time_gap_none_when_all_slots_violate() -> None:
+    # Every ranked slot violates the gap → None, so the caller's fallback
+    # spread takes over rather than forcing a clustered slot.
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    taken = _NOW.replace(hour=18)
+    assert next_best_time(
+        slots, now=_NOW, min_gap_minutes=240, recent_times=[taken],
+    ) is None
+
+
+def test_next_best_time_gap_checks_future_scheduled_posts_too() -> None:
+    # The clash can sit AHEAD of the candidate (a post scheduled for 19:00
+    # blocks an 18:00 pick just as much as one at 17:30 does).
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    future_taken = _NOW.replace(hour=19)
+    assert next_best_time(
+        slots, now=_NOW, min_gap_minutes=120, recent_times=[future_taken],
+    ) is None
+
+
+def test_next_best_time_ignores_gap_when_no_recent_times() -> None:
+    slots = [{"day_of_week": 2, "hour": 18, "avg_engagement": 510.3}]
+    best = next_best_time(slots, now=_NOW, min_gap_minutes=240, recent_times=[])
+    assert best is not None and (best.weekday(), best.hour) == (2, 18)
+
+
 # ---- validate_media_url ----
 
 

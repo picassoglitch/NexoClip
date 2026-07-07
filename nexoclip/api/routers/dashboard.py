@@ -9,6 +9,7 @@ in addition to the `Authorization` header. The bearer middleware in
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -1928,6 +1929,14 @@ async def stream_detail(
         1 for c in clips if c.status in ("cut", "ready_for_review")
     )
 
+    # The retention loop reclaims the source video once the stream is fully
+    # processed (delete-source-on-completion) — by design, clips don't need
+    # it anymore. Tell the template so it renders a friendly "liberado" note
+    # instead of a broken black <video> that 404s against /source.
+    source_available = False
+    with contextlib.suppress(OSError):
+        source_available = Path(stream.source_video_path).exists()
+
     return templates.TemplateResponse(
         request,
         "stream_detail.html",
@@ -1935,6 +1944,7 @@ async def stream_detail(
             "stream": stream,
             "candidates": candidates,
             "clips": clips,
+            "source_available": source_available,
             "pending_approval_count": pending_approval_count,
             "overview": overview,
             "actual_spend": actual_spend,

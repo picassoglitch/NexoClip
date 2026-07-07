@@ -395,17 +395,11 @@ def _ffmpeg_composite_alpha_over_source(
     # the result directly into the video buffer. No DOM, no
     # screenshots, no compositor timing to chase.
     if ass_file_path is not None and ass_file_path.exists():
-        # ffmpeg filter syntax requires single quotes around the
-        # filename AND escaping of `:` and `\` inside it. On POSIX
-        # the cache path is `/data/out/.../*.ass` — no problematic
-        # chars. The escape handles future Windows / containerized
-        # paths defensively.
-        ass_path_escaped = (
-            str(ass_file_path)
-            .replace("\\", "\\\\")
-            .replace(":", "\\:")
-            .replace("'", "\\'")
-        )
+        # Escaping rules live in captions_ass so the legacy fallback
+        # recorder burns with byte-identical filter args (no drift).
+        from .captions_ass import escape_ass_path_for_filter
+
+        ass_path_escaped = escape_ass_path_for_filter(ass_file_path)
         filter_graph = (
             f"[0:v][1:v]overlay=0:0:format=auto[ovl];"
             f"[ovl]ass='{ass_path_escaped}'[v]"

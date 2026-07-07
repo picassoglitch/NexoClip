@@ -169,10 +169,14 @@ def test_composite_command_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     def fake_run(cmd: list[str], *args, **kwargs):
         captured["cmd"] = cmd
         # Touch the output file so any caller doing .exists() checks
-        # downstream isn't surprised.
+        # downstream isn't surprised — but ONLY inside the sandbox;
+        # the subprocess patch is global and must never write to repo
+        # paths (e.g. the bundled outro asset an ffprobe call names
+        # as its last arg).
         out = Path(cmd[-1])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"\x00fake mp4")
+        if tmp_path in out.parents:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x00fake mp4")
         return _Proc()
 
     monkeypatch.setattr(hybrid_recorder.subprocess, "run", fake_run)
@@ -272,8 +276,16 @@ def test_composite_writes_to_partial_then_renames(
         target = cmd[-1]
         targets.append(target)
         out = Path(target)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"\x00fake mp4 large enough")
+        # Only materialize outputs inside the test sandbox. The patch
+        # on hybrid_recorder.subprocess.run is GLOBAL (it's the stdlib
+        # module), so the outro step's ffprobe calls land here too —
+        # and ffprobe's last arg is the file being probed, i.e. the
+        # bundled nexoclip/clip/assets/outro.mp4. Writing to cmd[-1]
+        # unconditionally overwrote the real end card in the working
+        # tree on every test run (it even got committed broken once).
+        if tmp_path in out.parents:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x00fake mp4 large enough")
         return _Proc()
 
     monkeypatch.setattr(hybrid_recorder.subprocess, "run", fake_run)
@@ -319,9 +331,11 @@ def test_composite_failure_scrubs_partial(
 
     def fake_run(cmd: list[str], *args, **kwargs):
         # Simulate ffmpeg leaving a partial behind before bailing.
+        # Sandbox-guarded like the other fakes — the patch is global.
         target = Path(cmd[-1])
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"\x00partial bytes")
+        if tmp_path in target.parents:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"\x00partial bytes")
         return _Proc()
 
     monkeypatch.setattr(hybrid_recorder.subprocess, "run", fake_run)

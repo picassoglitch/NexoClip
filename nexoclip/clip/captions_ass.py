@@ -210,4 +210,22 @@ def generate_ass(
     return output_path
 
 
-__all__ = ["generate_ass"]
+def escape_ass_path_for_filter(ass_file_path: Path) -> str:
+    """Escape a filesystem path for ffmpeg's `ass='<path>'` filter arg.
+
+    ffmpeg filter syntax requires single quotes around the filename AND
+    escaping of `:` and `\\` inside it. On POSIX the cache path is
+    `/data/out/.../*.ass` — no problematic chars. The escape handles
+    Windows / containerized paths defensively. Shared by BOTH recorders
+    (hybrid composite + legacy fallback encode) so the escaping rules
+    can't drift between them.
+    """
+    return (
+        str(ass_file_path)
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+    )
+
+
+__all__ = ["escape_ass_path_for_filter", "generate_ass"]

@@ -350,6 +350,12 @@ async def render_clip_in_background(
                         width=width,
                         height=height,
                         progress_callback=_on_progress,
+                        # R16 parity — since the render page stopped
+                        # drawing captions, the legacy fallback must
+                        # burn the same ASS file the hybrid path got;
+                        # without it a hybrid failure shipped a
+                        # caption-less MP4.
+                        ass_file_path=ass_file_path,
                         append_outro_enabled=append_outro_enabled,
                     )
         except PreviewRecordingError as e:

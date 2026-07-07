@@ -514,10 +514,22 @@
     {# ---- Source video ---- #}
     <div style="margin-top: 8px;">
       <small style="color: var(--nc-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px;">Video original</small>
+      {% if source_available %}
       <video controls preload="metadata" style="width: 100%; max-width: 640px; margin-top: 6px; background: #000; border-radius: var(--nc-radius); border: var(--nc-hairline);">
         <source src="/dashboard/streams/{{ stream.id }}/source">
         Tu navegador no puede reproducir el video aquí. Ábrelo en <code>{{ stream.source_video_path }}</code>.
       </video>
+      {% else %}
+      {# Retention reclaims the source once processing finishes (the clips
+         are already cut and don't need it) — a broken black <video> that
+         404s reads as a bug, so say what actually happened. #}
+      <p class="nc-text--muted" style="margin: 6px 0 0; font-size: 13px;">
+        <i class="ti ti-database-off" aria-hidden="true"></i>
+        Video original liberado para ahorrar espacio — tus clips ya están
+        cortados y no lo necesitan. Para volver a correr el proceso,
+        NexoClip lo vuelve a descargar solo.
+      </p>
+      {% endif %}
     </div>
 
     {# ---- Re-run pipeline (estimate + persona + run) ---- #}

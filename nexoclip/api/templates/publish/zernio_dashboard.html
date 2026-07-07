@@ -794,25 +794,16 @@
         </label>
       </div>
 
-      {# 3 · When #}
+      {# 3 · When (on_approve only) #}
       <div>
-        <div style="font-size:14px; margin-bottom:8px;"><strong>2. ¿Cuándo salen?</strong></div>
+        <div style="font-size:14px; margin-bottom:8px;"><strong>2. Al darle “Ship” a un clip</strong></div>
         <select class="nc-input" id="zn-ap-postmode" style="max-width:360px;">
-          <option value="queue">En cola, espaciados (recomendado)</option>
-          <option value="now">Apenas el clip está listo</option>
+          <option value="queue">A la cola de Zernio</option>
+          <option value="now">Publicar enseguida</option>
         </select>
         <div class="nc-text--muted" style="font-size:12px; margin-top:4px;">
-          “En cola” publica de a uno, espaciado en el tiempo, para no amontonarlos.
-        </div>
-        <div style="margin-top:10px;">
-          <select class="nc-input" id="zn-ap-strategy" style="max-width:360px;">
-            <option value="unique">Videos únicos — uno cada 30 min</option>
-            <option value="variations">Mismo video con variaciones — uno cada 1 h</option>
-          </select>
-          <div class="nc-text--muted" style="font-size:12px; margin-top:4px;">
-            Con variaciones del mismo video espaciamos a 1 h (también entre plataformas)
-            para que no se amontonen los casi-duplicados.
-          </div>
+          Solo aplica al modo “Yo elijo cada clip”. En automático, el Motor de
+          Crecimiento marca el ritmo por plataforma (tope diario + separación).
         </div>
       </div>
 
@@ -852,6 +843,43 @@
         <textarea class="nc-input" id="zn-ap-tagsuffix" rows="2" maxlength="500"
                   placeholder="@minombre · sígueme en Kick · #gaming #clips"></textarea>
       </label>
+
+      {# 7 · Growth Engine (Phases 1-6) #}
+      <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;
+                  display:flex; flex-direction:column; gap:14px;">
+        <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
+          <input type="checkbox" id="zn-ap-growth" style="margin-top:4px; transform:scale(1.2);">
+          <span>
+            <strong style="font-size:14px;">⚡ Motor de Crecimiento (beta)</strong>
+            <div class="nc-text--muted" style="font-size:13px; margin-top:2px;">
+              En vez de “publicar todo en todas partes”, la IA calcula un Growth
+              Score por clip y plataforma, respeta el límite diario de cada red,
+              evita repetir contenido parecido, y reparte los mejores clips donde
+              más rinden. El resto espera en la cola.
+            </div>
+          </span>
+        </label>
+        <div id="zn-growth-opts" style="display:none; flex-direction:column; gap:14px; padding-left:6px;">
+          <div style="display:flex; flex-wrap:wrap; gap:24px;">
+            <label class="nc-label" style="margin:0;">
+              <strong style="font-size:14px;">¿Cuántos clips hoy?</strong>
+              <span class="nc-text--muted" style="font-size:12px;">Vacío = sin tope (solo límites por red).</span>
+              <input class="nc-input" id="zn-ap-budget" type="number" min="0" placeholder="sin tope" style="width:120px;">
+            </label>
+            <label class="nc-label" style="margin:0;">
+              <strong style="font-size:14px;">Growth Score mínimo</strong>
+              <span class="nc-text--muted" style="font-size:12px;">Debajo de esto, no se publica en esa red.</span>
+              <input class="nc-input" id="zn-ap-growthmin" type="number" min="0" max="100" value="40" style="width:90px;">
+            </label>
+          </div>
+          <div>
+            <div style="font-size:14px; margin-bottom:6px;"><strong>Reglas por plataforma</strong>
+              <span class="nc-text--muted" style="font-size:12px;"> — máximo diario, separación mínima (min) y hashtags.</span>
+            </div>
+            <div id="zn-rules-table" class="nc-text--muted" style="font-size:12px;">Cargando…</div>
+          </div>
+        </div>
+      </div>
 
       <div>
         <button type="button" class="nc-btn nc-btn--primary" id="zn-ap-save" style="padding:9px 20px; font-size:14px;">
@@ -2281,7 +2309,6 @@
             r.checked = (r.value === mode);
           });
           document.getElementById("zn-ap-postmode").value = s.post_mode || "queue";
-          document.getElementById("zn-ap-strategy").value = s.content_strategy || "unique";
           document.getElementById("zn-ap-cap").value = (s.daily_cap == null ? 10 : s.daily_cap);
           // Threshold is a 3-option select now — snap the stored float to the
           // nearest bucket so old precise values still land somewhere sane.
@@ -2289,6 +2316,15 @@
           var bucket = thr <= 0.45 ? "0.3" : (thr >= 0.7 ? "0.8" : "0.6");
           document.getElementById("zn-ap-threshold").value = bucket;
           document.getElementById("zn-ap-tagsuffix").value = s.tag_suffix || "";
+          // Growth Engine knobs.
+          var growthOn = !!s.growth_engine;
+          document.getElementById("zn-ap-growth").checked = growthOn;
+          document.getElementById("zn-growth-opts").style.display = growthOn ? "flex" : "none";
+          document.getElementById("zn-ap-growthmin").value =
+            (s.growth_min_score == null ? 40 : s.growth_min_score);
+          document.getElementById("zn-ap-budget").value =
+            (s.daily_clip_budget == null ? "" : s.daily_clip_budget);
+          if (growthOn) { loadPacingRules(); }
           var selected = (s.targets || "").split(",").filter(function (t) { return t; });
           renderApTargets(b.platforms || [], selected);
           var used = document.getElementById("zn-ap-used");
@@ -2300,6 +2336,76 @@
         })
         .catch(function () {});
     }
+    // ---- Growth Engine: toggle + per-platform rulebook ----
+    function renderPacingRules(rules) {
+      var host = document.getElementById("zn-rules-table");
+      if (!rules || !rules.length) { host.textContent = "Sin reglas."; return; }
+      host.innerHTML = "";
+      var grid = document.createElement("div");
+      grid.style.display = "grid";
+      grid.style.gridTemplateColumns = "1fr 70px 80px 70px 60px auto";
+      grid.style.gap = "6px 10px";
+      grid.style.alignItems = "center";
+      var head = ["Plataforma", "Máx/día", "Gap (min)", "#tags", "On", ""];
+      head.forEach(function (h) {
+        var c = document.createElement("div");
+        c.textContent = h; c.style.fontWeight = "600"; c.style.opacity = "0.7";
+        grid.appendChild(c);
+      });
+      rules.forEach(function (r) {
+        var name = document.createElement("div");
+        name.textContent = r.platform + (r.overridden ? " •" : "");
+        name.title = r.overridden ? "Personalizado" : "Por defecto";
+        grid.appendChild(name);
+        function numInput(val, w) {
+          var i = document.createElement("input");
+          i.type = "number"; i.value = val; i.className = "nc-input";
+          i.style.width = w; i.style.padding = "3px 6px"; i.style.fontSize = "12px";
+          return i;
+        }
+        var maxd = numInput(r.max_per_day, "60px");
+        var gap = numInput(r.min_gap_minutes, "72px");
+        var tags = numInput(r.hashtag_max, "60px");
+        grid.appendChild(maxd); grid.appendChild(gap); grid.appendChild(tags);
+        var en = document.createElement("input");
+        en.type = "checkbox"; en.checked = !!r.enabled;
+        grid.appendChild(en);
+        var btn = document.createElement("button");
+        btn.type = "button"; btn.className = "nc-btn"; btn.textContent = "✓";
+        btn.style.padding = "2px 10px"; btn.style.fontSize = "12px";
+        btn.title = "Guardar regla";
+        btn.addEventListener("click", function () {
+          btn.textContent = "…";
+          fetch("/dashboard/publish/zernio/autopublish/rules/save", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              platform: r.platform,
+              max_per_day: parseInt(maxd.value, 10) || 0,
+              min_gap_minutes: parseInt(gap.value, 10) || 0,
+              hashtag_max: parseInt(tags.value, 10) || 0,
+              enabled: en.checked,
+            }),
+          }).then(function (x) { return x.json(); })
+            .then(function () { btn.textContent = "✓"; loadPacingRules(); })
+            .catch(function () { btn.textContent = "✕"; });
+        });
+        grid.appendChild(btn);
+      });
+      host.appendChild(grid);
+    }
+    function loadPacingRules() {
+      fetch("/dashboard/publish/zernio/autopublish/rules.json", { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderPacingRules(b.rules || []); })
+        .catch(function () {});
+    }
+    document.getElementById("zn-ap-growth").addEventListener("change", function () {
+      var on = this.checked;
+      document.getElementById("zn-growth-opts").style.display = on ? "flex" : "none";
+      if (on) { loadPacingRules(); }
+    });
+
     document.getElementById("zn-ap-save").addEventListener("click", function () {
       var msg = document.getElementById("zn-ap-msg");
       msg.textContent = "Guardando…"; msg.style.color = "";
@@ -2319,10 +2425,12 @@
           mode: mode,
           targets: targets,
           post_mode: document.getElementById("zn-ap-postmode").value,
-          content_strategy: document.getElementById("zn-ap-strategy").value,
           daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
           score_threshold: parseFloat(document.getElementById("zn-ap-threshold").value) || 0,
           tag_suffix: document.getElementById("zn-ap-tagsuffix").value || "",
+          growth_engine: document.getElementById("zn-ap-growth").checked,
+          growth_min_score: parseInt(document.getElementById("zn-ap-growthmin").value, 10) || 0,
+          daily_clip_budget: document.getElementById("zn-ap-budget").value || null,
         }),
       })
         .then(function (r) { return r.json(); })

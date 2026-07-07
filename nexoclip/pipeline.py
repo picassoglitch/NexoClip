@@ -29,9 +29,9 @@ import structlog
 from pydantic import BaseModel, Field
 
 from nexoclip.clip import Clip, cut_clips
+from nexoclip.clip.overlay_defaults import default_overlay_config
 from nexoclip.config import NexoClipConfig, load_config
 from nexoclip.db import (
-    AutopublishSettingsRepo,
     CandidatesRepo,
     ClipsRepo,
     Database,
@@ -1149,23 +1149,15 @@ async def _run_pipeline(
     # back to the persona name otherwise. No LLM calls in the
     # disabled path.
     variants_enabled = bool(getattr(settings, "variants_enabled", False))
-    # Auto-hook: generate a viral title for publish-worthy clips (score at/
-    # above the tenant's auto-publish threshold) so the editor, the render
-    # burn, and auto-publish all get a hook without a manual "Generar 5".
+    # Auto-hook: generate a viral title for EVERY clip so the editor, the
+    # render burn, and auto-publish all get a hook without a manual "Generar 5".
+    # (Was gated on the raw candidate score, which is uniformly low for YouTube
+    # VODs with no chat heat — so those clips got no hook and shipped plain.)
     auto_hook_enabled = bool(getattr(settings, "auto_hook_enabled", True))
-    hook_threshold = 0.5
-    if auto_hook_enabled and db is not None:
-        try:
-            _aps = await AutopublishSettingsRepo(db).get(tenant_id)
-            if _aps and _aps.get("score_threshold") is not None:
-                hook_threshold = float(_aps["score_threshold"])
-        except Exception:
-            hook_threshold = 0.5
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
             auto_hook = ""
-            _clip_score = float(getattr(clip.candidate, "score", 0.0) or 0.0)
-            if auto_hook_enabled and _clip_score >= hook_threshold:
+            if auto_hook_enabled:
                 auto_hook = await _auto_hook_for_clip(
                     clip=clip, persona=persona, language=language,
                     tenant_id=tenant_id, router=router,
@@ -1207,24 +1199,26 @@ async def _run_pipeline(
                         hashtags=[],
                     )
                 ]
-            # Persist the hook into the clip's overlay so the editor pre-fills
-            # it and the renderer burns it in. (build_post reads the variant
-            # title above for the published caption.)
-            if auto_hook and db is not None:
+            # Stamp the viral default overlay so the clip ships non-plain even
+            # when it never passes through the editor: captions on, the hook as
+            # the top headline, and a source-credit "marca" banner carrying the
+            # original streamer's name styled for the source platform (Kick /
+            # YouTube / Twitch). The editor + auto-publish both burn this in;
+            # the operator can still override it. (build_post reads the variant
+            # title for the published caption text.)
+            if db is not None:
                 try:
                     await ClipsRepo(db).set_overlay_config(
                         clip.id,
-                        overlay_config={
-                            "top_hook": {
-                                "enabled": True,
-                                "text": auto_hook,
-                                "style": "white_rounded",
-                            }
-                        },
+                        overlay_config=default_overlay_config(
+                            platform=stream.platform,
+                            channel=stream.channel,
+                            hook=auto_hook,
+                        ),
                     )
                 except Exception as e:
                     _log.warning(
-                        "pipeline.auto_hook_persist_failed",
+                        "pipeline.overlay_default_persist_failed",
                         clip_id=clip.id, error=str(e),
                     )
             clip_entries.append(ClipEntry(clip=clip, persona_id=persona.id, variants=variants))

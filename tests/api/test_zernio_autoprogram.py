@@ -274,15 +274,15 @@ async def test_schedule_auto_409s_while_a_run_is_fresh(
     publish_env: None, client: httpx.AsyncClient, db: Database,
     tenants: dict[str, dict[str, str]],
 ) -> None:
-    """A live run (recent heartbeat) blocks a second click — no double-schedule."""
-    import time as _time
-
-    from nexoclip.api.routers import zernio as zr
+    """A held cross-worker lock blocks a second click — no double-schedule."""
+    from nexoclip.db import AutoprogLocksRepo
 
     tid = tenants["alice"]["id"]
     await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
     await TenantsRepo(db).set_zernio_profile(tid, profile_id="prof_alice", profile_name="A")
-    zr._AUTOPROG[tid] = {"state": "running", "heartbeat": _time.monotonic()}
+    # Simulate a run already in progress on another worker by holding the lock.
+    token = await AutoprogLocksRepo(db).acquire(tid)
+    assert token is not None
     try:
         resp = await client.post(
             "/dashboard/publish/zernio/schedule/auto",
@@ -291,7 +291,7 @@ async def test_schedule_auto_409s_while_a_run_is_fresh(
         assert resp.status_code == 409
         assert "en curso" in resp.json()["error"]
     finally:
-        zr._AUTOPROG.pop(tid, None)
+        await AutoprogLocksRepo(db).release(tid, token)
 
 
 @pytest.mark.asyncio
@@ -299,29 +299,26 @@ async def test_schedule_auto_overrides_a_stale_run(
     publish_env: None, client: httpx.AsyncClient, db: Database,
     tenants: dict[str, dict[str, str]],
 ) -> None:
-    """A hung run (heartbeat past the stale window) is treated as dead so the
-    tenant isn't wedged at 'en curso' until a redeploy."""
-    import time as _time
-
-    from nexoclip.api.routers import zernio as zr
-
+    """A crashed run leaves a STALE DB lock; it's reclaimed so the tenant isn't
+    wedged at 'en curso'. (The lock's own staleness math is unit-tested in
+    tests/db/test_autoprog_locks.py — here we prove the endpoint isn't blocked
+    by an old lock.)"""
     tid = tenants["alice"]["id"]
     await sync_tenant_tier(db, tenant_id=tid, tier="all_access")
     await TenantsRepo(db).set_zernio_profile(tid, profile_id="prof_alice", profile_name="A")
-    # Heartbeat older than the stale window → dead run.
-    zr._AUTOPROG[tid] = {
-        "state": "running",
-        "heartbeat": _time.monotonic() - zr._AUTOPROG_STALE_S - 60.0,
-    }
-    try:
-        resp = await client.post(
-            "/dashboard/publish/zernio/schedule/auto",
-            headers=auth(tenants["alice"]["token"]),
-        )
-        # Override allowed → not a 409. (No approved clips → clean done/ok.)
-        assert resp.status_code == 200, resp.text
-    finally:
-        zr._AUTOPROG.pop(tid, None)
+    # Plant a STALE lock (claimed long ago) — a crashed run that never released.
+    conn = await db.connect()
+    await conn.execute(
+        "INSERT INTO autoprog_locks (tenant_id, token, claimed_at) VALUES (?, ?, ?)",
+        (tid, "dead", "2020-01-01T00:00:00+00:00"),
+    )
+    await conn.commit()
+    resp = await client.post(
+        "/dashboard/publish/zernio/schedule/auto",
+        headers=auth(tenants["alice"]["token"]),
+    )
+    # Stale lock reclaimed → not wedged at 409. (No approved clips → clean done.)
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
@@ -384,10 +381,11 @@ async def test_handsfree_queue_spreads_and_enriches(
 
 
 @pytest.mark.asyncio
-async def test_handsfree_now_mode_posts_immediately(
+async def test_handsfree_first_clip_scheduled_immediately(
     publish_env: None, db: Database, alice: dict[str, str]
 ) -> None:
-    """now mode keeps firing immediately — no scheduledFor."""
+    """The single, first eligible clip schedules ~now (min_gap spaces the rest,
+    it shouldn't delay the first) — the rulebook path always uses scheduledFor."""
     from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
 
     await AutopublishSettingsRepo(db).upsert(
@@ -406,9 +404,12 @@ async def test_handsfree_now_mode_posts_immediately(
             clip_scores=[("clp_1", 0.9)],
         )
     assert n == 1
+    from nexoclip.publish.pacing import DEFAULT_PLATFORM_RULES
+    rule = DEFAULT_PLATFORM_RULES["tiktok"]
     payload = json.loads(post_route.calls.last.request.content.decode())
-    assert payload["publishNow"] is True
-    assert "scheduledFor" not in payload
+    # Scheduled ~now (within the jitter window), NOT a full min_gap (180m) out.
+    when = _dt.datetime.fromisoformat(payload["scheduledFor"])
+    assert when <= _dt.datetime.now(_dt.UTC) + _dt.timedelta(minutes=rule.jitter_minutes + 2)
 
 
 @pytest.mark.asyncio
@@ -506,22 +507,26 @@ async def test_handsfree_empty_targets_falls_back_to_all_connected(
             db=db, tenant_id=alice["id"], base_url="https://x.test",
             clip_scores=[("clp_1", 0.9)],
         )
-    # Old behavior: n == 0 (no_targets). Now it posts to the connected accounts.
-    assert n == 1
-    assert post_route.call_count == 1
+    # Empty targets → all connected. The rulebook path posts one per platform
+    # (per-platform assets/scheduling), so one clip cross-posts to both
+    # connected accounts: 2 posts.
+    assert n == 2
+    assert post_route.call_count == 2
 
 
-async def _run_drip_sweep(
-    db: Database, alice: dict[str, str], *, content_strategy: str,
-) -> list[dict[str, Any]]:
-    """Run the hands-free queue sweep for clp_1+clp_2 and return the POST
-    /posts payloads (no best-time analytics — queue mode drips now)."""
+@pytest.mark.asyncio
+async def test_handsfree_spaces_by_platform_min_gap(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Two clips to TikTok → consecutive scheduled posts respect TikTok's
+    min_gap from the rulebook (180 min), not a flat 30-min drip. The first
+    fires ~now; the second a gap later (± the jitter window)."""
     from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+    from nexoclip.publish.pacing import DEFAULT_PLATFORM_RULES
 
     await AutopublishSettingsRepo(db).upsert(
         alice["id"], enabled=True, mode="hands_free", targets="tiktok",
         post_mode="queue", daily_cap=10, score_threshold=0.5, tag_suffix="",
-        content_strategy=content_strategy,
     )
     payloads: list[dict[str, Any]] = []
 
@@ -532,34 +537,16 @@ async def _run_drip_sweep(
 
     with respx.mock() as mock:
         _mock_accounts(mock, "tiktok")
-        # No best-time route mocked: the drip must not consult analytics.
         mock.post(f"{_ZBASE}/posts").mock(side_effect=_create)
         n = await autopublish_hands_free_sweep(
             db=db, tenant_id=alice["id"], base_url="https://x.test",
             clip_scores=[("clp_1", 0.9), ("clp_2", 0.8)],
         )
     assert n == 2
-    return payloads
-
-
-@pytest.mark.asyncio
-async def test_handsfree_drip_unique_is_30_min_apart(
-    publish_env: None, db: Database, alice: dict[str, str]
-) -> None:
-    """Unique strategy → consecutive scheduled posts are 30 min apart."""
-    payloads = await _run_drip_sweep(db, alice, content_strategy="unique")
+    rule = DEFAULT_PLATFORM_RULES["tiktok"]
     whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in payloads)
-    assert whens[1] - whens[0] == _dt.timedelta(minutes=30)
-
-
-@pytest.mark.asyncio
-async def test_handsfree_drip_variations_is_60_min_apart(
-    publish_env: None, db: Database, alice: dict[str, str]
-) -> None:
-    """Same-video-variations strategy → consecutive posts are 1 h apart."""
-    payloads = await _run_drip_sweep(db, alice, content_strategy="variations")
-    whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in payloads)
-    assert whens[1] - whens[0] == _dt.timedelta(hours=1)
+    gap = whens[1] - whens[0]
+    assert gap >= _dt.timedelta(minutes=rule.min_gap_minutes - 2 * rule.jitter_minutes)
 
 
 # ---- tag_suffix round-trip ----
@@ -592,39 +579,35 @@ async def test_tag_suffix_roundtrips_through_save_and_json(
     assert got.json()["settings"]["tag_suffix"] == "@minombre #marca"
 
 
+# ---- per-platform daily counting (caps hold across sweeps) ----
+
+
 @pytest.mark.asyncio
-async def test_content_strategy_roundtrips_and_validates(
-    publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
+async def test_count_by_platform_today(
+    publish_env: None, db: Database, alice: dict[str, str]
 ) -> None:
-    # Valid value persists and is echoed by /autopublish.json.
-    resp = await client.post(
-        "/dashboard/publish/zernio/autopublish/save",
-        json={
-            "enabled": True, "mode": "hands_free", "targets": ["tiktok"],
-            "post_mode": "queue", "content_strategy": "variations",
-        },
-        headers=auth(alice["token"]),
-    )
-    assert resp.status_code == 200
-    s = await AutopublishSettingsRepo(db).get(alice["id"])
-    assert s is not None and s["content_strategy"] == "variations"
+    """Counts today's active posts per platform: splits the csv, canonicalizes
+    x→twitter, and excludes failed/deleted rows."""
+    tid = alice["id"]
+    pubs = ZernioPublishesRepo(db)
+    today = _dt.datetime.now(_dt.UTC).isoformat()
+    await pubs.record(post_id="p1", tenant_id=tid, clip_id="c1",
+                      platforms=["tiktok"], content="a", status="scheduled",
+                      scheduled_for=today)
+    await pubs.record(post_id="p2", tenant_id=tid, clip_id="c2",
+                      platforms=["tiktok", "x"], content="b", status="scheduled",
+                      scheduled_for=today)
+    await pubs.record(post_id="p3", tenant_id=tid, clip_id="c3",
+                      platforms=["tiktok"], content="c", status="failed",
+                      scheduled_for=today)  # failed → not counted
+    await pubs.record(post_id="p4", tenant_id=tid, clip_id="c4",
+                      platforms=["youtube"], content="d", status="scheduled",
+                      scheduled_for="2020-01-01T00:00:00+00:00")  # old day → not counted
 
-    # Garbage falls back to the safe default.
-    await client.post(
-        "/dashboard/publish/zernio/autopublish/save",
-        json={"enabled": True, "mode": "hands_free", "targets": ["tiktok"],
-              "post_mode": "queue", "content_strategy": "bogus"},
-        headers=auth(alice["token"]),
-    )
-    s2 = await AutopublishSettingsRepo(db).get(alice["id"])
-    assert s2 is not None and s2["content_strategy"] == "unique"
-
-    with respx.mock() as mock:
-        _mock_accounts(mock, "tiktok")
-        got = await client.get(
-            "/dashboard/publish/zernio/autopublish.json", headers=auth(alice["token"]),
-        )
-    assert got.json()["settings"]["content_strategy"] == "unique"
+    counts = await pubs.count_by_platform_today(tid)
+    assert counts.get("tiktok") == 2  # p1 + p2 (p3 failed excluded)
+    assert counts.get("twitter") == 1  # p2's "x" canonicalized
+    assert "youtube" not in counts  # p4 is an old day
 
 
 # ---- reprocess failed ----
@@ -640,16 +623,17 @@ async def _seed_failed(db: Database, tid: str, post_id: str, clip_id: str) -> No
 
 
 @pytest.mark.asyncio
-async def test_reprocess_failed_reschedules_via_drip(
+async def test_reprocess_failed_reschedules_via_rulebook(
     publish_env: None, client: httpx.AsyncClient, db: Database, alice: dict[str, str]
 ) -> None:
     """Reprocess re-creates each failed post (fresh signed media URL) and
-    re-schedules it through the drip; the old failed rows are tombstoned."""
+    re-schedules it under the rulebook (TikTok min_gap, not a flat drip); the
+    old failed rows are tombstoned."""
     await _seed_failed(db, alice["id"], "post_f1", "clp_1")
     await _seed_failed(db, alice["id"], "post_f2", "clp_2")
     await AutopublishSettingsRepo(db).upsert(
         alice["id"], enabled=True, mode="hands_free", targets="tiktok",
-        post_mode="queue", daily_cap=10, content_strategy="variations",
+        post_mode="queue", daily_cap=10,
     )
     created: list[dict[str, Any]] = []
 
@@ -675,10 +659,12 @@ async def test_reprocess_failed_reschedules_via_drip(
     assert body["ok"] is True
     assert body["reprocessed"] == 2
 
-    # Both new posts are SCHEDULED (drip), 60 min apart (variations strategy),
-    # and each carries a fresh signed media URL.
+    # Both new posts are SCHEDULED, spaced by TikTok's rulebook min_gap (180
+    # min, ± jitter) — not a flat 60-min drip — each with a fresh signed URL.
+    from nexoclip.publish.pacing import DEFAULT_PLATFORM_RULES
+    rule = DEFAULT_PLATFORM_RULES["tiktok"]
     whens = sorted(_dt.datetime.fromisoformat(p["scheduledFor"]) for p in created)
-    assert whens[1] - whens[0] == _dt.timedelta(hours=1)
+    assert whens[1] - whens[0] >= _dt.timedelta(minutes=rule.min_gap_minutes - 2 * rule.jitter_minutes)
     for p in created:
         url = p.get("mediaUrl") or (p.get("mediaItems") or [{}])[0].get("url", "")
         assert "/api/internal/clip/" in url and "sig=" in url
@@ -703,7 +689,7 @@ async def test_reprocess_drops_disconnected_platform(
     )
     await AutopublishSettingsRepo(db).upsert(
         alice["id"], enabled=True, mode="hands_free", targets="youtube",
-        post_mode="queue", daily_cap=10, content_strategy="unique",
+        post_mode="queue", daily_cap=10,
     )
     created: list[dict[str, Any]] = []
 

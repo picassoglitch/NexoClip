@@ -83,3 +83,54 @@ async def test_record_is_idempotent_on_post_id(db: Database) -> None:
     with bound_tenant("ten_A"):
         rows = await repo.list_for_tenant()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_exists_for_clip_ignores_cancelled_rows(db: Database) -> None:
+    """A cancelled post must NOT block the clip from being re-scheduled —
+    the tombstone used to black-hole the clip permanently (every
+    scheduling surface skipped it, with no UI path back)."""
+    repo = ZernioPublishesRepo(db)
+    await repo.record(
+        post_id="post_c1", tenant_id="ten_A", clip_id="clp_9",
+        platforms=["tiktok"], content=None, status="scheduled",
+    )
+    assert await repo.exists_for_clip("ten_A", "clp_9") is True
+
+    await repo.set_status("post_c1", status="cancelled")
+    assert await repo.exists_for_clip("ten_A", "clp_9") is False
+
+
+@pytest.mark.asyncio
+async def test_count_by_platform_today_skips_cancelled_and_future(
+    db: Database,
+) -> None:
+    """The daily-cap accounting: a cancelled post frees its slot (that's
+    the point of cancelling to make room), and a post scheduled for a
+    FUTURE day doesn't consume today's cap."""
+    import datetime as _dt
+
+    repo = ZernioPublishesRepo(db)
+    now = _dt.datetime.now(_dt.UTC)
+    today = now.isoformat()
+    tomorrow = (now + _dt.timedelta(days=1)).isoformat()
+
+    await repo.record(
+        post_id="p_live", tenant_id="ten_A", clip_id="clp_a",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=today,
+    )
+    await repo.record(
+        post_id="p_tomorrow", tenant_id="ten_A", clip_id="clp_b",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=tomorrow,
+    )
+    await repo.record(
+        post_id="p_cancel", tenant_id="ten_A", clip_id="clp_c",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for=today,
+    )
+    await repo.set_status("p_cancel", status="cancelled")
+
+    counts = await repo.count_by_platform_today("ten_A")
+    assert counts.get("tiktok", 0) == 1  # only today's live post

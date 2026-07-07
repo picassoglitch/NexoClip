@@ -2076,13 +2076,17 @@ async def _cooled_down_platforms(
         # eternal re-arm. Multiple failures on one platform keep the
         # longest wait; already-lapsed cooldowns are not written at all.
         until_by_platform: dict[str, _dt.datetime] = {}
+        evidenced: set[str] = set()  # any abuse failure, parseable time or not
+        anchored: set[str] = set()   # abuse failure WITH a parseable time
         for post in failed:
             deltas = cooldowns_from_failed_post(post)
             if not deltas:
                 continue
+            evidenced.update(deltas)
             anchor = failure_anchor(post)
             if anchor is None:
                 continue
+            anchored.update(deltas)
             for platform, delta in deltas.items():
                 until = anchor + delta
                 if until <= now:
@@ -2095,6 +2099,19 @@ async def _cooled_down_platforms(
                 tenant_id, platform,
                 until=until.isoformat(), reason="rate_limit",
             )
+        # Self-heal: rate_limit rows are a PROJECTION of the failed-post
+        # evidence we just read, so drop rows the evidence no longer
+        # supports — stale entries the pre-fix code re-armed from `now`
+        # otherwise keep the platform parked until their bogus `until`
+        # passes (~a day of silence AFTER the bug was fixed). Kept rows:
+        # active anchored waits (just rewritten above) plus platforms whose
+        # abuse evidence has no parseable timestamp (we can't recompute
+        # those, so their existing bounded `until` stands). Only runs when
+        # the fetch succeeded — no evidence ≠ evidence of nothing.
+        await repo.clear_stale_by_reason(
+            tenant_id, reason="rate_limit",
+            keep=set(until_by_platform) | (evidenced - anchored),
+        )
     except Exception as e:  # detection is best-effort
         import structlog
 
@@ -3544,10 +3561,14 @@ async def _run_growth_autoprog(
                 from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
             )
             weights = await _platform_perf_weights(db, tenant_id)
-            # Abuse/rate-limit backoff: drop platforms in cooldown.
+            # Abuse/rate-limit backoff: drop platforms in cooldown. Recorded
+            # in the progress payload so the operator SEES why a selected
+            # platform got no posts (previously log-only — a parked platform
+            # just silently vanished from the plan).
             cooled = await _cooled_down_platforms(db, tenant_id, profile_id=profile_id)
             if cooled:
                 targets_canon = [p for p in targets_canon if p not in cooled]
+                prog["cooled"] = sorted(cooled)
                 _log.info(
                     "zernio.autoprogram.cooldown_skip tenant=%s cooled=%s",
                     tenant_id, sorted(cooled),

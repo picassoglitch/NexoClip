@@ -2826,14 +2826,20 @@
           var countEl = document.getElementById("zn-autoprog-count");
           if (countEl) { countEl.textContent = Math.max(0, count - (p.scheduled || 0)); }
           var failTxt = p.failed ? (" · ✗ " + p.failed + " fallido(s)") : "";
+          // Platforms the run skipped because the network is rate-limiting
+          // us (cooldown). Without this note a selected red just silently
+          // gets zero posts and the operator can't tell why.
+          var cooledTxt = (p.cooled && p.cooled.length)
+            ? (" · ⏸ " + p.cooled.join(", ") + " en pausa por límite de la red — se reanuda solo")
+            : "";
           if (p.state === "done") {
-            msg.style.color = p.failed ? "#e0a458" : "var(--nc-green, #48bb78)";
-            msg.textContent = "Programados " + (p.scheduled || 0) + " clip(s)" + failTxt + " ✓";
+            msg.style.color = (p.failed || cooledTxt) ? "#e0a458" : "var(--nc-green, #48bb78)";
+            msg.textContent = "Programados " + (p.scheduled || 0) + " clip(s)" + failTxt + " ✓" + cooledTxt;
             loadSchedule();  // refresh "Próximas publicaciones"
           } else {
             msg.style.color = "var(--nc-text--muted)";
             msg.textContent = "Programando " + (p.done || 0) + "/" + (p.total || count)
-              + " · ✓ " + (p.scheduled || 0) + failTxt + "…";
+              + " · ✓ " + (p.scheduled || 0) + failTxt + "…" + cooledTxt;
           }
         }
 

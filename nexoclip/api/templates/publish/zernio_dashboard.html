@@ -1199,11 +1199,13 @@
     </span>
   </div>
   <div class="nc-panel__body">
-    <div style="display:flex; gap:14px; margin-bottom:10px; font-size:12px;" class="nc-text--muted">
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c5f82a;"></span> Hub</span>
+    <div style="display:flex; gap:14px; margin-bottom:10px; font-size:12px; flex-wrap:wrap; align-items:center;" class="nc-text--muted">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c5f82a;"></span> Publicado</span>
       <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#00e5ff;"></span> Programado</span>
       <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ff2d95;"></span> Externo</span>
+      <span style="margin-left:auto;"><i class="ti ti-clock" aria-hidden="true"></i> Horas en tu zona horaria</span>
     </div>
+    <div id="zn-cal-agenda" style="margin-bottom:12px;"></div>
     <div id="zn-cal-grid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px;"></div>
     <div id="zn-cal-detail" style="margin-top:14px;"></div>
   </div>
@@ -1897,6 +1899,22 @@
   var calGrid = document.getElementById("zn-cal-grid");
   if (calGrid) {
     var SRC_COLOR = { hub: "#c5f82a", scheduled: "#00e5ff", external: "#ff2d95" };
+    var SRC_LABEL = { hub: "Publicado", scheduled: "Programado", external: "Externo" };
+    // Platform-first coloring: the operator thinks "3 TikToks + 2 Shorts el
+    // martes", not "these came from the hub". Hues are brand-adjacent but
+    // lifted for the dark background.
+    var PLAT_META = {
+      tiktok:    { icon: "ti-brand-tiktok",    color: "#00f2ea" },
+      youtube:   { icon: "ti-brand-youtube",   color: "#ff5c5c" },
+      instagram: { icon: "ti-brand-instagram", color: "#ff5c9d" },
+      twitter:   { icon: "ti-brand-x",         color: "#d6d9dc" },
+      x:         { icon: "ti-brand-x",         color: "#d6d9dc" },
+      facebook:  { icon: "ti-brand-facebook",  color: "#6ea8ff" },
+      linkedin:  { icon: "ti-brand-linkedin",  color: "#6cb2ff" },
+      pinterest: { icon: "ti-brand-pinterest", color: "#ff6b7d" },
+      threads:   { icon: "ti-brand-threads",   color: "#d6d9dc" },
+      bluesky:   { icon: "ti-brand-bluesky",   color: "#5bb8ff" }
+    };
     var calRef = new Date();
     calRef.setDate(1);
     var calEntries = [];
@@ -1908,15 +1926,43 @@
         ("0" + d.getDate()).slice(-2);
     }
 
+    // DB timestamps are UTC ISO strings; a bare one (no Z / offset) must
+    // not be parsed as local. Days and hours then render in the VIEWER'S
+    // timezone — a 23:30 post in Madrid belongs on that Madrid day, not
+    // on the next UTC day.
+    function toLocalDate(iso) {
+      if (!iso) { return null; }
+      var s = String(iso);
+      if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) { s += "Z"; }
+      var d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    function fmtHour(d) {
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+    function platMeta(p) {
+      return PLAT_META[String(p || "").toLowerCase()] ||
+        { icon: "ti-world", color: "#9aa3ad" };
+    }
+    function platChip(p, count) {
+      var m = platMeta(p);
+      return '<span title="' + p + '" style="display:inline-flex; align-items:center; gap:2px; ' +
+        'font-size:11px; color:' + m.color + '; margin-right:6px; white-space:nowrap;">' +
+        '<i class="ti ' + m.icon + '" aria-hidden="true"></i>' +
+        (count > 1 ? count : "") + "</span>";
+    }
+    function isPendingEntry(e) { return e.source === "scheduled"; }
+
     function renderCalendar() {
       var year = calRef.getFullYear(), month = calRef.getMonth();
       document.getElementById("zn-cal-month").textContent =
         calRef.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-      // Bucket entries by YYYY-MM-DD.
+      // Bucket entries by LOCAL YYYY-MM-DD (not the raw UTC prefix).
       var byDay = {};
       calEntries.forEach(function (e) {
-        if (!e.date) { return; }
-        var day = e.date.slice(0, 10);
+        var d = toLocalDate(e.date);
+        if (!d) { return; }
+        var day = ymd(d);
         (byDay[day] = byDay[day] || []).push(e);
       });
       calGrid.innerHTML = "";
@@ -1932,20 +1978,58 @@
       var lead = (first.getDay() + 6) % 7;
       for (var i = 0; i < lead; i++) { calGrid.appendChild(document.createElement("div")); }
       var daysInMonth = new Date(year, month + 1, 0).getDate();
+      var todayKey = ymd(new Date());
       for (var day = 1; day <= daysInMonth; day++) {
         var cell = document.createElement("div");
-        cell.style.cssText =
-          "min-height:54px; border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:4px; cursor:pointer;";
         var key = ymd(new Date(year, month, day));
-        var items = byDay[key] || [];
-        var dots = items.slice(0, 4).map(function (e) {
-          var deleted = e.status === "deleted";
-          return '<span title="' + (e.source || "") + '" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px;background:' +
-            (SRC_COLOR[e.source] || "#888") + ";" + (deleted ? "opacity:0.3;" : "") + '"></span>';
-        }).join("");
+        var items = (byDay[key] || []).filter(function (e) { return e.status !== "deleted"; });
+        var isToday = key === todayKey;
+        var isPast = key < todayKey;
+        var pending = items.filter(isPendingEntry).length;
+        var hasExternal = items.some(function (e) { return e.source === "external"; });
+        // Per-platform counts → icon chips (up to 3 platforms + "+N").
+        var perPlat = {};
+        items.forEach(function (e) {
+          ((e.platforms && e.platforms.length) ? e.platforms : ["otro"]).forEach(function (p) {
+            var k = String(p).toLowerCase();
+            perPlat[k] = (perPlat[k] || 0) + 1;
+          });
+        });
+        var platKeys = Object.keys(perPlat).sort();
+        var chips = platKeys.slice(0, 3).map(function (p) {
+          return platChip(p, perPlat[p]);
+        }).join("") +
+          (platKeys.length > 3
+            ? '<span class="nc-text--muted" style="font-size:10px;">+' + (platKeys.length - 3) + "</span>"
+            : "");
+        // Heat tint: fuller day = stronger wash. Cyan while posts are still
+        // pending, lime once everything on the day already went out.
+        var heat = items.length ? Math.min(items.length / 8, 1) : 0;
+        var tint = "";
+        if (heat) {
+          var alpha = (0.05 + heat * 0.11).toFixed(3);
+          tint = pending
+            ? "background:rgba(0,229,255," + alpha + ");"
+            : "background:rgba(197,248,42," + alpha + ");";
+        }
+        cell.style.cssText =
+          "min-height:54px; border:1px solid " +
+          (isToday ? "rgba(0,229,255,0.7)" : "rgba(255,255,255,0.08)") +
+          "; border-radius:6px; padding:4px;" + tint +
+          (isPast && !isToday ? "opacity:0.55;" : "") +
+          (items.length ? "cursor:pointer;" : "");
+        var badge = items.length
+          ? '<span style="font-size:11px; font-weight:700; color:' +
+            (pending ? SRC_COLOR.scheduled : SRC_COLOR.hub) + ';">' + items.length +
+            (hasExternal ? ' <span style="color:' + SRC_COLOR.external + ';">&#9679;</span>' : "") +
+            "</span>"
+          : "";
         cell.innerHTML =
-          '<div style="font-size:11px;" class="nc-text--muted">' + day + "</div>" + dots +
-          (items.length > 4 ? '<div style="font-size:10px;" class="nc-text--muted">+' + (items.length - 4) + "</div>" : "");
+          '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:4px;">' +
+          '<span class="' + (isToday ? "" : "nc-text--muted") + '" style="font-size:11px;' +
+          (isToday ? "color:#00e5ff; font-weight:700;" : "") + '">' +
+          day + (isToday ? " · hoy" : "") + "</span>" + badge + "</div>" +
+          (chips ? '<div style="margin-top:3px; line-height:1.5; overflow:hidden;">' + chips + "</div>" : "");
         if (items.length) {
           cell.addEventListener("click", (function (dayItems, label) {
             return function () { showDayDetail(label, dayItems); };
@@ -1955,25 +2039,106 @@
       }
     }
 
+    function entryLine(e, withDay) {
+      var deleted = e.status === "deleted";
+      var d = toLocalDate(e.date);
+      var when = d ? (withDay
+        ? d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) + " " + fmtHour(d)
+        : fmtHour(d)) : "—";
+      var plats = (e.platforms || []).map(function (p) {
+        var m = platMeta(p);
+        return '<span style="color:' + m.color + '; white-space:nowrap;">' +
+          '<i class="ti ' + m.icon + '" aria-hidden="true"></i> ' + p + "</span>";
+      }).join(" ");
+      var srcChip = '<span class="nc-chip" style="background:' +
+        (SRC_COLOR[e.source] || "#888") + '; color:#000;">' +
+        (SRC_LABEL[e.source] || e.source) + "</span>";
+      var failed = ["failed", "error"].indexOf(String(e.status || "").toLowerCase()) >= 0;
+      var link = e.url
+        ? ' · <a href="' + e.url + '" target="_blank" rel="noopener">ver post</a>'
+        : (e.clip_id ? ' · <a href="/dashboard/clips/' + e.clip_id + '">ver clip</a>' : "");
+      return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05); ' +
+        'display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;' +
+        (deleted ? "opacity:0.45; text-decoration:line-through;" : "") + '">' +
+        '<span style="font-variant-numeric:tabular-nums; font-weight:600; min-width:44px;">' + when + "</span>" +
+        srcChip + (plats ? " " + plats : "") +
+        (failed ? ' <span style="color:#ff5c5c; font-size:11px;">' + e.status + "</span>" : "") +
+        ' <span class="nc-text--muted" style="flex:1; min-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' +
+        (e.content || "(sin caption)") + "</span>" + link + "</div>";
+    }
+
     function showDayDetail(day, items) {
       var host = document.getElementById("zn-cal-detail");
-      host.innerHTML = "<h4 style='margin:0 0 8px;'>" + day + "</h4>" +
-        items.map(function (e) {
-          var deleted = e.status === "deleted";
-          var link = e.url ? ' · <a href="' + e.url + '" target="_blank" rel="noopener">ver</a>' : "";
-          return '<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);' +
-            (deleted ? "opacity:0.45;text-decoration:line-through;" : "") + '">' +
-            '<span class="nc-chip" style="background:' + (SRC_COLOR[e.source] || "#888") + ';color:#000;">' +
-            e.source + "</span> " +
-            (e.platforms || []).map(function (p) { return '<span class="nc-chip nc-chip--code">' + p + "</span>"; }).join(" ") +
-            " " + (e.content || "(sin caption)") + link + "</div>";
-        }).join("");
+      var d = toLocalDate(day + "T12:00:00Z");
+      var title = d
+        ? d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
+        : day;
+      var sorted = items.slice().sort(function (a, b) {
+        return String(a.date || "").localeCompare(String(b.date || ""));
+      });
+      host.innerHTML = "<h4 style='margin:0 0 8px;'>" + title + "</h4>" +
+        sorted.map(function (e) { return entryLine(e, false); }).join("");
+    }
+
+    // "Próximos 7 días" agenda — the question an operator actually has is
+    // "what goes out and when", and a list answers it faster than a grid.
+    function renderAgenda(entries) {
+      var host = document.getElementById("zn-cal-agenda");
+      if (!host) { return; }
+      var now = new Date();
+      var horizon = new Date(); horizon.setDate(horizon.getDate() + 7);
+      var upcoming = entries.filter(isPendingEntry).map(function (e) {
+        return { e: e, d: toLocalDate(e.date) };
+      }).filter(function (x) {
+        return x.d && x.d >= now && x.d <= horizon && x.e.status !== "deleted";
+      }).sort(function (a, b) { return a.d - b.d; });
+      if (!upcoming.length) { host.innerHTML = ""; return; }
+      var byDay = {};
+      var order = [];
+      upcoming.forEach(function (x) {
+        var k = ymd(x.d);
+        if (!byDay[k]) { byDay[k] = []; order.push(k); }
+        byDay[k].push(x);
+      });
+      host.innerHTML =
+        '<div style="border:1px solid rgba(0,229,255,0.25); border-radius:8px; padding:8px 12px;">' +
+        '<div style="font-size:12px; font-weight:600; margin-bottom:4px;">' +
+        '<i class="ti ti-calendar-due" aria-hidden="true"></i> Próximos 7 días</div>' +
+        order.map(function (k) {
+          var xs = byDay[k];
+          var label = xs[0].d.toLocaleDateString(undefined,
+            { weekday: "short", day: "numeric", month: "short" });
+          var posts = xs.map(function (x) {
+            var plats = (x.e.platforms || []).map(function (p) {
+              var m = platMeta(p);
+              return '<i class="ti ' + m.icon + '" aria-hidden="true" style="color:' + m.color + ';" title="' + p + '"></i>';
+            }).join("");
+            return '<span style="white-space:nowrap;">' + fmtHour(x.d) + " " + plats + "</span>";
+          }).join(' <span class="nc-text--muted">·</span> ');
+          return '<div style="font-size:12px; padding:2px 0;">' +
+            '<span style="display:inline-block; min-width:72px; font-weight:600;">' + label + "</span> " +
+            posts + "</div>";
+        }).join("") + "</div>";
+    }
+
+    function loadAgenda() {
+      // Local "next 7 days" can straddle UTC day bounds — over-fetch a day
+      // on each side and let the local-time filter trim it.
+      var from = new Date(); from.setDate(from.getDate() - 1);
+      var to = new Date(); to.setDate(to.getDate() + 8);
+      fetch("/dashboard/publish/zernio/calendar.json?date_from=" + ymd(from) + "&date_to=" + ymd(to),
+            { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (b) { renderAgenda(b.entries || []); })
+        .catch(function () { renderAgenda([]); });
     }
 
     function loadCalendar() {
       var year = calRef.getFullYear(), month = calRef.getMonth();
-      var from = ymd(new Date(year, month, 1));
-      var to = ymd(new Date(year, month + 1, 0));
+      // ±1 day: entries bucket to the viewer's LOCAL day, so a post on the
+      // month's first/last UTC-day can belong to this month locally.
+      var from = ymd(new Date(year, month, 0));
+      var to = ymd(new Date(year, month + 1, 1));
       fetch("/dashboard/publish/zernio/calendar.json?date_from=" + from + "&date_to=" + to,
             { credentials: "same-origin" })
         .then(function (r) { return r.json(); })
@@ -1991,7 +2156,7 @@
     document.querySelectorAll('.nc-pc-tab[data-tab="calendario"]').forEach(function (tab) {
       tab.addEventListener("click", function () {
         var m = calRef.getFullYear() + "-" + calRef.getMonth();
-        if (calLoadedMonth !== m) { calLoadedMonth = m; loadCalendar(); }
+        if (calLoadedMonth !== m) { calLoadedMonth = m; loadCalendar(); loadAgenda(); }
       });
     });
   }

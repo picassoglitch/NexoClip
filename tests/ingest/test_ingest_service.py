@@ -406,6 +406,100 @@ def test_download_failure_sweeps_partial_files(
     assert leftovers == [], f"partial files not cleaned: {leftovers}"
 
 
+def test_stale_partial_resume_sweeps_and_retries_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A killed run leaves `.part`/`.ytdl` resume state whose fragment files
+    are gone; yt-dlp's resume then dies with UnavailableVideoError (a SIBLING
+    of DownloadError) on a local FileNotFoundError. The download must sweep
+    the stale state and retry once from a clean slate instead of failing the
+    same way on every re-run.
+    """
+    import yt_dlp
+
+    target = tmp_path / "source" / "video.mp4"
+    target.parent.mkdir(parents=True)
+    # Stale state from the killed run.
+    (target.parent / "video.mp4.part").write_bytes(b"x" * 1000)
+    (target.parent / "video.mp4.ytdl").write_bytes(b"x")
+
+    calls: list[int] = []
+
+    class _FakeYDL:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeYDL:
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def extract_info(self, *_a: object, **_k: object) -> dict[str, Any]:
+            calls.append(1)
+            if len(calls) == 1:
+                raise yt_dlp.utils.UnavailableVideoError(
+                    "Unable to download video: [Errno 2] No such file or "
+                    "directory: 'video.mp4.part-Frag2086'"
+                )
+            target.write_bytes(b"video")
+            return {}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+
+    ingest_service._download_vod(
+        vod_url="https://twitch.tv/videos/1",
+        target_path=target,
+        cookies_from_browser=None,
+        cookies_file=None,
+        platform="twitch",
+    )
+    assert len(calls) == 2, "expected one clean-slate retry"
+    assert target.exists()
+    stale = [p.name for p in target.parent.glob("video.mp4.*")]
+    assert stale == [], f"stale resume state not swept: {stale}"
+
+
+def test_unavailable_video_error_is_wrapped_not_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UnavailableVideoError that is NOT stale-resume-shaped must still be
+    wrapped as IngestError (with the leftover sweep), not escape raw."""
+    import yt_dlp
+
+    from nexoclip.errors import IngestError
+
+    target = tmp_path / "source" / "video.mp4"
+    target.parent.mkdir(parents=True)
+
+    class _FakeYDL:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakeYDL:
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def extract_info(self, *_a: object, **_k: object) -> dict[str, Any]:
+            (target.parent / "video.mp4.part").write_bytes(b"x" * 1000)
+            raise yt_dlp.utils.UnavailableVideoError("format unavailable")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+
+    with pytest.raises(IngestError, match="yt-dlp failed"):
+        ingest_service._download_vod(
+            vod_url="https://twitch.tv/videos/1",
+            target_path=target,
+            cookies_from_browser=None,
+            cookies_file=None,
+            platform="twitch",
+        )
+    leftovers = [p.name for p in target.parent.glob("video*")]
+    assert leftovers == [], f"partial files not cleaned: {leftovers}"
+
+
 # ---- Residential proxy wiring (sustainable bot-gate fix) ----
 
 

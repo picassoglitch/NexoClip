@@ -611,26 +611,49 @@ def _download_vod(
         # extend this later.
         ydl_opts["cookiesfrombrowser"] = (cookies_from_browser.strip().lower(),)
 
-    try:
+    def _fetch() -> dict[str, Any]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info: dict[str, Any] = ydl.extract_info(vod_url, download=True) or {}
-    except yt_dlp.utils.DownloadError as e:
+            return ydl.extract_info(vod_url, download=True) or {}
+
+    # Catch YoutubeDLError, not DownloadError: UnavailableVideoError (raised
+    # when yt-dlp trips over its own broken resume state) is a SIBLING of
+    # DownloadError, so the narrower catch let it escape raw to the pipeline
+    # — no sweep, no hint, and the stale partial poisoned every re-run.
+    try:
+        info: dict[str, Any] = _fetch()
+    except yt_dlp.utils.YoutubeDLError as e:
         # Sweep the partial download (`.part`, `.ytdl`, fragment files, and a
-        # half-written muxed file) before surfacing the error. A failed fetch
-        # of a multi-hour VOD otherwise leaves gigabytes behind that the next
+        # half-written muxed file) before going further. A failed fetch of a
+        # multi-hour VOD otherwise leaves gigabytes behind that the next
         # download has to fit around — the start of the disk-exhaustion
-        # spiral. Output files all share the outtmpl stem in this stream's
-        # own `source/` dir, so globbing the stem is safe. Best-effort.
-        stem = target_path.with_suffix("").name
-        for leftover in target_path.parent.glob(f"{stem}*"):
-            with contextlib.suppress(OSError):
-                if leftover.is_file():
-                    leftover.unlink()
-        raise _explain_download_failure(
-            err=e, vod_url=vod_url, platform=platform,
-            cookies_from_browser=cookies_from_browser,
-            cookies_file=cookies_file,
-        ) from e
+        # spiral.
+        _sweep_download_leftovers(target_path)
+        if not _is_stale_partial_error(e):
+            raise _explain_download_failure(
+                err=e, vod_url=vod_url, platform=platform,
+                cookies_from_browser=cookies_from_browser,
+                cookies_file=cookies_file,
+            ) from e
+        # A killed run (host restart mid-download) leaves `.part` + `.ytdl`
+        # resume state pointing at fragment files that may no longer all
+        # exist; yt-dlp's resume then fails deterministically with a local
+        # FileNotFoundError. The sweep above just removed that state, so one
+        # clean-slate retry is the self-heal — without it the user re-runs
+        # into the identical error forever.
+        _log.warning(
+            "ingest.download.stale_partial_retry",
+            vod_url=vod_url,
+            error=str(e),
+        )
+        try:
+            info = _fetch()
+        except yt_dlp.utils.YoutubeDLError as e2:
+            _sweep_download_leftovers(target_path)
+            raise _explain_download_failure(
+                err=e2, vod_url=vod_url, platform=platform,
+                cookies_from_browser=cookies_from_browser,
+                cookies_file=cookies_file,
+            ) from e2
 
     actual = _resolve_downloaded_path(info, fallback=target_path)
     if actual.resolve() != target_path.resolve():
@@ -662,6 +685,32 @@ def _assert_disk_headroom(output_dir: Path) -> None:
             "(run the retention sweep, delete old streams, or expand the volume) "
             "and retry."
         )
+
+
+def _sweep_download_leftovers(target_path: Path) -> None:
+    """Delete every on-disk artifact of a partial download for this stream's
+    source: `video.mp4.part`, the `.ytdl` resume-state file, concurrent
+    fragment pieces (`video.mp4.part-FragN`), and a half-written muxed file.
+    They all share the outtmpl stem inside this stream's own `source/` dir,
+    so globbing the stem is safe. Best-effort — a locked file stays behind.
+    """
+    stem = target_path.with_suffix("").name
+    for leftover in target_path.parent.glob(f"{stem}*"):
+        with contextlib.suppress(OSError):
+            if leftover.is_file():
+                leftover.unlink()
+
+
+def _is_stale_partial_error(err: Exception) -> bool:
+    """True when yt-dlp failed on ITS OWN local resume state — a `.ytdl`
+    file referencing `.part-Frag*` pieces that no longer exist (the process
+    was killed mid-download, or the retention sweep reclaimed some pieces).
+    Surfaces as UnavailableVideoError wrapping FileNotFoundError. Retrying
+    the resume fails identically; retrying from a clean slate succeeds —
+    this is the signal that a clean retry is worth one shot.
+    """
+    raw = str(err)
+    return "No such file or directory" in raw or "[Errno 2]" in raw
 
 
 def _explain_download_failure(

@@ -3909,6 +3909,86 @@ class ZernioPublishesRepo:
             ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
         ]
 
+    async def list_for_calendar(
+        self,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 2000,
+    ) -> list[ZernioPublishRow]:
+        """Calendar-window rows for the bound tenant, bounded IN SQL.
+
+        The calendar buckets a post on the day it goes (or went) out —
+        `scheduled_for` when set, else `created_at` — so the window filter
+        matches that same day expression. Drafts and deleted tombstones
+        never reach the calendar. The window replaces a newest-N slice:
+        `list_for_tenant(limit=200)` + in-Python date filtering silently
+        dropped older-created rows, so posts scheduled by earlier runs
+        vanished from the month view while still holding their slots.
+        `limit` is a memory backstop, not pagination. Day bounds are
+        ISO-8601 (YYYY-MM-DD), inclusive; substr() keeps the bucketing
+        portable across SQLite and Postgres."""
+        tenant_id = current_tenant_id()
+        where = (
+            "tenant_id = ? "
+            "AND COALESCE(status, '') NOT IN ('draft', 'deleted')"
+        )
+        params: list[object] = [tenant_id]
+        if date_from:
+            where += " AND substr(COALESCE(scheduled_for, created_at), 1, 10) >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND substr(COALESCE(scheduled_for, created_at), 1, 10) <= ?"
+            params.append(date_to)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT post_id, tenant_id, clip_id, platforms, content, created_at, "
+            "status, scheduled_for, platforms_json, updated_at, options_json "
+            f"FROM zernio_publishes WHERE {where} "  # fixed fragments, params bound
+            "ORDER BY COALESCE(scheduled_for, created_at) LIMIT ?",
+            (*params, int(limit)),
+        )
+        return [
+            ZernioPublishRow.model_validate(dict(r)) for r in await cur.fetchall()
+        ]
+
+    async def count_status_groups(self) -> dict[str, int]:
+        """Exact per-status row counts for the bound tenant → {status: n}
+        (rows with no status yet land under ''). The stats strip needs REAL
+        totals — counting over the newest-100 display slice pinned
+        "Programados" at exactly the cap for any bigger backlog.
+
+        Synthetic `manual_<clip_id>` rows (mark-published) count as
+        'published' regardless of their stored status: they're recorded with
+        no status and no webhook ever updates them, which would otherwise
+        park every manual mark in the '' (queued) bucket forever. The LIKE
+        underscore is escaped — it's a single-char wildcard otherwise."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT CASE WHEN post_id LIKE 'manual\\_%' ESCAPE '\\' "
+            "THEN 'published' ELSE COALESCE(status, '') END AS s, "
+            "COUNT(*) AS n "
+            "FROM zernio_publishes WHERE tenant_id = ? GROUP BY s",
+            (tenant_id,),
+        )
+        return {
+            str(dict(r)["s"]): int(dict(r)["n"]) for r in await cur.fetchall()
+        }
+
+    async def recorded_clip_ids(self) -> set[str]:
+        """Every clip id with ANY publish row for the bound tenant — the
+        membership set deciding which published clips get a synthetic
+        "manual" history entry. Uncapped: deriving it from the capped
+        display slice re-listed clips whose rows had aged past the cap."""
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT DISTINCT clip_id FROM zernio_publishes WHERE tenant_id = ?",
+            (tenant_id,),
+        )
+        return {str(dict(r)["clip_id"]) for r in await cur.fetchall()}
+
     async def exists_for_clip(self, tenant_id: str, clip_id: str) -> bool:
         """True if this clip already has a LIVE publish record — the
         idempotency guard for hands-free auto-publish (don't re-post on

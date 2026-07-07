@@ -32,10 +32,11 @@ Multi-tenant SaaS that turns streamer VODs into multi-platform short-form clips.
 
 | Tool | Why | How (Windows) | How (macOS / Linux) |
 |---|---|---|---|
-| Python 3.11 | runtime (faster-whisper requires <= 3.11/3.12) | `uv python install 3.11` | `uv python install 3.11` |
+| Python 3.11 | runtime (the optional `local-whisper` extra needs <= 3.11/3.12) | `uv python install 3.11` | `uv python install 3.11` |
 | `uv` | Python + venv + dep manager | `pip install --user uv` | `pipx install uv` or `pip install --user uv` |
 | ffmpeg | cuts + reformats clips | `winget install Gyan.FFmpeg` | `brew install ffmpeg` / `apt install ffmpeg` |
-| NVIDIA GPU + driver | faster-whisper CUDA path (CPU works, just slow) | install the NVIDIA driver matching your GPU | same |
+| AssemblyAI API key | transcription default (cloud STT, no GPU needed) | `setx NEXOCLIP_ASSEMBLYAI_API_KEY ...` | `export NEXOCLIP_ASSEMBLYAI_API_KEY=...` |
+| NVIDIA GPU + driver | ONLY for the optional local-Whisper path (CPU works, just slow) | install the NVIDIA driver matching your GPU | same |
 | Anthropic API key | variant generation via Claude | `setx ANTHROPIC_API_KEY ...` (new shell after) | `export ANTHROPIC_API_KEY=...` |
 
 > Note: `uv` and `winget` install ffmpeg into a directory that's only added to PATH after a fresh shell. Open a new terminal before running `ffmpeg -version` to verify.
@@ -55,6 +56,13 @@ uv venv --python 3.11 .venv
 uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 # (drop --python on macOS / Linux if your default python is the venv one)
 
+# Optional extras — the default transcription provider is AssemblyAI (cloud),
+# so neither is required for a normal install:
+#   pip install 'nexoclip[local-whisper]'   # local faster-whisper STT (GPU/CPU),
+#                                           # for NEXOCLIP_TRANSCRIBE_PROVIDER=local
+#   pip install 'nexoclip[diarize]'         # pyannote speaker diarization for the
+#                                           # local path (pulls torch, ~2 GB; needs HF_TOKEN)
+
 # Copy config templates
 cp .env.example .env                                  # then add ANTHROPIC_API_KEY
 cp config/nexoclip.example.yaml config/nexoclip.yaml
@@ -70,12 +78,14 @@ cp config/llm.example.yaml      config/llm.yaml
 #   *nix:     source .venv/bin/activate
 
 ffmpeg -version                                        # binary on PATH?
-python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"   # 1+ means CUDA works
 nexoclip version                                       # entry-point installed?
 pytest                                                  # smoke + unit tests
+
+# Only if you installed the local-whisper extra:
+python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"   # 1+ means CUDA works
 ```
 
-> The faster-whisper CUDA check uses **CTranslate2**, not PyTorch — `import torch` won't work because PyTorch isn't a dependency.
+> The faster-whisper CUDA check uses **CTranslate2**, not PyTorch — `import torch` won't work because PyTorch isn't a dependency (unless you installed the `diarize` extra).
 
 ### First-run gotchas
 
@@ -89,12 +99,18 @@ pytest                                                  # smoke + unit tests
   profile so the request authenticates. The browser must have visited
   Kick at least once. Twitch and YouTube generally work without this.
 - **Use the venv's Python.** Activate `.venv` before running `nexoclip`
-  or `python run.py` — system Python 3.13/3.14 doesn't work with
-  faster-whisper. The activated prompt should look like
-  `(.venv) PS C:\...\QuantorClipAI>`.
-- **Whisper model downloads on first transcribe.** First `nexoclip
-  transcribe` (or first dashboard pipeline run) pulls the `medium`
-  model (~770 MB). Don't kill the process while it's downloading.
+  or `python run.py`. If you installed the `local-whisper` extra, note
+  that system Python 3.13/3.14 doesn't work with faster-whisper. The
+  activated prompt should look like `(.venv) PS C:\...\QuantorClipAI>`.
+- **Transcription is AssemblyAI by default.** Set
+  `NEXOCLIP_ASSEMBLYAI_API_KEY` in `.env` (cloud STT — word timestamps +
+  diarization in one call, no GPU). To transcribe locally instead, run
+  `pip install 'nexoclip[local-whisper]'` and set
+  `NEXOCLIP_TRANSCRIBE_PROVIDER=local`.
+- **Local Whisper only: model downloads on first transcribe.** With the
+  `local` provider, the first `nexoclip transcribe` (or first dashboard
+  pipeline run) pulls the `medium` model (~770 MB). Don't kill the
+  process while it's downloading.
 - **Set the LLM budget governor before flipping vision-rescore on.**
   `nexoclip tenants set-budget aldo --daily-usd 5.00` keeps a runaway
   loop from burning premium tokens.
@@ -141,7 +157,9 @@ nexoclip tenants set-budget aldo --daily-usd 5.00 --rescore-cap 8
 uvicorn 'nexoclip.api.app:create_app' --factory \
     --host 0.0.0.0 --port 8000
 
-# 5. Open http://localhost:8000/dashboard/login and paste your tok_...
+# 5. Open http://localhost:8000/ — dashboard access is via nexo-ai SSO
+#    (GET /auth/sso?token=<jwt>); the in-app token login page was removed.
+#    The tok_... API token is for Authorization: Bearer calls + MCP.
 
 # 6. Drain pending publish_jobs manually (the API lifespan also kicks
 #    a drain every 60s when started in production mode):
@@ -284,7 +302,7 @@ Env vars override YAML, YAML overrides defaults (see CLAUDE.md).
 ├── config/                  # YAML templates → personal copies
 ├── nexoclip/                # source
 │   ├── ingest/              # yt-dlp + ffmpeg audio extract
-│   ├── transcribe/          # faster-whisper
+│   ├── transcribe/          # AssemblyAI (default) / faster-whisper (optional extra)
 │   ├── detect/              # voice trigger fuzzy match
 │   ├── clip/                # ffmpeg fast-cut + 9:16 reformat
 │   ├── llm/                 # router + Anthropic provider + structured output
@@ -313,7 +331,7 @@ Env vars override YAML, YAML overrides defaults (see CLAUDE.md).
 
 ## Status (today)
 
-Phase 0 + Phase 1 + Phase 2 complete. `pytest` runs 470+ tests in ~20s; `ruff` and `mypy --strict` are clean across 89+ source files. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and downloaded a Whisper model on the first run (faster-whisper pulls the `medium` model, ~770 MB, on demand).
+Phase 0 + Phase 1 + Phase 2 complete. `pytest` runs 470+ tests in ~20s; `ruff` and `mypy --strict` are clean across 89+ source files. The pipeline runs against real VODs once you've set `ANTHROPIC_API_KEY` and `NEXOCLIP_ASSEMBLYAI_API_KEY` (or installed the `local-whisper` extra for on-device STT).
 
 Phase 3 backlog: cloud migration (Aurora/Postgres + ECS workers + S3 frame
 storage + Cognito + Stripe billing), MCP server, SSE live progress, OCR text-

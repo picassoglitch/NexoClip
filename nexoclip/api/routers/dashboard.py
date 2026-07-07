@@ -1361,7 +1361,7 @@ async def url_job_form(
 ) -> Response:
     """Backward-compat — bookmarked /dashboard/url-jobs/new redirects to
     the unified /dashboard/start page (Task UX 9). The old single-field
-    template is left in the tree but no longer rendered."""
+    template has been deleted."""
     return RedirectResponse(url="/dashboard/start", status_code=303)
 
 
@@ -1387,8 +1387,9 @@ async def url_job_create(
     from nexoclip.ingest import detect_platform
     from nexoclip.settings import get_settings
 
-    # Backend URL validation — matches the JS regex set in url_job_form.html
-    # so a curl or scripted submission gets the same answer as the form.
+    # Backend URL validation — mirrors the client-side URL check on the
+    # /dashboard/start page so a curl or scripted submission gets the same
+    # answer as the form.
     clean = (vod_url or "").strip()
     platform = detect_platform(clean)
     if not clean or platform == "unknown":

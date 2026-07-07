@@ -39,7 +39,7 @@ then publishers; then the operational layer (cost cards, webhooks).
 **Out of scope (Phase 3+):**
 - Cloud migration (Aurora/Postgres, ECS, SQS-backed worker pool, S3 for
   clip + frame storage, Cognito auth, Stripe billing, marketing site).
-- MCP server.
+- MCP server. *(Since shipped as Phase 3 #3 — lives in `nexoclip/mcp_server/`, run via `nexoclip mcp serve`.)*
 - **SSE-based live pipeline progress.** Tempting but explodes scope on
   connection lifecycle, reconnect, event buffering, partial state sync,
   proxy quirks. The dashboard needs reliable scoring + publishing +

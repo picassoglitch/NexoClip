@@ -111,8 +111,6 @@ class Settings(BaseSettings):
 
     transcribe_provider: str = "local"
     assemblyai_api_key: str | None = None
-    deepgram_api_key: str | None = None
-    openai_api_key: str | None = None
 
     # AssemblyAI tuning.
     #

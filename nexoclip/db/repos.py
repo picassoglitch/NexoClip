@@ -4265,6 +4265,34 @@ class PlatformCooldownsRepo:
         )
         return {str(r[0]): str(r[1]) for r in await cur.fetchall()}
 
+    async def clear_stale_by_reason(
+        self, tenant_id: str, *, reason: str, keep: set[str]
+    ) -> int:
+        """Delete this tenant's `reason` rows whose platform is NOT in `keep`
+        (canonical ids). Returns rows deleted.
+
+        The self-heal for evidence-derived cooldowns: the refresh recomputes
+        which platforms the CURRENT failed-post evidence still justifies, and
+        anything this reason wrote earlier that the evidence no longer
+        supports (e.g. rows the pre-fix code re-armed from `now` forever) is
+        dropped instead of parking the platform until its bogus `until`
+        passes. Rows written with a different reason are never touched."""
+        from nexoclip.publish.pacing import canonical_platform
+
+        keep_canon = {canonical_platform(p) for p in keep if p}
+        conn = await self._db.connect()
+        params: list[object] = [tenant_id, reason]
+        sql = (
+            "DELETE FROM platform_cooldowns WHERE tenant_id = ? AND reason = ?"
+        )
+        if keep_canon:
+            placeholders = ", ".join("?" for _ in keep_canon)
+            sql += f" AND platform NOT IN ({placeholders})"  # bound below
+            params.extend(sorted(keep_canon))
+        cur = await conn.execute(sql, tuple(params))
+        await conn.commit()
+        return int(cur.rowcount if cur.rowcount is not None else 0)
+
 
 class GrowthScoresRepo:
     """Pre-publish Growth Score cache, one row per clip (migration 053).

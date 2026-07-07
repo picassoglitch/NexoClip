@@ -716,9 +716,16 @@ async def zernio_dashboard(
     # (it stays visible on the Published tab). Decorate each with
     # display_title + thumbnail URL so the template stays dumb.
     raw_clips: list[Any] = []
+    publishable_total = 0
     with contextlib.suppress(Exception):  # display is best-effort
         raw_clips = await ClipsRepo(db).list_for_tenant_with_status(
             ["approved"], limit=60,
+        )
+        # Real backlog size — the Auto-programar button labels itself with
+        # this, NOT the 60-row display page, so a 300-clip backlog doesn't
+        # read as "60".
+        publishable_total = await ClipsRepo(db).count_for_tenant_with_status(
+            ["approved"],
         )
     publishable = [
         {
@@ -768,6 +775,7 @@ async def zernio_dashboard(
             # action on the Published tab (reopen -> approved -> re-publish).
             "published_clip_ids": sorted(c.id for c in published_clips),
             "publishable_clips": publishable,
+            "publishable_total": publishable_total,
             "supported_platforms": _SUPPORTED_PLATFORMS,
             "stats": stats,
             # Borradores — local rows seeded status='draft' at save time
@@ -3724,7 +3732,11 @@ async def zernio_schedule_auto(
         )
 
     try:
-        clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=200)
+        # 500 = the repo's standard page ceiling, and one run comfortably
+        # covers any real backlog (the rulebook spreads it across weeks
+        # anyway). Anything beyond is picked up by a re-click — the
+        # exists_for_clip guard below makes re-runs resume, not double-book.
+        clips = await ClipsRepo(db).list_for_tenant_with_status(["approved"], limit=500)
         # Idempotency: never re-schedule a clip that already has a Zernio
         # post (scheduled or published). Without this, re-running while the
         # previous run is mid-flight would double-book the same clips.

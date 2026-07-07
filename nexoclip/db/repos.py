@@ -1556,6 +1556,25 @@ class ClipsRepo:
         )
         return [_clip_from_row(r) for r in await cur.fetchall()]
 
+    async def count_for_tenant_with_status(self, statuses: list[str]) -> int:
+        """COUNT of the tenant's clips in the given statuses — the un-capped
+        companion to `list_for_tenant_with_status`, for surfaces that show a
+        display-limited page of clips but must label actions with the REAL
+        total (the Auto-programar button read the 60-row grid's length and
+        under-reported any backlog bigger than the page)."""
+        if not statuses:
+            return 0
+        tenant_id = current_tenant_id()
+        placeholders = ",".join("?" for _ in statuses)
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            f"SELECT COUNT(*) AS n FROM clips WHERE tenant_id = ? "
+            f"AND status IN ({placeholders})",
+            (tenant_id, *statuses),
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else 0
+
     async def set_overlay_config(
         self, clip_id: str, *, overlay_config: dict[str, object] | None
     ) -> ClipRow:

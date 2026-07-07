@@ -49,21 +49,27 @@ async def default_pipeline_runner(kickoff: PipelineKickoff) -> None:
         re-raise so FastAPI's BackgroundTasks logs the full traceback
         for the operator.
     """
+    from nexoclip.jobs.active import pipeline_active
     from nexoclip.pipeline import process_vod
     from nexoclip.settings import get_settings
 
     db_path = resolve_db_target(get_settings())
 
     try:
-        await process_vod(
-            tenant_id=kickoff.tenant_id,
-            vod_url=kickoff.stream.vod_url,
-            output_dir=kickoff.output_dir,
-            persona_id=kickoff.persona_id,
-            stream_id=kickoff.stream.id,
-            language=kickoff.language,
-            db_path=db_path,
-        )
+        # Registered as in-flight so the disk reclaimers (watchdog,
+        # ingest preflight, sweep backstop) never delete this stream's
+        # source mid-run — long transcribe/LLM stretches only READ it,
+        # so mtime-based activity checks can't see the run.
+        with pipeline_active(kickoff.stream.id):
+            await process_vod(
+                tenant_id=kickoff.tenant_id,
+                vod_url=kickoff.stream.vod_url,
+                output_dir=kickoff.output_dir,
+                persona_id=kickoff.persona_id,
+                stream_id=kickoff.stream.id,
+                language=kickoff.language,
+                db_path=db_path,
+            )
     except Exception as e:
         # Best-effort: emit a top-level failure event so the dashboard's
         # progress card surfaces the error instead of spinning. We catch
@@ -321,16 +327,20 @@ async def upload_pipeline_runner(
 
         # Phase 3 — run the full pipeline. process_vod sees the
         # cached stream.json and skips ingest_vod entirely (the
-        # upload:// pseudo-URL never has to hit yt-dlp).
-        await process_vod(
-            tenant_id=tenant_id,
-            vod_url=stream.vod_url,
-            output_dir=output_dir,
-            persona_id=persona_id,
-            stream_id=stream.id,
-            language=language,
-            db_path=db_path,
-        )
+        # upload:// pseudo-URL never has to hit yt-dlp). Registered as
+        # in-flight so the disk reclaimers never eat the source mid-run.
+        from nexoclip.jobs.active import pipeline_active
+
+        with pipeline_active(stream.id):
+            await process_vod(
+                tenant_id=tenant_id,
+                vod_url=stream.vod_url,
+                output_dir=output_dir,
+                persona_id=persona_id,
+                stream_id=stream.id,
+                language=language,
+                db_path=db_path,
+            )
     except Exception as e:
         try:
             await _emit_top_level_failure(
@@ -529,15 +539,20 @@ async def live_pipeline_runner(
             await db.close()
 
         # 4. Run the pipeline on the cached stream.json (no re-ingest).
-        await process_vod(
-            tenant_id=tenant_id,
-            vod_url=stream.vod_url,
-            output_dir=output_dir,
-            persona_id=persona_id,
-            stream_id=stream.id,
-            language=language,
-            db_path=db_path,
-        )
+        # Registered as in-flight so the disk reclaimers never eat the
+        # recording mid-run.
+        from nexoclip.jobs.active import pipeline_active
+
+        with pipeline_active(stream.id):
+            await process_vod(
+                tenant_id=tenant_id,
+                vod_url=stream.vod_url,
+                output_dir=output_dir,
+                persona_id=persona_id,
+                stream_id=stream.id,
+                language=language,
+                db_path=db_path,
+            )
     except Exception as e:
         try:
             await _emit_top_level_failure(

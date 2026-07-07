@@ -69,12 +69,11 @@ def pick_thumbnail(
             step = (end_s - start_s) / (sample_n - 1)
             sample_times = [start_s + i * step for i in range(sample_n)]
 
-        face_detector = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-        )
-        # If the bundled XML is missing we silently treat every frame as
-        # face-absent rather than raise; the picker still runs on sharpness.
-        haar_ok = not face_detector.empty()
+        from nexoclip.vision.haar import haar_face_detector
+
+        # A missing/limited Haar detector treats every frame as face-absent
+        # rather than raise; the picker still runs on sharpness.
+        face_detector = haar_face_detector()
 
         best: tuple[float, bytes, float, dict[str, float]] | None = None
         for ts in sample_times:
@@ -90,7 +89,7 @@ def pick_thumbnail(
             sharpness = min(1.0, lap_var / _DEFAULT_SHARPNESS_FLOOR)
 
             has_face = 0.0
-            if haar_ok:
+            if face_detector is not None:
                 faces = face_detector.detectMultiScale(
                     gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
                 )
@@ -130,10 +129,9 @@ def pick_thumbnail_from_frames(
         raise ClipError("empty frame batch — cannot pick thumbnail")
     import cv2
 
-    face_detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-    )
-    haar_ok = not face_detector.empty()
+    from nexoclip.vision.haar import haar_face_detector
+
+    face_detector = haar_face_detector()
 
     best: tuple[float, bytes, float, dict[str, float]] | None = None
     for frame, ts in zip(batch.frames_bgr, batch.sample_times, strict=True):
@@ -141,7 +139,7 @@ def pick_thumbnail_from_frames(
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         sharpness = min(1.0, lap_var / _DEFAULT_SHARPNESS_FLOOR)
         has_face = 0.0
-        if haar_ok:
+        if face_detector is not None:
             faces = face_detector.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
             )

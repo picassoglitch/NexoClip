@@ -114,20 +114,48 @@ async def ingest_vod(
     audio_path = source_dir / "audio.wav"
 
     if not force and stream_json.exists():
-        cached = Stream.model_validate_json(stream_json.read_text("utf-8"))
-        # Resume: still import chat replay if a new source is provided this run.
-        if chat_replay_source is not None:
-            from .chat_replay import chat_replay_path, import_chat_replay
+        # Cache-resume is only valid while the ARTIFACTS the pipeline needs
+        # are still on disk. The source gets reclaimed out from under the
+        # manifest by design — delete-on-completion, the failure-path
+        # cleanup in the pipeline runner, the disk watchdog — and every one
+        # of those relies on "a re-run re-downloads automatically". Resuming
+        # on stream.json alone broke that contract: the re-run skipped the
+        # download and then died at transcribe on the missing audio.
+        if video_path.exists() and audio_path.exists():
+            cached = Stream.model_validate_json(stream_json.read_text("utf-8"))
+            # Resume: still import chat replay if a new source is provided
+            # this run.
+            if chat_replay_source is not None:
+                from .chat_replay import chat_replay_path, import_chat_replay
 
-            import_chat_replay(
-                source=chat_replay_source,
-                stream_dir=stream_dir,
-                stream_id=cached.id,
-                tenant_id=cached.tenant_id,
+                import_chat_replay(
+                    source=chat_replay_source,
+                    stream_dir=stream_dir,
+                    stream_id=cached.id,
+                    tenant_id=cached.tenant_id,
+                )
+                cached = cached.model_copy(
+                    update={"source_chat_path": chat_replay_path(stream_dir)}
+                )
+                stream_json.write_text(
+                    cached.model_dump_json(indent=2), encoding="utf-8"
+                )
+            return cached
+        # Uploads and live recordings have no origin to re-fetch from —
+        # falling through to yt-dlp on their pseudo-URLs would produce an
+        # opaque "unsupported URL" error. Say what actually happened.
+        if vod_url.startswith(("upload://", "live://")):
+            raise IngestError(
+                f"source for {sid} was reclaimed and {vod_url!r} has no "
+                "origin to re-download from — upload the file again to "
+                "re-process it"
             )
-            cached = cached.model_copy(update={"source_chat_path": chat_replay_path(stream_dir)})
-            stream_json.write_text(cached.model_dump_json(indent=2), encoding="utf-8")
-        return cached
+        _log.info(
+            "ingest.resume.source_missing",
+            stream_id=sid,
+            reason="stream.json cached but source video/audio reclaimed — "
+                   "re-downloading",
+        )
 
     platform = detect_platform(vod_url)
 

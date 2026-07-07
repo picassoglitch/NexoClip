@@ -210,10 +210,10 @@ def _detect_subjects(
     to the source frame."""
     import cv2
 
-    detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-    )
-    if detector.empty():
+    from nexoclip.vision.haar import haar_face_detector
+
+    detector = haar_face_detector()
+    if detector is None:
         return []
 
     boxes: list[SubjectBox] = []
@@ -479,11 +479,11 @@ def analyze_framing_from_frames(batch: "ClipFrameBatch") -> FramingVerdict:
     else:
         orientation = "vertical"
 
-    detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-    )
+    from nexoclip.vision.haar import haar_face_detector
+
+    detector = haar_face_detector()
     subjects: list[SubjectBox] = []
-    if not detector.empty():
+    if detector is not None:
         for frame in batch.frames_bgr:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = detector.detectMultiScale(

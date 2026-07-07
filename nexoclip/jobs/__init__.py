@@ -16,6 +16,7 @@ The shipping path-by-stage:
 
 from __future__ import annotations
 
+from .active import active_stream_ids, pipeline_active
 from .base import JobDispatcher, PipelineKickoff, PipelineRunner
 from .factory import get_dispatcher
 from .in_process import InProcessJobDispatcher
@@ -27,5 +28,7 @@ __all__ = [
     "ModalJobDispatcher",
     "PipelineKickoff",
     "PipelineRunner",
+    "active_stream_ids",
     "get_dispatcher",
+    "pipeline_active",
 ]

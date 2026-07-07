@@ -106,12 +106,12 @@ def _detect_face_centers(
     """
     import cv2
 
-    detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-    )
-    if detector.empty():
-        # Bundle file is missing or unreadable - skip detection rather than
-        # raise; the caller falls back to a centered crop.
+    from nexoclip.vision.haar import haar_face_detector
+
+    detector = haar_face_detector()
+    if detector is None:
+        # No usable detector - skip detection rather than raise; the
+        # caller falls back to a centered crop.
         return []
 
     centers_x: list[float] = []
@@ -160,11 +160,11 @@ def compute_smart_crop_box_from_frames(
     if crop_w >= source_w:
         return SmartCropBox(x=0, y=0, w=source_w, h=crop_h)
 
-    detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-    )
+    from nexoclip.vision.haar import haar_face_detector
+
+    detector = haar_face_detector()
     centers_x: list[float] = []
-    if not detector.empty():
+    if detector is not None:
         for frame in batch.frames_bgr:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = detector.detectMultiScale(

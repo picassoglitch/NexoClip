@@ -73,8 +73,11 @@ dependencies = [
     # Face detection uses OpenCV's bundled Haar Cascade (cv2.data.haarcascades)
     # — no model download, no extra dep. Real emotion classification arrives
     # in Phase 2 via the multimodal LLM; Phase 1 only signals face-present.
+    # <5 is load-bearing: OpenCV 5 removed the legacy Haar API
+    # (cv2.CascadeClassifier), and an unpinned prod rebuild picked up
+    # 5.0.0.93 and crashed every analyze_video step with AttributeError.
     "scenedetect>=0.6.4",
-    "opencv-python>=4.10",
+    "opencv-python>=4.10,<5",
 
     # Brand-kit thumbnail compositing (voice-markers spec slice D.4).
     # We composite the picked raw frame with brand colors + handle overlay

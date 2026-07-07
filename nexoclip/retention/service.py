@@ -248,6 +248,8 @@ async def reclaim_sources_until_free(
     if free >= target_free_bytes:
         return 0, True
 
+    from nexoclip.jobs.active import active_stream_ids
+
     conn = await db.connect()
     cur = await conn.execute(
         "SELECT id, source_video_path, source_audio_path FROM streams "
@@ -256,12 +258,18 @@ async def reclaim_sources_until_free(
     rows = await cur.fetchall()
     now = time.time()
     freed = 0
+    in_flight = active_stream_ids()
     for row in rows:
         try:
             if shutil.disk_usage(output_dir).free >= target_free_bytes:
                 break
         except OSError:
             break
+        # Never yank a source out from under a RUNNING pipeline. The mtime
+        # check below can't see it: a multi-hour transcribe/LLM stretch only
+        # READS source/, so the dir goes "idle" minutes into the run.
+        if row["id"] in in_flight:
+            continue
         video = Path(row["source_video_path"]) if row["source_video_path"] else None
         audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
         stream_dir = output_dir / row["id"]
@@ -425,9 +433,17 @@ async def _sweep_one_tenant(
         "WHERE tenant_id = ? AND created_at < ?",
         (tenant_id, vod_cutoff),
     )
+    from nexoclip.jobs.active import active_stream_ids
+
     stream_rows = await cur.fetchall()
+    in_flight = active_stream_ids()
     for row in stream_rows:
         stream_id = row["id"]
+        # A 30-day-old stream can still have a run in flight RIGHT NOW
+        # (an operator re-running an old VOD) — leave it for the next
+        # sweep rather than delete the source mid-run.
+        if stream_id in in_flight:
+            continue
         video = Path(row["source_video_path"]) if row["source_video_path"] else None
         audio = Path(row["source_audio_path"]) if row["source_audio_path"] else None
         stream_dir = output_dir / stream_id

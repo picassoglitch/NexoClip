@@ -146,6 +146,34 @@ async def test_skips_active_hls_download_with_only_fragments(
     assert freed == 0
 
 
+async def test_skips_stream_with_pipeline_in_flight(
+    retention_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A RUNNING pipeline only READS its source during long transcribe/LLM
+    stretches, so the mtime check can't see it — the in-flight registry
+    must protect it. Regression: the reclaimer ate a source mid-run and
+    the run died at the next step that read the file."""
+    from nexoclip.jobs import pipeline_active
+
+    t = await TenantsRepo(retention_db).create(name="Aldo")
+    running = await _seed_source(
+        retention_db, tenant_id=t.id, stream_id="str_running",
+        output_dir=tmp_path, age_days=10,
+    )
+    idle = await _seed_source(
+        retention_db, tenant_id=t.id, stream_id="str_idle",
+        output_dir=tmp_path, age_days=5,
+    )
+    monkeypatch.setattr(shutil, "disk_usage", _fake_usage([1024]))  # always low
+    with pipeline_active("str_running"):
+        await reclaim_sources_until_free(
+            retention_db, output_dir=tmp_path, target_free_bytes=10 * 1024**3,
+            active_grace_s=0.0,
+        )
+    assert running.exists()      # in-flight source survives
+    assert not idle.exists()     # the idle one was fair game
+
+
 async def test_disabled_when_target_zero(
     retention_db: Database, tmp_path: Path
 ) -> None:

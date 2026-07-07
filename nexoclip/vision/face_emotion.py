@@ -43,10 +43,9 @@ def detect_face_emotions(video_path: Path, *, sample_rate_hz: float = 2.0) -> li
             raise DetectionError(f"unknown fps for {video_path}")
         frame_skip = max(1, round(fps / sample_rate_hz))
 
-        detector = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
-        )
-        haar_ok = not detector.empty()
+        from .haar import haar_face_detector
+
+        detector = haar_face_detector()
 
         frames: list[FaceFrame] = []
         frame_idx = 0
@@ -56,7 +55,7 @@ def detect_face_emotions(video_path: Path, *, sample_rate_hz: float = 2.0) -> li
                 break
             if frame_idx % frame_skip == 0:
                 ts = frame_idx / fps
-                frames.append(_face_frame_from_frame(ts, frame, detector if haar_ok else None))
+                frames.append(_face_frame_from_frame(ts, frame, detector))
             frame_idx += 1
     finally:
         cap.release()

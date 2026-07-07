@@ -110,6 +110,81 @@ def test_ingest_is_idempotent(
     assert len(extract_calls) == 1
 
 
+def test_ingest_resume_redownloads_when_source_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every source-reclaim path (delete-on-completion, the pipeline
+    runner's failure cleanup, the disk watchdog) leaves stream.json in
+    place and relies on 'a re-run re-downloads automatically'. Resuming
+    on stream.json alone broke that: the re-run skipped the download and
+    died at transcribe on the missing audio."""
+    info = {"duration": 30.0, "title": "t", "uploader": "u"}
+    download_calls = _stub_download_writes_file(monkeypatch, info=info)
+    extract_calls = _stub_audio_extract(monkeypatch)
+
+    first = asyncio.run(
+        ingest_vod(
+            tenant_id="default",
+            vod_url="https://kick.com/c/videos/1",
+            output_dir=tmp_path,
+        )
+    )
+    # Reclaim the source the way retention does: files gone, manifest kept.
+    source_dir = tmp_path / first.id / "source"
+    (source_dir / "video.mp4").unlink()
+    (source_dir / "audio.wav").unlink()
+
+    second = asyncio.run(
+        ingest_vod(
+            tenant_id="default",
+            vod_url="https://kick.com/c/videos/1",
+            output_dir=tmp_path,
+            stream_id=first.id,
+        )
+    )
+
+    assert second.id == first.id
+    assert len(download_calls) == 2  # re-downloaded, not cache-resumed
+    assert len(extract_calls) == 2
+    assert (source_dir / "video.mp4").exists()
+    assert (source_dir / "audio.wav").exists()
+
+
+def test_ingest_resume_upload_source_reclaimed_raises_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uploads have no origin to re-fetch — a reclaimed upload source must
+    fail with a message that says to upload again, not fall through to
+    yt-dlp on the upload:// pseudo-URL."""
+    from nexoclip.errors import IngestError
+
+    _stub_download_writes_file(monkeypatch, info={})
+    _stub_audio_extract(monkeypatch)
+
+    sid = "str_upload1"
+    stream_dir = tmp_path / sid
+    (stream_dir / "source").mkdir(parents=True)
+    stream = Stream(
+        id=sid, tenant_id="default", vod_url="upload://clip.mp4",
+        platform="upload", title="clip", channel=None, duration_s=5.0,
+        source_video_path=stream_dir / "source" / "video.mp4",
+        source_audio_path=stream_dir / "source" / "audio.wav",
+    )
+    (stream_dir / "stream.json").write_text(
+        stream.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    with pytest.raises(IngestError, match="upload the file again"):
+        asyncio.run(
+            ingest_vod(
+                tenant_id="default",
+                vod_url="upload://clip.mp4",
+                output_dir=tmp_path,
+                stream_id=sid,
+            )
+        )
+
+
 def test_ingest_force_redownloads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

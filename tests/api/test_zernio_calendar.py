@@ -183,6 +183,73 @@ async def test_calendar_date_range_filter(
 
 
 @pytest.mark.asyncio
+async def test_calendar_window_filters_hub_rows_in_sql(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # Hub rows are windowed by their PUBLISH day in SQL — the old
+    # newest-200 slice + in-Python filter dropped older-created rows,
+    # so weeks of scheduled posts vanished from the month view.
+    await ZernioPublishesRepo(db).record(
+        post_id="post_june", tenant_id=alice["id"], clip_id="clp_j1",
+        platforms=["tiktok"], content="junio", status="scheduled",
+        scheduled_for="2026-06-20T18:00:00Z",
+    )
+    await ZernioPublishesRepo(db).record(
+        post_id="post_july", tenant_id=alice["id"], clip_id="clp_j2",
+        platforms=["tiktok"], content="julio", status="scheduled",
+        scheduled_for="2026-07-20T18:00:00Z",
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json"
+            "?date_from=2026-06-01&date_to=2026-06-30",
+            headers=auth(alice["token"]),
+        )
+    posts = {e["post_id"] for e in resp.json()["entries"]}
+    assert "post_june" in posts
+    assert "post_july" not in posts
+
+
+@pytest.mark.asyncio
+async def test_calendar_keeps_published_post_on_its_scheduled_day(
+    zernio_env: None,
+    client: httpx.AsyncClient,
+    db: Database,
+    alice: dict[str, str],
+) -> None:
+    # Once a scheduled post publishes (status flips via webhook), the day
+    # it went out doesn't change. Regression: bucketing keyed on
+    # status == "scheduled" snapped published posts back onto the
+    # batch-creation day, piling a run's worth of dots on the day the
+    # operator clicked Auto-programar and leaving the real days empty.
+    repo = ZernioPublishesRepo(db)
+    await repo.record(
+        post_id="post_done", tenant_id=alice["id"], clip_id="clp_done",
+        platforms=["tiktok"], content="Ya salió", status="scheduled",
+        scheduled_for="2026-06-10T20:00:00Z",
+    )
+    await repo.set_status("post_done", status="published")
+    with respx.mock() as mock:
+        mock.get(f"{_ZBASE}/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        resp = await client.get(
+            "/dashboard/publish/zernio/calendar.json", headers=auth(alice["token"]),
+        )
+    entry = next(
+        e for e in resp.json()["entries"] if e["post_id"] == "post_done"
+    )
+    assert entry["date"][:10] == "2026-06-10"
+    assert entry["source"] == "hub"  # published → no longer "scheduled"
+
+
+@pytest.mark.asyncio
 async def test_calendar_buckets_scheduled_by_publish_date(
     zernio_env: None,
     client: httpx.AsyncClient,

@@ -181,3 +181,92 @@ async def test_count_by_platform_by_day_buckets_future_days(
     assert by_day.get("youtube", {}).get(today) == 1
     assert by_day.get("youtube", {}).get(d1) == 2
     assert d2 not in by_day.get("youtube", {})  # cancelled → not counted
+
+
+@pytest.mark.asyncio
+async def test_list_for_calendar_windows_by_publish_day(db: Database) -> None:
+    """The calendar window filters on the day a post goes out
+    (scheduled_for, else created_at) IN SQL — no newest-N slice that
+    could drop older rows — and never returns drafts or tombstones."""
+    repo = ZernioPublishesRepo(db)
+    await repo.record(
+        post_id="w_in", tenant_id="ten_A", clip_id="c_in",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for="2026-06-15T10:00:00+00:00",
+    )
+    await repo.record(
+        post_id="w_out", tenant_id="ten_A", clip_id="c_out",
+        platforms=["tiktok"], content=None, status="scheduled",
+        scheduled_for="2026-07-15T10:00:00+00:00",
+    )
+    await repo.record(
+        post_id="w_draft", tenant_id="ten_A", clip_id="c_d",
+        platforms=["tiktok"], content=None, status="draft",
+        scheduled_for="2026-06-16T10:00:00+00:00",
+    )
+    await repo.record(  # no scheduled_for → windows on created_at (now)
+        post_id="w_now", tenant_id="ten_A", clip_id="c_n",
+        platforms=["tiktok"], content=None,
+    )
+    with bound_tenant("ten_A"):
+        june = await repo.list_for_calendar(
+            date_from="2026-06-01", date_to="2026-06-30",
+        )
+    assert [r.post_id for r in june] == ["w_in"]
+    with bound_tenant("ten_A"):
+        unbounded = await repo.list_for_calendar()
+    ids = {r.post_id for r in unbounded}
+    assert {"w_in", "w_out", "w_now"} <= ids
+    assert "w_draft" not in ids
+
+
+@pytest.mark.asyncio
+async def test_count_status_groups_exact_and_manual_as_published(
+    db: Database,
+) -> None:
+    """The stats strip counts REAL totals per status. Rows with no status
+    land under ''; synthetic manual_<clip_id> marks count as 'published'
+    even though they're stored statusless (no webhook ever updates them)."""
+    repo = ZernioPublishesRepo(db)
+    for i in range(3):
+        await repo.record(
+            post_id=f"s_sched_{i}", tenant_id="ten_A", clip_id=f"cs{i}",
+            platforms=["tiktok"], content=None, status="scheduled",
+        )
+    await repo.record(
+        post_id="s_pub", tenant_id="ten_A", clip_id="cp",
+        platforms=["tiktok"], content=None, status="published",
+    )
+    await repo.record(  # statusless immediate publish → '' bucket
+        post_id="s_none", tenant_id="ten_A", clip_id="cn",
+        platforms=["tiktok"], content=None,
+    )
+    await repo.record(  # manual mark: statusless but counts as published
+        post_id="manual_cm", tenant_id="ten_A", clip_id="cm",
+        platforms=[], content=None,
+    )
+    await repo.record(  # other tenants never leak into the counts
+        post_id="s_other", tenant_id="ten_B", clip_id="cb",
+        platforms=["tiktok"], content=None, status="scheduled",
+    )
+    with bound_tenant("ten_A"):
+        groups = await repo.count_status_groups()
+    assert groups.get("scheduled") == 3
+    assert groups.get("published") == 2  # explicit row + manual mark
+    assert groups.get("") == 1
+
+
+@pytest.mark.asyncio
+async def test_recorded_clip_ids_is_uncapped_membership(db: Database) -> None:
+    repo = ZernioPublishesRepo(db)
+    await repo.record(
+        post_id="m_1", tenant_id="ten_A", clip_id="clp_x",
+        platforms=["tiktok"], content=None,
+    )
+    await repo.record(
+        post_id="m_2", tenant_id="ten_B", clip_id="clp_y",
+        platforms=["tiktok"], content=None,
+    )
+    with bound_tenant("ten_A"):
+        ids = await repo.recorded_clip_ids()
+    assert ids == {"clp_x"}

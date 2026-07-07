@@ -604,9 +604,10 @@ async def zernio_dashboard(
     # Per-tenant publish history comes from OUR table (migration 030) —
     # Zernio's GET /posts is company-key-wide and must never be rendered
     # unfiltered (every tenant would see every other tenant's posts).
-    # limit=100 (not 25) so the membership set below doesn't miss older
-    # rows and wrongly re-list their clips as "marked manually".
-    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=100)
+    # limit=100 is a DISPLAY slice; the membership set and the stats strip
+    # below use exact uncapped queries instead of this page.
+    pubs_repo = ZernioPublishesRepo(db)
+    publishes = await pubs_repo.list_for_tenant(limit=100)
 
     accounts: list[ZernioAccount] = []
     status_by_post: dict[str, dict[str, Any]] = {}
@@ -693,7 +694,10 @@ async def zernio_dashboard(
     # Fallback entries: published clips with no record at all (clips
     # marked before mark-published wrote rows). Timestamp is the clip's
     # creation time — the actual publish moment was never recorded.
-    recorded_clip_ids = {row.clip_id for row in publishes}
+    # Membership comes from an uncapped DISTINCT query — deriving it from
+    # the newest-100 display slice re-listed clips whose rows had aged
+    # past the cap as "marked manually".
+    recorded_clip_ids = await pubs_repo.recorded_clip_ids()
     for c in published_clips:
         if c.id in recorded_clip_ids:
             continue
@@ -741,21 +745,30 @@ async def zernio_dashboard(
         for c in raw_clips
     ]
 
-    # Stats strip — single pass over the tenant's (capped) history.
-    def _s(h: dict[str, Any]) -> str:
-        return str(h.get("status", "")).lower()
+    # Stats strip — EXACT DB counts (count_status_groups), not the capped
+    # newest-100 display join: with any backlog past the cap, "Programados"
+    # read exactly 100 no matter how many posts were really queued. Buckets
+    # mirror the history status classes; rows with no status yet ('') read
+    # "queued" → scheduled. Published clips with no publish row at all
+    # (pre-migration-030 manual marks) have no DB row to count, so the
+    # fallback entries appended above ride on top of the published bucket.
+    counts = await pubs_repo.count_status_groups()
 
+    def _bucket(names: set[str]) -> int:
+        return sum(n for s, n in counts.items() if s.lower() in names)
+
+    fallback_published = sum(
+        1 for c in published_clips if c.id not in recorded_clip_ids
+    )
     stats = {
-        "published": sum(
-            1 for h in history if _s(h) in {"published", "finished", "success"}
+        "published": _bucket({"published", "finished", "success"})
+        + fallback_published,
+        "failed": _bucket({"failed", "error"}),
+        "scheduled": _bucket(
+            {"scheduled", "pending", "queued", "publishing", "processing", ""}
         ),
-        "failed": sum(1 for h in history if _s(h) in {"failed", "error"}),
-        "scheduled": sum(
-            1 for h in history
-            if _s(h) in {"scheduled", "pending", "queued", "publishing", "processing"}
-        ),
-        "total": len(history),
     }
+    stats["total"] = stats["published"] + stats["failed"] + stats["scheduled"]
 
     return templates.TemplateResponse(
         request,
@@ -3021,24 +3034,20 @@ async def zernio_calendar_json(
     entries: list[dict[str, Any]] = []
 
     # Sources 1 + 2: local hub/scheduled publishes (already tenant-scoped).
-    publishes = await ZernioPublishesRepo(db).list_for_tenant(limit=200)
+    # The window filter lives in SQL — the old newest-200 slice + in-Python
+    # filtering silently dropped older-created rows, so a month with several
+    # auto-program runs' worth of posts rendered with whole weeks missing.
+    publishes = await ZernioPublishesRepo(db).list_for_calendar(
+        date_from=df, date_to=dt,
+    )
     for p in publishes:
-        if p.status in ("draft", "deleted"):
-            continue
-        # Bucket by the day the post actually goes out: a future-scheduled
-        # post lands on its `scheduled_for` day, an immediate publish on its
-        # `created_at` day. (Before, everything landed on the batch-creation
-        # day, so a day's worth of scheduled clips piled onto the day they
-        # were queued instead of the day they publish.)
-        date = (
-            p.scheduled_for
-            if p.status == "scheduled" and p.scheduled_for
-            else p.created_at
-        )
-        if df and date and date[:10] < df:
-            continue
-        if dt and date and date[:10] > dt:
-            continue
+        # Bucket by the day the post goes (or WENT) out: `scheduled_for`
+        # whenever it exists — the day a post published doesn't change when
+        # its status flips to 'published' — else `created_at` (immediate
+        # publishes). Gating scheduled_for on status == "scheduled" piled a
+        # batch's published posts back onto the day the operator clicked
+        # Auto-programar and left the days they actually went out empty.
+        date = p.scheduled_for or p.created_at
         entries.append(
             {
                 "date": date,

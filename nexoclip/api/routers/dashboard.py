@@ -1744,7 +1744,13 @@ def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
     # auto-clip claim, so checking running-states first would show
     # 'Analyzing…' forever. Order: complete (clips/terminal) → failed →
     # running → pending.
-    if has_clips or status in ("done", "ingested", "ready"):
+    #
+    # 'ingested' is NOT terminal: it means the download landed — the
+    # pipeline may be queued, running, killed by a redeploy, or never
+    # dispatched. With zero clips it must not render "Ya quedó listo · 0
+    # clips" (a dead end); 'pending' shows the progress panel, whose
+    # abandoned-run detector explains what happened and offers Córrelo.
+    if has_clips or status in ("done", "ready"):
         status_kind = "complete"
     elif status == "failed":
         status_kind = "failed"

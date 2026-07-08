@@ -503,7 +503,7 @@
 
 {# ===================== TECHNICAL DETAILS ===================== #}
 {# Everything an engineer wants, a creator doesn't — collapsed by default. #}
-<details class="nc-panel" style="margin-top: 18px;" {% if _running or (not ov.total_clips and not _complete) %}open{% endif %}>
+<details id="tech-details" class="nc-panel" style="margin-top: 18px;" {% if _running or (not ov.total_clips and not _complete) %}open{% endif %}>
   <summary style="cursor: pointer; padding: 14px 16px; display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--nc-text);">
     <i class="ti ti-settings" aria-hidden="true" style="color: var(--nc-text-muted);"></i>
     Detalles técnicos
@@ -533,7 +533,9 @@
     </div>
 
     {# ---- Re-run pipeline (estimate + persona + run) ---- #}
-    <div style="margin-top: 18px;">
+    {# id="rerun" — jump target for the failure/abandoned banners' Córrelo
+       buttons; their onclick opens the collapsed <details> first. #}
+    <div id="rerun" style="margin-top: 18px;">
       <small style="color: var(--nc-text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px;">Volver a correrlo</small>
       {% if estimate %}
         {%- if is_unlimited -%}{%- set _est_severity = 'ok' -%}

@@ -16,8 +16,16 @@ import pytest
 import respx
 
 from nexoclip.db import Database, TenantsRepo, apply_migrations
+from nexoclip.integrations.nexo_ai import reporter as reporter_mod
 from nexoclip.integrations.nexo_ai.reporter import report_llm_usage
 from nexoclip.settings import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _zero_retry_delays(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the retry schedule (attempt count) but drop the sleeps so
+    transient-failure tests don't wait out real backoff."""
+    monkeypatch.setattr(reporter_mod, "_RETRY_DELAYS_S", (0.0, 0.0))
 
 
 def _now() -> str:
@@ -127,6 +135,71 @@ async def test_network_error_records_failure_without_raising(
     t = await TenantsRepo(db).get(tid)
     assert t.last_usage_report_ok == 0
     assert (t.last_usage_report_error or "") != ""
+
+
+@respx.mock
+async def test_timeout_retries_then_succeeds(db: Database, nexo_env) -> None:
+    """The prod incident: a transient timeout while the host is saturated.
+    The report must retry instead of dropping the event (Nexo AI would
+    never deduct it) and leave the chip green after the retry lands."""
+    tid = await _tenant_linked(db)
+    route = respx.post(_URL).mock(side_effect=[
+        httpx.ReadTimeout("slow"),
+        httpx.Response(200, json={"balance": {
+            "remaining": 1_949_000, "unlimited": False, "monthlyUsed": 3_050_000,
+        }}),
+    ])
+    await report_llm_usage(
+        db, tenant_id=tid, llm_call_id="lc6",
+        input_tokens=1_000, output_tokens=0, occurred_at_iso=_now(),
+    )
+    assert route.call_count == 2
+    t = await TenantsRepo(db).get(tid)
+    assert t.last_usage_report_ok == 1
+    assert t.last_usage_report_error is None
+    assert t.cached_balance_remaining == 1_949_000
+
+
+@respx.mock
+async def test_all_attempts_time_out_records_failure(
+    db: Database, nexo_env
+) -> None:
+    tid = await _tenant_linked(db)
+    route = respx.post(_URL).mock(side_effect=httpx.ReadTimeout("slow"))
+    await report_llm_usage(
+        db, tenant_id=tid, llm_call_id="lc7",
+        input_tokens=1_000, output_tokens=0, occurred_at_iso=_now(),
+    )
+    assert route.call_count == 3  # 1 + the 2 zeroed retry delays
+    t = await TenantsRepo(db).get(tid)
+    assert t.last_usage_report_ok == 0
+    assert "timeout" in (t.last_usage_report_error or "")
+
+
+@respx.mock
+async def test_5xx_is_retried(db: Database, nexo_env) -> None:
+    """Server errors are transient → retried until the schedule runs out."""
+    tid = await _tenant_linked(db)
+    route = respx.post(_URL).mock(return_value=httpx.Response(503, text="down"))
+    await report_llm_usage(
+        db, tenant_id=tid, llm_call_id="lc8",
+        input_tokens=1_000, output_tokens=0, occurred_at_iso=_now(),
+    )
+    assert route.call_count == 3
+    assert "503" in ((await TenantsRepo(db).get(tid)).last_usage_report_error or "")
+
+
+@respx.mock
+async def test_4xx_rejection_is_not_retried(db: Database, nexo_env) -> None:
+    """Payload/config rejections are permanent → one attempt only."""
+    tid = await _tenant_linked(db)
+    route = respx.post(_URL).mock(return_value=httpx.Response(422, text="bad kind"))
+    await report_llm_usage(
+        db, tenant_id=tid, llm_call_id="lc9",
+        input_tokens=1_000, output_tokens=0, occurred_at_iso=_now(),
+    )
+    assert route.call_count == 1
+    assert "422" in ((await TenantsRepo(db).get(tid)).last_usage_report_error or "")
 
 
 @respx.mock

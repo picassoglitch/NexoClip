@@ -1119,6 +1119,7 @@ async def streams_list(
     db: Database = Depends(get_db),
 ) -> Response:
     from nexoclip.ingest import is_ffmpeg_available
+    from nexoclip.jobs.active import active_stream_ids
 
     streams = await StreamsRepo(db).list_for_tenant()
     personas = await _merged_personas(db)
@@ -1130,6 +1131,10 @@ async def streams_list(
             "streams": streams,
             "personas": personas,
             "ffmpeg_ok": is_ffmpeg_available(),
+            # Streams with a run queued/executing right now — the status
+            # column lags (stays 'ingested'/'failed' until the run ends),
+            # so the Estado chip keys on this to show 'procesando' live.
+            "active_ids": active_stream_ids(),
         },
     )
 
@@ -1744,7 +1749,13 @@ def _stream_overview(stream: object, clips: list, candidates: list) -> dict:
     # auto-clip claim, so checking running-states first would show
     # 'Analyzing…' forever. Order: complete (clips/terminal) → failed →
     # running → pending.
-    if has_clips or status in ("done", "ingested", "ready"):
+    #
+    # 'ingested' is NOT terminal: it means the download landed — the
+    # pipeline may be queued, running, killed by a redeploy, or never
+    # dispatched. With zero clips it must not render "Ya quedó listo · 0
+    # clips" (a dead end); 'pending' shows the progress panel, whose
+    # abandoned-run detector explains what happened and offers Córrelo.
+    if has_clips or status in ("done", "ready"):
         status_kind = "complete"
     elif status == "failed":
         status_kind = "failed"
@@ -1821,6 +1832,19 @@ async def stream_detail(
     clips = await ClipsRepo(db).list_for_stream(stream_id)
     personas = await _merged_personas(db)
     overview = _stream_overview(stream, clips, candidates)
+
+    # Right after Córrelo the status COLUMN still says 'ingested' / 'failed'
+    # — it only flips at the end of the run — so the page rendered as if
+    # nothing had happened and users re-clicked or gave up. The jobs.active
+    # registry knows a run for this stream is queued or executing in this
+    # process; trust it over the stale column so the analyzing hero + live
+    # progress panel render. (Clips-bearing pages stay 'complete': the
+    # existing clips are worth showing while a re-run cooks.)
+    if overview["status_kind"] in ("pending", "failed"):
+        from nexoclip.jobs.active import active_stream_ids
+
+        if stream_id in active_stream_ids():
+            overview["status_kind"] = "running"
 
     # Token T3 — ACTUAL spend for this run (Claude + transcription + any
     # provider, tagged with this stream_id). Drives the estimate-vs-actual

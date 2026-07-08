@@ -11,7 +11,13 @@
 
 {%- set ov = overview -%}
 {%- set _complete = ov.status_kind == 'complete' -%}
+{# _running gates the live progress panel — pending included, so a stream
+   whose run is queued/downloading/abandoned still gets the panel (its
+   abandoned-run detector + Córrelo button explain a dead run). _analyzing
+   is running ONLY — the "Buscando tus mejores momentos" hero must not
+   show over a run that isn't actually executing. #}
 {%- set _running = ov.status_kind in ('running', 'pending') -%}
+{%- set _analyzing = ov.status_kind == 'running' -%}
 {%- set _failed = ov.status_kind == 'failed' -%}
 
 {# ---- viral-score → color (lime ≥80, amber ≥60, muted below) ---- #}
@@ -191,7 +197,7 @@
     </a>
     {% endif %}
   </div>
-  {% elif _running %}
+  {% elif _analyzing %}
   <div class="nc-hero__status" style="color: var(--nc-warn);">
     <i class="ti ti-loader-2 nc-spin" aria-hidden="true"></i>
     <span>Estoy analizando tu video…</span>
@@ -444,9 +450,9 @@
     {% else %}
     <div class="nc-empty">
       <div class="nc-empty__icon"><i class="ti ti-scissors-off" aria-hidden="true"></i></div>
-      <div class="nc-empty__title">{% if _running %}Creando tus clips…{% else %}Todavía no hay clips{% endif %}</div>
+      <div class="nc-empty__title">{% if _analyzing %}Creando tus clips…{% else %}Todavía no hay clips{% endif %}</div>
       <p class="nc-empty__body">
-        {% if _running %}Todavía estoy analizando — tus clips van a ir apareciendo aquí conforme los corto.
+        {% if _analyzing %}Todavía estoy analizando — tus clips van a ir apareciendo aquí conforme los corto.
         {% else %}Córrelo desde Detalles técnicos para generar tus clips.{% endif %}
       </p>
     </div>

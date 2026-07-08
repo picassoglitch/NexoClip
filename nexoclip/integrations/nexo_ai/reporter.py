@@ -9,9 +9,13 @@ Called from LLMRouter._log after each successful Claude call. The flow:
        { external_user_id, events: [{kind, amount, source_id, occurred_at}] }
   3. Parse the response's `balance` block and persist it on the tenant row
      so the dashboard nav chip can read it without making its own call.
-  4. Best-effort: timeout 3s, swallow all errors. The LLM call already
-     happened — we never want to break a successful response on a network
-     hiccup with the platform.
+  4. Best-effort: swallow all errors — the LLM call already happened; we
+     never want to break a successful response on a network hiccup with
+     the platform. Transient failures (timeout / network / 5xx) are
+     retried on a short backoff schedule before recording a failure:
+     the whole report runs as a background task (`schedule_usage`), so
+     waiting costs nothing, and dropping the event means Nexo AI never
+     deducts it.
 
 Idempotency: Nexo AI's usage_events table has UNIQUE (engine_id, source_id),
 so re-runs are no-ops. We use the llm_calls.id ULID as the source_id.
@@ -38,10 +42,20 @@ from nexoclip.settings import get_settings
 # loud .exception() so they're impossible to miss.
 _log = logging.getLogger("nexoclip.nexo_ai.reporter")
 
-# Hard cap on the outbound call. If Nexo AI is down or slow we don't want
-# the LLM hot path to wait — 3s is plenty for a 1-event POST over the
-# public internet under normal load.
-_REPORT_TIMEOUT_S = 3.0
+# Hard cap PER ATTEMPT on the outbound call. This runs off the hot path
+# (schedule_usage backgrounds it), so the cap only bounds how long a dead
+# Nexo AI can pin a background task. 3s proved too tight in prod: when the
+# host is saturated (cut/detect on multi-hour VODs), the event loop is slow
+# to service the socket and healthy reports were timing out client-side.
+_REPORT_TIMEOUT_S = 10.0
+
+# Backoff schedule for transient failures (timeout / network error / 5xx)
+# AFTER the first attempt — total attempts = 1 + len(this). Definitive 4xx
+# rejections are never retried. Sized to ride out a load spike on this
+# host rather than a long Nexo AI outage; a restart mid-retry still drops
+# the event (Nexo AI's UNIQUE(engine, source_id) makes retries safe, just
+# not durable).
+_RETRY_DELAYS_S: tuple[float, ...] = (30.0, 120.0)
 
 
 async def report_usage(
@@ -147,27 +161,34 @@ async def report_usage(
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=_REPORT_TIMEOUT_S) as client:
-            response = await client.post(url, json=body, headers=headers)
-    except httpx.TimeoutException:
+    response: httpx.Response | None = None
+    last_error = ""
+    delays = (0.0, *_RETRY_DELAYS_S)
+    for attempt, delay in enumerate(delays, start=1):
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            async with httpx.AsyncClient(timeout=_REPORT_TIMEOUT_S) as client:
+                response = await client.post(url, json=body, headers=headers)
+        except httpx.TimeoutException:
+            response = None
+            last_error = f"timeout after {_REPORT_TIMEOUT_S:.0f}s contacting Nexo AI"
+        except Exception as e:  # best-effort, never propagate
+            response = None
+            last_error = f"network error: {type(e).__name__}"
+        if response is not None and response.status_code < 500:
+            break  # success or a definitive 4xx rejection — don't retry
+        if response is not None:
+            last_error = f"Nexo AI server error: HTTP {response.status_code}"
         _log.warning(
-            "report failed: timeout · tenant=%s url=%s amount=%d",
-            tenant_id, url, amount,
+            "report attempt %d/%d failed: %s · tenant=%s url=%s amount=%d",
+            attempt, len(delays), last_error, tenant_id, url, amount,
         )
+
+    if response is None or response.status_code >= 500:
         await _record_status(
             db, tenant_id, ok=False, at_iso=occurred_at_iso,
-            error=f"timeout after {_REPORT_TIMEOUT_S:.0f}s contacting Nexo AI",
-        )
-        return
-    except Exception as e:  # noqa: BLE001 — best-effort, never propagate
-        _log.exception(
-            "report failed: unexpected error · tenant=%s url=%s amount=%d",
-            tenant_id, url, amount,
-        )
-        await _record_status(
-            db, tenant_id, ok=False, at_iso=occurred_at_iso,
-            error=f"network error: {type(e).__name__}",
+            error=f"{last_error} ({len(delays)} attempts)",
         )
         return
 
@@ -280,7 +301,7 @@ async def _record_status(
         await TenantsRepo(db).set_usage_report_status(
             tenant_id, ok=ok, at_iso=at_iso, error=error,
         )
-    except Exception:  # noqa: BLE001 — observability never blocks
+    except Exception:  # observability never blocks
         _log.warning(
             "usage report status write failed · tenant=%s ok=%s", tenant_id, ok,
         )

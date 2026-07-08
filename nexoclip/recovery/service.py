@@ -135,6 +135,7 @@ def classify_streams(
     events: list[Event],
     *,
     now: _dt.datetime,
+    active_ids: frozenset[str] = frozenset(),
 ) -> list[OrphanDecision]:
     """Pure decision core — pick which streams are orphaned (dead in-flight)
     and whether each should be retried or given up on.
@@ -142,6 +143,15 @@ def classify_streams(
     Side-effect free + deterministic given `now`, so the threshold logic is
     unit-testable without a database. The lifespan loop feeds it the live
     rows; `recover_orphaned_pipelines` turns decisions into dispatches.
+
+    `active_ids` is the `jobs.active` registry — streams with a run queued
+    or executing in THIS process. They are excluded outright: a run parked
+    behind the concurrency semaphore for hours (two multi-hour VODs hold
+    both slots all afternoon) emits no events, which is indistinguishable
+    from a lost task by timing alone. Without this, the sweeper stacks
+    duplicate dispatches onto the queue and then writes a bogus
+    RecoveryExhausted `pipeline.failed` over a perfectly healthy run.
+    After a restart the registry is empty, so true orphans still recover.
     """
     # Bucket events by their stream_id payload once — the events table is
     # per-tenant and small (a handful of types per stream).
@@ -153,6 +163,8 @@ def classify_streams(
 
     decisions: list[OrphanDecision] = []
     for s in streams:
+        if s.id in active_ids:
+            continue  # queued or running in this process — not an orphan
         # Only http(s) VOD ingests — live:// and upload:// have their own
         # runners and possibly-gone source bytes (see module docstring).
         if getattr(s, "is_live", False) or not s.vod_url.lower().startswith("http"):
@@ -258,11 +270,15 @@ async def _recover_one_tenant(
     task_registry: set[asyncio.Task[None]] | None,
 ) -> list[str]:
     """Per-tenant body of the sweep. Tenant is already bound."""
+    from nexoclip.jobs.active import active_stream_ids
+
     streams = await StreamsRepo(db).list_for_tenant()
     # Generous limit: must reach the `stream.processed` / step events of
     # any stream within MAX_AGE_S so terminal runs aren't re-dispatched.
     events = await EventsRepo(db).list_for_tenant(limit=5000)
-    decisions = classify_streams(streams, events, now=now)
+    decisions = classify_streams(
+        streams, events, now=now, active_ids=active_stream_ids()
+    )
     if not decisions:
         return []
 

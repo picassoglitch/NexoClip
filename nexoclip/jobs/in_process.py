@@ -19,10 +19,15 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+import structlog
+
+from .active import active_stream_ids, register, unregister
 from .base import JobDispatcher, PipelineKickoff, PipelineRunner
 
 if TYPE_CHECKING:
     from fastapi import BackgroundTasks
+
+_log = structlog.get_logger(__name__)
 
 
 class InProcessJobDispatcher(JobDispatcher):
@@ -57,16 +62,43 @@ class InProcessJobDispatcher(JobDispatcher):
         async with self._sem:
             await self._runner(kickoff)
 
+    async def _run_registered(self, kickoff: PipelineKickoff) -> None:
+        """Run under the semaphore, releasing the `jobs.active` registration
+        taken at dispatch time. The registration deliberately spans the wait
+        for a slot: a run queued for hours behind a multi-hour VOD is in
+        flight, not orphaned, and the recovery sweeper / disk reclaimers key
+        on that registry."""
+        try:
+            await self._guarded_run(kickoff)
+        finally:
+            unregister(kickoff.stream.id)
+
     async def dispatch_pipeline(
         self,
         kickoff: PipelineKickoff,
         *,
         background_tasks: BackgroundTasks | None = None,
     ) -> None:
+        stream_id = kickoff.stream.id
+        # One run per stream at a time. A second launch while one is queued
+        # or running (double-clicked rerun, recovery sweep racing the
+        # channel poller) would execute CONCURRENTLY once slots free —
+        # two yt-dlp processes writing the same source/*.part is exactly
+        # the fragment corruption the ingest self-heal exists to clean up.
+        # Steps are idempotent between runs, not against a parallel twin.
+        if stream_id in active_stream_ids():
+            _log.info(
+                "jobs.dispatch.skipped_in_flight",
+                stream_id=stream_id,
+                reason="a pipeline run for this stream is already queued or "
+                       "running in this process",
+            )
+            return
+        register(stream_id)
         if background_tasks is not None:
             # Normal API path — defer until after the response is sent. The
             # semaphore still applies once the background task runs.
-            background_tasks.add_task(self._guarded_run, kickoff)
+            background_tasks.add_task(self._run_registered, kickoff)
             return
         # CLI / recovery / test path — run inline (callers wrap in a task).
-        await self._guarded_run(kickoff)
+        await self._run_registered(kickoff)

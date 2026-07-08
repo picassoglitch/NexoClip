@@ -49,14 +49,24 @@ class _FakeBackgroundTasks:
         self.deferred.append((func, args))
 
 
-def _make_kickoff() -> PipelineKickoff:
+def _make_kickoff(stream_id: str = "str_TEST") -> PipelineKickoff:
     return PipelineKickoff(
         tenant_id="ten_TEST",
-        stream=cast("object", _FakeStream()),  # type: ignore[arg-type]
+        stream=cast("object", _FakeStream(id=stream_id)),  # type: ignore[arg-type]
         persona_id="per_TEST",
         output_dir=Path("./out"),
         language="es",
     )
+
+
+@pytest.fixture(autouse=True)
+def _clean_active_registry() -> None:
+    """The jobs.active registry is module-global; a test that dispatches
+    without draining its deferred task would leak a registration into the
+    next test and trip the in-flight dedupe."""
+    from nexoclip.jobs import active
+
+    active._active.clear()
 
 
 # ---- InProcessJobDispatcher ----
@@ -76,9 +86,10 @@ def test_in_process_with_background_tasks_defers_call() -> None:
     assert len(probe.calls) == 0, "runner ran inline; should have been deferred"
     assert len(bt.deferred) == 1
     func, args = bt.deferred[0]
-    # Deferred through the concurrency-guarded wrapper (not the raw runner),
-    # but the kickoff is threaded through and running it invokes the runner.
-    assert func == dispatcher._guarded_run
+    # Deferred through the registry-releasing concurrency-guarded wrapper
+    # (not the raw runner), but the kickoff is threaded through and running
+    # it invokes the runner.
+    assert func == dispatcher._run_registered
     assert args == (kickoff,)
     asyncio.run(func(*args))
     assert probe.calls == [kickoff]
@@ -174,9 +185,13 @@ async def test_dispatch_bounds_concurrency_to_cap() -> None:
 
     disp = InProcessJobDispatcher(_slow_runner, max_concurrency=2)
     # Fire 8 launches concurrently (recovery/CLI path → inline await, wrapped
-    # in tasks just like the recovery sweep does).
+    # in tasks just like the recovery sweep does). Distinct stream ids —
+    # same-stream launches are deduped, which is its own test below.
     await asyncio.gather(
-        *(asyncio.create_task(disp.dispatch_pipeline(_make_kickoff())) for _ in range(8))
+        *(
+            asyncio.create_task(disp.dispatch_pipeline(_make_kickoff(f"str_{i}")))
+            for i in range(8)
+        )
     )
     assert peak <= 2, f"peak concurrency {peak} exceeded cap of 2"
     assert peak >= 1
@@ -194,6 +209,69 @@ async def test_dispatch_runs_all_launches_despite_cap() -> None:
 
     disp = InProcessJobDispatcher(_runner, max_concurrency=1)
     await asyncio.gather(
-        *(asyncio.create_task(disp.dispatch_pipeline(_make_kickoff())) for _ in range(8))
+        *(
+            asyncio.create_task(disp.dispatch_pipeline(_make_kickoff(f"str_{i}")))
+            for i in range(8)
+        )
     )
     assert ran == 8
+
+
+# ---- Same-stream in-flight dedupe ----
+
+
+@pytest.mark.asyncio
+async def test_dispatch_dedupes_same_stream_while_in_flight() -> None:
+    """A second launch for a stream that is queued or running must be
+    skipped — two concurrent runs of the same stream write over each
+    other's source/*.part files (the prod fragment-corruption incident)."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    ran = 0
+
+    async def _runner(_kickoff: PipelineKickoff) -> None:
+        nonlocal ran
+        ran += 1
+        started.set()
+        await release.wait()
+
+    disp = InProcessJobDispatcher(_runner, max_concurrency=2)
+    first = asyncio.create_task(disp.dispatch_pipeline(_make_kickoff("str_dup")))
+    await started.wait()
+
+    # Duplicate launches while the first is mid-run: all skipped, even
+    # though a semaphore slot is free.
+    await disp.dispatch_pipeline(_make_kickoff("str_dup"))
+    await disp.dispatch_pipeline(_make_kickoff("str_dup"))
+    release.set()
+    await first
+    assert ran == 1
+
+    # Registration released after the run — a genuine re-run goes through.
+    release.set()
+    await disp.dispatch_pipeline(_make_kickoff("str_dup"))
+    assert ran == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_dedupes_stream_queued_on_semaphore() -> None:
+    """The dedupe must also cover a launch still WAITING for a slot — a
+    queued run is in flight, not lost (the recovery sweeper was stacking
+    duplicates of exactly these)."""
+    release = asyncio.Event()
+    ran: list[str] = []
+
+    async def _runner(kickoff: PipelineKickoff) -> None:
+        ran.append(kickoff.stream.id)
+        await release.wait()
+
+    disp = InProcessJobDispatcher(_runner, max_concurrency=1)
+    hog = asyncio.create_task(disp.dispatch_pipeline(_make_kickoff("str_hog")))
+    await asyncio.sleep(0)  # hog takes the only slot
+    queued = asyncio.create_task(disp.dispatch_pipeline(_make_kickoff("str_q")))
+    await asyncio.sleep(0)  # str_q now parked on the semaphore
+
+    await disp.dispatch_pipeline(_make_kickoff("str_q"))  # duplicate: skipped
+    release.set()
+    await asyncio.gather(hog, queued)
+    assert ran == ["str_hog", "str_q"]

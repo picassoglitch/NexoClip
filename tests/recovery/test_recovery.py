@@ -122,6 +122,27 @@ def test_in_flight_recent_step_protected_but_long_silence_recovered() -> None:
     assert [d.stream_id for d in out] == ["str_dead"]
 
 
+def test_in_flight_registry_stream_skipped() -> None:
+    """A stream queued on the dispatcher's semaphore (or mid-run in a long
+    silent step) looks timing-eligible — no step events for hours — but is
+    NOT an orphan. The jobs.active registry is authoritative: skip it
+    entirely, so it is neither re-dispatched (duplicate concurrent runs)
+    nor given up on (bogus RecoveryExhausted over a healthy run)."""
+    queued = _stream("str_q", created_s_ago=NEVER_STARTED_GRACE_S + 600)
+    silent = _stream("str_s", created_s_ago=IN_FLIGHT_SILENCE_S + 4000)
+    silent_ev = [
+        _event("str_s", "pipeline.step.start", s_ago=IN_FLIGHT_SILENCE_S + 600)
+    ]
+    # Both are eligible on timing alone…
+    assert len(classify_streams([queued, silent], silent_ev, now=_NOW)) == 2
+    # …but excluded while registered in flight.
+    out = classify_streams(
+        [queued, silent], silent_ev, now=_NOW,
+        active_ids=frozenset({"str_q", "str_s"}),
+    )
+    assert out == []
+
+
 def test_attempts_cap_flags_give_up() -> None:
     s = _stream("str_1", created_s_ago=NEVER_STARTED_GRACE_S + 600)
     ev = [

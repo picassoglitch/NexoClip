@@ -31,13 +31,30 @@ def active_stream_ids() -> frozenset[str]:
     return frozenset(sid for sid, n in _active.items() if n > 0)
 
 
+def register(stream_id: str) -> None:
+    """Mark one in-flight run for `stream_id`. Pair with `unregister`.
+
+    Split out of `pipeline_active` so the dispatcher can register at
+    DISPATCH time (covering the wait for a semaphore slot, which can be
+    hours behind a multi-hour VOD) rather than only once the runner
+    executes — the recovery sweeper must see queued runs as in flight or
+    it re-dispatches them as "orphans".
+    """
+    _active[stream_id] += 1
+
+
+def unregister(stream_id: str) -> None:
+    """Release one in-flight run for `stream_id`."""
+    _active[stream_id] -= 1
+    if _active[stream_id] <= 0:
+        del _active[stream_id]
+
+
 @contextmanager
 def pipeline_active(stream_id: str) -> Iterator[None]:
     """Mark `stream_id`'s pipeline as in flight for the duration."""
-    _active[stream_id] += 1
+    register(stream_id)
     try:
         yield
     finally:
-        _active[stream_id] -= 1
-        if _active[stream_id] <= 0:
-            del _active[stream_id]
+        unregister(stream_id)

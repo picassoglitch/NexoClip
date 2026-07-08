@@ -1596,7 +1596,22 @@ async def stream_progress(
     # actual pipeline thread is dead and the run will never finish on its
     # own. Show that explicitly so the user knows to click 'Run pipeline'
     # rather than wait forever on a fake 'running' state.
+    #
+    # UNLESS a run for this stream is registered in jobs.active — then the
+    # run is alive in this process (executing, or queued behind the
+    # concurrency semaphore) and the wall clock proves nothing: the
+    # pipeline's own per-step ceilings scale with VOD duration
+    # (analyze_video gets duration * 4 — about 20h on a 5-hour VOD), so a
+    # healthy long run WILL sit in one step past any fixed threshold. Flagging it
+    # abandoned contradicts the hero (which trusts the same registry) and
+    # offers a Córrelo that would stack a duplicate run on top of the
+    # live one. Registry says in flight → keep it 'running', keep polling;
+    # the runner's own timeout/failure handling is what ends a stuck step.
     import datetime as _dt
+
+    from nexoclip.jobs.active import active_stream_ids
+
+    run_in_flight = stream_id in active_stream_ids()
 
     ABANDONED_THRESHOLD_S = 60 * 60  # 1 hour — generous even for hour+ VODs
     now = _dt.datetime.now(_dt.UTC)
@@ -1606,7 +1621,7 @@ async def stream_progress(
                 started = _dt.datetime.fromisoformat(str(s["started_at"]))
                 elapsed = (now - started).total_seconds()
                 s["elapsed_s"] = elapsed
-                if elapsed > ABANDONED_THRESHOLD_S:
+                if elapsed > ABANDONED_THRESHOLD_S and not run_in_flight:
                     s["status"] = "abandoned"
             except ValueError:
                 pass

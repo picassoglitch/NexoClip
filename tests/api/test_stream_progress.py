@@ -218,6 +218,60 @@ async def test_progress_running_step_flips_to_abandoned_after_an_hour(
     assert 'hx-trigger="every 3s"' not in body
 
 
+async def test_progress_long_step_stays_running_while_run_in_flight(
+    client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
+) -> None:
+    """A step.start >1h old is NOT abandoned while jobs.active holds a run
+    for the stream — the pipeline scales per-step timeouts with VOD duration
+    (analyze_video on a 5h VOD legitimately runs for hours), so wall clock
+    alone must not flip a live run to 'se quedó a medias' + a Córrelo button
+    that would stack a duplicate run on top of it."""
+    from nexoclip.jobs.active import pipeline_active
+
+    tenant_id = tenants["alice"]["id"]
+    await _seed_stream(db, tenant_id=tenant_id, stream_id="str_live")
+
+    started_at = (
+        _dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=2)
+    ).isoformat()
+    conn = await db.connect()
+    await conn.execute(
+        "INSERT INTO events (id, tenant_id, type, payload_json, ts) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "evt_long_alive_test",
+            tenant_id,
+            "pipeline.step.start",
+            json.dumps({"step": "analyze_video", "stream_id": "str_live"}),
+            started_at,
+        ),
+    )
+    await conn.commit()
+
+    with pipeline_active("str_live"):
+        r = await client.get(
+            "/dashboard/streams/str_live/progress",
+            headers=auth(tenants["alice"]["token"]),
+        )
+    assert r.status_code == 200
+    body = r.text
+    assert "se quedó a medias" not in body
+    assert "(en proceso…)" in body
+    # Elapsed renders in hours past the 60-minute mark.
+    assert "lleva 2h" in body
+    # Still polling — the run is alive and the card must keep refreshing.
+    assert 'hx-trigger="every 3s"' in body
+
+    # Same stale event with NO run in flight (registry released) → the
+    # original abandoned behavior stands.
+    r = await client.get(
+        "/dashboard/streams/str_live/progress",
+        headers=auth(tenants["alice"]["token"]),
+    )
+    assert r.status_code == 200
+    assert "se quedó a medias" in r.text
+
+
 async def test_progress_failed_step_surfaces_error(
     client: httpx.AsyncClient, db: Database, tenants: dict[str, dict[str, str]]
 ) -> None:

@@ -174,6 +174,12 @@ class Settings(BaseSettings):
     # itself keeps going and keeps writing step events).
     modal_pipeline_endpoint_url: str | None = None
     modal_pipeline_timeout_s: float = 21600.0  # 6h — multi-hour VODs
+    # Phase 2b — how the whisper provider hands Modal the audio. False
+    # (default, Railway): HMAC-signed URL on our own public host. True
+    # (the pipeline WORKER env): the WAV was extracted on the worker's
+    # ephemeral disk and never existed on the web box, so upload it to
+    # the object store and pass a presigned URL instead.
+    transcribe_audio_via_object_storage: bool = False
     # Slice O.44 — HMAC secret for the internal signed-URL audio
     # fetch endpoint Modal pulls from. Different secret than the
     # SSO HMAC — this one is purely internal. Pick something random;

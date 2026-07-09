@@ -50,29 +50,37 @@ def get_provider() -> TranscribeProvider:
         from .modal_whisper import ModalWhisperProvider
 
         public_url = (settings.public_url or "").strip()
+        audio_via_object_storage = bool(
+            getattr(settings, "transcribe_audio_via_object_storage", False)
+        )
         if not settings.modal_endpoint_url or not settings.modal_token:
             raise NexoClipError(
                 "transcribe_provider='modal' requires NEXOCLIP_MODAL_ENDPOINT_URL "
                 "and NEXOCLIP_MODAL_TOKEN. Run `modal deploy "
                 "infra/modal_whisper_app.py` and paste the printed URL."
             )
-        if not settings.internal_signing_secret:
-            raise NexoClipError(
-                "transcribe_provider='modal' requires "
-                "NEXOCLIP_INTERNAL_SIGNING_SECRET (random string used to sign "
-                "the audio URL Modal pulls from)."
-            )
-        if not public_url:
-            raise NexoClipError(
-                "transcribe_provider='modal' requires NEXOCLIP_PUBLIC_URL "
-                "(externally-reachable base URL Modal hits)."
-            )
+        # Phase 2b — worker mode uploads the WAV to the object store and
+        # hands Modal a presigned URL, so the signed-local-URL plumbing
+        # (signing secret + public host) isn't required there.
+        if not audio_via_object_storage:
+            if not settings.internal_signing_secret:
+                raise NexoClipError(
+                    "transcribe_provider='modal' requires "
+                    "NEXOCLIP_INTERNAL_SIGNING_SECRET (random string used to sign "
+                    "the audio URL Modal pulls from)."
+                )
+            if not public_url:
+                raise NexoClipError(
+                    "transcribe_provider='modal' requires NEXOCLIP_PUBLIC_URL "
+                    "(externally-reachable base URL Modal hits)."
+                )
         return ModalWhisperProvider(
             endpoint_url=settings.modal_endpoint_url,
             bearer_token=settings.modal_token,
-            signing_secret=settings.internal_signing_secret,
+            signing_secret=settings.internal_signing_secret or "",
             public_base_url=public_url,
             model=settings.modal_model,
+            audio_via_object_storage=audio_via_object_storage,
         )
 
     if choice == "assemblyai":

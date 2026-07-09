@@ -70,6 +70,7 @@ class ModalWhisperProvider:
         public_base_url: str,
         model: str = "small",
         request_timeout_s: float = 3600.0,
+        audio_via_object_storage: bool = False,
     ) -> None:
         self._endpoint_url = endpoint_url.rstrip("/")
         self._bearer_token = bearer_token
@@ -77,6 +78,11 @@ class ModalWhisperProvider:
         self._public_base_url = public_base_url.rstrip("/")
         self._model = model
         self._timeout_s = request_timeout_s
+        # Phase 2b — on the pipeline WORKER the WAV lives on ephemeral
+        # disk and never existed on the web box, so a signed URL against
+        # NEXOCLIP_PUBLIC_URL would 410. Upload to the object store and
+        # hand Modal a presigned URL instead.
+        self._audio_via_object_storage = audio_via_object_storage
 
     @property
     def name(self) -> str:
@@ -88,20 +94,23 @@ class ModalWhisperProvider:
                 "ModalWhisperProvider misconfigured: NEXOCLIP_MODAL_ENDPOINT_URL "
                 "and NEXOCLIP_MODAL_TOKEN must be set."
             )
-        if not self._signing_secret:
-            raise TranscriptionError(
-                "ModalWhisperProvider misconfigured: NEXOCLIP_INTERNAL_SIGNING_SECRET "
-                "must be set so Modal can pull audio from this server."
-            )
-        if not self._public_base_url:
-            raise TranscriptionError(
-                "ModalWhisperProvider misconfigured: NEXOCLIP_PUBLIC_URL must "
-                "be set to the externally-reachable base URL (e.g. "
-                "https://nexoclip.nexo-ai.world) so Modal can "
-                "fetch the audio."
-            )
-
-        audio_url = self._build_signed_audio_url(req.stream_id, req.tenant_id)
+        work_audio_key: str | None = None
+        if self._audio_via_object_storage:
+            audio_url, work_audio_key = await self._upload_audio_for_pull(req)
+        else:
+            if not self._signing_secret:
+                raise TranscriptionError(
+                    "ModalWhisperProvider misconfigured: NEXOCLIP_INTERNAL_SIGNING_SECRET "
+                    "must be set so Modal can pull audio from this server."
+                )
+            if not self._public_base_url:
+                raise TranscriptionError(
+                    "ModalWhisperProvider misconfigured: NEXOCLIP_PUBLIC_URL must "
+                    "be set to the externally-reachable base URL (e.g. "
+                    "https://nexoclip.nexo-ai.world) so Modal can "
+                    "fetch the audio."
+                )
+            audio_url = self._build_signed_audio_url(req.stream_id, req.tenant_id)
         body: dict[str, Any] = {
             "audio_url": audio_url,
             "language": req.language,
@@ -147,6 +156,8 @@ class ModalWhisperProvider:
                 f"modal whisper transport error: {e}"
             ) from e
 
+        if work_audio_key is not None:
+            await self._cleanup_work_audio(work_audio_key)
         return _modal_response_to_transcript(raw, req=req)
 
     def _build_signed_audio_url(self, stream_id: str, tenant_id: str) -> str:
@@ -164,6 +175,60 @@ class ModalWhisperProvider:
             f"{self._public_base_url}/api/internal/audio/{stream_id}"
             f"?tenant={tenant_id}&exp={exp}&sig={sig}"
         )
+
+    async def _upload_audio_for_pull(
+        self, req: TranscribeRequest
+    ) -> tuple[str, str]:
+        """Worker mode: put the local WAV in the object store and return
+        `(presigned_url, key)` for Modal to pull. The key is transient —
+        deleted best-effort once the transcript lands."""
+        from pathlib import Path
+
+        from nexoclip.integrations.storage import build_artifact_store
+        from nexoclip.settings import get_settings
+
+        store = build_artifact_store(get_settings())
+        if store is None:
+            raise TranscriptionError(
+                "ModalWhisperProvider misconfigured: "
+                "NEXOCLIP_TRANSCRIBE_AUDIO_VIA_OBJECT_STORAGE=1 requires the "
+                "NEXOCLIP_OBJECT_STORAGE_* vars (there is no public host to "
+                "serve the audio from on a worker)."
+            )
+        audio_path = Path(req.audio_path)
+        if not audio_path.is_file():
+            raise TranscriptionError(
+                f"audio file missing on worker disk: {audio_path}"
+            )
+        key = f"work/{req.tenant_id}/{req.stream_id}/audio.wav"
+        await store.upload(
+            local_path=audio_path, key=key, content_type="audio/wav"
+        )
+        # 24h TTL: far beyond any transcription runtime, well under the
+        # 7-day presign ceiling.
+        url = await store.presigned_url(key=key, ttl_seconds=24 * 3600)
+        _log.info(
+            "modal_whisper.audio_via_object_storage",
+            stream_id=req.stream_id, key=key,
+        )
+        return url, key
+
+    async def _cleanup_work_audio(self, key: str) -> None:
+        """Drop the transient work-audio object. Best-effort — a leaked
+        object costs cents and the runbook documents a bucket lifecycle
+        rule for `work/` as the backstop."""
+        try:
+            from nexoclip.integrations.storage import build_artifact_store
+            from nexoclip.settings import get_settings
+
+            store = build_artifact_store(get_settings())
+            if store is not None:
+                await store.delete(key=key)
+        except Exception as e:  # cleanup must never fail the transcript
+            _log.warning(
+                "modal_whisper.work_audio_cleanup_failed",
+                key=key, error=str(e),
+            )
 
 
 def _modal_response_to_transcript(

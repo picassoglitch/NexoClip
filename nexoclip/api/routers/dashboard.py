@@ -48,6 +48,7 @@ from nexoclip.db import (
     StreamsRepo,
     TenantsRepo,
     VariantsRepo,
+    ZernioPublishesRepo,
 )
 from nexoclip.db.models import CustomTriggerPhrases
 from nexoclip.errors import NexoClipError
@@ -4936,6 +4937,24 @@ async def stream_delete(
         raise HTTPException(
             status_code=409,
             detail="stream is currently running — wait for it to finish or fail before deleting",
+        )
+
+    # A scheduled Zernio post fetches our signed media URL only when its
+    # slot arrives — deleting the stream now cascades the clip row away
+    # and that fetch 404s days later (the user gets a "post failed"
+    # email with no visible cause). Refuse and point at the pending
+    # posts instead of silently arming the time bomb.
+    pending = await ZernioPublishesRepo(db).pending_for_stream(stream_id)
+    if pending:
+        posts = ", ".join(p["post_id"] for p in pending[:5])
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(pending)} scheduled post(s) still use this stream's "
+                f"clips ({posts}). Cancel or let them publish in the "
+                f"Publish Center first — deleting now would make them fail "
+                f"at publish time."
+            ),
         )
 
     # Resolve the on-disk stream directory BEFORE the DB row goes

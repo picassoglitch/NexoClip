@@ -160,7 +160,7 @@ async def _retention_loop(
     outcomes and swallows per-tenant errors, so a single bad tenant won't
     stall the loop.
     """
-    from nexoclip.retention import sweep_retention
+    from nexoclip.retention import reclaim_orphan_dirs, sweep_retention
 
     first = True
     while True:
@@ -168,6 +168,11 @@ async def _retention_loop(
             await asyncio.sleep(initial_delay_s if first else interval_s)
             first = False
             await sweep_retention(db, output_dir=output_dir)
+            # Orphan pass AFTER the row-driven sweep: dirs whose rows are
+            # gone (torn down by the sweep, lost in the SQLite->Postgres
+            # cutover, deleted by hand) are invisible to every row-driven
+            # reclaimer and would ratchet the volume up forever.
+            await reclaim_orphan_dirs(db, output_dir=output_dir)
         except asyncio.CancelledError:
             raise
         except Exception as e:

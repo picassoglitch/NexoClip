@@ -57,7 +57,14 @@ _IMAGE = (
     modal.Image.debian_slim(python_version="3.11")
     # ffmpeg: cut/reformat/audio-extract. libgl1 + libglib2.0-0: OpenCV's
     # runtime .so deps (opencv-python, not -headless, per the repo pin).
-    .apt_install("ffmpeg", "libgl1", "libglib2.0-0")
+    # Fonts: the cut path's drawtext branding resolves
+    # /usr/share/fonts/truetype/{dejavu,liberation}/... (clip/service.py,
+    # thumbnail_brand.py) — without these the handle/watermark overlays
+    # silently skip on the worker.
+    .apt_install(
+        "ffmpeg", "libgl1", "libglib2.0-0",
+        "fonts-dejavu-core", "fonts-liberation",
+    )
     # The package's own dependency list — single source of truth, so a
     # requirements bump on the web box reaches the worker on redeploy.
     .pip_install_from_pyproject("pyproject.toml")
@@ -65,8 +72,39 @@ _IMAGE = (
     # Local files LAST (Modal 1.x constraint): the nexoclip package and
     # the config/ dir (pipeline reads config/nexoclip[.example].yaml
     # relative to CWD, which is /root in Modal containers).
-    .add_local_dir("config", remote_path="/root/config")
+    #
+    # The gitignored operator-local config/nexoclip.yaml is EXCLUDED on
+    # purpose: Railway prod deliberately runs on nexoclip.example.yaml
+    # (the real one never ships), and the worker must use the same
+    # detection/LLM defaults as the web box — not the deploy machine's
+    # local experiments.
+    .add_local_dir(
+        "config",
+        remote_path="/root/config",
+        ignore=["nexoclip.yaml"],
+    )
     .add_local_python_source("nexoclip")
+    # add_local_python_source ships ONLY *.py files. The pipeline also
+    # needs the package's data files at runtime, overlaid onto the same
+    # /root/nexoclip tree:
+    #   - db/migrations/*.sql + db/pg_baseline.sql — apply_migrations
+    #     reads them at every db_session open (even against an
+    #     already-migrated Postgres, it must read the files to discover
+    #     versions); without them EVERY remote run dies at startup with
+    #     MigrationError.
+    #   - clip/assets/outro.mp4 — the outro end-card (append_outro only
+    #     degrades to a warning, but worker clips would silently differ
+    #     from in-process ones).
+    .add_local_dir(
+        "nexoclip/db/migrations", remote_path="/root/nexoclip/db/migrations"
+    )
+    .add_local_file(
+        "nexoclip/db/pg_baseline.sql",
+        remote_path="/root/nexoclip/db/pg_baseline.sql",
+    )
+    .add_local_dir(
+        "nexoclip/clip/assets", remote_path="/root/nexoclip/clip/assets"
+    )
 )
 
 app = modal.App("nexoclip-pipeline")

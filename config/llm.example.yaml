@@ -68,10 +68,9 @@ routing:
     primary: anthropic
     fallbacks: []
 
-  growth_score:                                 # Pre-publish Growth Score card (per-platform fit + verdict)
-    default_quality: premium
-    primary: anthropic
-    fallbacks: []
+# NOTE: the pre-publish Growth Score is now computed by a deterministic
+# scorer (nexoclip/score/growth.py) — no LLM route. The old `growth_score`
+# rule (Opus/premium) was removed; nothing should route to it.
 
 # Reliability
 retry:

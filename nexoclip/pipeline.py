@@ -77,7 +77,7 @@ from nexoclip.logging import get_logger
 from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
 from nexoclip.llm.schemas import Variant
-from nexoclip.variants import Persona, generate_variants, load_personas
+from nexoclip.variants import Persona, load_personas
 from nexoclip.vision import analyze_video as _analyze_video
 from nexoclip.vision import load_visual_signals
 
@@ -1172,14 +1172,10 @@ async def _run_pipeline(
             routing_tags=persona.routing_tags,
         )
     clip_entries: list[ClipEntry] = []
-    # Slice O.46 — variants generation is off by default (operator
-    # feedback). When disabled, we still create exactly ONE stub
-    # VariantRow per clip so the publish flow (which reads
-    # variant.caption / variant.hashtags) keeps working. The stub
-    # pulls its caption from the clip's overlay_config when set, falls
-    # back to the persona name otherwise. No LLM calls in the
-    # disabled path.
-    variants_enabled = bool(getattr(settings, "variants_enabled", False))
+    # Each clip gets exactly ONE variant row: a deterministic stub the publish
+    # flow reads its caption / hook / hashtags from (the LLM caption variant
+    # generator was removed). The stub's caption comes from the clip's
+    # overlay_config when set, else the persona name. No LLM calls here.
     # Auto-hook: generate a viral title for EVERY clip so the editor, the
     # render burn, and auto-publish all get a hook without a manual "Generar 5".
     # (Was gated on the raw candidate score, which is uniformly low for YouTube
@@ -1194,42 +1190,30 @@ async def _run_pipeline(
                     tenant_id=tenant_id, router=router,
                     stream_title=stream.title or "",
                 )
-            if variants_enabled:
-                variants = await generate_variants(
-                    tenant_id=tenant_id,
-                    clip=clip,
-                    persona=persona,
-                    router=router,
-                    n=n_variants,
-                    language=language,
-                    quality=quality,
-                    force=force,
+            # One stub variant per clip, captioned from the overlay or a
+            # sensible fallback. The dashboard editor + the publish flow both
+            # read .caption; the operator can edit it via the overlay form
+            # before shipping.
+            stub_caption = ""
+            overlay = getattr(clip, "overlay_config", None)
+            if isinstance(overlay, dict):
+                stub_caption = (
+                    overlay.get("title_text")
+                    or overlay.get("top_hook", {}).get("text", "")
+                    if isinstance(overlay.get("top_hook"), dict)
+                    else overlay.get("title_text") or ""
+                ) or ""
+            if not stub_caption:
+                stub_caption = persona.name
+            variants = [
+                Variant(
+                    id="v_stub",
+                    language=language or persona.primary_language or "es",
+                    caption=str(stub_caption)[:240],
+                    title_card_text=auto_hook,
+                    hashtags=[],
                 )
-            else:
-                # Stub path — one row per clip, captioned from overlay
-                # or a sensible fallback. The dashboard editor + the
-                # publish flow both read .caption; the operator can
-                # edit it via the overlay form before shipping.
-                stub_caption = ""
-                overlay = getattr(clip, "overlay_config", None)
-                if isinstance(overlay, dict):
-                    stub_caption = (
-                        overlay.get("title_text")
-                        or overlay.get("top_hook", {}).get("text", "")
-                        if isinstance(overlay.get("top_hook"), dict)
-                        else overlay.get("title_text") or ""
-                    ) or ""
-                if not stub_caption:
-                    stub_caption = persona.name
-                variants = [
-                    Variant(
-                        id="v_stub",
-                        language=language or persona.primary_language or "es",
-                        caption=str(stub_caption)[:240],
-                        title_card_text=auto_hook,
-                        hashtags=[],
-                    )
-                ]
+            ]
             # Stamp the viral default overlay so the clip ships non-plain even
             # when it never passes through the editor: captions on, the hook as
             # the top headline, and a source-credit "marca" banner carrying the

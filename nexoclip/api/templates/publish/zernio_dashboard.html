@@ -850,22 +850,19 @@
                   placeholder="@minombre · sígueme en Kick · #gaming #clips"></textarea>
       </label>
 
-      {# 7 · Growth Engine (Phases 1-6) #}
+      {# 7 · Smart publishing — deterministic per-platform rulebook (no LLM) #}
       <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;
                   display:flex; flex-direction:column; gap:14px;">
-        <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
-          <input type="checkbox" id="zn-ap-growth" style="margin-top:4px; transform:scale(1.2);">
-          <span>
-            <strong style="font-size:14px;">⚡ Motor de Crecimiento (beta)</strong>
-            <div class="nc-text--muted" style="font-size:13px; margin-top:2px;">
-              En vez de “publicar todo en todas partes”, la IA calcula un Growth
-              Score por clip y plataforma, respeta el límite diario de cada red,
-              evita repetir contenido parecido, y reparte los mejores clips donde
-              más rinden. El resto espera en la cola.
-            </div>
-          </span>
-        </label>
-        <div id="zn-growth-opts" style="display:none; flex-direction:column; gap:14px; padding-left:6px;">
+        <div>
+          <strong style="font-size:14px;">⚡ Publicación inteligente</strong>
+          <div class="nc-text--muted" style="font-size:13px; margin-top:2px;">
+            En vez de “publicar todo en todas partes”, cada clip se puntúa por
+            plataforma según su duración y calidad, se respeta el límite diario
+            de cada red, se evita repetir contenido parecido, y se reparten los
+            mejores clips primero. El resto espera en la cola. Todo automático.
+          </div>
+        </div>
+        <div id="zn-growth-opts" style="display:flex; flex-direction:column; gap:14px; padding-left:6px;">
           <div style="display:flex; flex-wrap:wrap; gap:24px;">
             <label class="nc-label" style="margin:0;">
               <strong style="font-size:14px;">¿Cuántos clips hoy?</strong>
@@ -2487,15 +2484,12 @@
           var bucket = thr <= 0.45 ? "0.3" : (thr >= 0.7 ? "0.8" : "0.6");
           document.getElementById("zn-ap-threshold").value = bucket;
           document.getElementById("zn-ap-tagsuffix").value = s.tag_suffix || "";
-          // Growth Engine knobs.
-          var growthOn = !!s.growth_engine;
-          document.getElementById("zn-ap-growth").checked = growthOn;
-          document.getElementById("zn-growth-opts").style.display = growthOn ? "flex" : "none";
+          // Smart-publishing knobs (always on — deterministic, no LLM).
           document.getElementById("zn-ap-growthmin").value =
             (s.growth_min_score == null ? 40 : s.growth_min_score);
           document.getElementById("zn-ap-budget").value =
             (s.daily_clip_budget == null ? "" : s.daily_clip_budget);
-          if (growthOn) { loadPacingRules(); }
+          loadPacingRules();
           var selected = (s.targets || "").split(",").filter(function (t) { return t; });
           renderApTargets(b.platforms || [], selected);
           var used = document.getElementById("zn-ap-used");
@@ -2507,7 +2501,7 @@
         })
         .catch(function () {});
     }
-    // ---- Growth Engine: toggle + per-platform rulebook ----
+    // ---- Smart publishing: per-platform rulebook ----
     function renderPacingRules(rules) {
       var host = document.getElementById("zn-rules-table");
       if (!rules || !rules.length) { host.textContent = "Sin reglas."; return; }
@@ -2571,12 +2565,6 @@
         .then(function (b) { renderPacingRules(b.rules || []); })
         .catch(function () {});
     }
-    document.getElementById("zn-ap-growth").addEventListener("change", function () {
-      var on = this.checked;
-      document.getElementById("zn-growth-opts").style.display = on ? "flex" : "none";
-      if (on) { loadPacingRules(); }
-    });
-
     document.getElementById("zn-ap-save").addEventListener("click", function () {
       var msg = document.getElementById("zn-ap-msg");
       msg.textContent = "Guardando…"; msg.style.color = "";
@@ -2599,7 +2587,6 @@
           daily_cap: parseInt(document.getElementById("zn-ap-cap").value, 10) || 0,
           score_threshold: parseFloat(document.getElementById("zn-ap-threshold").value) || 0,
           tag_suffix: document.getElementById("zn-ap-tagsuffix").value || "",
-          growth_engine: document.getElementById("zn-ap-growth").checked,
           growth_min_score: parseInt(document.getElementById("zn-ap-growthmin").value, 10) || 0,
           daily_clip_budget: document.getElementById("zn-ap-budget").value || null,
         }),

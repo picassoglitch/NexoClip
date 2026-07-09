@@ -5,9 +5,8 @@ Phase 2 ships only the in-memory `MemoryFrameStore` (the existing
 implementation - same surface, the worker pool reads from object storage
 instead of process-local memory.
 
-Callers (`generate_variants`, vision rescore, vision smart crop / thumb
-pickers) accept the protocol; they never need to know which backend
-they're talking to.
+Callers (vision rescore, vision smart crop / thumb pickers) accept the
+protocol; they never need to know which backend they're talking to.
 """
 
 from __future__ import annotations

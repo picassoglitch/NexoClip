@@ -1,9 +1,8 @@
 """Viral-hook variant generator — voice-markers spec slice F.7-B.
 
-Distinct from `variants.service.generate_variants` (which writes
-captions in a persona's voice). This generator's only job is to
-produce 5 candidate TITLE LINES — the bold-on-white text that sits
-at the top of the rendered clip and drives the swipe rate.
+This generator's only job is to produce candidate TITLE LINES — the
+bold-on-white text that sits at the top of the rendered clip and drives
+the swipe rate. (The old persona-voice caption generator was removed.)
 
 Pipeline:
     persona context + clip transcript snippet + tone preset

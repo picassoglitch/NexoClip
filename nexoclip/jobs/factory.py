@@ -15,8 +15,9 @@ def get_dispatcher(*, runner: PipelineRunner | None = None) -> JobDispatcher:
 
     Args:
         runner: Required when `job_dispatcher == "in_process"` — the
-            actual coroutine the dispatcher invokes. Ignored by cloud
-            dispatchers (they marshal the kickoff to their own runtime).
+            actual coroutine the dispatcher invokes. The Modal dispatcher
+            uses it too, to build its in-process FALLBACK for sources
+            that exist only on this box (`upload://`, `live://`).
 
     Defaults to "in_process" so existing deployments don't change behavior.
     """
@@ -30,7 +31,8 @@ def get_dispatcher(*, runner: PipelineRunner | None = None) -> JobDispatcher:
         return InProcessJobDispatcher(runner)
 
     if choice == "modal":
-        return ModalJobDispatcher()
+        fallback = InProcessJobDispatcher(runner) if runner is not None else None
+        return ModalJobDispatcher(fallback=fallback)
 
     raise NexoClipError(
         f"unknown job_dispatcher {choice!r}; expected one of "

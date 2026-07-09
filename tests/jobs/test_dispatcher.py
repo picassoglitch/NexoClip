@@ -112,19 +112,26 @@ def test_in_process_name_is_stable() -> None:
     assert InProcessJobDispatcher(lambda _: asyncio.sleep(0)).name == "in-process"
 
 
-# ---- ModalJobDispatcher (stub) ----
+# ---- ModalJobDispatcher (construction contract; behavior in
+# ---- test_modal_dispatcher.py) ----
 
 
-def test_modal_raises_until_wired() -> None:
-    """Modal dispatcher is a stub; trying to use it before F.10+ must
-    fail loudly with an actionable message, not silently drop the job."""
-    dispatcher = ModalJobDispatcher()
-    with pytest.raises(NexoClipError, match="ModalJobDispatcher is a stub"):
-        asyncio.run(dispatcher.dispatch_pipeline(_make_kickoff()))
+def test_modal_raises_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Constructing without endpoint/token must fail loudly with an
+    actionable message — `create_app`'s defensive boot catches this and
+    falls back to in-process, so a half-configured deploy still serves."""
+    monkeypatch.delenv("NEXOCLIP_MODAL_PIPELINE_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("NEXOCLIP_MODAL_TOKEN", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(NexoClipError, match="misconfigured"):
+        ModalJobDispatcher()
 
 
 def test_modal_name_is_stable() -> None:
-    assert ModalJobDispatcher().name == "modal"
+    d = ModalJobDispatcher(
+        endpoint_url="https://modal.test", bearer_token="bear"
+    )
+    assert d.name == "modal"
 
 
 # ---- factory.get_dispatcher ----
@@ -140,12 +147,24 @@ def test_factory_defaults_to_in_process(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_factory_picks_modal_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """NEXOCLIP_JOB_DISPATCHER=modal → ModalJobDispatcher (still raises
-    on dispatch, but the factory must return the right impl)."""
+    """NEXOCLIP_JOB_DISPATCHER=modal (+ endpoint/token) → ModalJobDispatcher,
+    with the in-process fallback wired when a runner is available."""
     monkeypatch.setenv("NEXOCLIP_JOB_DISPATCHER", "modal")
+    monkeypatch.setenv(
+        "NEXOCLIP_MODAL_PIPELINE_ENDPOINT_URL", "https://modal.test/pipeline"
+    )
+    monkeypatch.setenv("NEXOCLIP_MODAL_TOKEN", "bear")
     get_settings.cache_clear()
-    d = get_dispatcher(runner=None)
-    assert isinstance(d, ModalJobDispatcher)
+    try:
+        d = get_dispatcher(runner=_RunnerProbe())
+        assert isinstance(d, ModalJobDispatcher)
+        assert isinstance(d._fallback, InProcessJobDispatcher)
+        # No runner → no fallback, but the dispatcher still constructs.
+        d2 = get_dispatcher(runner=None)
+        assert isinstance(d2, ModalJobDispatcher)
+        assert d2._fallback is None
+    finally:
+        get_settings.cache_clear()
 
 
 def test_factory_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:

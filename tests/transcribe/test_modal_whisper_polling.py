@@ -31,10 +31,13 @@ from nexoclip.transcribe.providers.base import TranscribeRequest
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the poll loop tick instantly."""
+    """Make the poll loop tick instantly. The loop lives in
+    `nexoclip.integrations.modal_http` (shared since Phase 2b) and calls
+    `asyncio.sleep` — patching the module attribute is global, so this
+    covers it regardless of which module runs the loop."""
     async def _noop(_s: float) -> None:
         return None
-    monkeypatch.setattr(modal_whisper.asyncio, "sleep", _noop)
+    monkeypatch.setattr(asyncio, "sleep", _noop)
 
 
 def _make_provider(endpoint: str = "https://modal.test") -> modal_whisper.ModalWhisperProvider:
@@ -207,8 +210,10 @@ async def test_polling_respects_deadline(
         real_calls["n"] += 1
         await _REAL_SLEEP(0.001)
 
-    monkeypatch.setattr(modal_whisper.asyncio, "sleep", _short_sleep)
+    monkeypatch.setattr(asyncio, "sleep", _short_sleep)
     # Shrink the per-poll interval so the deadline math triggers quickly.
+    # (The provider reads its module-level constant at call time and
+    # passes it into the shared poll loop, so this patch still bites.)
     monkeypatch.setattr(modal_whisper, "_POLL_INTERVAL_S", 0.01)
     _patch_client(monkeypatch, handler)
 

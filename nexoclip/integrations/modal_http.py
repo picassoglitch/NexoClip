@@ -78,10 +78,11 @@ async def poll_until_terminal(
             return current
         # Resolve the (possibly relative) Location against the response's
         # own request URL so trailing-slash + query-string cases stay
-        # correct on Modal's hostnames.
-        next_url = httpx.URL(location)
-        if not next_url.is_absolute_url:
-            next_url = httpx.URL(location, base=str(current.request.url))
+        # correct on Modal's hostnames. URL.join handles both absolute
+        # and relative Locations (httpx.URL has no `base=` kwarg — the
+        # code this was extracted from would have raised TypeError on
+        # the first relative redirect).
+        next_url = current.request.url.join(location)
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:

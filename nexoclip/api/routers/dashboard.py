@@ -4160,10 +4160,17 @@ async def clip_download(
     # transition is atomic on (state != 'rendering') so a concurrent
     # request for the same clip is a no-op.
     if not original.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"source clip file missing from disk: {original}",
-        )
+        # Phase 2a — the local copy may have been reclaimed (retention,
+        # or the pipeline ran on a worker). The render needs real local
+        # bytes; pull the bucket copy back into place before giving up.
+        from nexoclip.api._artifacts import rehydrate_clip
+        if not await rehydrate_clip(
+            tenant_id=tenant_id, clip_id=clip_id, clip_path=original
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"source clip file missing from disk: {original}",
+            )
 
     await ClipsRepo(db).mark_render_started(clip_id)
 
@@ -4519,7 +4526,7 @@ async def clip_media(
     source: str = "original",
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
-) -> FileResponse:
+) -> Response:
     """Stream the cut MP4 for inline <video> playback on the clip detail page.
 
     Slice M.6 — defaults to the ORIGINAL `clip.mp4` (no burns).
@@ -4544,6 +4551,15 @@ async def clip_media(
     original = Path(clip.path)
     final = original.parent / "clip_final.mp4"
 
+    # Phase 2a — the Final tab's auto-burn below needs the original bytes
+    # on local disk. If retention (or a worker-run pipeline) reclaimed
+    # them, pull the bucket copy back before deciding what to serve.
+    if source == "final" and not final.exists() and not original.exists():
+        from nexoclip.api._artifacts import rehydrate_clip
+        await rehydrate_clip(
+            tenant_id=tenant_id, clip_id=clip_id, clip_path=original
+        )
+
     # Slice O.13 — when the editor's "Final" tab requests the burned
     # version and it's missing on disk, regenerate on the fly using
     # the saved overlay_config. Guarantees the Final tab is never a
@@ -4565,6 +4581,16 @@ async def clip_media(
         # to final only if the original is missing for some reason.
         clip_path = original if original.exists() else final
     if not clip_path.exists():
+        # Phase 2a — no local copy at all: serve the bucket copy of the
+        # cut original via redirect (no bytes through the web box). The
+        # redirect is minted blind — a missing object 404s at the bucket
+        # exactly like the local miss 404s here.
+        from nexoclip.api._artifacts import artifact_redirect_url
+        from nexoclip.integrations.storage import clip_media_key
+
+        url = await artifact_redirect_url(clip_media_key(tenant_id, clip_id))
+        if url is not None:
+            return RedirectResponse(url=url, status_code=302)
         raise HTTPException(
             status_code=404,
             detail=f"clip file missing from disk: {clip_path}",
@@ -4582,7 +4608,7 @@ async def clip_thumbnail(
     clip_id: str,
     tenant_id: str = Depends(tenant_binder),
     db: Database = Depends(get_db),
-) -> FileResponse:
+) -> Response:
     """Serve the per-clip thumbnail JPEG for the inbox clip cards.
 
     Returns 404 when the clip row has no `thumbnail_frame_path` (the
@@ -4595,6 +4621,16 @@ async def clip_thumbnail(
         raise HTTPException(status_code=404, detail="no thumbnail for this clip")
     thumb_path = Path(clip.thumbnail_frame_path)
     if not thumb_path.exists():
+        # Phase 2a — serve the bucket copy when the local one is gone
+        # (retention reclaim, or the pipeline ran on a worker).
+        from nexoclip.api._artifacts import artifact_redirect_url
+        from nexoclip.integrations.storage import clip_thumbnail_key
+
+        url = await artifact_redirect_url(
+            clip_thumbnail_key(tenant_id, clip_id)
+        )
+        if url is not None:
+            return RedirectResponse(url=url, status_code=302)
         raise HTTPException(
             status_code=404,
             detail=f"thumbnail file missing from disk: {thumb_path}",
@@ -4856,11 +4892,17 @@ async def clip_waveform(
         raise HTTPException(status_code=404, detail="clip not found")
     clip_path = Path(clip.path)
     if not clip_path.exists():
-        return Response(
-            content="[]",
-            media_type="application/json",
-            headers={"Cache-Control": "no-store"},
-        )
+        # Phase 2a — waveform extraction needs local bytes; pull the
+        # bucket copy back before degrading to the flat baseline.
+        from nexoclip.api._artifacts import rehydrate_clip
+        if not await rehydrate_clip(
+            tenant_id=tenant_id, clip_id=clip_id, clip_path=clip_path
+        ):
+            return Response(
+                content="[]",
+                media_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
     peaks = load_or_compute_waveform(clip_path)
     return Response(
         content=_json.dumps(peaks),
@@ -4941,11 +4983,32 @@ async def stream_delete(
     except Exception:  # noqa: BLE001 — path parsing failures are non-fatal
         stream_dir = None
 
+    # Phase 2a — collect this stream's clip ids BEFORE the cascade so we
+    # can drop their bucket copies too. Best-effort, like the fs cleanup.
+    clip_ids: list[str] = []
+    try:
+        clip_ids = [c.id for c in await ClipsRepo(db).list_for_stream(stream_id)]
+    except Exception:  # bucket cleanup is best-effort
+        clip_ids = []
+
     deleted = await repo.delete(stream_id)
     if not deleted:
         # Shouldn't happen — we just fetched the row — but if a parallel
         # delete beat us, treat it as a no-op success.
         return RedirectResponse(url="/dashboard/streams", status_code=303)
+
+    if clip_ids:
+        from nexoclip.integrations.storage import (
+            build_artifact_store,
+            clip_key_family,
+        )
+        from nexoclip.settings import get_settings
+
+        _store = build_artifact_store(get_settings())
+        if _store is not None:
+            for cid in clip_ids:
+                for key in clip_key_family(tenant_id, cid):
+                    await _store.delete(key=key)
 
     # Best-effort filesystem cleanup. Failures here don't fail the
     # delete — the DB row is already gone, the operator's goal is

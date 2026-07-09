@@ -1129,6 +1129,34 @@ async def _run_pipeline(
                         error=str(e),
                     )
 
+    # 4c) offload clip artifacts to object storage — Phase 2a. Runs AFTER
+    # auto-correct because the trim re-cuts clip.mp4 in place; uploading
+    # earlier would persist the pre-trim bytes. Best-effort and quiet (no
+    # pipeline step event — the dashboard's six-step card stays as-is).
+    if clips:
+        from nexoclip.integrations.storage import build_artifact_store
+
+        _store = build_artifact_store(settings)
+        if _store is not None:
+            from nexoclip.clip import offload_clip_artifacts
+
+            try:
+                _uploaded = await offload_clip_artifacts(
+                    _store, tenant_id=tenant_id, clips=clips, force=force,
+                )
+                _log.info(
+                    "pipeline.artifacts_offloaded",
+                    stream_id=stream.id,
+                    clip_count=len(clips),
+                    objects_uploaded=_uploaded,
+                )
+            except Exception as e:  # never break the pipeline on offload
+                _log.warning(
+                    "pipeline.artifact_offload_failed",
+                    stream_id=stream.id,
+                    error=str(e),
+                )
+
     # 5) variants per clip — reuse the router built above for detect+viral.
     if db is not None:
         # Persona must exist in DB so variants can FK to it.

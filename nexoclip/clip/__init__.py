@@ -16,6 +16,7 @@ from .auto_correct import (
     auto_correct_clip,
     load_auto_corrections,
 )
+from .offload import ensure_local_clip, offload_clip_artifacts
 from .publishability import (
     DirectorLine,
     PublishabilityVerdict,
@@ -83,9 +84,11 @@ __all__ = [
     "cut_clips",
     "cut_window",
     "director_lines",
+    "ensure_local_clip",
     "lines_to_json",
     "load_auto_corrections",
     "load_clips",
     "load_or_compute_waveform",
+    "offload_clip_artifacts",
     "plan_clip_window",
 ]

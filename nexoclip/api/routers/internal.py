@@ -160,8 +160,14 @@ def mint_signed_clip_url(
 
 
 def artifact_key_for_clip(tenant_id: str, clip_id: str) -> str:
-    """Bucket key for a clip's burned-in publish render. Tenant-namespaced."""
-    return f"clips/{tenant_id}/{clip_id}/clip_render_1080.mp4"
+    """Bucket key for a clip's burned-in publish render. Tenant-namespaced.
+
+    Delegates to the shared key family in `nexoclip.integrations.storage`
+    (Phase 2a) so the pipeline/retention and this router can never drift.
+    """
+    from nexoclip.integrations.storage import clip_render_key
+
+    return clip_render_key(tenant_id, clip_id)
 
 
 async def resolve_publish_media_url(

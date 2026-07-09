@@ -305,6 +305,84 @@ async def reclaim_sources_until_free(
     return freed, reached
 
 
+async def reclaim_orphan_dirs(
+    db: Database,
+    *,
+    output_dir: Path,
+    grace_s: float = 24 * 3600.0,
+) -> tuple[int, int]:
+    """Delete per-stream dirs on disk that have NO `streams` row left.
+
+    Every other reclaimer here is DB-driven — it walks stream ROWS and
+    unlinks the files they point to. A directory whose row is gone (the
+    SQLite -> Postgres cutover stranded 188 dirs / ~266 GB of these; a
+    row hard-deleted while its unlink partially failed leaves more) is
+    invisible to all of them forever, so the volume ratchets up with
+    garbage no window can age out. This pass closes that gap: anything
+    under `output_dir` shaped like a stream dir that no row claims gets
+    reclaimed.
+
+    Safety rails, in order:
+      * Refuses to act when the streams table is EMPTY — a populated
+        volume next to an empty table smells like a mispointed
+        DATABASE_URL, not 100% garbage. Deleting everything on that
+        signal would be catastrophic; log and bail instead.
+      * Skips ids registered in `jobs.active` (a run in flight whose row
+        was deleted mid-run must keep its working dir).
+      * Skips dirs with ANY write inside `grace_s` — an in-flight
+        download can exist moments before its row lands, and mtime is
+        the only signal that covers every such race.
+      * Only `str_*` dirs directly under `output_dir`; never files, never
+        other layouts.
+
+    Returns (dirs_deleted, bytes_freed).
+    """
+    from nexoclip.jobs.active import active_stream_ids
+
+    output_dir = Path(output_dir).resolve()
+    conn = await db.connect()
+    cur = await conn.execute("SELECT id FROM streams")
+    db_ids = {row["id"] for row in await cur.fetchall()}
+    if not db_ids:
+        _log.warning(
+            "retention.orphan_sweep_refused",
+            reason="streams table is empty — refusing to treat the whole "
+                   "volume as orphaned (mispointed DATABASE_URL?)",
+        )
+        return 0, 0
+
+    in_flight = active_stream_ids()
+    now = time.time()
+    deleted = 0
+    freed = 0
+    try:
+        entries = sorted(os.listdir(output_dir))
+    except OSError:
+        return 0, 0
+    for name in entries:
+        if not name.startswith("str_") or name in db_ids or name in in_flight:
+            continue
+        path = output_dir / name
+        if not path.is_dir():
+            continue
+        newest = 0.0
+        with contextlib.suppress(OSError):
+            newest = path.stat().st_mtime
+        for child in path.rglob("*"):
+            with contextlib.suppress(OSError):
+                newest = max(newest, child.stat().st_mtime)
+        if now - newest < grace_s:
+            continue
+        freed += _safe_unlink(path)
+        deleted += 1
+    if deleted:
+        _log.info(
+            "retention.orphan_sweep_done",
+            dirs_deleted=deleted, bytes_freed=freed,
+        )
+    return deleted, freed
+
+
 async def sweep_retention(
     db: Database,
     *,

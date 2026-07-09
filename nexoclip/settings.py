@@ -164,6 +164,16 @@ class Settings(BaseSettings):
     modal_endpoint_url: str | None = None
     modal_token: str | None = None
     modal_model: str = "small"
+    # Phase 2b — Modal PIPELINE worker (separate app from the whisper
+    # one). The endpoint is the URL Modal prints for the `run_pipeline`
+    # web function of `modal deploy infra/modal_pipeline_app.py`; the
+    # bearer is the same `modal_token` shared secret. Set
+    # `NEXOCLIP_JOB_DISPATCHER=modal` to route http(s)-VOD pipeline runs
+    # there. `modal_pipeline_timeout_s` bounds how long the dispatcher
+    # polls one run before giving up on *tracking* it (the remote run
+    # itself keeps going and keeps writing step events).
+    modal_pipeline_endpoint_url: str | None = None
+    modal_pipeline_timeout_s: float = 21600.0  # 6h — multi-hour VODs
     # Slice O.44 — HMAC secret for the internal signed-URL audio
     # fetch endpoint Modal pulls from. Different secret than the
     # SSO HMAC — this one is purely internal. Pick something random;

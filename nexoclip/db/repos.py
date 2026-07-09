@@ -3989,6 +3989,34 @@ class ZernioPublishesRepo:
         )
         return {str(dict(r)["clip_id"]) for r in await cur.fetchall()}
 
+    async def pending_for_stream(self, stream_id: str) -> list[dict[str, str]]:
+        """Publish rows still WAITING to fire whose clip belongs to
+        `stream_id` — the guard set for stream deletion. Deleting a stream
+        cascades its clip rows, and a scheduled Zernio post whose clip row
+        is gone 404s at publish time (the vendor fetches our signed media
+        URL only when the slot arrives). Pending = the pre-flight states;
+        posted/failed/cancelled/draft rows don't block anything.
+        """
+        tenant_id = current_tenant_id()
+        conn = await self._db.connect()
+        cur = await conn.execute(
+            "SELECT zp.post_id, zp.clip_id, zp.status, zp.scheduled_for "
+            "FROM zernio_publishes zp JOIN clips c ON c.id = zp.clip_id "
+            "WHERE zp.tenant_id = ? AND c.tenant_id = ? AND c.stream_id = ? "
+            "AND COALESCE(zp.status, '') IN "
+            "('scheduled', 'pending', 'queued', 'publishing', 'processing')",
+            (tenant_id, tenant_id, stream_id),
+        )
+        return [
+            {
+                "post_id": str(d["post_id"]),
+                "clip_id": str(d["clip_id"]),
+                "status": str(d["status"]),
+                "scheduled_for": str(d["scheduled_for"] or ""),
+            }
+            for d in (dict(r) for r in await cur.fetchall())
+        ]
+
     async def exists_for_clip(self, tenant_id: str, clip_id: str) -> bool:
         """True if this clip already has a LIVE publish record — the
         idempotency guard for hands-free auto-publish (don't re-post on

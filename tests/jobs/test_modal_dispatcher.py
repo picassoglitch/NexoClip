@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -28,9 +29,14 @@ _REAL_ASYNC_CLIENT = httpx.AsyncClient  # capture BEFORE any monkeypatch
 
 
 @pytest.fixture(autouse=True)
-def _clean_active_registry() -> None:
+def _clean_active_registry() -> Iterator[None]:
+    """Clear the process-global registry before AND after each test —
+    the dedup test registers a stream it never releases, which would
+    otherwise leak into later-collected test files."""
     from nexoclip.jobs import active
 
+    active._active.clear()
+    yield
     active._active.clear()
 
 
@@ -208,6 +214,34 @@ async def test_303_polling_flow_reaches_terminal(
     assert gets["n"] == 3
     assert errors == []
     assert "str_TEST" not in active_stream_ids()
+
+
+async def test_polling_follows_relative_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Modal's Location header is documented as relative
+    (`?__modal_function_call_id=fc-...`) — the loop must resolve it
+    against the request URL, not choke on it."""
+    gets = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                303, headers={"location": "?__modal_function_call_id=fc-1"}
+            )
+        gets["n"] += 1
+        assert request.url.params.get("__modal_function_call_id") == "fc-1"
+        return httpx.Response(200, json={"status": "done"})
+
+    d = _dispatcher()
+    _patch_client(monkeypatch, handler)
+    errors = _no_failure_emit(d)
+
+    await d.dispatch_pipeline(_make_kickoff())
+    await d.drain()
+
+    assert gets["n"] == 1
+    assert errors == []
 
 
 async def test_http_error_emits_pipeline_failed(

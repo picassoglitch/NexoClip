@@ -530,7 +530,17 @@ async def ensure_clip_rendered(
     #    mark_render_started is atomic on (state != 'rendering') so a
     #    concurrent publish doesn't double-dispatch.
     if not original.exists():
-        raise RuntimeError(f"source clip file missing from disk: {original}")
+        # Phase 2a — the local copy may have been reclaimed (retention,
+        # or the pipeline ran on a worker). The render needs real local
+        # bytes; pull the bucket copy back before failing the publish.
+        from nexoclip.api._artifacts import rehydrate_clip
+
+        if not await rehydrate_clip(
+            tenant_id=tenant_id, clip_id=clip_id, clip_path=original
+        ):
+            raise RuntimeError(
+                f"source clip file missing from disk: {original}"
+            )
     with bound_tenant(tenant_id):
         await repo.mark_render_started(clip_id)
     await render_clip_in_background(

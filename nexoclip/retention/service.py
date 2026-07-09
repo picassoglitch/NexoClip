@@ -467,6 +467,23 @@ async def _sweep_one_tenant(
         (tenant_id, clip_cutoff),
     )
     clip_rows = await cur.fetchall()
+    # Phase 2a — the bucket mirrors the clip row's lifecycle: when the row
+    # goes, its object-store copies (clip.mp4 / thumbnail / publish render)
+    # go too, or the bucket accumulates unreachable objects forever.
+    artifact_store = None
+    if clip_rows and not dry_run:
+        try:
+            from nexoclip.integrations.storage import build_artifact_store
+            from nexoclip.settings import get_settings
+
+            artifact_store = build_artifact_store(get_settings())
+        except Exception as e:  # a bad endpoint config must not stop the sweep
+            _log.warning(
+                "retention.artifact_store_unavailable",
+                tenant_id=tenant_id,
+                error=str(e),
+            )
+            artifact_store = None
     for row in clip_rows:
         clip_id = row["id"]
         clip_path = Path(row["path"]) if row["path"] else None
@@ -475,6 +492,13 @@ async def _sweep_one_tenant(
         # branded variants, metadata.json in one shot.
         if clip_path and not dry_run:
             bytes_freed += _safe_unlink(clip_path.parent)
+        if artifact_store is not None:
+            from nexoclip.integrations.storage import clip_key_family
+
+            for key in clip_key_family(tenant_id, clip_id):
+                # store.delete is best-effort (suppresses errors); a failed
+                # bucket delete never blocks the row delete.
+                await artifact_store.delete(key=key)
         if not dry_run:
             await conn.execute(
                 "DELETE FROM clips WHERE id = ? AND tenant_id = ?",

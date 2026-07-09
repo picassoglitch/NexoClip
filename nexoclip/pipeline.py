@@ -1134,13 +1134,16 @@ async def _run_pipeline(
     # earlier would persist the pre-trim bytes. Best-effort and quiet (no
     # pipeline step event — the dashboard's six-step card stays as-is).
     if clips:
-        from nexoclip.integrations.storage import build_artifact_store
+        try:
+            # build_artifact_store is inside the guard too — a malformed
+            # endpoint URL raises from boto3.client, and a config typo
+            # must not kill a run whose clips already exist.
+            from nexoclip.integrations.storage import build_artifact_store
 
-        _store = build_artifact_store(settings)
-        if _store is not None:
-            from nexoclip.clip import offload_clip_artifacts
+            _store = build_artifact_store(settings)
+            if _store is not None:
+                from nexoclip.clip import offload_clip_artifacts
 
-            try:
                 _uploaded = await offload_clip_artifacts(
                     _store, tenant_id=tenant_id, clips=clips, force=force,
                 )
@@ -1150,12 +1153,12 @@ async def _run_pipeline(
                     clip_count=len(clips),
                     objects_uploaded=_uploaded,
                 )
-            except Exception as e:  # never break the pipeline on offload
-                _log.warning(
-                    "pipeline.artifact_offload_failed",
-                    stream_id=stream.id,
-                    error=str(e),
-                )
+        except Exception as e:  # never break the pipeline on offload
+            _log.warning(
+                "pipeline.artifact_offload_failed",
+                stream_id=stream.id,
+                error=str(e),
+            )
 
     # 5) variants per clip — reuse the router built above for detect+viral.
     if db is not None:

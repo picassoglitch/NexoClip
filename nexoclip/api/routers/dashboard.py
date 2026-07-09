@@ -4998,17 +4998,23 @@ async def stream_delete(
         return RedirectResponse(url="/dashboard/streams", status_code=303)
 
     if clip_ids:
-        from nexoclip.integrations.storage import (
-            build_artifact_store,
-            clip_key_family,
-        )
-        from nexoclip.settings import get_settings
+        try:
+            from nexoclip.integrations.storage import (
+                build_artifact_store,
+                clip_key_family,
+            )
+            from nexoclip.settings import get_settings
 
-        _store = build_artifact_store(get_settings())
-        if _store is not None:
-            for cid in clip_ids:
-                for key in clip_key_family(tenant_id, cid):
-                    await _store.delete(key=key)
+            _store = build_artifact_store(get_settings())
+            if _store is not None:
+                for cid in clip_ids:
+                    for key in clip_key_family(tenant_id, cid):
+                        await _store.delete(key=key)
+        except Exception:  # rows are gone; bucket cleanup stays best-effort
+            import structlog
+            structlog.get_logger("nexoclip.api.dashboard").warning(
+                "stream_delete.bucket_cleanup_failed", stream_id=stream_id
+            )
 
     # Best-effort filesystem cleanup. Failures here don't fail the
     # delete — the DB row is already gone, the operator's goal is

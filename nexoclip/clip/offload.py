@@ -52,6 +52,13 @@ async def offload_clip_artifacts(
         clip_id = str(getattr(clip, "id", "") or "")
         if not clip_id:
             continue
+        # The pipeline's Clip model calls it `thumbnail_path`; the DB row
+        # (ClipRow) calls the same file `thumbnail_frame_path`. Accept
+        # either so both shapes offload correctly.
+        thumbnail = (
+            getattr(clip, "thumbnail_path", None)
+            or getattr(clip, "thumbnail_frame_path", None)
+        )
         targets = [
             (
                 getattr(clip, "path", None),
@@ -59,7 +66,7 @@ async def offload_clip_artifacts(
                 "video/mp4",
             ),
             (
-                getattr(clip, "thumbnail_frame_path", None),
+                thumbnail,
                 clip_thumbnail_key(tenant_id, clip_id),
                 "image/jpeg",
             ),
@@ -104,14 +111,25 @@ async def ensure_local_clip(
         return True
     if store is None:
         return False
+    # Download to a unique temp name + atomic rename: two concurrent
+    # byte-needing requests (waveform + download) for the same reclaimed
+    # clip must never observe a torn half-written file.
+    import os
+    import uuid
+
+    tmp = clip_path.with_name(
+        f"{clip_path.name}.rehydrating-{uuid.uuid4().hex[:8]}"
+    )
     got = await store.download(
-        key=clip_media_key(tenant_id, clip_id), dest=clip_path
+        key=clip_media_key(tenant_id, clip_id), dest=tmp
     )
     if got is None:
+        tmp.unlink(missing_ok=True)
         _log.warning(
             "clip.rehydrate_miss", clip_id=clip_id, dest=str(clip_path)
         )
         return False
+    os.replace(tmp, clip_path)
     _log.info("clip.rehydrated", clip_id=clip_id, dest=str(clip_path))
     return True
 

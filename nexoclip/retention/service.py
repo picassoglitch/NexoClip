@@ -394,10 +394,18 @@ async def _sweep_one_tenant(
     # go too, or the bucket accumulates unreachable objects forever.
     artifact_store = None
     if clip_rows and not dry_run:
-        from nexoclip.integrations.storage import build_artifact_store
-        from nexoclip.settings import get_settings
+        try:
+            from nexoclip.integrations.storage import build_artifact_store
+            from nexoclip.settings import get_settings
 
-        artifact_store = build_artifact_store(get_settings())
+            artifact_store = build_artifact_store(get_settings())
+        except Exception as e:  # a bad endpoint config must not stop the sweep
+            _log.warning(
+                "retention.artifact_store_unavailable",
+                tenant_id=tenant_id,
+                error=str(e),
+            )
+            artifact_store = None
     for row in clip_rows:
         clip_id = row["id"]
         clip_path = Path(row["path"]) if row["path"] else None

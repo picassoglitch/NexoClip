@@ -61,10 +61,13 @@ def _clip(tmp_path: Path, clip_id: str, *, with_thumb: bool = True) -> object:
     thumb = clip_dir / "thumbnail.jpg"
     if with_thumb:
         thumb.write_bytes(b"jpg-" + clip_id.encode())
+    # `thumbnail_path` is the pipeline Clip model's field name — the shape
+    # cut_clips actually returns (the DB row calls it thumbnail_frame_path;
+    # a dedicated test below covers that alias).
     return SimpleNamespace(
         id=clip_id,
         path=str(mp4),
-        thumbnail_frame_path=str(thumb) if with_thumb else None,
+        thumbnail_path=str(thumb) if with_thumb else None,
     )
 
 
@@ -93,6 +96,35 @@ async def test_offload_is_idempotent_unless_forced(tmp_path: Path) -> None:
         await offload_clip_artifacts(store, tenant_id="t", clips=clips, force=True)
         == 2
     )
+
+
+async def test_offload_accepts_db_row_thumbnail_alias(tmp_path: Path) -> None:
+    """ClipRow-shaped objects name the same file `thumbnail_frame_path` —
+    both spellings must offload (the prod bug this pins: only the mp4 was
+    uploaded and every bucket thumbnail redirect 404'd)."""
+    store = FakeArtifactStore()
+    clip_dir = tmp_path / "clips" / "clp_9"
+    clip_dir.mkdir(parents=True)
+    (clip_dir / "clip.mp4").write_bytes(b"mp4")
+    (clip_dir / "thumbnail.jpg").write_bytes(b"jpg")
+    row_shaped = SimpleNamespace(
+        id="clp_9",
+        path=str(clip_dir / "clip.mp4"),
+        thumbnail_frame_path=str(clip_dir / "thumbnail.jpg"),
+    )
+
+    n = await offload_clip_artifacts(store, tenant_id="t", clips=[row_shaped])
+
+    assert n == 2
+    assert clip_thumbnail_key("t", "clp_9") in store.objects
+
+
+def test_pipeline_clip_model_field_name_is_pinned() -> None:
+    """The offload reads `thumbnail_path` off the objects cut_clips
+    returns — fail loudly here if the model field is ever renamed."""
+    from nexoclip.clip.models import Clip
+
+    assert "thumbnail_path" in Clip.model_fields
 
 
 async def test_offload_skips_missing_files_and_bad_clips(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 ## What this is
 
-NexoClip is a multi-tenant SaaS that turns a streamer's VOD into a multi-platform short-form clip pipeline. Voice cues + chat heat + audio peaks + visual signals detect clip-worthy moments; Anthropic (Claude) generates persona-flavored captions, hooks, and viral-moment selections; local Whisper handles transcription on the user's GPU.
+NexoClip is a multi-tenant SaaS that turns a streamer's VOD into a multi-platform short-form clip pipeline. Voice cues + chat heat + audio peaks + visual signals detect clip-worthy moments; an LLM generates persona-flavored captions, hooks, and viral-moment selections (self-hosted open models by default — see rule 3); local Whisper handles transcription on the user's GPU.
 
 **Read these first, in this order:**
 1. `docs/nexoclip_spec.md` — full architectural spec (v0.5)
@@ -19,7 +19,7 @@ The spec is the source of truth for *what* to build. PHASE_0.md is the source of
 
 2. **No business logic in route handlers.** FastAPI routes and MCP tool handlers both delegate to the same service functions in `nexoclip/<module>/service.py`. Routes are thin: parse inputs, call service, return response.
 
-3. **All LLM calls go through `LLMRouter`.** Never call `anthropic.Anthropic()` directly outside `nexoclip/llm/`. The router handles cost tracking, retries, fallback, structured output validation. Bypassing it breaks billing and reliability. Anthropic is the only configured provider; the router still supports adding more later without code changes.
+3. **All LLM calls go through `LLMRouter`.** Never call a vendor SDK or LLM HTTP endpoint directly outside `nexoclip/llm/`. The router handles cost tracking, retries, fallback, structured output validation. Bypassing it breaks billing and reliability. Default routing is the `openllm` / `openllm_vision` providers (any OpenAI-compatible self-hosted runtime — Ollama, vLLM, LM Studio — zero per-token cost, keyless). Anthropic remains a configured-but-unrouted provider; pointing a purpose back at it (or adding it as a fallback) is a deliberate config change in `config/llm.example.yaml`, never a code change. Do NOT route anything at a paid API by default.
 
 4. **Idempotent pipeline steps.** Every step in the VOD pipeline must be safely re-runnable. If `transcribe` is run twice on the same stream, the second run is a no-op (or produces identical output). State is in DB + filesystem, not in memory.
 
@@ -94,7 +94,7 @@ Each module has:
 ## Stack pin
 
 - Python **3.11+** (match faster-whisper requirements)
-- `anthropic` Python SDK for Claude (the only LLM vendor)
+- Open-model LLMs via any OpenAI-compatible runtime (Ollama/vLLM/LM Studio), spoken over `httpx` — no vendor SDK; `anthropic` SDK stays installed for the optional paid provider
 - `faster-whisper` (CUDA build) for STT
 - `yt-dlp` for VOD download
 - `ffmpeg` (system binary) called via `subprocess.run` or `ffmpeg-python`

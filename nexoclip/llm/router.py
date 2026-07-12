@@ -48,7 +48,10 @@ ProviderInvoker = Callable[[LLMProvider, str], Awaitable[ProviderResult]]
 # calls in two weeks — each one burning latency and log noise per clip.
 # State is process-global (not per-router) because routers are constructed
 # per pipeline run; a restart merely costs one failing call to re-trip it.
-_BILLING_ERROR_MARKERS = ("credit balance", "usage limits", "billing")
+_BILLING_ERROR_MARKERS = (
+    "credit balance", "usage limits", "billing", "insufficient credits",
+    "quota exceeded",
+)
 _BILLING_LOCKOUT_S = 3600.0
 _billing_lockouts: dict[str, _dt.datetime] = {}
 
@@ -85,13 +88,19 @@ def _default_provider_factory(
 ) -> LLMProvider | None:
     """Construct configured providers; return None for unimplemented ones.
 
-    Anthropic is the only built-in provider. If `llm.yaml` ever references
-    another, register its constructor here.
+    Dispatch is on `config.kind`, so `llm.yaml` can register any number of
+    entries per protocol (e.g. `ollama` and `ollama_vision` both
+    openai_compatible) without touching router code.
     """
-    if name == "anthropic":
+    kind = getattr(config, "kind", "anthropic")
+    if kind == "anthropic" and name == "anthropic":
         from .anthropic_provider import AnthropicProvider
 
         return AnthropicProvider(api_key=api_key, config=config)
+    if kind == "openai_compatible":
+        from .openai_compatible_provider import OpenAICompatibleProvider
+
+        return OpenAICompatibleProvider(api_key=api_key, config=config)
     return None
 
 
@@ -250,14 +259,12 @@ class LLMRouter:
                 _billing_lockouts.pop(provider_name, None)
             provider = self._get_provider(provider_name)
             if provider is None:
-                api_key_env = (self._config.providers.get(provider_name)
-                               and self._config.providers[provider_name].api_key_env) or "?"
+                provider_cfg = self._config.providers.get(provider_name)
                 has_key = bool(self._api_keys.get(provider_name))
-                has_cfg = self._config.providers.get(provider_name) is not None
-                if not has_cfg:
+                if provider_cfg is None:
                     reason = "no config block"
-                elif not has_key:
-                    reason = f"{api_key_env} env var missing/empty"
+                elif provider_cfg.api_key_required and not has_key:
+                    reason = f"{provider_cfg.api_key_env or '?'} env var missing/empty"
                 else:
                     reason = "factory returned None (provider not implemented)"
                 last_error = LLMError(f"provider not available: {provider_name} ({reason})")
@@ -384,7 +391,9 @@ class LLMRouter:
         if name not in self._providers:
             cfg = self._config.providers.get(name)
             api_key = self._api_keys.get(name, "")
-            if cfg is None or not api_key:
+            # Keyless providers (self-hosted Ollama/vLLM) opt out via
+            # api_key_required: false — an empty key is fine for them.
+            if cfg is None or (cfg.api_key_required and not api_key):
                 self._providers[name] = None
             else:
                 self._providers[name] = self._provider_factory(name, cfg, api_key)

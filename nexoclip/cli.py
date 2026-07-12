@@ -433,6 +433,25 @@ def version() -> None:
 
 
 @app.command()
+def worker(
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address."),
+    port: int = typer.Option(8100, "--port", help="Bind port."),
+) -> None:
+    """Serve the PC worker — the full pipeline on this machine.
+
+    Speaks the same kickoff/poll HTTP contract as the Modal worker, so the
+    web box dispatches to it by pointing NEXOCLIP_MODAL_PIPELINE_ENDPOINT_URL
+    at this app's (tunneled) URL. Requires NEXOCLIP_WORKER_TOKEN (or
+    NEXOCLIP_MODAL_TOKEN), DATABASE_URL and NEXOCLIP_OBJECT_STORAGE_BUCKET.
+    """
+    import uvicorn
+
+    from nexoclip.workers import create_worker_app
+
+    uvicorn.run(create_worker_app(), host=host, port=port, log_level="info")
+
+
+@app.command()
 def ingest(
     vod_url: str = typer.Argument(..., help="VOD URL (Kick / Twitch / YouTube)"),
     output_dir: Path = typer.Option(

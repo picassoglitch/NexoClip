@@ -23,9 +23,9 @@ providers:
     base_url: http://localhost:11434/v1
     base_url_env: NEXOCLIP_OPENLLM_BASE_URL
     models:
-      standard: qwen2.5:7b-instruct              # strong ES/EN + reliable JSON at 7B
-      premium: qwen2.5:14b-instruct              # bump if the box has VRAM for it
-    timeout_s: 120                               # local inference is slower than an API
+      standard: qwen2.5:7b-instruct-q4_K_M      # already pulled on the Quantor PC
+      premium: qwen2.5:7b-instruct-q4_K_M       # bump when the box has VRAM for a 14B
+    timeout_s: 120                              # local inference is slower than an API
 
   # Vision-capable open model for the multimodal purposes (clip scoring,
   # visual variant generation). Same runtime, different model tag.

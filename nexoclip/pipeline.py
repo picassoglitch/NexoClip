@@ -517,7 +517,13 @@ async def _auto_hook_for_clip(
 
     `stream_title` is passed as context so a no-speech clip (sports goal,
     reaction) still gets a real hook off the stream title instead of
-    meta-commentary about a missing transcript."""
+    meta-commentary about a missing transcript.
+
+    When the LLM path fails (billing cap, provider outage) the clip still
+    gets a title via the deterministic generator — a hookless clip cascades
+    into a degenerate one-word caption downstream, which is worse than a
+    heuristic title."""
+    from nexoclip.variants.deterministic import deterministic_hook
     from nexoclip.variants.hooks import generate_hooks
 
     evidence = getattr(clip.candidate, "evidence", None) or {}
@@ -532,6 +538,7 @@ async def _auto_hook_for_clip(
     reason = str(getattr(clip.candidate, "reason", "") or "").strip()
     if reason:
         context_bits.append(f"Why it was clipped: {reason}")
+    hook = ""
     try:
         hooks = await generate_hooks(
             tenant_id=tenant_id,
@@ -542,10 +549,19 @@ async def _auto_hook_for_clip(
             n=1,
             router=router,
         )
-        return hooks[0].text.strip() if hooks else ""
+        hook = hooks[0].text.strip() if hooks else ""
     except Exception as e:
         _log.warning("pipeline.auto_hook_failed", clip_id=clip.id, error=str(e))
-        return ""
+    if hook:
+        return hook
+    hook = deterministic_hook(
+        transcript_snippet=snippet,
+        stream_title=stream_title,
+        language=language or persona.primary_language or "es",
+        seed=str(clip.id),
+    )
+    _log.info("pipeline.auto_hook_deterministic_fallback", clip_id=clip.id)
+    return hook
 
 
 async def _run_pipeline(
@@ -1175,7 +1191,7 @@ async def _run_pipeline(
     # Each clip gets exactly ONE variant row: a deterministic stub the publish
     # flow reads its caption / hook / hashtags from (the LLM caption variant
     # generator was removed). The stub's caption comes from the clip's
-    # overlay_config when set, else the persona name. No LLM calls here.
+    # overlay_config when set, else the stream title / hook. No LLM calls here.
     # Auto-hook: generate a viral title for EVERY clip so the editor, the
     # render burn, and auto-publish all get a hook without a manual "Generar 5".
     # (Was gated on the raw candidate score, which is uniformly low for YouTube
@@ -1204,7 +1220,11 @@ async def _run_pipeline(
                     else overlay.get("title_text") or ""
                 ) or ""
             if not stub_caption:
-                stub_caption = persona.name
+                # NEVER the persona name — a tenant whose persona was named
+                # "viral" shipped 18 posts captioned literally "viral". The
+                # stream title is real context; the hook is already the
+                # caption's first block, so it's the last resort here.
+                stub_caption = (stream.title or "").strip() or auto_hook
             variants = [
                 Variant(
                     id="v_stub",

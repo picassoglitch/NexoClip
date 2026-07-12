@@ -3602,6 +3602,7 @@ async def clip_generate_hooks(
         n_int = 5
     n_int = max(1, min(10, n_int))
 
+    source = "llm"
     try:
         hooks = await generate_hooks(
             tenant_id=tenant_id,
@@ -3612,18 +3613,30 @@ async def clip_generate_hooks(
             n=n_int,
             router=router_,
         )
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"hook generation failed: {e}",
-        ) from e
+        hook_texts = [h.text for h in hooks]
+    except Exception:
+        # LLM down / out of credits — the button must still return usable
+        # titles. Build them deterministically from the transcript snippet
+        # and the stream title instead of 502-ing the editor.
+        from nexoclip.variants import deterministic_hook_candidates
+
+        stream = await StreamsRepo(db).get(clip.stream_id)
+        hook_texts = deterministic_hook_candidates(
+            transcript_snippet=snippet,
+            stream_title=(stream.title or "") if stream else "",
+            language=persona_language,
+            seed=clip_id,
+            n=n_int,
+        )
+        source = "deterministic"
 
     return Response(
         content=_json.dumps(
             {
-                "hooks": [{"text": h.text} for h in hooks],
+                "hooks": [{"text": t} for t in hook_texts],
                 "tone": tone_id,
                 "n": n_int,
+                "source": source,
             }
         ),
         media_type="application/json",

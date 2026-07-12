@@ -5,6 +5,10 @@ overlay/hook instead). What remains here is the persona model and the
 hook generator, both still used by the pipeline and the publish composer.
 """
 
+from .deterministic import (
+    deterministic_hook,
+    deterministic_hook_candidates,
+)
 from .hooks import (
     Hook,
     HookBatch,
@@ -19,6 +23,8 @@ __all__ = [
     "HookBatch",
     "Persona",
     "ToneId",
+    "deterministic_hook",
+    "deterministic_hook_candidates",
     "generate_hooks",
     "get_persona",
     "load_personas",

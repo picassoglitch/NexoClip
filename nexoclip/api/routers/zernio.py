@@ -1879,6 +1879,26 @@ async def _autopublish_count_today(db: Database, tenant_id: str) -> int:
     return int(row[0]) if row else 0
 
 
+async def _emit_degenerate_skip(
+    db: Database, *, tenant_id: str, clip_id: str
+) -> None:
+    """Record why an auto-publish skipped a clip (no hook, no real body)
+    so the dashboard events feed shows the cause. Best-effort."""
+    from nexoclip.tenancy import bound_tenant
+
+    try:
+        with bound_tenant(tenant_id):
+            await EventsRepo(db).emit(
+                type="publish.skipped_degenerate",
+                payload={
+                    "clip_id": clip_id,
+                    "reason": "composed post has no hook and no real caption body",
+                },
+            )
+    except Exception:  # event is advisory, never block publish
+        pass
+
+
 async def maybe_autopublish_on_approve(
     *, request: Request, db: Database, tenant_id: str, clip_id: str
 ) -> str | None:
@@ -1930,6 +1950,15 @@ async def maybe_autopublish_on_approve(
         composed = await build_post(
             db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
         )
+        if composed.is_degenerate:
+            # No hook and no real body — publishing a bare token ("viral")
+            # buries the account. Leave the clip for manual review instead.
+            log.warning(
+                "autopublish.skipped_degenerate",
+                tenant_id=tenant_id, clip_id=clip_id, caption=composed.caption[:80],
+            )
+            await _emit_degenerate_skip(db, tenant_id=tenant_id, clip_id=clip_id)
+            return None
         post_id = await _publish_clip(
             client=client,
             db=db,
@@ -2226,6 +2255,16 @@ async def _run_growth_engine(
                 composed = await build_post(
                     db, clip_id, handle_suffix=str(settings_row.get("tag_suffix") or ""),
                 )
+            if composed.is_degenerate:
+                # Hands-free must not ship contentless posts (the "viral"
+                # incident) — skip and surface why via an event.
+                log.warning(
+                    "autopublish.growth.skipped_degenerate",
+                    tenant_id=tenant_id, clip_id=clip_id,
+                    caption=composed.caption[:80],
+                )
+                await _emit_degenerate_skip(db, tenant_id=tenant_id, clip_id=clip_id)
+                continue
             stream_id = getattr(clip, "stream_id", "") or ""
             if stream_id and stream_id not in stream_titles:
                 with bound_tenant(tenant_id):

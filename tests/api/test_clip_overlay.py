@@ -1038,7 +1038,53 @@ async def test_generate_hooks_endpoint_returns_json(
         "title two",
         "title three",
     ]
+    assert body["source"] == "llm"
     get_settings.cache_clear()
+
+
+async def test_generate_hooks_endpoint_falls_back_when_llm_fails(
+    client: httpx.AsyncClient,
+    db: Database,
+    tenants: dict[str, dict[str, str]],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """LLM down / out of credits → the button still returns usable titles,
+    built deterministically from the transcript/stream title (no 502)."""
+    from nexoclip.llm import router as router_module
+    from nexoclip.settings import get_settings
+
+    monkeypatch.setenv("NEXOCLIP_DEFAULT_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from tests.llm._fakes import FakeProvider  # type: ignore[import]
+
+    fake = FakeProvider("anthropic")
+    fake.queue_fatal("anthropic 400: Your credit balance is too low")
+
+    def factory(name, _config, _api_key):
+        return fake if name == "anthropic" else None
+
+    monkeypatch.setattr(router_module, "_default_provider_factory", factory)
+    router_module.reset_billing_lockouts()
+
+    tid = tenants["alice"]["id"]
+    await _login(client, tenants["alice"]["token"])
+    await _seed_clip(db, tenant_id=tid)
+    try:
+        r = await client.post(
+            "/dashboard/clips/clp_e/generate-hooks",
+            data={"tone": "default", "n": "5"},
+        )
+    finally:
+        router_module.reset_billing_lockouts()
+        get_settings.cache_clear()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source"] == "deterministic"
+    assert body["hooks"]  # never empty — templates as the last resort
+    assert all(h["text"].strip() for h in body["hooks"])
 
 
 async def test_generate_hooks_endpoint_404_for_unknown_clip(

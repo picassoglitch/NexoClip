@@ -3585,6 +3585,17 @@ async def _run_growth_autoprog(
                     if clip is None:
                         continue
                     composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
+                    if composed.is_degenerate:
+                        # Same rule as on_approve/hands-free: a post with no
+                        # hook and no real body never ships (the "viral" run).
+                        _log.warning(
+                            "zernio.autoprogram.skipped_degenerate "
+                            "tenant=%s clip=%s", tenant_id, clip_id,
+                        )
+                        await _emit_degenerate_skip(
+                            db, tenant_id=tenant_id, clip_id=clip_id
+                        )
+                        continue
                     stream_id = getattr(clip, "stream_id", "") or ""
                     if stream_id and stream_id not in stream_titles:
                         stream = await StreamsRepo(db).get(stream_id)

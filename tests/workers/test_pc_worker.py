@@ -172,6 +172,34 @@ async def test_duplicate_kickoff_reuses_the_running_job(worker_env: None) -> Non
 
 
 @pytest.mark.asyncio
+async def test_concurrency_cap_queues_second_job(
+    worker_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default cap is 1: a second stream's job waits for the slot instead of
+    running concurrently (one GPU — parallel pipelines starve each other)."""
+    monkeypatch.setenv("NEXOCLIP_WORKER_MAX_JOBS", "1")
+    release = asyncio.Event()
+    running: list[str] = []
+
+    async def runner(kickoff: PipelineKickoff) -> None:
+        running.append(kickoff.stream.id)
+        await release.wait()
+
+    app = create_worker_app(runner=runner)
+    async with _client(app) as client:
+        r1 = await client.post("/", json=_kickoff_body("str_cap_a"))
+        r2 = await client.post("/", json=_kickoff_body("str_cap_b"))
+        assert r1.status_code == 303 and r2.status_code == 303
+        await asyncio.sleep(0.05)
+        assert running == ["str_cap_a"]  # b queued, not started
+        # Both jobs still poll as in-progress.
+        assert (await client.get(r2.headers["location"])).status_code == 303
+        release.set()
+        await asyncio.sleep(0.05)
+        assert running == ["str_cap_a", "str_cap_b"]  # b ran after a freed the slot
+
+
+@pytest.mark.asyncio
 async def test_llm_proxy_requires_bearer_and_forwards(worker_env: None) -> None:
     import respx
 

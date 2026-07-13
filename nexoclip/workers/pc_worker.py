@@ -123,6 +123,13 @@ def create_worker_app(*, runner: PipelineRunner | None = None) -> FastAPI:
     is the production `default_pipeline_runner`."""
     app = FastAPI(title="nexoclip-pc-worker", docs_url=None, redoc_url=None)
     ledger = _JobLedger()
+    # One box, one GPU: run pipelines one at a time by default (a second
+    # concurrent run starves both — CV passes, whisper and ffmpeg all fight
+    # for the same cores). Excess jobs queue on the semaphore; their poll
+    # URLs keep 303-ing, which the dispatcher's poll loop already tolerates
+    # for hours. NEXOCLIP_WORKER_MAX_JOBS raises the cap on beefier boxes.
+    max_jobs = max(1, int(os.environ.get("NEXOCLIP_WORKER_MAX_JOBS", "1") or 1))
+    run_slots = asyncio.Semaphore(max_jobs)
 
     async def _default_runner(kickoff: PipelineKickoff) -> None:
         from nexoclip.api._pipeline import default_pipeline_runner
@@ -136,7 +143,12 @@ def create_worker_app(*, runner: PipelineRunner | None = None) -> FastAPI:
         started = job.started_at
         stream_id = kickoff.stream.id
         try:
-            await run(kickoff)
+            async with run_slots:
+                _log.info(
+                    "worker.slot_acquired", stream_id=stream_id, job_id=job_id,
+                    waited_s=round(time.time() - started, 1),
+                )
+                await run(kickoff)
         except Exception as e:
             # The runner already emitted pipeline.failed to the shared DB;
             # a failed body (HTTP 200 at the poll) tells the dispatcher to

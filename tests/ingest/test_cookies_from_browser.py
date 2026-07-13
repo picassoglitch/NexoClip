@@ -89,6 +89,66 @@ def test_download_vod_omits_cookies_when_empty_string(tmp_path: Path) -> None:
     assert "cookiesfrombrowser" not in _FakeYoutubeDL.captured_opts
 
 
+# ---- locked cookie DB self-heals: retry without cookies ----
+
+
+def test_locked_cookie_db_retries_without_cookies(tmp_path: Path) -> None:
+    """Chrome holding its cookie DB (yt-dlp #7271) must NOT fail the run:
+    the download retries cookie-less instead of surfacing close-your-browser
+    instructions — on a residential IP that retry almost always succeeds."""
+    import yt_dlp
+
+    attempts: list[dict[str, Any]] = []
+
+    class _LockedThenOk(_FakeYoutubeDL):
+        def extract_info(self, url: str, *, download: bool = True) -> dict[str, Any]:
+            attempts.append(dict(type(self).captured_opts))
+            if "cookiesfrombrowser" in type(self).captured_opts:
+                raise yt_dlp.utils.DownloadError(
+                    "ERROR: Could not copy Chrome cookie database"
+                )
+            return super().extract_info(url, download=download)
+
+    target = tmp_path / "vid" / "video.mp4"
+    with patch("nexoclip.ingest.service.yt_dlp.YoutubeDL", _LockedThenOk):
+        _download_vod(
+            vod_url="https://kick.com/x/videos/abc",
+            target_path=target,
+            cookies_from_browser="chrome",
+            platform="kick",
+        )
+    assert len(attempts) == 2
+    assert "cookiesfrombrowser" in attempts[0]
+    assert "cookiesfrombrowser" not in attempts[1]
+    assert target.exists()
+
+
+def test_locked_cookie_db_then_site_error_still_explains(tmp_path: Path) -> None:
+    """If the cookie-less retry ALSO fails (site genuinely wants cookies),
+    the second error surfaces through the normal explain path."""
+    import yt_dlp
+
+    class _LockedThenForbidden(_FakeYoutubeDL):
+        def extract_info(self, url: str, *, download: bool = True) -> dict[str, Any]:
+            if "cookiesfrombrowser" in type(self).captured_opts:
+                raise yt_dlp.utils.DownloadError(
+                    "ERROR: Could not copy Chrome cookie database"
+                )
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: [kick:vod] abc: HTTP Error 403: Forbidden"
+            )
+
+    target = tmp_path / "vid" / "video.mp4"
+    with patch("nexoclip.ingest.service.yt_dlp.YoutubeDL", _LockedThenForbidden):
+        with pytest.raises(IngestError, match="403"):
+            _download_vod(
+                vod_url="https://kick.com/x/videos/abc",
+                target_path=target,
+                cookies_from_browser="chrome",
+                platform="kick",
+            )
+
+
 # ---- friendlier error rewrite ----
 
 

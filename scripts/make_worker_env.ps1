@@ -45,6 +45,10 @@ $lines += @(
     "# PC-local settings.",
     "NEXOCLIP_TRANSCRIBE_PROVIDER=local",
     "NEXOCLIP_WHISPER_DEVICE=cuda",
+    # small+int8 fits alongside the resident Ollama LLM on an 8GB card;
+    # medium+float16 (the code default) OOM-crashed the whisper worker.
+    "NEXOCLIP_WHISPER_MODEL=small",
+    "NEXOCLIP_WHISPER_COMPUTE_TYPE=int8_float16",
     "NEXOCLIP_DEFAULT_OUTPUT_DIR=$env:LOCALAPPDATA\nexoclip-worker\out",
     "NEXOCLIP_JOB_DISPATCHER=in_process"
 )

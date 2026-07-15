@@ -31,12 +31,12 @@ from nexoclip.tenancy import bound_tenant
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
 from tests.pipeline.test_process_vod import (  # type: ignore[import]
+    _hook_payload,
     _make_config,
     _make_personas,
     _stub_ffmpeg,
     _stub_ingest,
     _stub_whisper,
-    _success_payload,
 )
 
 
@@ -55,7 +55,7 @@ def _make_deps_no_router() -> PipelineDeps:
     the default-provider-factory monkeypatch."""
     return PipelineDeps(
         config=_make_config(),
-        llm_config=make_llm_config(retry_attempts=1),
+        llm_config=make_llm_config(retry_attempts=1, purpose="hook_generation"),
         personas=_make_personas(),
     )
 
@@ -83,7 +83,7 @@ def test_pipeline_writes_every_entity_to_db(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     manifest = asyncio.run(
@@ -124,13 +124,15 @@ def test_pipeline_writes_every_entity_to_db(
                 assert p is not None
                 assert p.primary_language == "es"
 
+                # One deterministic stub variant per clip.
                 variants = await VariantsRepo(db).list_for_clip(clips[0].id)
-                assert len(variants) == 3
+                assert len(variants) == 1
                 assert all(v.id.startswith("var_") for v in variants)
 
+                # The only LLM call left in the pipeline is the auto-hook.
                 llm_rows = await LLMCallsRepo(db).list_for_tenant()
                 assert len(llm_rows) == 1
-                assert llm_rows[0].purpose == "variant_generation"
+                assert llm_rows[0].purpose == "hook_generation"
                 assert llm_rows[0].cost_usd_micros > 0
         finally:
             await db.close()
@@ -151,7 +153,7 @@ def test_pipeline_idempotent_on_dual_write(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     deps = _make_deps_no_router()
@@ -194,10 +196,10 @@ def test_pipeline_idempotent_on_dual_write(
                 assert len(cands) == 1
                 clips = await ClipsRepo(db).list_for_stream(first.stream.id)
                 assert len(clips) == 1
-                # Variants: cache hit on second run -> only one batch in DB.
+                # Variants: cache hit on second run -> only one stub in DB.
                 # (replace_for_clip_persona reset would happen on regenerate.)
                 variants = await VariantsRepo(db).list_for_clip(clips[0].id)
-                assert len(variants) == 3
+                assert len(variants) == 1
                 # LLM calls: filesystem cache hit on second run -> only ONE
                 # call total (no extra LLM call on the resume).
                 llm_rows = await LLMCallsRepo(db).list_for_tenant()
@@ -216,7 +218,7 @@ def test_pipeline_no_db_path_skips_db_writes(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     manifest = asyncio.run(
@@ -251,7 +253,7 @@ def test_pipeline_unknown_tenant_raises(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     with pytest.raises(Exception, match="FOREIGN KEY|integrity|tenant"):

@@ -76,7 +76,6 @@ from nexoclip.llm.config import Quality
 from nexoclip.logging import get_logger
 from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
-from nexoclip.llm.schemas import Variant
 from nexoclip.variants import Persona, load_personas
 from nexoclip.vision import analyze_video as _analyze_video
 from nexoclip.vision import load_visual_signals
@@ -1199,41 +1198,58 @@ async def _run_pipeline(
     auto_hook_enabled = bool(getattr(settings, "auto_hook_enabled", True))
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
-            auto_hook = ""
-            if auto_hook_enabled:
-                auto_hook = await _auto_hook_for_clip(
-                    clip=clip, persona=persona, language=language,
-                    tenant_id=tenant_id, router=router,
-                    stream_title=stream.title or "",
+            # Idempotent re-runs must not re-pay the auto-hook LLM call:
+            # the stub (and its hook) persists next to the clip, and a
+            # resume without --force reuses it verbatim.
+            variants_path = clip.path.parent / "variants.json"
+            cached = None if force else _load_stub_variants(variants_path)
+            if cached is not None:
+                variants = cached
+                auto_hook = variants[0].title_card_text or ""
+            else:
+                auto_hook = ""
+                if auto_hook_enabled:
+                    auto_hook = await _auto_hook_for_clip(
+                        clip=clip, persona=persona, language=language,
+                        tenant_id=tenant_id, router=router,
+                        stream_title=stream.title or "",
+                    )
+                # One stub variant per clip, captioned from the overlay or a
+                # sensible fallback. The dashboard editor + the publish flow both
+                # read .caption; the operator can edit it via the overlay form
+                # before shipping.
+                stub_caption = ""
+                overlay = getattr(clip, "overlay_config", None)
+                if isinstance(overlay, dict):
+                    stub_caption = (
+                        overlay.get("title_text")
+                        or overlay.get("top_hook", {}).get("text", "")
+                        if isinstance(overlay.get("top_hook"), dict)
+                        else overlay.get("title_text") or ""
+                    ) or ""
+                if not stub_caption:
+                    # NEVER the persona name — a tenant whose persona was named
+                    # "viral" shipped 18 posts captioned literally "viral". The
+                    # stream title is real context; the hook is already the
+                    # caption's first block, so it's the last resort here.
+                    stub_caption = (stream.title or "").strip() or auto_hook
+                variants = [
+                    Variant(
+                        id="v_stub",
+                        language=language or persona.primary_language or "es",
+                        caption=str(stub_caption)[:240],
+                        title_card_text=auto_hook,
+                        hashtags=[],
+                    )
+                ]
+                variants_path.write_text(
+                    json.dumps(
+                        {"variants": [v.model_dump() for v in variants]},
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
                 )
-            # One stub variant per clip, captioned from the overlay or a
-            # sensible fallback. The dashboard editor + the publish flow both
-            # read .caption; the operator can edit it via the overlay form
-            # before shipping.
-            stub_caption = ""
-            overlay = getattr(clip, "overlay_config", None)
-            if isinstance(overlay, dict):
-                stub_caption = (
-                    overlay.get("title_text")
-                    or overlay.get("top_hook", {}).get("text", "")
-                    if isinstance(overlay.get("top_hook"), dict)
-                    else overlay.get("title_text") or ""
-                ) or ""
-            if not stub_caption:
-                # NEVER the persona name — a tenant whose persona was named
-                # "viral" shipped 18 posts captioned literally "viral". The
-                # stream title is real context; the hook is already the
-                # caption's first block, so it's the last resort here.
-                stub_caption = (stream.title or "").strip() or auto_hook
-            variants = [
-                Variant(
-                    id="v_stub",
-                    language=language or persona.primary_language or "es",
-                    caption=str(stub_caption)[:240],
-                    title_card_text=auto_hook,
-                    hashtags=[],
-                )
-            ]
             # Stamp the viral default overlay so the clip ships non-plain even
             # when it never passes through the editor: captions on, the hook as
             # the top headline, and a source-credit "marca" banner carrying the
@@ -1368,6 +1384,19 @@ async def _run_pipeline(
             )
 
     return manifest
+
+
+def _load_stub_variants(path: Path) -> list[Variant] | None:
+    """Cache read for the variants step. Returns None (regenerate) on any
+    missing/corrupt file — the step is best-effort re-runnable either way."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        variants = [Variant.model_validate(v) for v in data.get("variants", [])]
+    except Exception:
+        return None
+    return variants or None
 
 
 def _read_llm_spend(call_log_path: Path) -> LLMSpend:

@@ -16,7 +16,6 @@ from nexoclip.ingest import service as ingest_service
 from nexoclip.llm import LLMRouter
 from nexoclip.llm.config import ProviderConfig
 from nexoclip.pipeline import PipelineDeps, StreamManifest, load_manifest, process_vod
-from nexoclip.transcribe import service as transcribe_service
 from nexoclip.variants import Persona
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
@@ -54,14 +53,33 @@ def _stub_ingest(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     return download_calls
 
 
-def _stub_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+def _force_inprocess_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
     # Force the in-process Whisper path so the WhisperModel monkeypatch
     # below actually intercepts the call. The default production path
-    # spawns a subprocess that wouldn't see our patched fake.
-    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_INPROCESS", "1")
-    import nexoclip.transcribe.service as _ts
+    # spawns a subprocess that wouldn't see our patched fake. The
+    # provider factory reads NEXOCLIP_TRANSCRIBE_INPROCESS from the
+    # environment, and the local provider lazy-imports
+    # `faster_whisper.WhisperModel` inside `_run_inprocess`, so we patch
+    # the module entry in sys.modules (stubbing it out when the real
+    # faster-whisper isn't importable in the test env).
+    import sys
+    import types
 
-    monkeypatch.setattr(_ts, "_USE_SUBPROCESS", False)
+    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_INPROCESS", "1")
+    # Defensive: invalidate the Settings singleton so the factory sees a
+    # fresh `transcribe_provider` (tests share a cached Settings instance).
+    from nexoclip.settings import get_settings
+
+    get_settings.cache_clear()
+    fw = sys.modules.get("faster_whisper")
+    if fw is None:
+        fw = types.ModuleType("faster_whisper")
+        sys.modules["faster_whisper"] = fw
+    monkeypatch.setattr(fw, "WhisperModel", FakeWhisperModel, raising=False)
+
+
+def _stub_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
+    _force_inprocess_whisper(monkeypatch)
     FakeWhisperModel.reset()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=600.0)
     # One trigger phrase ("clipéalo") at t=120, plus filler.
@@ -86,7 +104,6 @@ def _stub_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
             ],
         ),
     ]
-    monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
 
 
 def _stub_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
@@ -127,24 +144,15 @@ def _make_personas() -> dict[str, Persona]:
     }
 
 
-def _success_payload(n: int = 5) -> dict:
-    return {
-        "variants": [
-            {
-                "id": f"v_{i + 1}",
-                "language": "es",
-                "caption": f"Caption #{i + 1}",
-                "title_card_text": "" if i % 2 == 0 else f"HOOK{i}",
-                "hashtags": ["clip"],
-            }
-            for i in range(n)
-        ]
-    }
+def _hook_payload() -> dict:
+    """Canned auto-hook response — the only LLM call left in the pipeline
+    (variants are a deterministic stub now)."""
+    return {"hooks": [{"text": "HOOK VIRAL"}]}
 
 
 def _make_router_factory(provider: FakeProvider):
     def factory(stream_dir: Path) -> LLMRouter:
-        config = make_llm_config(retry_attempts=1)
+        config = make_llm_config(retry_attempts=1, purpose="hook_generation")
 
         def provider_factory(
             name: str, _config: ProviderConfig, _api_key: str
@@ -175,11 +183,11 @@ def _run_pipeline(
 
     fake = FakeProvider("anthropic")
     for _ in range(queue_n_payloads):
-        fake.queue_success(_success_payload(n=n_variants))
+        fake.queue_success(_hook_payload())
 
     deps = PipelineDeps(
         config=_make_config(),
-        llm_config=make_llm_config(retry_attempts=1),
+        llm_config=make_llm_config(retry_attempts=1, purpose="hook_generation"),
         personas=_make_personas(),
         router_factory=_make_router_factory(fake),
     )
@@ -211,7 +219,11 @@ def test_pipeline_runs_full_flow(
     assert len(manifest.candidates) == 1
     assert manifest.candidates[0].evidence["phrase"] == "clipéalo"
     assert len(manifest.clip_entries) == 1
-    assert len(manifest.clip_entries[0].variants) == 3
+    # Variants are a deterministic stub now: exactly one per clip, carrying
+    # the auto-hook as its title card.
+    assert len(manifest.clip_entries[0].variants) == 1
+    assert manifest.clip_entries[0].variants[0].id == "v_stub"
+    assert manifest.clip_entries[0].variants[0].title_card_text == "HOOK VIRAL"
     assert manifest.persona_id == "aldo_villanueva"
     assert manifest.language == "es"
 
@@ -230,7 +242,7 @@ def test_pipeline_runs_full_flow(
 
     # 1 candidate × (fast cut + reformat) = 2 ffmpeg calls
     assert len(ffmpeg_calls) == 2
-    # 1 LLM call for the single clip's variants
+    # 1 LLM call for the single clip's auto-hook
     assert len(fake.calls) == 1
 
 
@@ -260,12 +272,13 @@ def test_pipeline_idempotent_with_explicit_stream_id(
     ffmpeg_calls = _stub_ffmpeg(monkeypatch)
 
     fake = FakeProvider("anthropic")
-    # Only one payload queued — the second run must hit caches at every step.
-    fake.queue_success(_success_payload(n=3))
+    # Only one payload queued — the second run must hit caches at every step
+    # (including the auto-hook, cached in the clip's variants.json).
+    fake.queue_success(_hook_payload())
 
     deps = PipelineDeps(
         config=_make_config(),
-        llm_config=make_llm_config(retry_attempts=1),
+        llm_config=make_llm_config(retry_attempts=1, purpose="hook_generation"),
         personas=_make_personas(),
         router_factory=_make_router_factory(fake),
     )
@@ -311,12 +324,12 @@ def test_pipeline_force_reruns_everything(
     ffmpeg_calls = _stub_ffmpeg(monkeypatch)
 
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
-    fake.queue_success(_success_payload(n=3))  # one for each run
+    fake.queue_success(_hook_payload())
+    fake.queue_success(_hook_payload())  # one for each run
 
     deps = PipelineDeps(
         config=_make_config(),
-        llm_config=make_llm_config(retry_attempts=1),
+        llm_config=make_llm_config(retry_attempts=1, purpose="hook_generation"),
         personas=_make_personas(),
         router_factory=_make_router_factory(fake),
     )
@@ -371,15 +384,17 @@ def test_pipeline_unknown_persona_raises(
         )
 
 
-def test_pipeline_handles_zero_candidates(
+def test_pipeline_no_triggers_falls_back_to_interval_clips(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stream with no trigger phrase should still produce a valid manifest."""
+    """Stream with no trigger phrase still produces clips: when no detector
+    fires, detect falls back to evenly spaced interval candidates (silent /
+    no-speech VODs must not yield an empty run)."""
     _stub_ingest(monkeypatch)
     _stub_ffmpeg(monkeypatch)
 
     # Reset whisper to a transcript with no trigger words.
-    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
+    _force_inprocess_whisper(monkeypatch)
     FakeWhisperModel.reset()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=60.0)
     FakeWhisperModel.canned_segments = [
@@ -390,12 +405,11 @@ def test_pipeline_handles_zero_candidates(
             words=[FakeWord(start=0.0, end=2.0, word="hola", probability=0.9)],
         )
     ]
-    monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
 
-    fake = FakeProvider("anthropic")  # no payloads queued
+    fake = FakeProvider("anthropic")  # no payloads queued — hooks fall back
     deps = PipelineDeps(
         config=_make_config(),
-        llm_config=make_llm_config(retry_attempts=1),
+        llm_config=make_llm_config(retry_attempts=1, purpose="hook_generation"),
         personas=_make_personas(),
         router_factory=_make_router_factory(fake),
     )
@@ -409,8 +423,10 @@ def test_pipeline_handles_zero_candidates(
             deps=deps,
         )
     )
-    assert manifest.candidates == []
-    assert manifest.clip_entries == []
+    # Ingest stub reports a 600s VOD → 5 interval candidates (capped).
+    assert len(manifest.candidates) == 5
+    assert all(c.reason == "interval" for c in manifest.candidates)
+    assert len(manifest.clip_entries) == 5
     assert manifest.llm_spend.total_calls == 0
     assert (tmp_path / manifest.stream.id / "manifest.json").exists()
 

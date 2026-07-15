@@ -14,10 +14,12 @@ from nexoclip.config import NexoClipConfig, VoiceDetectorConfig
 from nexoclip.ingest import service as ingest_service
 from nexoclip.llm import config as llm_config_module
 from nexoclip.llm import router as router_module
-from nexoclip.transcribe import service as transcribe_service
 from nexoclip.variants import personas as personas_module
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
+from tests.pipeline.test_process_vod import (  # type: ignore[import]
+    _force_inprocess_whisper,
+)
 from tests.transcribe._fakes import (  # type: ignore[import]
     FakeInfo,
     FakeSegment,
@@ -60,8 +62,7 @@ def _stub_everything(
             words=[FakeWord(start=120.0, end=121.0, word="clipéalo", probability=0.93)],
         )
     ]
-    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
-    monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
+    _force_inprocess_whisper(monkeypatch)
 
     # ffmpeg
     def fake_ffmpeg(cmd, *, what):
@@ -78,9 +79,14 @@ def _stub_everything(
     )
     monkeypatch.setattr("nexoclip.pipeline.load_config", lambda: config)
     monkeypatch.setattr(
-        llm_config_module, "load_llm_config", lambda *_a, **_k: make_llm_config(retry_attempts=1)
+        llm_config_module,
+        "load_llm_config",
+        lambda *_a, **_k: make_llm_config(retry_attempts=1, purpose="hook_generation"),
     )
-    monkeypatch.setattr("nexoclip.pipeline.load_llm_config", lambda: make_llm_config(retry_attempts=1))
+    monkeypatch.setattr(
+        "nexoclip.pipeline.load_llm_config",
+        lambda: make_llm_config(retry_attempts=1, purpose="hook_generation"),
+    )
 
     # Personas
     from nexoclip.variants import Persona
@@ -118,14 +124,7 @@ def test_process_command_writes_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeProvider("anthropic")
-    fake.queue_success(
-        {
-            "variants": [
-                {"id": "v_1", "language": "es", "caption": "C1", "title_card_text": "", "hashtags": []},
-                {"id": "v_2", "language": "es", "caption": "C2", "title_card_text": "", "hashtags": []},
-            ]
-        }
-    )
+    fake.queue_success({"hooks": [{"text": "HOOK"}]})  # the clip's auto-hook
     _stub_everything(monkeypatch, fake_provider=fake)
 
     runner = CliRunner()
@@ -150,7 +149,8 @@ def test_process_command_writes_manifest(
     assert manifest["language"] == "es"
     assert len(manifest["candidates"]) == 1
     assert len(manifest["clip_entries"]) == 1
-    assert len(manifest["clip_entries"][0]["variants"]) == 2
+    # One deterministic stub variant per clip (the LLM generator was removed).
+    assert len(manifest["clip_entries"][0]["variants"]) == 1
 
     stream_id = manifest["stream"]["id"]
     assert (tmp_path / stream_id / "manifest.json").exists()

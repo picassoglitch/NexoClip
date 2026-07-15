@@ -37,14 +37,30 @@ class RateLimitsConfig(BaseModel):
     output_tokens_per_minute: int = 0
 
 
-class ProviderConfig(BaseModel):
-    """One LLM provider. Anthropic is the only configured backend."""
+ProviderKind = Literal["anthropic", "openai_compatible"]
 
-    api_key_env: str
+
+class ProviderConfig(BaseModel):
+    """One LLM provider entry.
+
+    `kind` picks the wire protocol: "anthropic" (the vendor SDK) or
+    "openai_compatible" (any `/chat/completions` runtime — Ollama, vLLM,
+    LM Studio, llama.cpp, OpenRouter). Self-hosted runtimes need no API
+    key: set `api_key_required: false` and leave the env var unset."""
+
+    kind: ProviderKind = "anthropic"
+    api_key_env: str = ""
+    api_key_required: bool = True
     base_url: str = ""
+    # When set and the env var is non-empty, it overrides `base_url` — so
+    # prod can point at a hosted/tunneled runtime without editing YAML.
+    base_url_env: str = ""
     models: ProviderModelsConfig
     rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
     timeout_s: float = Field(default=30.0, gt=0.0)
+    # openai_compatible only: send response_format={"type":"json_object"}.
+    # Disable for runtimes that reject the parameter.
+    json_mode: bool = True
 
 
 class RoutingRule(BaseModel):

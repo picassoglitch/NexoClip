@@ -91,13 +91,8 @@ clip:
   output_height: 1920
   encoder: libx264
   preset: fast
-  crf: 23
+  crf: 19
   burn_captions: false              # Phase 0 leaves captions off; Phase 1 turns on
-
-# Variant generation
-variants:
-  per_persona: 5                    # number of variants generated per clip per persona
-  default_quality: standard         # standard | premium
 
 # Logging
 log:

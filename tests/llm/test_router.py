@@ -234,6 +234,92 @@ def test_fatal_error_is_not_retried(tmp_path: Path) -> None:
     assert len(fake.calls) == 1  # no retries
 
 
+def test_billing_error_trips_lockout_and_skips_provider(tmp_path: Path) -> None:
+    """A billing 400 (credits drained / usage cap) is durable, not transient:
+    the first failure must trip a per-provider lockout so subsequent calls
+    fail fast WITHOUT hitting the API — one drained account produced 1,868
+    identical failed calls in two weeks before this breaker existed."""
+    from nexoclip.llm.router import reset_billing_lockouts
+
+    reset_billing_lockouts()
+    try:
+        fake = FakeProvider("anthropic")
+        fake.queue_fatal(
+            "anthropic 400: Your credit balance is too low to access the "
+            "Anthropic API. Please go to Plans & Billing."
+        )
+
+        config = make_llm_config(retry_attempts=3, initial_backoff_s=0.0)
+        router = LLMRouter(
+            config,
+            api_keys={"anthropic": "k"},
+            provider_factory=_factory({"anthropic": fake}),
+            call_log_path=tmp_path / "llm_calls.jsonl",
+        )
+
+        def _call() -> None:
+            asyncio.run(
+                router.complete(
+                    tenant_id="t", purpose="variant_generation",
+                    system="s", user="u", schema=TinySchema,
+                )
+            )
+
+        with pytest.raises(LLMError):
+            _call()
+        assert len(fake.calls) == 1
+
+        # Second call: provider is locked out — no new API attempt at all.
+        with pytest.raises(LLMError, match="billing lockout"):
+            _call()
+        assert len(fake.calls) == 1
+    finally:
+        reset_billing_lockouts()
+
+
+def test_billing_lockout_expires_with_the_clock(tmp_path: Path) -> None:
+    import datetime as _dt
+
+    from nexoclip.llm.router import reset_billing_lockouts
+
+    reset_billing_lockouts()
+    try:
+        now = _dt.datetime(2026, 7, 12, 12, 0, tzinfo=_dt.UTC)
+
+        def clock() -> _dt.datetime:
+            return now
+
+        fake = FakeProvider("anthropic")
+        fake.queue_fatal("anthropic 400: You have reached your specified API usage limits.")
+        fake.queue_success({"answer": "back"})
+
+        config = make_llm_config(retry_attempts=1, initial_backoff_s=0.0)
+        router = LLMRouter(
+            config,
+            api_keys={"anthropic": "k"},
+            provider_factory=_factory({"anthropic": fake}),
+            call_log_path=tmp_path / "llm_calls.jsonl",
+            clock=clock,
+        )
+
+        def _call() -> TinySchema:
+            return asyncio.run(
+                router.complete(
+                    tenant_id="t", purpose="variant_generation",
+                    system="s", user="u", schema=TinySchema,
+                )
+            )
+
+        with pytest.raises(LLMError):
+            _call()
+        # Past the lockout window the breaker clears and calls flow again.
+        now = now + _dt.timedelta(hours=2)
+        assert _call().answer == "back"
+        assert len(fake.calls) == 2
+    finally:
+        reset_billing_lockouts()
+
+
 def test_validation_error_retries_then_fails(tmp_path: Path) -> None:
     fake = FakeProvider("anthropic")
     # All three attempts return malformed output (missing required field).

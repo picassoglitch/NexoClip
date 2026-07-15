@@ -5,7 +5,6 @@ Phase 0 commands (see PHASE_0.md):
     nexoclip transcribe <stream_id>
     nexoclip detect <stream_id>
     nexoclip cut <stream_id>
-    nexoclip variants <clip_id> --persona <persona_id>
     nexoclip process <vod_url>          # orchestrates all of the above
 
 Phase 1 admin commands (see PHASE_1.md):
@@ -434,6 +433,25 @@ def version() -> None:
 
 
 @app.command()
+def worker(
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address."),
+    port: int = typer.Option(8100, "--port", help="Bind port."),
+) -> None:
+    """Serve the PC worker — the full pipeline on this machine.
+
+    Speaks the same kickoff/poll HTTP contract as the Modal worker, so the
+    web box dispatches to it by pointing NEXOCLIP_MODAL_PIPELINE_ENDPOINT_URL
+    at this app's (tunneled) URL. Requires NEXOCLIP_WORKER_TOKEN (or
+    NEXOCLIP_MODAL_TOKEN), DATABASE_URL and NEXOCLIP_OBJECT_STORAGE_BUCKET.
+    """
+    import uvicorn
+
+    from nexoclip.workers import create_worker_app
+
+    uvicorn.run(create_worker_app(), host=host, port=port, log_level="info")
+
+
+@app.command()
 def ingest(
     vod_url: str = typer.Argument(..., help="VOD URL (Kick / Twitch / YouTube)"),
     output_dir: Path = typer.Option(
@@ -726,98 +744,6 @@ def cut(
     typer.echo(f"  clips:    {len(clips)}")
     for c in clips:
         typer.echo(f"  [{c.start_s:>7.1f}s..{c.end_s:>7.1f}s]  {c.id}  -> {c.path}")
-
-
-@app.command()
-def variants(
-    clip_id: str = typer.Argument(..., help="Clip ID produced by `nexoclip cut`."),
-    persona: str = typer.Option(..., "--persona", help="Persona id from personas.yaml."),
-    output_dir: Path = typer.Option(
-        Path("./out"), "--output-dir", "-o", help="Root directory holding stream folders."
-    ),
-    tenant_id: str | None = typer.Option(
-        None, "--tenant-id", help="Override tenant; defaults to NEXOCLIP_DEFAULT_TENANT_ID."
-    ),
-    n: int = typer.Option(5, "--n", min=1, help="How many variants to generate."),
-    language: str | None = typer.Option(
-        None, "--language", help="ISO 639-1 code; defaults to persona's primary language."
-    ),
-    quality: str | None = typer.Option(
-        None,
-        "--quality",
-        help="Override default quality (`standard` or `premium`).",
-    ),
-    llm_config_path: Path | None = typer.Option(
-        None, "--llm-config", help="Path to llm.yaml (defaults to config/llm.yaml)."
-    ),
-    personas_path: Path | None = typer.Option(None, "--personas", help="Path to personas.yaml."),
-    force: bool = typer.Option(
-        False, "--force", help="Re-generate even if `variants.json` already exists."
-    ),
-    json_output: bool = typer.Option(False, "--json", help="Print variants as JSON."),
-) -> None:
-    """Generate N caption variants for a clip in a persona's voice."""
-    from nexoclip.errors import LLMError, VariantError
-    from nexoclip.llm import LLMRouter, load_llm_config
-    from nexoclip.llm.config import Quality
-    from nexoclip.settings import get_settings
-    from nexoclip.variants import find_clip, generate_variants, get_persona
-
-    settings = get_settings()
-    effective_tenant = tenant_id or settings.default_tenant_id
-    quality_arg: Quality | None = None
-    if quality is not None:
-        if quality not in ("standard", "premium"):
-            typer.echo(f"--quality must be 'standard' or 'premium', got {quality!r}", err=True)
-            raise typer.Exit(code=2)
-        quality_arg = quality  # type: ignore[assignment]
-
-    try:
-        clip, clip_dir, stream_dir = find_clip(clip_id, Path(output_dir).resolve())
-        persona_obj = get_persona(persona, path=personas_path)
-        llm_config = load_llm_config(llm_config_path)
-        router = LLMRouter(
-            config=llm_config,
-            call_log_path=stream_dir / "llm_calls.jsonl",
-        )
-        result = asyncio.run(
-            generate_variants(
-                tenant_id=effective_tenant,
-                clip=clip,
-                persona=persona_obj,
-                router=router,
-                n=n,
-                language=language,
-                quality=quality_arg,
-                clip_dir=clip_dir,
-                force=force,
-            )
-        )
-    except (VariantError, LLMError) as e:
-        typer.echo(f"variants failed: {e}", err=True)
-        raise typer.Exit(code=1) from e
-
-    if json_output:
-        from nexoclip.variants.models import VariantsFile
-
-        payload = VariantsFile(
-            clip_id=clip.id,
-            tenant_id=effective_tenant,
-            persona_id=persona_obj.id,
-            persona_name=persona_obj.name,
-            language=language or persona_obj.primary_language,
-            variants=result,
-        )
-        typer.echo(payload.model_dump_json(indent=2))
-        return
-
-    typer.echo(f"clip:    {clip.id}")
-    typer.echo(f"persona: {persona_obj.id} ({persona_obj.name})")
-    typer.echo(f"variants ({len(result)}):")
-    for v in result:
-        hashtags = " ".join(f"#{h}" for h in v.hashtags) if v.hashtags else ""
-        title = f"  [{v.title_card_text}]" if v.title_card_text else ""
-        typer.echo(f"  - {v.id} ({v.language}){title} {v.caption} {hashtags}".rstrip())
 
 
 @app.command()

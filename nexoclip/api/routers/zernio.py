@@ -1674,7 +1674,7 @@ async def zernio_autopublish_json(
         "enabled": False, "mode": "on_approve", "targets": None,
         "post_mode": "queue", "daily_cap": 10, "score_threshold": 0.6,
         "tag_suffix": "",
-        "growth_engine": False, "growth_min_score": 40, "daily_clip_budget": None,
+        "growth_min_score": 40, "daily_clip_budget": None,
     }
     platforms: list[str] = []
     tenant = await TenantsRepo(db).get(tenant_id)
@@ -1732,10 +1732,8 @@ async def zernio_autopublish_save(
     # Fixed @handles + brand hashtags appended to every auto-published /
     # auto-programmed caption. Capped so a runaway paste can't bloat posts.
     tag_suffix = str(data.get("tag_suffix") or "").strip()[:500]
-    # Growth Engine knobs (Phases 2 + 5). Off by default; min-score is the
-    # per-platform publish floor (0-100); budget is "how many clips today"
-    # (None / 0 = no pool cap).
-    growth_engine = bool(data.get("growth_engine"))
+    # Deterministic publishing knobs: min-score is the per-platform publish
+    # floor (0-100); budget is "how many clips today" (None / 0 = no pool cap).
     try:
         growth_min_score = min(100, max(0, int(data.get("growth_min_score", 40))))
     except (TypeError, ValueError):
@@ -1756,7 +1754,6 @@ async def zernio_autopublish_save(
         daily_cap=daily_cap,
         score_threshold=score_threshold,
         tag_suffix=tag_suffix,
-        growth_engine=growth_engine,
         growth_min_score=growth_min_score,
         daily_clip_budget=daily_clip_budget,
     )
@@ -1882,6 +1879,26 @@ async def _autopublish_count_today(db: Database, tenant_id: str) -> int:
     return int(row[0]) if row else 0
 
 
+async def _emit_degenerate_skip(
+    db: Database, *, tenant_id: str, clip_id: str
+) -> None:
+    """Record why an auto-publish skipped a clip (no hook, no real body)
+    so the dashboard events feed shows the cause. Best-effort."""
+    from nexoclip.tenancy import bound_tenant
+
+    try:
+        with bound_tenant(tenant_id):
+            await EventsRepo(db).emit(
+                type="publish.skipped_degenerate",
+                payload={
+                    "clip_id": clip_id,
+                    "reason": "composed post has no hook and no real caption body",
+                },
+            )
+    except Exception:  # event is advisory, never block publish
+        pass
+
+
 async def maybe_autopublish_on_approve(
     *, request: Request, db: Database, tenant_id: str, clip_id: str
 ) -> str | None:
@@ -1933,6 +1950,15 @@ async def maybe_autopublish_on_approve(
         composed = await build_post(
             db, clip_id, handle_suffix=str(s.get("tag_suffix") or ""),
         )
+        if composed.is_degenerate:
+            # No hook and no real body — publishing a bare token ("viral")
+            # buries the account. Leave the clip for manual review instead.
+            log.warning(
+                "autopublish.skipped_degenerate",
+                tenant_id=tenant_id, clip_id=clip_id, caption=composed.caption[:80],
+            )
+            await _emit_degenerate_skip(db, tenant_id=tenant_id, clip_id=clip_id)
+            return None
         post_id = await _publish_clip(
             client=client,
             db=db,
@@ -2050,15 +2076,14 @@ async def autopublish_hands_free_sweep(
             )
             return 0
 
-        # The ONE hands-free scheduling path: the per-platform rulebook +
-        # fatigue spacing + allocation + per-platform assets. LLM Growth Scores
-        # when the tenant has the Growth Engine on, else a publishability
-        # fallback (no LLM). The old flat interval drip is gone.
+        # The ONE hands-free scheduling path: the deterministic per-platform
+        # scorer + rulebook + fatigue spacing + allocation + per-platform
+        # assets. No LLM. The old flat interval drip is gone.
         return await _run_growth_engine(
             db=db, tenant_id=tenant_id, base_url=base_url,
             profile_id=profile_id, client=client, account_map=account_map,
             targets=chosen, eligible=eligible, clips_by_id=clips_by_id,
-            settings_row=s, growth_on=bool(s.get("growth_engine")), log=log,
+            settings_row=s, log=log,
         )
     except Exception as e:  # the sweep must never break the pipeline
         log.warning("autopublish.handsfree.failed", tenant_id=tenant_id, error=str(e))
@@ -2146,31 +2171,6 @@ async def _cooled_down_platforms(
     return {canonical_platform(p) for p in active}
 
 
-async def _platform_perf_weights(db: Database, tenant_id: str) -> dict[str, float]:
-    """Continuous-learning allocation weights from real per-platform analytics.
-
-    Never raises — on any failure (no analytics, Zernio down) returns {} so the
-    planner falls back to full, unbiased allocation. Cold-start safe: platforms
-    without enough mature data stay at weight 1.0."""
-    try:
-        from nexoclip.publish.analytics_service import internal_analytics
-        from nexoclip.score.performance import (
-            compute_platform_performance,
-            platform_weights,
-        )
-
-        analytics = await internal_analytics(db, tenant_id, client=_build_client())
-        perf = compute_platform_performance(analytics.get("posts", []))
-        return platform_weights(perf)
-    except Exception as e:  # learning is best-effort; never block publishing
-        import structlog
-
-        structlog.get_logger("nexoclip.api.zernio").info(
-            "perf_weights.unavailable", tenant_id=tenant_id, error=str(e),
-        )
-        return {}
-
-
 async def _run_growth_engine(
     *,
     db: Database,
@@ -2183,19 +2183,17 @@ async def _run_growth_engine(
     eligible: list[str],
     clips_by_id: dict[str, Any],
     settings_row: dict[str, Any],
-    growth_on: bool,
     log: Any,
 ) -> int:
     """Execute the rulebook-aware sweep for a batch of eligible clips.
 
     The ONE hands-free scheduling path (the flat-drip route is gone). Scores
-    each clip — the LLM Growth Score when the tenant has the Growth Engine on,
-    else a cheap publishability-derived fallback (no LLM) — then plans with
-    `plan_growth_publish` (fatigue spacing → allocation → per-platform pacing →
-    per-platform assets) and renders + posts each scheduled (clip, platform)
-    through Zernio. One post's failure never aborts the batch; never raises."""
+    each clip with the deterministic `score_clip` (per-platform duration fit +
+    publishability, no LLM), then plans with `plan_growth_publish` (fatigue
+    spacing → allocation → per-platform pacing → per-platform assets) and
+    renders + posts each scheduled (clip, platform) through Zernio. One post's
+    failure never aborts the batch; never raises."""
     import datetime as _dt
-    from pathlib import Path
 
     from nexoclip.api._clip_render import ensure_clip_rendered
     from nexoclip.api.routers.internal import (
@@ -2203,13 +2201,16 @@ async def _run_growth_engine(
         sign_render_query,
         signed_clip_ttl_for_schedule,
     )
-    from nexoclip.clip.breakdown import clip_breakdown
-    from nexoclip.db import ClipsRepo, GrowthScoresRepo, PlatformPacingRulesRepo
-    from nexoclip.llm import LLMRouter, load_llm_config
+    from nexoclip.db import (
+        ClipsRepo,
+        GrowthScoresRepo,
+        PlatformPacingRulesRepo,
+        StreamsRepo,
+    )
     from nexoclip.publish.compose import build_post
     from nexoclip.publish.growth_engine import ClipContent, plan_growth_publish
     from nexoclip.publish.pacing import canonical_platform
-    from nexoclip.score.growth import GrowthInput, compute_growth_score, fallback_card
+    from nexoclip.score.growth import GrowthInput, score_clip
     from nexoclip.tenancy import bound_tenant
 
     settings = get_settings()
@@ -2228,15 +2229,6 @@ async def _run_growth_engine(
         log.info("autopublish.growth.no_connected_targets", tenant_id=tenant_id)
         return 0
 
-    router = (
-        LLMRouter(
-            config=load_llm_config(),
-            call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
-            db=db,
-        )
-        if growth_on
-        else None
-    )
     rules = await PlatformPacingRulesRepo(db).effective_rules(tenant_id)
     gs_repo = GrowthScoresRepo(db)
     recent_tags = await gs_repo.recent_content_tags(tenant_id, limit=12)
@@ -2250,11 +2242,11 @@ async def _run_growth_engine(
     existing_by_day = await pubs_repo.count_by_platform_by_day(
         tenant_id, from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
     )
-    # Continuous learning: shift volume toward platforms that actually earn
-    # views (a mature 0-view platform gets fewer clips). Best-effort.
-    weights = await _platform_perf_weights(db, tenant_id)
 
-    # Score + compose each eligible clip into a ClipContent.
+    # Score + compose each eligible clip into a ClipContent. Stream titles are
+    # fetched once per stream (a sweep is usually one VOD) to feed the
+    # deterministic content-tag derivation for fatigue spacing.
+    stream_titles: dict[str, str] = {}
     contents: list[ClipContent] = []
     for clip_id in eligible:
         clip = clips_by_id[clip_id]
@@ -2263,34 +2255,37 @@ async def _run_growth_engine(
                 composed = await build_post(
                     db, clip_id, handle_suffix=str(settings_row.get("tag_suffix") or ""),
                 )
+            if composed.is_degenerate:
+                # Hands-free must not ship contentless posts (the "viral"
+                # incident) — skip and surface why via an event.
+                log.warning(
+                    "autopublish.growth.skipped_degenerate",
+                    tenant_id=tenant_id, clip_id=clip_id,
+                    caption=composed.caption[:80],
+                )
+                await _emit_degenerate_skip(db, tenant_id=tenant_id, clip_id=clip_id)
+                continue
+            stream_id = getattr(clip, "stream_id", "") or ""
+            if stream_id and stream_id not in stream_titles:
+                with bound_tenant(tenant_id):
+                    stream = await StreamsRepo(db).get(stream_id)
+                stream_titles[stream_id] = (stream.title or "") if stream else ""
             inp = GrowthInput(
                 clip_id=clip_id,
                 duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
                 caption=composed.caption, hashtags=list(composed.hashtags),
                 hook=composed.hook, platforms=connected,
                 publishability_score=clip.publishability_score,
+                stream_title=stream_titles.get(stream_id, ""),
                 recent_content_tags=recent_tags,
             )
-            if growth_on and router is not None:
-                with bound_tenant(tenant_id):
-                    bd = await clip_breakdown(db, clip_id)
-                from dataclasses import replace
-
-                inp = replace(
-                    inp, heuristic_reason=bd.heuristic_reason,
-                    motion_score=bd.motion_score, face_presence=bd.face_presence,
-                    speaking_intensity=bd.speaking_intensity,
-                    reaction_confidence=bd.reaction_confidence,
+            card = score_clip(inp)
+            with bound_tenant(tenant_id):
+                await gs_repo.record(
+                    tenant_id=tenant_id, clip_id=clip_id,
+                    overall_score=card.overall_score, decision=card.decision,
+                    content_tags=card.content_tags, card_json=card.model_dump_json(),
                 )
-                card = await compute_growth_score(inp, tenant_id=tenant_id, router=router)
-                with bound_tenant(tenant_id):
-                    await gs_repo.record(
-                        tenant_id=tenant_id, clip_id=clip_id,
-                        overall_score=card.overall_score, decision=card.decision,
-                        content_tags=card.content_tags, card_json=card.model_dump_json(),
-                    )
-            else:
-                card = fallback_card(inp)
             contents.append(
                 ClipContent(
                     # sans-tags: the asset matrix carries hashtags
@@ -2312,13 +2307,15 @@ async def _run_growth_engine(
     if not contents:
         return 0
 
-    budget = (settings_row.get("daily_clip_budget") or None) if growth_on else None
-    min_score = int(settings_row.get("growth_min_score") or 40) if growth_on else 0
+    # Deterministic knobs, always applied now (no LLM opt-in gate): the daily
+    # clip pool cap and the per-platform publish floor.
+    budget = settings_row.get("daily_clip_budget") or None
+    min_score = int(settings_row.get("growth_min_score") or 40)
     plan = plan_growth_publish(
         contents, connected=connected, rules=rules,
         now=_dt.datetime.now(_dt.UTC), budget=budget, min_score=min_score,
         existing_today=existing_today, existing_by_day=existing_by_day,
-        recent_tags=recent_tags, platform_weights=weights,
+        recent_tags=recent_tags, platform_weights=None,
     )
 
     pubs = ZernioPublishesRepo(db)
@@ -3518,29 +3515,28 @@ async def _run_growth_autoprog(
 ) -> None:
     """Rulebook-aware bulk auto-program (replaces the flat 30-min drip).
 
-    Scores each approved clip (LLM Growth Score when the tenant has the Growth
-    Engine on, else a publishability-derived fallback), then plans the whole
-    backlog with `plan_backlog_schedule`: per-platform `max_per_day` + `min_gap`,
-    rolling overflow across days, best clips first, cross-posted to every
-    allowed platform — so a 39-clip YouTube backlog spreads over ~2 weeks at
-    ~3/day instead of 39 posts in one day. Posts each scheduled (clip, platform)
+    Scores each approved clip with the deterministic `score_clip` (per-platform
+    duration fit + publishability, no LLM), then plans the whole backlog with
+    `plan_backlog_schedule`: per-platform `max_per_day` + `min_gap`, rolling
+    overflow across days, best clips first, cross-posted to every allowed
+    platform — so a 39-clip YouTube backlog spreads over ~2 weeks at ~3/day
+    instead of 39 posts in one day. Posts each scheduled (clip, platform)
     through the shared `_publish_clip`. Holds the cross-worker lock for the run
     and releases it at the end. Never raises into the event loop."""
     import datetime as _dt
-    from dataclasses import replace
 
-    from nexoclip.clip.breakdown import clip_breakdown
     from nexoclip.db import (
         AutoprogLocksRepo,
         AutopublishSettingsRepo,
         ClipsRepo,
         GrowthScoresRepo,
         PlatformPacingRulesRepo,
+        StreamsRepo,
     )
     from nexoclip.publish.compose import build_post
     from nexoclip.publish.growth_engine import ClipContent, plan_backlog_schedule
     from nexoclip.publish.pacing import canonical_platform
-    from nexoclip.score.growth import GrowthInput, compute_growth_score, fallback_card
+    from nexoclip.score.growth import GrowthInput, score_clip
     from nexoclip.tenancy import bound_tenant
 
     prog = _AUTOPROG[tenant_id]
@@ -3548,21 +3544,8 @@ async def _run_growth_autoprog(
     locks = AutoprogLocksRepo(db)
     targets_canon = [canonical_platform(p) for p in targets]
     try:
-        settings = get_settings()
         s = await AutopublishSettingsRepo(db).get(tenant_id) or {}
-        growth_on = bool(s.get("growth_engine"))
-        min_score = int(s.get("growth_min_score") or 40) if growth_on else 0
-        router = None
-        if growth_on:
-            from pathlib import Path
-
-            from nexoclip.llm import LLMRouter, load_llm_config
-
-            router = LLMRouter(
-                config=load_llm_config(),
-                call_log_path=Path(settings.default_output_dir) / "llm_calls_growth.jsonl",
-                db=db,
-            )
+        min_score = int(s.get("growth_min_score") or 40)
 
         client = _build_client()
         with bound_tenant(tenant_id):
@@ -3577,7 +3560,6 @@ async def _run_growth_autoprog(
                 tenant_id,
                 from_day=_dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
             )
-            weights = await _platform_perf_weights(db, tenant_id)
             # Abuse/rate-limit backoff: drop platforms in cooldown. Recorded
             # in the progress payload so the operator SEES why a selected
             # platform got no posts (previously log-only — a parked platform
@@ -3591,7 +3573,9 @@ async def _run_growth_autoprog(
                     tenant_id, sorted(cooled),
                 )
 
-            # Score + compose each clip into a ClipContent.
+            # Score + compose each clip into a ClipContent (deterministic, no
+            # LLM). Stream titles fetched once per stream for content tags.
+            stream_titles: dict[str, str] = {}
             contents: list[ClipContent] = []
             for clip_id in clip_ids:
                 prog["heartbeat"] = time.monotonic()
@@ -3601,6 +3585,21 @@ async def _run_growth_autoprog(
                     if clip is None:
                         continue
                     composed = await build_post(db, clip_id, handle_suffix=handle_suffix)
+                    if composed.is_degenerate:
+                        # Same rule as on_approve/hands-free: a post with no
+                        # hook and no real body never ships (the "viral" run).
+                        _log.warning(
+                            "zernio.autoprogram.skipped_degenerate "
+                            "tenant=%s clip=%s", tenant_id, clip_id,
+                        )
+                        await _emit_degenerate_skip(
+                            db, tenant_id=tenant_id, clip_id=clip_id
+                        )
+                        continue
+                    stream_id = getattr(clip, "stream_id", "") or ""
+                    if stream_id and stream_id not in stream_titles:
+                        stream = await StreamsRepo(db).get(stream_id)
+                        stream_titles[stream_id] = (stream.title or "") if stream else ""
                     inp = GrowthInput(
                         clip_id=clip_id,
                         duration_s=float(getattr(clip, "duration_s", 0.0) or 0.0),
@@ -3608,25 +3607,15 @@ async def _run_growth_autoprog(
                         hook=composed.hook,
                         platforms=targets_canon,
                         publishability_score=clip.publishability_score,
+                        stream_title=stream_titles.get(stream_id, ""),
                         recent_content_tags=recent_tags,
                     )
-                    if growth_on and router is not None:
-                        bd = await clip_breakdown(db, clip_id)
-                        inp = replace(
-                            inp, heuristic_reason=bd.heuristic_reason,
-                            motion_score=bd.motion_score,
-                            face_presence=bd.face_presence,
-                            speaking_intensity=bd.speaking_intensity,
-                            reaction_confidence=bd.reaction_confidence,
-                        )
-                        card = await compute_growth_score(inp, tenant_id=tenant_id, router=router)
-                        await gs_repo.record(
-                            tenant_id=tenant_id, clip_id=clip_id,
-                            overall_score=card.overall_score, decision=card.decision,
-                            content_tags=card.content_tags, card_json=card.model_dump_json(),
-                        )
-                    else:
-                        card = fallback_card(inp)
+                    card = score_clip(inp)
+                    await gs_repo.record(
+                        tenant_id=tenant_id, clip_id=clip_id,
+                        overall_score=card.overall_score, decision=card.decision,
+                        content_tags=card.content_tags, card_json=card.model_dump_json(),
+                    )
                     contents.append(
                         ClipContent(
                             # sans-tags — see _run_growth_engine: the asset's
@@ -3647,8 +3636,8 @@ async def _run_growth_autoprog(
                 contents, connected=targets_canon, rules=rules,
                 now=_dt.datetime.now(_dt.UTC), min_score=min_score,
                 existing_today=existing_today, existing_by_day=existing_by_day,
-                platform_weights=weights,
-                recent_tags=recent_tags if growth_on else None,
+                platform_weights=None,
+                recent_tags=recent_tags,
             )
             prog["total"] = len(plan.posts)
 

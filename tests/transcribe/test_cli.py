@@ -10,16 +10,28 @@ from typer.testing import CliRunner
 
 from nexoclip.cli import app
 from nexoclip.ingest import Stream
-from nexoclip.transcribe import service as transcribe_service
 
 from ._fakes import FakeInfo, FakeSegment, FakeWhisperModel, FakeWord
 
 
 @pytest.fixture(autouse=True)
 def _patch_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(transcribe_service, "_USE_SUBPROCESS", False)
+    # Patch `faster_whisper.WhisperModel` directly — the local provider
+    # lazy-imports it inside `_run_inprocess` — and flip the provider
+    # into in-process mode via the factory's env override.
+    import sys
+    import types
+
+    fw = sys.modules.get("faster_whisper")
+    if fw is None:
+        fw = types.ModuleType("faster_whisper")
+        sys.modules["faster_whisper"] = fw
     FakeWhisperModel.reset()
-    monkeypatch.setattr(transcribe_service, "WhisperModel", FakeWhisperModel)
+    monkeypatch.setattr(fw, "WhisperModel", FakeWhisperModel, raising=False)
+    monkeypatch.setenv("NEXOCLIP_TRANSCRIBE_INPROCESS", "1")
+    from nexoclip.settings import get_settings
+
+    get_settings.cache_clear()
     FakeWhisperModel.canned_info = FakeInfo(language="es", duration=5.0)
     FakeWhisperModel.canned_segments = [
         FakeSegment(

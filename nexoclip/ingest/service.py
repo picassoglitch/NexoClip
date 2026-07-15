@@ -628,23 +628,37 @@ def _download_vod(
         # download has to fit around — the start of the disk-exhaustion
         # spiral.
         _sweep_download_leftovers(target_path)
-        if not _is_stale_partial_error(e):
+        if _is_cookie_acquisition_error(e) and "cookiesfrombrowser" in ydl_opts:
+            # The browser holds an exclusive lock on its cookie DB (yt-dlp
+            # #7271) — a machine-local problem, not a site refusal. Cookies
+            # are usually unnecessary on residential IPs, so retry the same
+            # download WITHOUT them rather than surfacing close-your-browser
+            # instructions to the operator. If the site then 403s, the
+            # normal explain path below still says so.
+            _log.warning(
+                "ingest.download.cookies_unavailable_retry_without",
+                vod_url=vod_url,
+                error=str(e)[:200],
+            )
+            ydl_opts.pop("cookiesfrombrowser", None)
+        elif not _is_stale_partial_error(e):
             raise _explain_download_failure(
                 err=e, vod_url=vod_url, platform=platform,
                 cookies_from_browser=cookies_from_browser,
                 cookies_file=cookies_file,
             ) from e
-        # A killed run (host restart mid-download) leaves `.part` + `.ytdl`
-        # resume state pointing at fragment files that may no longer all
-        # exist; yt-dlp's resume then fails deterministically with a local
-        # FileNotFoundError. The sweep above just removed that state, so one
-        # clean-slate retry is the self-heal — without it the user re-runs
-        # into the identical error forever.
-        _log.warning(
-            "ingest.download.stale_partial_retry",
-            vod_url=vod_url,
-            error=str(e),
-        )
+        else:
+            # A killed run (host restart mid-download) leaves `.part` + `.ytdl`
+            # resume state pointing at fragment files that may no longer all
+            # exist; yt-dlp's resume then fails deterministically with a local
+            # FileNotFoundError. The sweep above just removed that state, so
+            # one clean-slate retry is the self-heal — without it the user
+            # re-runs into the identical error forever.
+            _log.warning(
+                "ingest.download.stale_partial_retry",
+                vod_url=vod_url,
+                error=str(e),
+            )
         try:
             info = _fetch()
         except yt_dlp.utils.YoutubeDLError as e2:
@@ -699,6 +713,21 @@ def _sweep_download_leftovers(target_path: Path) -> None:
         with contextlib.suppress(OSError):
             if leftover.is_file():
                 leftover.unlink()
+
+
+def _is_cookie_acquisition_error(err: Exception) -> bool:
+    """True when yt-dlp failed to READ browser cookies (locked DB while the
+    browser runs — yt-dlp #7271 — or a keyring/decryption hiccup), as opposed
+    to the site rejecting the request. These are machine-local and the
+    download itself hasn't been attempted yet, so retrying without cookies
+    is safe and usually sufficient on a residential IP."""
+    raw = str(err).lower()
+    return "cookie" in raw and (
+        "could not copy" in raw
+        or "database is locked" in raw
+        or "failed to decrypt" in raw
+        or "could not find" in raw
+    )
 
 
 def _is_stale_partial_error(err: Exception) -> bool:

@@ -1,4 +1,4 @@
-"""LocalWhisperProvider — faster-whisper on the local GPU/CPU.
+﻿"""LocalWhisperProvider — faster-whisper on the local GPU/CPU.
 
 Wraps the existing `_run_whisper` and `_run_whisper_subprocess` paths
 from `nexoclip.transcribe.service` so behavior is unchanged for
@@ -27,6 +27,29 @@ from nexoclip.errors import TranscriptionError
 from nexoclip.transcribe.models import Segment, Transcript, Word
 
 from .base import TranscribeRequest
+
+
+class _WorkerCrashError(Exception):
+    """Nonzero exit from the whisper subprocess — carries enough context to
+    either trigger the cpu fallback or convert into a TranscriptionError."""
+
+    def __init__(
+        self, *, returncode: int, stderr_tail: str,
+        device: str, model: str, compute_type: str,
+    ) -> None:
+        super().__init__(f"whisper worker exit {returncode}")
+        self.returncode = returncode
+        self.stderr_tail = stderr_tail
+        self.device = device
+        self.model = model
+        self.compute_type = compute_type
+
+    def to_error(self) -> TranscriptionError:
+        return TranscriptionError(
+            f"Whisper worker exited with code {self.returncode} "
+            f"({self.model}/{self.device}/{self.compute_type}). "
+            f"Worker stderr tail: {self.stderr_tail}"
+        )
 
 
 class LocalWhisperProvider:
@@ -71,7 +94,49 @@ class LocalWhisperProvider:
     ) -> Transcript:
         """Spawn `nexoclip.transcribe._worker` so a CUDA OOM doesn't take
         down the parent. Same protocol as the legacy `_run_whisper_subprocess`.
+
+        A CUDA-side native crash (OOM, driver fault — exits with a Windows
+        NTSTATUS like 0xC0000409, no Python traceback) retries ONCE on
+        cpu/int8 automatically. Slower, but a run a client queued must never
+        die with edit-your-.env instructions when the machine can still
+        finish the job.
         """
+        try:
+            return self._spawn_worker(
+                audio_path=audio_path, stream_id=stream_id,
+                tenant_id=tenant_id, language=language,
+                device=self._device, compute_type=self._compute_type,
+            )
+        except _WorkerCrashError as crash:
+            if self._device == "cpu":
+                raise crash.to_error() from crash
+            import structlog
+
+            structlog.get_logger(__name__).warning(
+                "transcribe.cuda_crash_cpu_fallback",
+                stream_id=stream_id,
+                exit_code=crash.returncode,
+                model=self._model_size,
+            )
+            try:
+                return self._spawn_worker(
+                    audio_path=audio_path, stream_id=stream_id,
+                    tenant_id=tenant_id, language=language,
+                    device="cpu", compute_type="int8",
+                )
+            except _WorkerCrashError as crash2:
+                raise crash2.to_error() from crash2
+
+    def _spawn_worker(
+        self,
+        *,
+        audio_path: Path,
+        stream_id: str,
+        tenant_id: str,
+        language: str | None,
+        device: str,
+        compute_type: str,
+    ) -> Transcript:
         with tempfile.NamedTemporaryFile(
             suffix=".json", delete=False, mode="w", encoding="utf-8"
         ) as tmp:
@@ -85,8 +150,8 @@ class LocalWhisperProvider:
                 "--stream-id", stream_id,
                 "--tenant-id", tenant_id,
                 "--model", self._model_size,
-                "--device", self._device,
-                "--compute", self._compute_type,
+                "--device", device,
+                "--compute", compute_type,
                 "--language", language or "",
                 "--out", str(out_path),
             ]
@@ -94,13 +159,12 @@ class LocalWhisperProvider:
                 cmd, capture_output=True, text=True, check=False
             )
             if result.returncode != 0:
-                tail = (result.stderr or "")[-1500:]
-                raise TranscriptionError(
-                    f"Whisper worker exited with code {result.returncode}. "
-                    f"This usually means CUDA out-of-memory or a driver crash on "
-                    f"a long video — drop to NEXOCLIP_WHISPER_MODEL=base or set "
-                    f"NEXOCLIP_WHISPER_DEVICE=cpu in .env and re-run. "
-                    f"Worker stderr tail: {tail}"
+                raise _WorkerCrashError(
+                    returncode=result.returncode,
+                    stderr_tail=(result.stderr or "")[-1500:],
+                    device=device,
+                    model=self._model_size,
+                    compute_type=compute_type,
                 )
             if not out_path.exists():
                 raise TranscriptionError(

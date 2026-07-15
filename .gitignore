@@ -79,3 +79,6 @@ models/
 *.m4a
 *.aac
 .pgtest/
+
+# PC worker local env (secrets)
+worker.env

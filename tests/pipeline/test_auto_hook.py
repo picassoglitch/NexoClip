@@ -43,14 +43,37 @@ async def test_generates_hook_from_transcript_snippet() -> None:
     assert "clipea esto" in router.calls[0]["user"]
 
 
-@pytest.mark.asyncio
-async def test_swallows_llm_failure_returns_empty() -> None:
-    class _Boom:
-        async def complete(self, **kw: Any) -> HookBatch:
-            raise RuntimeError("llm down")
+class _Boom:
+    async def complete(self, **kw: Any) -> HookBatch:
+        raise RuntimeError("llm down")
 
+
+@pytest.mark.asyncio
+async def test_llm_failure_falls_back_to_deterministic_hook() -> None:
+    """A hook hiccup never breaks the pipeline AND never ships a hookless
+    clip — the deterministic generator takes over (the "viral" incident:
+    empty hooks cascaded into one-word captions on 18 dead posts)."""
+    hook = await _auto_hook_for_clip(
+        clip=_clip("¡esa jugada fue una locura y nadie la vio venir!"),
+        persona=_PERSONA, language=None, tenant_id="t1", router=_Boom(),
+    )
+    assert hook != ""
+    assert "locura" in hook.lower()  # built from the clip's own transcript
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_with_no_transcript_uses_stream_title() -> None:
+    hook = await _auto_hook_for_clip(
+        clip=_clip(""), persona=_PERSONA, language=None,
+        tenant_id="t1", router=_Boom(), stream_title="Mexico 1 - 0 Korea",
+    )
+    assert "Mexico 1 - 0 Korea" in hook
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_with_nothing_at_all_still_returns_a_title() -> None:
     hook = await _auto_hook_for_clip(
         clip=_clip(""), persona=_PERSONA, language=None,
         tenant_id="t1", router=_Boom(),
     )
-    assert hook == ""  # best-effort: a hook hiccup never breaks the pipeline
+    assert hook != ""  # template fallback — a clip never ships hookless

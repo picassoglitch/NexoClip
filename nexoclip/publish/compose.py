@@ -41,6 +41,11 @@ class ComposedPost:
     hashtags: list[str] = field(default_factory=list)
     hook: str = ""
     caption_sans_tags: str = ""
+    # True when the post carries no real content: no hook AND a body under
+    # three words (empty, or a stray token like a persona name). Automated
+    # publish paths must skip these — shipping them is how 18 posts titled
+    # "viral" went out with 0 views.
+    is_degenerate: bool = False
 
 
 def _as_hashtag(tag: str) -> str:
@@ -104,6 +109,7 @@ async def build_post(
     return ComposedPost(
         title=title, caption=caption, hashtags=hashtags, hook=hook,
         caption_sans_tags=caption_sans_tags,
+        is_degenerate=not hook and len(body.split()) < 3,
     )
 
 
@@ -118,9 +124,11 @@ async def generate_hook_line(
     """Best-effort single viral-hook line for a clip via the LLM.
 
     Resolves the persona voice + transcript snippet the same way the hooks
-    surface does, then asks `generate_hooks` for one candidate. Returns ""
-    on any failure so callers can fall back to the variant's hook — this
-    must never raise into a publish path."""
+    surface does, then asks `generate_hooks` for one candidate. When the
+    LLM path fails (billing cap, outage) it falls back to the deterministic
+    generator, so callers get a usable line whenever the clip exists.
+    Returns "" only on total failure (e.g. unknown clip) — this must never
+    raise into a publish path."""
     import json as _json
     from pathlib import Path
 
@@ -222,22 +230,36 @@ async def generate_hook_line(
             context_bits.append(f"Why it was clipped: {detect_reason}")
         clip_context = " — ".join(context_bits)
 
-        output_dir = Path(get_settings().default_output_dir)
-        router = LLMRouter(
-            config=load_llm_config(),
-            call_log_path=output_dir / "llm_calls_hooks.jsonl",
-            db=db,
-        )
-        hooks = await generate_hooks(
-            tenant_id=tenant_id,
-            persona_voice=persona_voice,
-            persona_language=persona_language,
-            transcript_snippet=snippet,
-            clip_context=clip_context,
-            tone=tone_id,  # type: ignore[arg-type]
-            n=1,
-            router=router,
-        )
-        return hooks[0].text.strip() if hooks else ""
+        hook_text = ""
+        try:
+            output_dir = Path(get_settings().default_output_dir)
+            router = LLMRouter(
+                config=load_llm_config(),
+                call_log_path=output_dir / "llm_calls_hooks.jsonl",
+                db=db,
+            )
+            hooks = await generate_hooks(
+                tenant_id=tenant_id,
+                persona_voice=persona_voice,
+                persona_language=persona_language,
+                transcript_snippet=snippet,
+                clip_context=clip_context,
+                tone=tone_id,  # type: ignore[arg-type]
+                n=1,
+                router=router,
+            )
+            hook_text = hooks[0].text.strip() if hooks else ""
+        except Exception:
+            hook_text = ""
+        if not hook_text:
+            from nexoclip.variants.deterministic import deterministic_hook
+
+            hook_text = deterministic_hook(
+                transcript_snippet=snippet,
+                stream_title=stream_title,
+                language=persona_language,
+                seed=clip_id,
+            )
+        return hook_text
     except Exception:
         return ""

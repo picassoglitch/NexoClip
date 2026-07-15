@@ -180,6 +180,30 @@ async def test_build_post_no_variant_is_empty(
     assert post.hook == ""
     assert post.title is None
     assert post.caption == "@x"
+    assert post.is_degenerate  # nothing real to publish
+
+
+@pytest.mark.asyncio
+async def test_build_post_flags_degenerate_one_word_caption(
+    db: Database, alice: dict[str, str]
+) -> None:
+    """A hookless variant whose caption is a stray token (the persona-name
+    fallback that shipped literal "viral" posts) must be flagged so the
+    automated publish paths refuse it."""
+    from nexoclip.publish.compose import build_post
+
+    now = _dt.datetime.now(_dt.UTC).isoformat()
+    await _seed_clip(
+        db, alice["id"], clip_id="clp_degen", persona_id="psn_ap",
+        caption="viral", hook="", hashtags=[], now=now,
+    )
+    with bound_tenant(alice["id"]):
+        post = await build_post(db, "clp_degen", handle_suffix="@doomscroll")
+    assert post.is_degenerate
+    # ...while a post with a real hook is not degenerate even with a short body.
+    with bound_tenant(alice["id"]):
+        healthy = await build_post(db, "clp_1", handle_suffix="")
+    assert not healthy.is_degenerate
 
 
 # ---- /compose/{clip_id} ----
@@ -478,6 +502,40 @@ async def test_handsfree_skips_reject_clip_despite_high_detector_score(
         n = await autopublish_hands_free_sweep(
             db=db, tenant_id=alice["id"], base_url="https://x.test",
             clip_scores=[("clp_bad", 0.9)],
+        )
+    assert n == 0
+    assert post_route.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handsfree_skips_degenerate_caption_clip(
+    publish_env: None, db: Database, alice: dict[str, str]
+) -> None:
+    """Hands-free must never ship a contentless post (no hook, one-word
+    body) — the exact failure that published 18 shorts titled "viral"."""
+    from nexoclip.api.routers.zernio import autopublish_hands_free_sweep
+
+    now = _dt.datetime.now(_dt.UTC).isoformat()
+    await _seed_clip(
+        db, alice["id"], clip_id="clp_viral", persona_id="psn_ap",
+        caption="viral", hook="", hashtags=[], now=now,
+        candidate_score=0.9, publishability_score=80,
+        publishability_status="publish_ready",
+    )
+    await AutopublishSettingsRepo(db).upsert(
+        alice["id"], enabled=True, mode="hands_free", targets="tiktok",
+        post_mode="now", daily_cap=10, score_threshold=0.5, tag_suffix="@doomscroll",
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        _mock_accounts(mock, "tiktok")
+        post_route = mock.post(f"{_ZBASE}/posts").mock(
+            side_effect=lambda r: httpx.Response(
+                201, json={"success": True, "post": {"_id": "post_degen"}}
+            )
+        )
+        n = await autopublish_hands_free_sweep(
+            db=db, tenant_id=alice["id"], base_url="https://x.test",
+            clip_scores=[("clp_viral", 0.9)],
         )
     assert n == 0
     assert post_route.call_count == 0

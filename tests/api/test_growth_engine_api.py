@@ -45,13 +45,12 @@ async def test_save_persists_growth_knobs(
         json={
             "enabled": True, "mode": "hands_free", "targets": ["tiktok"],
             "post_mode": "queue", "daily_cap": 5,
-            "growth_engine": True, "growth_min_score": 60, "daily_clip_budget": 15,
+            "growth_min_score": 60, "daily_clip_budget": 15,
         },
         headers=auth(alice["token"]),
     )
     assert resp.status_code == 200
     s = await AutopublishSettingsRepo(db).get(alice["id"])
-    assert s["growth_engine"] is True
     assert s["growth_min_score"] == 60
     assert s["daily_clip_budget"] == 15
 

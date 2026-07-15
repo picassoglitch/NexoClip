@@ -76,8 +76,7 @@ from nexoclip.llm.config import Quality
 from nexoclip.logging import get_logger
 from nexoclip.settings import Settings, get_settings
 from nexoclip.transcribe import Transcript, transcribe
-from nexoclip.llm.schemas import Variant
-from nexoclip.variants import Persona, generate_variants, load_personas
+from nexoclip.variants import Persona, load_personas
 from nexoclip.vision import analyze_video as _analyze_video
 from nexoclip.vision import load_visual_signals
 
@@ -517,7 +516,13 @@ async def _auto_hook_for_clip(
 
     `stream_title` is passed as context so a no-speech clip (sports goal,
     reaction) still gets a real hook off the stream title instead of
-    meta-commentary about a missing transcript."""
+    meta-commentary about a missing transcript.
+
+    When the LLM path fails (billing cap, provider outage) the clip still
+    gets a title via the deterministic generator — a hookless clip cascades
+    into a degenerate one-word caption downstream, which is worse than a
+    heuristic title."""
+    from nexoclip.variants.deterministic import deterministic_hook
     from nexoclip.variants.hooks import generate_hooks
 
     evidence = getattr(clip.candidate, "evidence", None) or {}
@@ -532,6 +537,7 @@ async def _auto_hook_for_clip(
     reason = str(getattr(clip.candidate, "reason", "") or "").strip()
     if reason:
         context_bits.append(f"Why it was clipped: {reason}")
+    hook = ""
     try:
         hooks = await generate_hooks(
             tenant_id=tenant_id,
@@ -542,10 +548,19 @@ async def _auto_hook_for_clip(
             n=1,
             router=router,
         )
-        return hooks[0].text.strip() if hooks else ""
+        hook = hooks[0].text.strip() if hooks else ""
     except Exception as e:
         _log.warning("pipeline.auto_hook_failed", clip_id=clip.id, error=str(e))
-        return ""
+    if hook:
+        return hook
+    hook = deterministic_hook(
+        transcript_snippet=snippet,
+        stream_title=stream_title,
+        language=language or persona.primary_language or "es",
+        seed=str(clip.id),
+    )
+    _log.info("pipeline.auto_hook_deterministic_fallback", clip_id=clip.id)
+    return hook
 
 
 async def _run_pipeline(
@@ -1172,14 +1187,10 @@ async def _run_pipeline(
             routing_tags=persona.routing_tags,
         )
     clip_entries: list[ClipEntry] = []
-    # Slice O.46 — variants generation is off by default (operator
-    # feedback). When disabled, we still create exactly ONE stub
-    # VariantRow per clip so the publish flow (which reads
-    # variant.caption / variant.hashtags) keeps working. The stub
-    # pulls its caption from the clip's overlay_config when set, falls
-    # back to the persona name otherwise. No LLM calls in the
-    # disabled path.
-    variants_enabled = bool(getattr(settings, "variants_enabled", False))
+    # Each clip gets exactly ONE variant row: a deterministic stub the publish
+    # flow reads its caption / hook / hashtags from (the LLM caption variant
+    # generator was removed). The stub's caption comes from the clip's
+    # overlay_config when set, else the stream title / hook. No LLM calls here.
     # Auto-hook: generate a viral title for EVERY clip so the editor, the
     # render burn, and auto-publish all get a hook without a manual "Generar 5".
     # (Was gated on the raw candidate score, which is uniformly low for YouTube
@@ -1187,29 +1198,26 @@ async def _run_pipeline(
     auto_hook_enabled = bool(getattr(settings, "auto_hook_enabled", True))
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
         for clip in clips:
-            auto_hook = ""
-            if auto_hook_enabled:
-                auto_hook = await _auto_hook_for_clip(
-                    clip=clip, persona=persona, language=language,
-                    tenant_id=tenant_id, router=router,
-                    stream_title=stream.title or "",
-                )
-            if variants_enabled:
-                variants = await generate_variants(
-                    tenant_id=tenant_id,
-                    clip=clip,
-                    persona=persona,
-                    router=router,
-                    n=n_variants,
-                    language=language,
-                    quality=quality,
-                    force=force,
-                )
+            # Idempotent re-runs must not re-pay the auto-hook LLM call:
+            # the stub (and its hook) persists next to the clip, and a
+            # resume without --force reuses it verbatim.
+            variants_path = clip.path.parent / "variants.json"
+            cached = None if force else _load_stub_variants(variants_path)
+            if cached is not None:
+                variants = cached
+                auto_hook = variants[0].title_card_text or ""
             else:
-                # Stub path — one row per clip, captioned from overlay
-                # or a sensible fallback. The dashboard editor + the
-                # publish flow both read .caption; the operator can
-                # edit it via the overlay form before shipping.
+                auto_hook = ""
+                if auto_hook_enabled:
+                    auto_hook = await _auto_hook_for_clip(
+                        clip=clip, persona=persona, language=language,
+                        tenant_id=tenant_id, router=router,
+                        stream_title=stream.title or "",
+                    )
+                # One stub variant per clip, captioned from the overlay or a
+                # sensible fallback. The dashboard editor + the publish flow both
+                # read .caption; the operator can edit it via the overlay form
+                # before shipping.
                 stub_caption = ""
                 overlay = getattr(clip, "overlay_config", None)
                 if isinstance(overlay, dict):
@@ -1220,7 +1228,11 @@ async def _run_pipeline(
                         else overlay.get("title_text") or ""
                     ) or ""
                 if not stub_caption:
-                    stub_caption = persona.name
+                    # NEVER the persona name — a tenant whose persona was named
+                    # "viral" shipped 18 posts captioned literally "viral". The
+                    # stream title is real context; the hook is already the
+                    # caption's first block, so it's the last resort here.
+                    stub_caption = (stream.title or "").strip() or auto_hook
                 variants = [
                     Variant(
                         id="v_stub",
@@ -1230,6 +1242,14 @@ async def _run_pipeline(
                         hashtags=[],
                     )
                 ]
+                variants_path.write_text(
+                    json.dumps(
+                        {"variants": [v.model_dump() for v in variants]},
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
             # Stamp the viral default overlay so the clip ships non-plain even
             # when it never passes through the editor: captions on, the hook as
             # the top headline, and a source-credit "marca" banner carrying the
@@ -1364,6 +1384,19 @@ async def _run_pipeline(
             )
 
     return manifest
+
+
+def _load_stub_variants(path: Path) -> list[Variant] | None:
+    """Cache read for the variants step. Returns None (regenerate) on any
+    missing/corrupt file — the step is best-effort re-runnable either way."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        variants = [Variant.model_validate(v) for v in data.get("variants", [])]
+    except Exception:
+        return None
+    return variants or None
 
 
 def _read_llm_spend(call_log_path: Path) -> LLMSpend:

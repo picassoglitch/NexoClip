@@ -1,14 +1,13 @@
-"""Variant generator — LLM-driven caption variants per (clip, persona)."""
+"""Persona loading + viral-hook generation.
 
-from .enrichment import (
-    EMOTIONAL_LABELS,
-    EmotionalLabel,
-    EnrichedVariant,
-    PlatformFit,
-    RiskLabel,
-    Tone,
-    enrich_variant,
-    enrich_variants,
+The LLM caption-variant generator was removed (clips ship a deterministic
+overlay/hook instead). What remains here is the persona model and the
+hook generator, both still used by the pipeline and the publish composer.
+"""
+
+from .deterministic import (
+    deterministic_hook,
+    deterministic_hook_candidates,
 )
 from .hooks import (
     Hook,
@@ -17,29 +16,17 @@ from .hooks import (
     generate_hooks,
     tone_choices,
 )
-from .models import VariantsFile
 from .personas import Persona, get_persona, load_personas
-from .service import find_clip, generate_variants, load_variants
 
 __all__ = [
-    "EMOTIONAL_LABELS",
-    "EmotionalLabel",
-    "EnrichedVariant",
     "Hook",
     "HookBatch",
     "Persona",
-    "PlatformFit",
-    "RiskLabel",
-    "Tone",
     "ToneId",
-    "VariantsFile",
-    "enrich_variant",
-    "enrich_variants",
-    "find_clip",
+    "deterministic_hook",
+    "deterministic_hook_candidates",
     "generate_hooks",
-    "generate_variants",
     "get_persona",
     "load_personas",
-    "load_variants",
     "tone_choices",
 ]

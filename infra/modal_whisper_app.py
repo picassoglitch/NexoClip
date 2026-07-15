@@ -67,7 +67,19 @@ _IMAGE = (
         # explicitly so the image build doesn't skip it.
         "requests>=2.32",
     )
+    # Bake the `small` weights into the image at build time (CPU-billed,
+    # once). Without this every cold container re-downloads ~460 MB from
+    # HuggingFace on GPU-billed time before the first segment comes out.
+    .run_commands(
+        "python -c \"from faster_whisper import WhisperModel; "
+        "WhisperModel('small', device='cpu', compute_type='int8')\""
+    )
 )
+
+# Only sizes we deliberately pay for. A config typo on the caller side
+# (NEXOCLIP_MODAL_MODEL=large-v3) would otherwise silently multiply the
+# per-VOD GPU cost — this is exactly how a credit balance dies quietly.
+_ALLOWED_MODELS = {"tiny", "base", "small"}
 
 app = modal.App("nexoclip-whisper")
 
@@ -76,8 +88,14 @@ app = modal.App("nexoclip-whisper")
     image=_IMAGE,
     gpu="T4",  # cheapest GPU that runs `small` at >10x realtime
     timeout=3600,  # 1h cap — multi-hour VODs need it
-    scaledown_window=300,  # keep warm for 5 min for burst uploads
+    scaledown_window=120,  # keep warm 2 min for back-to-back uploads
                             # (renamed from container_idle_timeout in Modal 1.x)
+    # Credit-drain guard: at most 2 T4s alive no matter how many jobs
+    # queue up (a reprocess sweep or channel-ingest burst fans out here).
+    # No `retries=` — Modal web functions don't support retries at all,
+    # so a crashed run never auto-retries on our dime; the pipeline's
+    # recovery loop caps re-dispatch at 3 attempts.
+    max_containers=2,
     secrets=[modal.Secret.from_name("nexoclip-modal-token")],
 )
 @modal.fastapi_endpoint(method="POST")
@@ -130,6 +148,12 @@ def transcribe(payload: dict) -> dict:
     stream_id = (payload or {}).get("stream_id", "?")
     if not audio_url:
         raise HTTPException(status_code=400, detail="audio_url required")
+    if model_size not in _ALLOWED_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"model {model_size!r} not allowed; use one of "
+            f"{sorted(_ALLOWED_MODELS)} (cost guard)",
+        )
 
     started_at = time.time()
 

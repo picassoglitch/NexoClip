@@ -246,3 +246,32 @@ async def test_preflight_refuses_without_shared_db(
         resp = await client.post("/", json=_kickoff_body())
         assert resp.status_code == 500
         assert "DATABASE_URL" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_prefixed_database_url_reaches_settings(
+    worker_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker configured only with NEXOCLIP_DATABASE_URL must end up with
+    Settings.database_url set — Settings binds the un-prefixed DATABASE_URL
+    alias, and without normalization the run passes preflight yet writes to
+    a worker-local SQLite the dashboard never sees."""
+    import os
+
+    from nexoclip.settings import get_settings
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("NEXOCLIP_DATABASE_URL", "postgresql://u:p@shared/db")
+
+    async def runner(kickoff: PipelineKickoff) -> None:  # pragma: no cover
+        raise AssertionError("must not run")
+
+    try:
+        create_worker_app(runner=runner)
+        assert os.environ["DATABASE_URL"] == "postgresql://u:p@shared/db"
+        assert get_settings().database_url == "postgresql://u:p@shared/db"
+    finally:
+        # DATABASE_URL was set via os.environ inside create_worker_app —
+        # scrub it and the settings cache so later tests see a clean env.
+        os.environ.pop("DATABASE_URL", None)
+        get_settings.cache_clear()

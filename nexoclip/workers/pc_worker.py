@@ -43,6 +43,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from nexoclip.jobs.base import PipelineKickoff, PipelineRunner
+from nexoclip.settings import get_settings
 
 _log = structlog.get_logger(__name__)
 
@@ -121,6 +122,15 @@ def _count_clips_from_manifest(stream_dir: Path) -> int | None:
 def create_worker_app(*, runner: PipelineRunner | None = None) -> FastAPI:
     """Build the worker app. `runner` is injectable for tests; the default
     is the production `default_pipeline_runner`."""
+    # Settings binds database_url to the un-prefixed DATABASE_URL alias, so a
+    # worker configured only with NEXOCLIP_DATABASE_URL would pass preflight
+    # yet resolve_db_target() would silently fall back to a worker-local
+    # SQLite. Normalize before anything instantiates Settings.
+    if not (os.environ.get("DATABASE_URL") or "").strip():
+        _prefixed_db_url = (os.environ.get("NEXOCLIP_DATABASE_URL") or "").strip()
+        if _prefixed_db_url:
+            os.environ["DATABASE_URL"] = _prefixed_db_url
+            get_settings.cache_clear()
     app = FastAPI(title="nexoclip-pc-worker", docs_url=None, redoc_url=None)
     ledger = _JobLedger()
     # One box, one GPU: run pipelines one at a time by default (a second

@@ -259,6 +259,7 @@ async def generate_hook_line(
                 stream_title=stream_title,
                 language=persona_language,
                 seed=clip_id,
+                reason=detect_reason,
             )
         return hook_text
     except Exception:

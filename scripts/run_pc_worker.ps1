@@ -27,6 +27,23 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 "[$(Get-Date -Format o)] launcher starting worker on port $Port" |
     Add-Content (Join-Path $logDir "launcher.log")
 
+# Ollama is the upstream of the worker's /v1 LLM proxy. If it isn't up
+# (crashed / quit from the tray), every cloud run's hooks silently degrade
+# to the deterministic fallback - so any worker launch revives it too.
+$ollamaUp = $false
+try {
+    Invoke-WebRequest -Uri "http://127.0.0.1:11434/api/tags" -UseBasicParsing -TimeoutSec 3 | Out-Null
+    $ollamaUp = $true
+} catch {}
+if (-not $ollamaUp) {
+    $ollamaExe = Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama app.exe"
+    if (Test-Path $ollamaExe) {
+        "[$(Get-Date -Format o)] launcher reviving Ollama (was down)" |
+            Add-Content (Join-Path $logDir "launcher.log")
+        Start-Process -FilePath $ollamaExe -WindowStyle Hidden
+    }
+}
+
 Start-Process -FilePath (Resolve-Path ".venv\Scripts\python.exe") `
     -ArgumentList "-m", "nexoclip.cli", "worker", "--port", $Port `
     -WorkingDirectory (Get-Location) `

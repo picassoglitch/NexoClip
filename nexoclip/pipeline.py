@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -500,6 +501,57 @@ async def _resolve_brand_kit_url(db: Database, *, stream_id: str) -> str | None:
     return None
 
 
+_SERIES_MAX_GAP_S = 20.0
+"""Two clips whose windows sit within this many seconds of each other are
+one long moment the cutter split — they publish as "Parte 1/N, 2/N, …" so
+a viewer who lands on any part goes hunting for the rest of the series."""
+
+_SERIES_TAG_RE = re.compile(r"\s+—\s+Part(?:e)?\s+\d+/\d+$")
+
+
+def _series_parts(clips: list[Any]) -> dict[str, tuple[int, int, int]]:
+    """Map clip.id -> (part_no, total, run_key) for temporally contiguous
+    runs of >= 2 clips. Interval-fallback clips are evenly spaced by
+    construction and never chain into a fake series."""
+    ordered = sorted(clips, key=lambda c: float(getattr(c, "start_s", 0.0)))
+    runs: list[list[Any]] = []
+    for c in ordered:
+        reason = str(getattr(c.candidate, "reason", "") or "")
+        chainable = reason != "interval"
+        if (
+            chainable
+            and runs
+            and runs[-1]
+            and str(getattr(runs[-1][-1].candidate, "reason", "") or "") != "interval"
+            and float(c.start_s) <= float(runs[-1][-1].end_s) + _SERIES_MAX_GAP_S
+        ):
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    parts: dict[str, tuple[int, int, int]] = {}
+    for run_key, run in enumerate(runs):
+        if len(run) >= 2:
+            for i, c in enumerate(run, start=1):
+                parts[c.id] = (i, len(run), run_key)
+    return parts
+
+
+def _series_hook(base: str, part: int, total: int, *, language: str) -> str:
+    """`base — Parte {part}/{total}`, trimmed so the whole line stays
+    within the 90-char burn budget."""
+    word = "Parte" if (language or "es").startswith("es") else "Part"
+    tag = f" — {word} {part}/{total}"
+    room = 90 - len(tag)
+    b = _SERIES_TAG_RE.sub("", base.strip())
+    if len(b) > room:
+        b = b[: max(0, room - 1)].rstrip() + "…"
+    return b + tag
+
+
+def _norm_hook(hook: str) -> str:
+    return " ".join(hook.split()).casefold()
+
+
 async def _auto_hook_for_clip(
     *,
     clip: Any,
@@ -508,6 +560,7 @@ async def _auto_hook_for_clip(
     tenant_id: str,
     router: Any,
     stream_title: str = "",
+    avoid_hooks: tuple[str, ...] = (),
 ) -> str:
     """Generate ONE viral hook (title line) from the clip's transcript
     snippet. Best-effort — returns '' on any failure so a hook hiccup never
@@ -546,11 +599,18 @@ async def _auto_hook_for_clip(
             transcript_snippet=snippet,
             clip_context=" — ".join(context_bits),
             n=1,
+            avoid_hooks=avoid_hooks,
             router=router,
         )
         hook = hooks[0].text.strip() if hooks else ""
     except Exception as e:
         _log.warning("pipeline.auto_hook_failed", clip_id=clip.id, error=str(e))
+    # Cross-clip uniqueness is a hard rule: if the model converged on a
+    # line a sibling clip already ships, discard it — the deterministic
+    # generator below honors the avoid-set structurally.
+    if hook and _norm_hook(hook) in {_norm_hook(h) for h in avoid_hooks}:
+        _log.info("pipeline.auto_hook_duplicate_discarded", clip_id=clip.id)
+        hook = ""
     if hook:
         return hook
     hook = deterministic_hook(
@@ -558,6 +618,8 @@ async def _auto_hook_for_clip(
         stream_title=stream_title,
         language=language or persona.primary_language or "es",
         seed=str(clip.id),
+        reason=reason,
+        avoid=set(avoid_hooks),
     )
     _log.info("pipeline.auto_hook_deterministic_fallback", clip_id=clip.id)
     return hook
@@ -1196,24 +1258,52 @@ async def _run_pipeline(
     # (Was gated on the raw candidate score, which is uniformly low for YouTube
     # VODs with no chat heat — so those clips got no hook and shipped plain.)
     auto_hook_enabled = bool(getattr(settings, "auto_hook_enabled", True))
+    hook_language = language or persona.primary_language or "es"
+    # Contiguous clips are one long moment → "Parte 1/N" series titles;
+    # every hook in the batch must be unique across the whole stream.
+    series_parts = _series_parts(clips)
+    series_base: dict[int, str] = {}
+    used_hooks: list[str] = []
+    used_norms: set[str] = set()
     with _step("variants", db=db, clip_count=len(clips), n=n_variants):
-        for clip in clips:
+        # Time-ordered so a series' Parte 1 resolves its base hook before
+        # Parte 2 needs it (and parts publish in watch order downstream).
+        for clip in sorted(clips, key=lambda c: float(getattr(c, "start_s", 0.0))):
             # Idempotent re-runs must not re-pay the auto-hook LLM call:
             # the stub (and its hook) persists next to the clip, and a
             # resume without --force reuses it verbatim.
             variants_path = clip.path.parent / "variants.json"
             cached = None if force else _load_stub_variants(variants_path)
+            part = series_parts.get(clip.id)
             if cached is not None:
                 variants = cached
                 auto_hook = variants[0].title_card_text or ""
+                # A partially cached series still needs its base for the
+                # uncached parts — recover it from the tagged hook.
+                if part and auto_hook and part[2] not in series_base:
+                    series_base[part[2]] = _SERIES_TAG_RE.sub("", auto_hook)
             else:
                 auto_hook = ""
                 if auto_hook_enabled:
-                    auto_hook = await _auto_hook_for_clip(
-                        clip=clip, persona=persona, language=language,
-                        tenant_id=tenant_id, router=router,
-                        stream_title=stream.title or "",
-                    )
+                    if part and part[2] in series_base:
+                        auto_hook = _series_hook(
+                            series_base[part[2]], part[0], part[1],
+                            language=hook_language,
+                        )
+                    else:
+                        base = await _auto_hook_for_clip(
+                            clip=clip, persona=persona, language=language,
+                            tenant_id=tenant_id, router=router,
+                            stream_title=stream.title or "",
+                            avoid_hooks=tuple(used_hooks),
+                        )
+                        if part:
+                            series_base[part[2]] = base
+                            auto_hook = _series_hook(
+                                base, part[0], part[1], language=hook_language,
+                            )
+                        else:
+                            auto_hook = base
                 # One stub variant per clip, captioned from the overlay or a
                 # sensible fallback. The dashboard editor + the publish flow both
                 # read .caption; the operator can edit it via the overlay form
@@ -1250,6 +1340,11 @@ async def _run_pipeline(
                     ),
                     encoding="utf-8",
                 )
+            # Feed the uniqueness guard — cached hooks count too, so a
+            # partial re-run can't hand a fresh clip an already-used line.
+            if auto_hook and _norm_hook(auto_hook) not in used_norms:
+                used_norms.add(_norm_hook(auto_hook))
+                used_hooks.append(auto_hook)
             # Stamp the viral default overlay so the clip ships non-plain even
             # when it never passes through the editor: captions on, the hook as
             # the top headline, and a source-credit "marca" banner carrying the

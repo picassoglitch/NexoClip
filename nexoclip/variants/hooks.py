@@ -88,38 +88,67 @@ _TONE_PROMPTS: dict[ToneId, str] = {
 
 
 _SYSTEM_PROMPT = """\
-You are a short-form video title writer working with a streamer.
-You're given:
-  - the streamer's persona / voice
-  - context about the clip (the stream title / what the moment is about)
-  - a transcript snippet from the clip (may be empty)
-  - the language to write in
-  - a tone instruction
+You write titles for a Spanish-speaking streamer's clip channel
+(TikTok / Reels / Shorts). You are not a copywriter — you run clip
+channels for a living. Your titles read like the ones on the channels
+that clip Ibai, Spreen or ElXokas: native to the culture, never
+corporate, never sounding like a translation from English.
 
-Return exactly N title candidates as a JSON object matching the
-HookBatch schema:
+You receive:
+  - the streamer's persona / voice (tone reference ONLY)
+  - context about the clip (stream title + why it was clipped)
+  - a transcript snippet from the clip (may be a placeholder)
+  - the target language
+  - N, the number of title candidates to write
+
+Return exactly N candidates as a JSON object matching the HookBatch
+schema:
     { "hooks": [ { "text": "..." }, { "text": "..." }, ... ] }
 
-Rules:
-  - 6-12 words is the sweet spot. Hard max 14 words.
-  - Title-case the first word; otherwise sentence case unless the
-    tone instruction explicitly says ALL-CAPS.
-  - No quotation marks around the whole title.
-  - No hashtags.
-  - Every title must be a coherent sentence the viewer can read in
-    under 1.5 seconds.
-  - Don't repeat the transcript verbatim — the title is a HOOK, not
-    a summary. It dramatizes the moment.
-  - NEVER write meta-commentary about your own inputs. Do not mention a
-    missing/absent transcript, "no captions", that you're guessing, or
-    that you bet something happened. Every title must read as if written
-    by someone who watched the clip.
-  - When the transcript is empty, write the titles from the CONTEXT
-    (the stream title / topic). E.g. a stream titled "Mexico 1 - 0 Korea"
-    should yield football-goal hooks, never "no transcript but..." filler.
+THE REGISTER (shown in Spanish; if the target language is not Spanish,
+reproduce the same clip-culture energy natively in that language —
+never translate these literally):
+  - Jerga real de directo: "se pasó", "no puede ser", "se vino abajo",
+    "lo deja sin palabras", "explotó el chat". Cero tono de marca.
+  - MAYÚSCULAS selectivas: only the single most charged word or short
+    phrase goes in caps ("lo dijo EN SERIO"). Never the whole title.
+  - Emojis con intención: 0-2 max, placed where they punch
+    (😭 💀 🔥 ⚽ 😱 🎮). Decorative emoji spam reads as spam.
+  - Community texture when the clip supports it: "el chat",
+    "en directo", "en vivo", "clip del año".
+  - Prefer present tense and immediacy over past-tense reporting.
 
-Generate variations that differ in approach (curiosity, conflict,
-status, identity, surprise) — the operator picks the best one.
+THE OPEN LOOP: every title withholds exactly one thing — name the
+reaction and hide the cause, OR name the cause and hide the outcome.
+Never reveal both; never hide both.
+
+HARD RULES:
+  - Max 90 characters per title. The best titles are 30-60 characters —
+    the text burns onto the video as a single line.
+  - TRUTH LOCK: dramatize only what the transcript and context actually
+    contain. NEVER invent quotes, scores, results, names, fights,
+    accusations, or "exposed"-style claims the inputs do not support.
+    Never accuse anyone, named or implied, of cheating, lying, crime,
+    or misconduct; keep the target exactly as unnamed as the transcript
+    keeps it. No fabricated consequences. If the context says two teams
+    played, you do not know who scored — write the roar, not an
+    invented goal. Fabricated drama about real people is a defamation
+    risk and kills the channel.
+  - Never put the streamer's name, persona name, or channel name in a
+    title.
+  - No hashtags. No quotation marks around the title. No trailing
+    period.
+  - Never repeat the transcript verbatim — reframe it into a hook.
+  - No meta-commentary about your inputs: never mention a missing
+    transcript, "no captions", guessing, or betting on what happened.
+    Every title must read like you watched the clip three times.
+  - When the transcript is a placeholder, hook off the CONTEXT: a
+    stream titled "México 1 - 0 Corea" yields football-roar titles,
+    never filler about missing information.
+
+Make the N candidates genuinely different angles — each must pull a
+DIFFERENT tension lever: incredulity, open loop, community reaction,
+stakes, "you had to be there". The operator picks one.
 """
 
 
@@ -131,8 +160,8 @@ def _user_prompt(
     tone: ToneId,
     n: int,
     clip_context: str = "",
+    avoid_hooks: tuple[str, ...] = (),
 ) -> str:
-    tone_block = _TONE_PROMPTS.get(tone, _TONE_PROMPTS["default"])
     has_snippet = bool(transcript_snippet.strip())
     snippet_block = (
         transcript_snippet.strip()
@@ -142,18 +171,36 @@ def _user_prompt(
         else "(transcript unavailable — write the hooks from the context above)"
     )
     persona_block = persona_voice.strip() or "(no persona voice provided)"
-    context_block = (
-        f"What this clip / stream is about:\n{clip_context.strip()}\n\n"
-        if clip_context.strip()
-        else ""
-    )
+    # Always present so the TRUTH LOCK has an explicit scope — when the
+    # caller has no context, the placeholder anchors the model to the
+    # transcript instead of letting it invent a premise.
+    context_block = clip_context.strip() or "(only the transcript below is available)"
+    # The register baked into the system prompt IS the default voice —
+    # a tone preset is an operator override, appended only when chosen.
+    tone_block = ""
+    if tone != "default" and tone in _TONE_PROMPTS:
+        tone_block = f"Extra tone instruction: {_TONE_PROMPTS[tone]}\n\n"
+    # Cross-clip uniqueness: hooks already burned onto sibling clips of
+    # this stream. The model must not converge on the same line twice.
+    avoid_block = ""
+    used = [h.strip() for h in avoid_hooks if h.strip()]
+    if used:
+        listing = "\n".join(f"  - {h}" for h in used)
+        avoid_block = (
+            "Titles already used on other clips from this same stream — "
+            "every new candidate must be clearly different from ALL of "
+            f"these:\n{listing}\n\n"
+        )
     return (
-        f"Streamer persona / voice:\n{persona_block}\n\n"
-        f"{context_block}"
+        "Streamer persona / voice (tone reference only — never name them "
+        f"in a title):\n{persona_block}\n\n"
+        f"What we know about this clip:\n{context_block}\n\n"
         f"Language to write in: {persona_language}\n\n"
-        f"Tone instruction: {tone_block}\n\n"
+        f"{tone_block}"
+        f"{avoid_block}"
         f"Transcript snippet from the clip:\n\"\"\"\n{snippet_block}\n\"\"\"\n\n"
-        f"Generate {n} title candidates for this clip."
+        f"Generate {n} title candidates for this clip. "
+        "Dramatize the real moment — never invent one."
     )
 
 
@@ -169,6 +216,7 @@ async def generate_hooks(
     clip_context: str = "",
     tone: ToneId = "default",
     n: int = DEFAULT_N,
+    avoid_hooks: tuple[str, ...] = (),
     router: LLMRouter,
 ) -> list[Hook]:
     """Generate `n` viral-hook title candidates for one clip.
@@ -190,6 +238,9 @@ async def generate_hooks(
         tone: One of the five ToneId presets. Falls back to "default"
             if the caller passes an unrecognized id.
         n: Number to generate. Clamped to [MIN_N, MAX_N].
+        avoid_hooks: Hooks already used on sibling clips of this
+            stream — listed in the prompt as forbidden so a batch
+            never ships the same line twice.
         router: Configured LLMRouter — purpose `hook_generation`
             must be in its routing rules.
 
@@ -205,6 +256,7 @@ async def generate_hooks(
         clip_context=clip_context,
         tone=tone,
         n=n_clamped,
+        avoid_hooks=avoid_hooks,
     )
     batch = await router.complete(
         tenant_id=tenant_id,

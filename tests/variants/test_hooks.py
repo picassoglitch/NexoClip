@@ -79,7 +79,10 @@ def test_user_prompt_surfaces_clip_context() -> None:
     assert "Mexico 1 - 0 Korea" in p
 
 
-def test_user_prompt_unknown_tone_falls_back_to_default() -> None:
+def test_user_prompt_unknown_tone_adds_no_extra_instruction() -> None:
+    # The clip-culture register in the system prompt IS the default voice;
+    # tone presets are operator overrides. Unknown/default tones must not
+    # inject an extra instruction line.
     p = _user_prompt(
         persona_voice="x",
         persona_language="en",
@@ -87,8 +90,42 @@ def test_user_prompt_unknown_tone_falls_back_to_default() -> None:
         tone="bogus",  # type: ignore[arg-type]
         n=1,
     )
-    # Default tone block mentions "punchy, short, no fluff".
-    assert "punchy, short" in p
+    assert "Extra tone instruction" not in p
+
+
+def test_user_prompt_non_default_tone_appends_override() -> None:
+    p = _user_prompt(
+        persona_voice="x",
+        persona_language="en",
+        transcript_snippet="y",
+        tone="curious",
+        n=1,
+    )
+    assert "Extra tone instruction" in p
+    assert "OPEN-LOOP" in p
+
+
+def test_user_prompt_lists_avoid_hooks() -> None:
+    p = _user_prompt(
+        persona_voice="x",
+        persona_language="es",
+        transcript_snippet="y",
+        tone="default",
+        n=1,
+        avoid_hooks=("El chat explotó 💀", "  "),
+    )
+    assert "already used on other clips" in p
+    assert "El chat explotó 💀" in p
+    # Blank entries are dropped, and no avoid block appears without real ones.
+    p2 = _user_prompt(
+        persona_voice="x",
+        persona_language="es",
+        transcript_snippet="y",
+        tone="default",
+        n=1,
+        avoid_hooks=("", "   "),
+    )
+    assert "already used" not in p2
 
 
 # ---- generate_hooks (end-to-end via fake provider) ----

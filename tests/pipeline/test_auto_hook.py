@@ -62,12 +62,15 @@ async def test_llm_failure_falls_back_to_deterministic_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_with_no_transcript_uses_stream_title() -> None:
+async def test_llm_failure_with_no_transcript_hooks_off_the_stream_title() -> None:
     hook = await _auto_hook_for_clip(
         clip=_clip(""), persona=_PERSONA, language=None,
         tenant_id="t1", router=_Boom(), stream_title="Mexico 1 - 0 Korea",
     )
-    assert "Mexico 1 - 0 Korea" in hook
+    # The scoreline is parsed into drama framing — never the title verbatim
+    # (the old wall-of-identical-titles failure mode).
+    assert hook != "Mexico 1 - 0 Korea"
+    assert "mexico" in hook.lower() or "korea" in hook.lower()
 
 
 @pytest.mark.asyncio

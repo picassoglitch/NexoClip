@@ -240,8 +240,7 @@ def create_app(
     app.include_router(dashboard_router.router)
     app.include_router(webhooks_router.router)
     # Zernio integration — multi-platform publish dashboard at
-    # /dashboard/publish/zernio. Replaces the upload-post.com surface
-    # (a legacy 308 redirect from the old path lives in dashboard.py).
+    # /dashboard/publish/zernio. Replaces the upload-post.com surface.
     app.include_router(zernio_router.router)
     # Inbound Zernio webhook receiver at /api/webhooks/zernio (HMAC-
     # verified, auth-exempt — see auth._PUBLIC_PREFIXES).

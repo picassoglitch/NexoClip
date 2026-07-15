@@ -42,7 +42,6 @@ to the legacy seek-and-shoot if any stage blows up.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import shutil
 import subprocess

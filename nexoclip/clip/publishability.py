@@ -33,7 +33,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from nexoclip.branding.platform_zones import (
-    CollisionWarning,
     OverlayRect,
     detect_collisions,
 )

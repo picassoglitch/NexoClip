@@ -176,3 +176,30 @@ def test_is_diarization_available_pyannote_missing(
     if spec is not None:
         pytest.skip("pyannote.audio is installed; skipping the absent-case test")
     assert is_diarization_available() is False
+
+
+async def test_worker_timeout_degrades_to_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a wedged pyannote subprocess (CUDA stall) must degrade
+    to skipped-with-reason instead of hanging the whole pipeline forever."""
+    import subprocess as _subprocess
+
+    from nexoclip.diarize import service as service_mod
+
+    monkeypatch.setenv("HF_TOKEN", "hf_fake_for_tests")
+    monkeypatch.setattr(service_mod, "is_diarization_available", lambda: True)
+
+    def _hang_then_timeout(*args, **kwargs):
+        raise _subprocess.TimeoutExpired(cmd="pyannote-worker", timeout=0.1)
+
+    monkeypatch.setattr(service_mod.subprocess, "run", _hang_then_timeout)
+
+    stream = _make_stream(tmp_path)
+    result = await diarize(
+        tenant_id="default",
+        stream=stream,
+        config=DiarizationConfig(enabled=True, worker_timeout_s=0.1),
+    )
+    assert result.skipped is True
+    assert "killed after" in (result.skip_reason or "")

@@ -138,8 +138,15 @@ def transcribe(payload: dict) -> dict:
     # brevity we read the Modal-injected `MODAL_REQUEST_AUTH` header
     # via the request context. If this becomes fragile, switch to
     # the @asgi_app pattern with explicit FastAPI app.
-    request_token = (payload or {}).get("auth_token", "")
-    if not expected_token or request_token != expected_token:
+    request_token = str((payload or {}).get("auth_token", ""))
+    # Constant-time compare (bytes — str compare_digest rejects non-ASCII):
+    # this public URL's only guard is the token, and `!=` leaks a timing
+    # oracle byte by byte.
+    import hmac as _hmac
+
+    if not expected_token or not _hmac.compare_digest(
+        request_token.encode("utf-8"), expected_token.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="invalid bearer token")
 
     audio_url = (payload or {}).get("audio_url", "").strip()

@@ -221,6 +221,12 @@ def _record_step_event(
             task = loop.create_task(EventsRepo(db).emit(type=event_type, payload=clean))
             _PENDING_EVENT_TASKS.add(task)
             task.add_done_callback(_PENDING_EVENT_TASKS.discard)
+            # Register with the owning Database so its close() drains this
+            # write — otherwise the run's teardown can close the pool while
+            # the emit is still queued ("pool is closed" after pipeline.done).
+            track = getattr(db, "track_background_task", None)
+            if callable(track):
+                track(task)
             return
 
         import sqlite3

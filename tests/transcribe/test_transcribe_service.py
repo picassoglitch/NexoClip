@@ -204,3 +204,28 @@ def test_transcribe_wraps_whisper_failure(
     monkeypatch.setattr(fw, "WhisperModel", BoomModel, raising=False)
     with pytest.raises(TranscriptionError, match="Whisper failed to start"):
         asyncio.run(transcribe(tenant_id="default", stream=stream))
+
+
+def test_transcribe_recovers_from_corrupt_cache(tmp_path: Path) -> None:
+    """Regression: a truncated/corrupt transcript.json (crash mid-write,
+    disk full) must fall through to a fresh transcription instead of
+    permanently failing every later non-forced run with ValidationError."""
+    stream = _make_stream(tmp_path)
+    json_path = stream.source_audio_path.parent / "transcript.json"
+    json_path.write_text('{"stream_id": "str_01TEST", "langua', encoding="utf-8")
+
+    transcript = asyncio.run(
+        transcribe(
+            tenant_id="default",
+            stream=stream,
+            model_size="medium",
+            device="cuda",
+            compute_type="float16",
+            language="es",
+        )
+    )
+
+    assert isinstance(transcript, Transcript)
+    assert len(transcript.segments) == 2
+    # The corrupt cache was replaced with a valid one.
+    assert Transcript.model_validate_json(json_path.read_text("utf-8"))

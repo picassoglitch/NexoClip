@@ -18,6 +18,7 @@ the same way the SVG file does.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from threading import Lock
@@ -108,7 +109,12 @@ def _render_png(target_path: Path) -> None:
         scaled = [(px * _RENDER_SCALE, py * _RENDER_SCALE) for px, py in poly]
         draw.polygon(scaled, fill=_KICK_GREEN)
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(target_path, format="PNG")
+    # Atomic: the cached file is trusted by existence alone across boots,
+    # so a crash mid-save must never leave a truncated PNG on the real name
+    # (ffmpeg would fail to decode it on every burn until manually deleted).
+    part_path = target_path.with_suffix(".part.png")
+    img.save(part_path, format="PNG")
+    os.replace(part_path, target_path)
 
 
 def kick_logo_png_path() -> Path:

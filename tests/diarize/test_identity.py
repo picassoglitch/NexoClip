@@ -239,3 +239,57 @@ async def test_resolve_skipped_diarization_is_noop(migrated_db: Database) -> Non
         )
         assert (outcome.matched, outcome.created, outcome.unresolved) == (0, 0, 0)
         assert len(await SpeakersRepo(migrated_db).list_for_tenant()) == 0
+
+
+async def test_resolve_speakers_is_idempotent_on_rerun(
+    migrated_db: Database,
+) -> None:
+    """Regression (hard rule 4): re-running the pipeline on the same stream
+    must NOT fold the same VOD's embedding into the persistent fingerprint
+    again — that double-counts total_speech_s and drifts the embedding."""
+    tenant_id = await _seed(migrated_db)
+    diar = Diarization(
+        stream_id="str_idtest",
+        tenant_id=tenant_id,
+        segments=[
+            DiarizationSegment(ts=0.0, end_ts=60.0, speaker_label="SPEAKER_00")
+        ],
+        embeddings=[
+            SpeakerEmbedding(
+                speaker_label="SPEAKER_00",
+                embedding=[1.0, 0.0, 0.0],
+                total_speech_s=60.0,
+            )
+        ],
+        skipped=False,
+    )
+    with bound_tenant(tenant_id):
+        first = await resolve_speakers(
+            db=migrated_db,
+            stream_id="str_idtest",
+            diarization=diar,
+            config=DiarizationConfig(),
+        )
+        assert first.created == 1
+
+        speakers = await SpeakersRepo(migrated_db).list_for_tenant()
+        assert len(speakers) == 1
+        assert speakers[0].total_speech_s == pytest.approx(60.0)
+
+        # Same stream, same diarization — e.g. cached diarization on a
+        # pipeline re-run. Must be a no-op on the persistent fingerprint.
+        second = await resolve_speakers(
+            db=migrated_db,
+            stream_id="str_idtest",
+            diarization=diar,
+            config=DiarizationConfig(),
+        )
+        assert second.created == 0
+        assert second.matched == 1
+
+        speakers = await SpeakersRepo(migrated_db).list_for_tenant()
+        assert len(speakers) == 1
+        assert speakers[0].total_speech_s == pytest.approx(60.0)  # not 120
+
+        rows = await VodSpeakersRepo(migrated_db).list_for_stream("str_idtest")
+        assert len(rows) == 1

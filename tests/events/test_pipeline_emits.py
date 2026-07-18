@@ -23,10 +23,10 @@ from tests.db.test_pipeline_dual_write import (  # type: ignore[import]
 )
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.pipeline.test_process_vod import (  # type: ignore[import]
+    _hook_payload,
     _stub_ffmpeg,
     _stub_ingest,
     _stub_whisper,
-    _success_payload,
 )
 
 
@@ -48,7 +48,7 @@ def test_pipeline_emits_canonical_events(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     manifest = asyncio.run(
@@ -71,21 +71,23 @@ def test_pipeline_emits_canonical_events(
         asyncio.run(db.close())
 
     # Canonical lifecycle events: 1 stream + 1 clip + 1 stream-processed.
-    # Filter out the auxiliary `pipeline.step.*` rows that the dashboard's
-    # progress poller reads — those are additive and tested elsewhere.
-    canonical = [e.type for e in events if not e.type.startswith("pipeline.step.")]
-    assert sorted(canonical) == sorted(
-        [STREAM_CREATED, CLIP_READY_FOR_REVIEW, STREAM_PROCESSED]
-    )
+    # The run also emits auxiliary rows (`pipeline.step.*`, `clip.cut.*`,
+    # `clip.auto_corrected`, …) for the dashboard's progress poller — those
+    # are additive and tested elsewhere, so assert only that each canonical
+    # event fires exactly once.
+    canonical_types = [STREAM_CREATED, CLIP_READY_FOR_REVIEW, STREAM_PROCESSED]
+    canonical = [e.type for e in events if e.type in canonical_types]
+    assert sorted(canonical) == sorted(canonical_types)
 
-    by_type = {e.type: e for e in events if not e.type.startswith("pipeline.step.")}
+    by_type = {e.type: e for e in events if e.type in canonical_types}
 
     assert by_type[STREAM_CREATED].payload["stream_id"] == manifest.stream.id
     assert by_type[STREAM_CREATED].payload["platform"] == "kick"
 
     assert by_type[CLIP_READY_FOR_REVIEW].payload["stream_id"] == manifest.stream.id
     assert by_type[CLIP_READY_FOR_REVIEW].payload["persona_id"] == "aldo_villanueva"
-    assert by_type[CLIP_READY_FOR_REVIEW].payload["variant_count"] == 3
+    # Variants are a deterministic stub now: exactly one per clip.
+    assert by_type[CLIP_READY_FOR_REVIEW].payload["variant_count"] == 1
 
     assert by_type[STREAM_PROCESSED].payload["stream_id"] == manifest.stream.id
     assert by_type[STREAM_PROCESSED].payload["clip_count"] == 1
@@ -101,7 +103,7 @@ def test_pipeline_no_db_emits_nothing(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     asyncio.run(
@@ -134,7 +136,7 @@ def test_pipeline_emits_one_clip_event_per_clip(
     _stub_whisper(monkeypatch)
     _stub_ffmpeg(monkeypatch)
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=3))
+    fake.queue_success(_hook_payload())
     _patch_default_anthropic_provider(monkeypatch, fake)
 
     manifest = asyncio.run(

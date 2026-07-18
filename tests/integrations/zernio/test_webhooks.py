@@ -62,3 +62,12 @@ def test_parse_post_event_handles_flat_payload() -> None:
     assert out["event"] == "post.failed"
     assert out["post_id"] == "p2"
     assert out["status"] == "failed"
+
+
+def test_verify_rejects_non_ascii_signature_without_raising() -> None:
+    """Regression: `hmac.compare_digest` on str raises TypeError for
+    non-ASCII input — a hostile header on the public webhook route must
+    map to False (→ 403), never an unhandled 500."""
+    assert not verify_zernio_signature(
+        secret="whsec", body=b'{"x":1}', signature_header="ñdeadbeef"
+    )

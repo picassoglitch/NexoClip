@@ -100,14 +100,17 @@ def test_ffmpeg_invocations_carry_correct_arguments(
     )
 
     fast_cut, reformat = calls
-    # Fast cut: -ss BEFORE -i, -c copy
+    # Fast cut: -ss BEFORE -i (fast seek) + -accurate_seek re-encode for a
+    # frame-accurate trim (`-c copy` was dropped when accurate cutting
+    # landed; audio re-encodes to AAC at the cut point).
     assert fast_cut[0] == "ffmpeg"
-    assert "-ss" in fast_cut and "-c" in fast_cut and "copy" in fast_cut
+    assert "-ss" in fast_cut and "-accurate_seek" in fast_cut
     ss_idx = fast_cut.index("-ss")
     i_idx = fast_cut.index("-i")
     assert ss_idx < i_idx, "fast cut must put -ss before -i (keyframe-snap fast seek)"
     assert fast_cut[ss_idx + 1] == "90.000"
     assert fast_cut[fast_cut.index("-t") + 1] == "45.000"
+    assert fast_cut[fast_cut.index("-c:a") + 1] == "aac"
 
     # Reformat: 9:16 crop + scale + libx264 + aac
     assert reformat[0] == "ffmpeg"
@@ -116,7 +119,7 @@ def test_ffmpeg_invocations_carry_correct_arguments(
     assert reformat[reformat.index("-c:v") + 1] == "libx264"
     assert reformat[reformat.index("-c:a") + 1] == "aac"
     assert reformat[reformat.index("-preset") + 1] == "fast"
-    assert reformat[reformat.index("-crf") + 1] == "23"
+    assert reformat[reformat.index("-crf") + 1] == "19"  # config default
 
 
 def test_cut_clips_idempotent_on_manifest(

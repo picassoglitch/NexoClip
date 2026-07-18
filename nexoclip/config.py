@@ -177,6 +177,14 @@ class DiarizationConfig(BaseModel):
     enabled: bool = True
     model: str = Field(default="pyannote/speaker-diarization-3.1")
     device: str = Field(default="cuda")
+    worker_timeout_s: float = Field(
+        default=7200.0,
+        gt=0.0,
+        description="Hard kill for the pyannote subprocess. A CUDA stall "
+        "hangs without exiting; past this the run degrades to "
+        "skipped-with-reason instead of wedging the whole pipeline. "
+        "Generous by default — multi-hour VODs on CPU are slow.",
+    )
     match_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     min_speech_for_id_s: float = Field(
         default=30.0,

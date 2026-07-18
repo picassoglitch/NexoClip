@@ -21,6 +21,7 @@ Layout:
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -155,7 +156,19 @@ async def cut_clips(
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     if not force and manifest_path.exists():
-        return ClipManifest.model_validate_json(manifest_path.read_text("utf-8")).clips
+        try:
+            return ClipManifest.model_validate_json(
+                manifest_path.read_text("utf-8")
+            ).clips
+        except Exception as e:  # corrupt cache must not wedge the stream
+            # Truncated/garbled manifest (crash mid-write on an old
+            # deploy, disk full): fall through and re-cut instead of
+            # failing every later run of this step.
+            _log.warning(
+                "clip.manifest_cache_corrupt",
+                stream_id=stream.id, path=str(manifest_path),
+                error=str(e)[:200],
+            )
 
     if not stream.source_video_path.exists():
         raise ClipError(f"source video missing: {stream.source_video_path}")
@@ -238,7 +251,11 @@ async def cut_clips(
     clips: list[Clip] = [c for c in results if c is not None]
 
     manifest = ClipManifest(stream_id=stream.id, tenant_id=tenant_id, clips=clips)
-    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    # Atomic write: a crash mid-write must not leave truncated JSON on the
+    # name the idempotency gate trusts.
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp_path, manifest_path)
     return clips
 
 
@@ -965,11 +982,24 @@ def _run_encode_with_fallback(
         _run_ffmpeg(cmd, what=f"{what} (libx264 fallback)")
 
 
+# Hard ceiling on one ffmpeg invocation. Clips are bounded (≤ a few
+# minutes of source), so an encode past this is a wedged ffmpeg — kill it
+# instead of pinning a cut_concurrency slot AND a process-wide heavy_slot
+# forever, which would stall every later pipeline run.
+_FFMPEG_TIMEOUT_S = 1800
+
+
 def _run_ffmpeg(cmd: list[str], *, what: str) -> None:
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(
+            cmd, check=True, capture_output=True, timeout=_FFMPEG_TIMEOUT_S
+        )
     except FileNotFoundError as e:
         raise ClipError("ffmpeg binary not found on PATH") from e
+    except subprocess.TimeoutExpired as e:
+        raise ClipError(
+            f"ffmpeg {what} killed after {_FFMPEG_TIMEOUT_S}s (wedged encode)"
+        ) from e
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf-8", "replace") if e.stderr else ""
         raise ClipError(f"ffmpeg {what} failed: {stderr}") from e

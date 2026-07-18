@@ -20,9 +20,11 @@ import pytest
 import respx
 
 from nexoclip.db import Database, TenantsRepo, apply_migrations
+from nexoclip.integrations.nexo_ai import reporter as reporter_mod
 from nexoclip.integrations.nexo_ai.reporter import (
     report_llm_usage,
     report_usage,
+    schedule_usage,
 )
 from nexoclip.settings import get_settings
 
@@ -133,3 +135,39 @@ async def test_zero_amount_zero_cost_is_skipped(db: Database, nexo_env) -> None:
         cost_usd_micros=0, source_id="z", occurred_at_iso=_now(),
     )
     assert not route.called
+
+
+@respx.mock
+async def test_db_close_drains_scheduled_report(db: Database, nexo_env) -> None:
+    """Shutdown-ordering regression (Modal worker, 2026-07-15): the run's
+    teardown closed the DB while a scheduled usage report was still in its
+    HTTP leg, so the report's follow-up writes (balance cache, report
+    status) died with "pool is closed" and were silently lost. close() must
+    drain the scheduled report first."""
+    tid = await _tenant(db)
+    route = respx.post(_URL).mock(return_value=_ok_response())
+
+    before = set(reporter_mod._BACKGROUND_TASKS)
+    schedule_usage(
+        db, tenant_id=tid, kind="llm.tokens", amount=37,
+        cost_usd_micros=1_000, source_id="lc_drain", occurred_at_iso=_now(),
+        provider="openllm", operation="variants",
+    )
+    spawned = set(reporter_mod._BACKGROUND_TASKS) - before
+    assert len(spawned) == 1
+    task = spawned.pop()
+
+    # Teardown immediately — pre-fix this closed the backend under the
+    # in-flight report task instead of waiting for it.
+    await db.close()
+    assert task.done()
+    assert route.called
+
+    check = Database(db.target)
+    try:
+        t = await TenantsRepo(check).get(tid)
+        assert t is not None
+        assert t.last_usage_report_ok == 1
+        assert t.cached_balance_remaining == 10
+    finally:
+        await check.close()

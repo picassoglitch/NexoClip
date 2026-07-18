@@ -533,8 +533,9 @@ class Settings(BaseSettings):
     hub_max_posts_per_platform_per_day: int = 4
 
     # On a post.failed with a transient error class, the hub fires ONE
-    # automatic retry after this delay (seconds), then stops. Set to 0
-    # to disable auto-retry. Env: NEXOCLIP_HUB_AUTO_RETRY_DELAY_S.
+    # automatic retry after this delay (seconds), then stops. 0 retries
+    # immediately (inline); a NEGATIVE value disables auto-retry.
+    # Env: NEXOCLIP_HUB_AUTO_RETRY_DELAY_S.
     hub_auto_retry_delay_s: float = 600.0
 
     # Growth layer (phase 10) anti-spam: max broadcasts a tenant may

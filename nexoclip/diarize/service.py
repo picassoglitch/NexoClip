@@ -92,6 +92,10 @@ async def diarize(
             transient = (
                 ("hf_token" in stale_reason and os.environ.get("HF_TOKEN"))
                 or ("disabled in config" in stale_reason and cfg.enabled)
+                # "pyannote.audio not installed": the operator followed the
+                # skip_reason's own pip-install instruction — retry now that
+                # the import works.
+                or ("not installed" in stale_reason and is_diarization_available())
             )
             if cached.skipped and transient:
                 pass  # fall through to re-run
@@ -141,6 +145,7 @@ async def diarize(
         tenant_id=tenant_id,
         model=cfg.model,
         device=cfg.device,
+        timeout_s=cfg.worker_timeout_s,
     )
     out_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     return result
@@ -153,6 +158,7 @@ def _run_worker(
     tenant_id: str,
     model: str,
     device: str,
+    timeout_s: float | None = None,
 ) -> Diarization:
     """Spawn `nexoclip.diarize._worker` and parse its JSON output.
 
@@ -182,12 +188,34 @@ def _run_worker(
             "--out",
             str(out_path),
         ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                # A CUDA stall inside pyannote hangs without exiting; the
+                # kill-after-timeout degrades this run to skipped-with-reason
+                # instead of wedging the whole pipeline forever.
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            _log.warning(
+                "diarize.worker_timeout",
+                timeout_s=timeout_s,
+                stream_id=stream_id,
+            )
+            return Diarization(
+                stream_id=stream_id,
+                tenant_id=tenant_id,
+                skipped=True,
+                skip_reason=(
+                    f"diarization worker killed after {timeout_s:.0f}s "
+                    "(likely a CUDA stall); raise "
+                    "detection.diarization.worker_timeout_s if the VOD is "
+                    "genuinely that long"
+                ),
+            )
         if result.returncode != 0:
             tail = (result.stderr or "")[-1500:]
             _log.warning(

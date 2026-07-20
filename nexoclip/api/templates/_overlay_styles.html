@@ -333,6 +333,59 @@
     border-radius: 0.769cqw;
   }
 
+  /* platform_band variant — branded source-credit band for the NON-kick
+     stream platforms (YouTube / Twitch / X). Full-width bar in the
+     platform brand color (via --pv-banner-color, set by the handler
+     from platform_colors[platform]) with a white monochrome glyph on the
+     left + the source URL centered. Mirrors overlay_burn._banner_platform_band
+     so the editor preview matches the burned MP4. Inherits the base
+     .nc-pv-banner safe-zone position (bottom: 21.875cqh). */
+  .nc-pv-banner--platform_band {
+    background: var(--pv-banner-color, #111);
+    color: #fff;
+    /* Clear the absolutely-positioned glyph on the left so the centered
+       URL never crashes into it. */
+    padding: 0 1.538cqw 0 11cqw;
+    justify-content: center;
+  }
+  .nc-pv-banner--platform_band .nc-pv-banner__platform {
+    /* Hide the platform NAME text; the glyph carries the identity. */
+    position: absolute;
+    left: 2.2cqw;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6cqw;
+    height: 62%;
+    color: transparent;
+    font-size: 0;
+    line-height: 0;
+    background-repeat: no-repeat;
+    background-position: left center;
+    background-size: contain;
+    filter: drop-shadow(0 0.216cqh 0.385cqw rgba(0, 0, 0, 0.5));
+  }
+  .nc-pv-banner--platform_band[data-platform="youtube"] .nc-pv-banner__platform {
+    background-image: url("/static/glyph-youtube.png");
+  }
+  .nc-pv-banner--platform_band[data-platform="twitch"] .nc-pv-banner__platform {
+    background-image: url("/static/glyph-twitch.png");
+  }
+  .nc-pv-banner--platform_band[data-platform="x"] .nc-pv-banner__platform,
+  .nc-pv-banner--platform_band[data-platform="twitter"] .nc-pv-banner__platform {
+    background-image: url("/static/glyph-x.png");
+  }
+  .nc-pv-banner--platform_band .nc-pv-banner__url {
+    color: #fff;
+    font-weight: 800;
+    font-size: 2.115cqw;
+    letter-spacing: 0.02em;
+    opacity: 1;
+    text-align: center;
+    white-space: nowrap;
+    text-shadow: 0 0.108cqh 0.192cqw rgba(0, 0, 0, 0.6);
+  }
+  .nc-pv-banner--platform_band .nc-pv-banner__live-pill { display: none !important; }
+
   /* ---------- Captions (karaoke word-highlight) ---------- */
   .nc-pv-caption {
     position: absolute;

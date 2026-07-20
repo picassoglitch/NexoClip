@@ -138,18 +138,31 @@ def apply_ai_fixes(
         ))
 
     # ---- Fix 4: pick the right banner variant for the clip style ---
+    # The Kick-branded variants (repost_page wordmark, green_block, the
+    # black-bar classic) only fit a KICK-sourced clip. For the other
+    # stream platforms (twitch / youtube) the banner-ful styles map to
+    # `platform_band` — the brand-colored band + white glyph that credits
+    # the source correctly (see overlay_defaults.source_banner). The
+    # logo-free `kick_minimal_url` stays platform-agnostic.
     style_id = (out.get("clip_style") or "").strip()
     recommended_variant: str | None = None
+    source_p = (source_platform or "").strip().lower()
     if not is_stream_source:
         style_id = ""  # skip banner-variant suggestion for non-stream clips
     if style_id == "repost_page_viral":
-        recommended_variant = "kick_repost_page"
+        recommended_variant = (
+            "kick_repost_page" if source_p == "kick" else "platform_band"
+        )
     elif style_id == "clean_creator":
         recommended_variant = "kick_minimal_url"
     elif style_id == "gaming_chaos":
-        recommended_variant = "kick_green_block"
+        recommended_variant = (
+            "kick_green_block" if source_p == "kick" else "platform_band"
+        )
     elif style_id == "documentary":
-        recommended_variant = "kick_black_bar_classic"
+        recommended_variant = (
+            "kick_black_bar_classic" if source_p == "kick" else "platform_band"
+        )
     elif style_id == "minimal_native":
         recommended_variant = "kick_minimal_url"
     if recommended_variant and banner.get("variant") not in (recommended_variant, ""):

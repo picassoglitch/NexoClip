@@ -303,6 +303,7 @@ def _overlay_rects_from_config(overlay: dict[str, object]) -> list[OverlayRect]:
             "kick_green_block": 0.08,
             "kick_black_bar_classic": 0.05,
             "kick_repost_page": 0.07,
+            "platform_band": 0.05,
         }.get(variant, 0.07)
         rects.append(
             OverlayRect(name="banner", x=0.0, y=1.0 - band_frac, w=1.0, h=band_frac)

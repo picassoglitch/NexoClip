@@ -51,7 +51,8 @@
    a re-render. Export ignores is-hidden vs absent — both equivalent. #}
 <div id="pv-banner"
      class="nc-pv-banner nc-pv-banner--{{ _banner.get('variant') or 'kick_repost_page' }}{% if not _banner.get('enabled', False) %} is-hidden{% endif %}"
-     data-variant="{{ _banner.get('variant') or 'kick_repost_page' }}">
+     data-variant="{{ _banner.get('variant') or 'kick_repost_page' }}"
+     data-platform="{{ (_banner.get('platform') or 'kick')|lower }}">
   <span class="nc-pv-banner__platform" id="pv-banner-platform">
     {{ (_banner.get('platform') or 'kick')|upper }}
   </span>

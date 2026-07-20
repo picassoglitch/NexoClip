@@ -30,13 +30,18 @@ def test_kick_source_gets_repost_page_banner() -> None:
 def test_youtube_source_credits_youtube_not_kick() -> None:
     b = source_banner("youtube", "@SomeStreamer")
     assert b["platform"] == "youtube"
-    assert b["variant"] == "kick_minimal_url"  # text banner, no kick logo
+    # Branded band (platform color + white glyph), never Kick chrome.
+    assert b["variant"] == "platform_band"
     assert b["url"] == "youtube.com/@SomeStreamer"
 
 
 def test_twitch_and_x_domains() -> None:
-    assert source_banner("twitch", "ninja")["url"] == "twitch.tv/ninja"
-    assert source_banner("x", "elonmusk")["url"] == "x.com/elonmusk"
+    tw = source_banner("twitch", "ninja")
+    assert tw["variant"] == "platform_band"
+    assert tw["url"] == "twitch.tv/ninja"
+    x = source_banner("x", "elonmusk")
+    assert x["variant"] == "platform_band"
+    assert x["url"] == "x.com/elonmusk"
 
 
 def test_no_channel_no_banner() -> None:
@@ -47,6 +52,7 @@ def test_no_channel_no_banner() -> None:
 
 
 def test_unknown_platform_uses_minimal_handle() -> None:
+    # Upload / unknown has no domain + no glyph → logo-free text pill.
     b = source_banner("upload", "creator")
     assert b["variant"] == "kick_minimal_url"
     assert b["url"] == "creator"

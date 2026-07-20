@@ -363,10 +363,14 @@ def test_clip_render_banner_is_inside_safe_zone() -> None:
     These translate to cqh values: 28.125 / 21.875 respectively
     (28.125% of 1920 = 540px from bottom = banner top at y=1380).
     If anybody changes the banner CSS without updating this test
-    they'll get a failure that points at the social-cropping bug. """
+    they'll get a failure that points at the social-cropping bug.
+
+    The banner CSS was merged into the shared _overlay_styles.html
+    partial (clip_render.html now {% include %}s it), so that's the
+    file the assertions read."""
     template_path = (
         Path(__file__).resolve().parents[2]
-        / "nexoclip" / "api" / "templates" / "clip_render.html"
+        / "nexoclip" / "api" / "templates" / "_overlay_styles.html"
     )
     css = template_path.read_text(encoding="utf-8")
 

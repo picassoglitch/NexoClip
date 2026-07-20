@@ -4256,20 +4256,30 @@ async def _resolve_overlay_context(db: Database, clip: object) -> dict:
     # ---- banner_url_display (was: editor inline-Jinja vs export half-impl) ----
     banner_url_display = ""
     if _banner.get("enabled", False):
-        # _format_kick_url accepts any of: "aldo", "@aldo", "kick.com/aldo",
-        # "https://kick.com/aldo", "https://www.kick.com/aldo" and emits
-        # canonical "KICK.COM/ALDO". Same helper the burn-step uses, so
-        # the editor preview, the export, and the burned MP4 ALL agree
-        # on what string lands in the banner.
-        from nexoclip.clip.overlay_burn import _format_kick_url  # type: ignore[attr-defined]
-        try:
-            banner_url_display = _format_kick_url(str(_banner.get("url") or ""))
-        except Exception:  # noqa: BLE001
-            banner_url_display = str(_banner.get("url") or "").upper()
-        if not banner_url_display:
-            # Empty input — show a placeholder so the operator sees the
-            # banner shape in the editor before they type a URL.
-            banner_url_display = "KICK.COM/YOURHANDLE"
+        _banner_platform = str(_banner.get("platform") or "kick").lower()
+        _raw_url = str(_banner.get("url") or "")
+        if _banner_platform == "kick":
+            # _format_kick_url accepts any of: "aldo", "@aldo",
+            # "kick.com/aldo", "https://kick.com/aldo",
+            # "https://www.kick.com/aldo" and emits canonical
+            # "KICK.COM/ALDO". Same helper the burn-step uses, so the
+            # editor preview, the export, and the burned MP4 ALL agree
+            # on what string lands in the banner.
+            from nexoclip.clip.overlay_burn import _format_kick_url  # type: ignore[attr-defined]
+            try:
+                banner_url_display = _format_kick_url(_raw_url)
+            except Exception:  # noqa: BLE001
+                banner_url_display = _raw_url.upper()
+            if not banner_url_display:
+                # Empty input — show a placeholder so the operator sees
+                # the banner shape before they type a URL.
+                banner_url_display = "KICK.COM/YOURHANDLE"
+        else:
+            # Non-kick source (platform_band / minimal): the URL already
+            # carries the platform-correct domain from
+            # overlay_defaults.source_banner — never rewrite it to
+            # KICK.COM. Just uppercase to match the burn.
+            banner_url_display = _raw_url.strip().upper()
 
     show_live_pill = bool(_banner.get("live_badge", False))
 

@@ -368,7 +368,11 @@
       <div class="nc-bigclip{% if c.status == 'rejected' %} nc-bigclip--rejected{% endif %}{% if _is_top %} nc-bigclip--top{% endif %}">
         <div class="nc-bigclip__thumb">
           {% if c.thumbnail_frame_path %}
-          <img src="/dashboard/clips/{{ c.id }}/thumbnail" alt="miniatura del clip">
+          {# Hide on 404 (thumbnail reclaimed from disk + no bucket copy —
+             common on pre-object-storage clips) so the card shows an empty
+             thumb slot instead of a broken-image icon. #}
+          <img src="/dashboard/clips/{{ c.id }}/thumbnail" alt="miniatura del clip"
+               onerror="this.style.display='none'">
           {% else %}
           <i class="ti ti-photo-off" aria-hidden="true" style="font-size: 32px; color: var(--nc-text-muted);"></i>
           {% endif %}

@@ -54,6 +54,8 @@ PLATFORM_COLORS: dict[str, str] = {
     "tiktok":    "#000000",
     "youtube":   "#FF0000",
     "instagram": "#E1306C",
+    "x":         "#000000",
+    "twitter":   "#000000",
 }
 
 # Title overlay sizing (relative to output width, computed in
@@ -802,23 +804,42 @@ def _banner_filters_by_variant(
     Falls back to the legacy `_banner_filters` for any unknown variant
     so clips saved before slice I.1 (no `banner.variant` set) keep
     publishing identically — non-breaking.
+
+    The Kick-branded variants (repost_page's wordmark PNG + KICK.COM
+    url rewrite, green_block's hardcoded KICK text) only render for
+    kick-sourced clips — a twitch/youtube clip must never ship Kick
+    chrome (see overlay_defaults.source_banner). Any other platform
+    falls through to the legacy renderer, which draws the platform's
+    own name over its PLATFORM_COLORS band. `kick_minimal_url` is
+    logo-free and stays platform-agnostic.
+
+    `platform_band` is the branded source-credit banner for the OTHER
+    stream platforms — a full-width bar in the platform's brand color
+    with a white monochrome glyph (play/bubble/X) + the source URL.
     """
-    if variant == "kick_repost_page":
-        return _banner_repost_page(
-            url=url, color_hex=color_hex, live_badge=live_badge,
+    if variant == "platform_band":
+        return _banner_platform_band(
+            platform=platform, url=url,
             output_w=output_w, output_h=output_h, fontfile=fontfile,
         )
-    if variant == "kick_green_block":
-        return _banner_green_block(
-            url=url, color_hex=color_hex,
-            output_w=output_w, output_h=output_h, fontfile=fontfile,
-        )
+    if platform == "kick":
+        if variant == "kick_repost_page":
+            return _banner_repost_page(
+                url=url, color_hex=color_hex, live_badge=live_badge,
+                output_w=output_w, output_h=output_h, fontfile=fontfile,
+            )
+        if variant == "kick_green_block":
+            return _banner_green_block(
+                url=url, color_hex=color_hex,
+                output_w=output_w, output_h=output_h, fontfile=fontfile,
+            )
     if variant == "kick_minimal_url":
         return _banner_minimal_url(
-            url=url,
+            url=url, platform=platform,
             output_w=output_w, output_h=output_h, fontfile=fontfile,
         )
-    # "kick_black_bar_classic" + unknown → legacy renderer.
+    # "kick_black_bar_classic" + unknown + non-kick platforms on the
+    # Kick-branded variants → legacy per-platform renderer.
     return _banner_filters(
         platform=platform, url=url, color_hex=color_hex,
         output_w=output_w, output_h=output_h, fontfile=fontfile,
@@ -924,11 +945,13 @@ def _banner_repost_page(
     logo_x = 14
     kick_lift = int(band_h * 0.15)
     logo_y = band_y + (band_h - logo_h) // 2 - kick_lift
-    # The leading `__KICK_OVERLAY__` is a marker filter signature that
-    # `burn_overlays` strips out + replaces with the proper input +
-    # `-filter_complex` graph. It is NOT a real ffmpeg filter.
+    # The leading `__PNG_OVERLAY__:key=kick` is a marker filter signature
+    # that `burn_overlays` strips out + replaces with the proper input +
+    # `-filter_complex` graph. It is NOT a real ffmpeg filter. `key`
+    # selects which PNG the compositor resolves (kick → the wordmark;
+    # youtube/twitch/x → a platform glyph via `platform_glyph_png`).
     chunks.append(
-        f"__KICK_OVERLAY__:w={logo_w}:h={logo_h}:x={logo_x}:y={logo_y}"
+        f"__PNG_OVERLAY__:key=kick:w={logo_w}:h={logo_h}:x={logo_x}:y={logo_y}"
     )
     # `fontfile` is still unused for this variant — keep the param so
     # the sibling variants below match its API.
@@ -954,6 +977,70 @@ def _banner_repost_page(
         f":y={band_y}+({band_h}-text_h)/2"
     )
 
+    return chunks
+
+
+def _banner_platform_band(
+    *,
+    platform: str,
+    url: str,
+    output_w: int,
+    output_h: int,
+    fontfile: Path,
+) -> list[str]:
+    """Branded source-credit band for a NON-kick stream platform
+    (YouTube / Twitch / X). Full-width bar in the platform's brand
+    color, a white monochrome glyph on the left, source URL centered.
+
+    The glyph rides the same `__PNG_OVERLAY__` sentinel mechanism as the
+    Kick wordmark — `burn_overlays` resolves `key=<platform>` to the PNG
+    from `platform_glyph_png` and composites it via `-filter_complex`.
+    We emit the sentinel unconditionally (keeping this a pure function —
+    no disk I/O here); the compositor gracefully skips the overlay when
+    the platform has no glyph (upload / unknown), leaving band + URL.
+
+    Position mirrors the CSS preview's default banner safe zone (bottom
+    edge at ~78% of frame height) so the bar clears the social-UI band
+    that TikTok / Reels / Shorts paint over the bottom ~22%.
+    """
+    band_h = max(44, int(output_h * 0.05))
+    band_bottom = int(output_h * 0.78)
+    band_y = band_bottom - band_h
+    color = _hex_to_ff_color(
+        PLATFORM_COLORS.get(platform, "#111111"), fallback="0x111111"
+    )
+    chunks: list[str] = [
+        f"drawbox=x=0:y={band_y}"
+        f":w={output_w}:h={band_h}"
+        f":color={color}@0.95:t=fill"
+    ]
+
+    # White monochrome glyph, left-aligned + vertically centered. Square
+    # canvas → glyph_w == glyph_h. The compositor resolves the PNG.
+    glyph_h = int(band_h * 0.62)
+    glyph_x = max(18, int(output_w * 0.02))
+    glyph_y = band_y + (band_h - glyph_h) // 2
+    chunks.append(
+        f"__PNG_OVERLAY__:key={platform}:w={glyph_h}:h={glyph_h}"
+        f":x={glyph_x}:y={glyph_y}"
+    )
+
+    # Source URL — centered, white with a dark shadow so it stays legible
+    # on bright brand colors (YouTube red / Twitch purple). Already
+    # domain-formatted upstream (overlay_defaults.source_banner); we just
+    # uppercase + burn it.
+    url_text = (url or "").strip().upper()
+    if url_text:
+        url_size = max(16, int(output_h * 0.013))
+        chunks.append(
+            f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
+            f":text='{_ff_escape_text(url_text)}'"
+            f":fontcolor=white"
+            f":fontsize={url_size}"
+            f":x=(w-text_w)/2"
+            f":y={band_y}+({band_h}-text_h)/2"
+            f":shadowcolor=black@0.6:shadowx=2:shadowy=2"
+        )
     return chunks
 
 
@@ -1009,19 +1096,28 @@ def _banner_green_block(
 def _banner_minimal_url(
     *,
     url: str,
+    platform: str = "kick",
     output_w: int,
     output_h: int,
     fontfile: Path,
 ) -> list[str]:
     """Clean Creator / Minimal Native variant — no banner box, just a
     small URL stamped in the bottom-left over a subtle dark gradient
-    for legibility."""
+    for legibility.
+
+    The bare-handle → "kick.com/<handle>" expansion only applies to
+    kick-sourced clips; other platforms burn the handle as-is (their
+    domain-ful URLs already arrive with a "." from overlay_defaults)."""
     if not url:
         return []
     # Subtle shadow box behind the URL for legibility on bright frames.
     pad = 8
     url_size = max(16, int(output_w * 0.026))
-    text = url.upper() if "." in url else f"kick.com/{url}".upper()
+    text = (
+        url.upper()
+        if "." in url or platform != "kick"
+        else f"kick.com/{url}".upper()
+    )
     # No full-width band — just the text with its own outline box.
     return [
         f"drawtext=fontfile='{_ff_escape_path(fontfile)}'"
@@ -1253,60 +1349,73 @@ def burn_overlays(
             captions_path.unlink(missing_ok=True)
         return False
 
-    # Slice O.13 — KICK wordmark composited via PNG overlay (true
-    # pixel parity with the CSS preview which loads the same SVG).
-    # `_banner_repost_page` plants a `__KICK_OVERLAY__:w=...:h=...:x=...:y=...`
-    # sentinel inside the comma-joined chain. We pull it out here,
-    # strip it from the filter chain, then rebuild the ffmpeg
-    # invocation as a `-filter_complex` graph with the Kick PNG as a
-    # second input.
+    # Slice O.13 — brand PNG composited via overlay (true pixel parity
+    # with the CSS preview which loads the same source art). The banner
+    # renderers plant a `__PNG_OVERLAY__:key=<k>:w=...:h=...:x=...:y=...`
+    # sentinel inside the comma-joined chain (`key=kick` → the Kick
+    # wordmark; `key=youtube|twitch|x` → a platform glyph). We pull it
+    # out here, strip it from the filter chain, then rebuild the ffmpeg
+    # invocation as a `-filter_complex` graph with the PNG as a second
+    # input.
     import re as _re
-    kick_overlay = None
-    kick_match = _re.search(
-        r"(^|,)__KICK_OVERLAY__:w=(\d+):h=(\d+):x=(-?\d+):y=(-?\d+)(,|$)",
+    png_overlay = None
+    png_match = _re.search(
+        r"(^|,)__PNG_OVERLAY__:key=([a-z]+):w=(\d+):h=(\d+):x=(-?\d+):y=(-?\d+)(,|$)",
         filter_graph,
     )
-    if kick_match:
-        kick_overlay = {
-            "w": int(kick_match.group(2)),
-            "h": int(kick_match.group(3)),
-            "x": int(kick_match.group(4)),
-            "y": int(kick_match.group(5)),
+    if png_match:
+        png_overlay = {
+            "key": png_match.group(2),
+            "w": int(png_match.group(3)),
+            "h": int(png_match.group(4)),
+            "x": int(png_match.group(5)),
+            "y": int(png_match.group(6)),
         }
         # Strip the marker from the filter graph, collapsing the
         # neighbouring commas so we don't leave a `,,` artifact.
         filter_graph = _re.sub(
-            r"(^|,)__KICK_OVERLAY__:w=\d+:h=\d+:x=-?\d+:y=-?\d+(,|$)",
+            r"(^|,)__PNG_OVERLAY__:key=[a-z]+:w=\d+:h=\d+:x=-?\d+:y=-?\d+(,|$)",
             lambda m: "," if m.group(1) == "," and m.group(2) == "," else "",
             filter_graph,
         ).strip(",")
 
-    if kick_overlay is not None:
-        # Two-input filter_complex: main video runs through the regular
-        # chain, kick PNG gets scaled, then overlaid at the recorded
-        # x/y. Audio passes through untouched via `-map 0:a?`.
+    if png_overlay is not None:
+        # Resolve the sentinel key → PNG path. `kick` → the wordmark;
+        # everything else → a platform glyph (returns None for platforms
+        # without one, so we fall back to the chain-only band + URL).
+        overlay_key = str(png_overlay["key"])
+        overlay_png: Path | None
         try:
-            from nexoclip.clip.kick_logo_png import kick_logo_png_path
-            kick_png = kick_logo_png_path()
+            if overlay_key == "kick":
+                from nexoclip.clip.kick_logo_png import kick_logo_png_path
+                overlay_png = kick_logo_png_path()
+            else:
+                from nexoclip.clip.platform_glyph_png import (
+                    platform_glyph_png_path,
+                )
+                overlay_png = platform_glyph_png_path(overlay_key)
         except Exception:  # noqa: BLE001 — fall back to chain-only
-            kick_png = None
+            overlay_png = None
 
-        if kick_png is not None and kick_png.exists():
-            # Build the proper graph. If the regular chain is empty
-            # (banner enabled but everything else off) we still need a
-            # passthrough so the [main] label resolves.
+        if overlay_png is not None and overlay_png.exists():
+            # Two-input filter_complex: main video runs through the
+            # regular chain, the brand PNG gets scaled, then overlaid at
+            # the recorded x/y. Audio passes through via `-map 0:a?`.
+            # If the regular chain is empty (banner enabled but
+            # everything else off) we still need a passthrough so the
+            # [main] label resolves.
             main_chain = filter_graph if filter_graph else "null"
             fc_graph = (
                 f"[0:v]{main_chain}[main];"
-                f"[1:v]scale={kick_overlay['w']}:{kick_overlay['h']}[kwm];"
-                f"[main][kwm]overlay={kick_overlay['x']}:{kick_overlay['y']}[outv]"
+                f"[1:v]scale={png_overlay['w']}:{png_overlay['h']}[bpng];"
+                f"[main][bpng]overlay={png_overlay['x']}:{png_overlay['y']}[outv]"
             )
             cmd = [
                 "ffmpeg",
                 "-y",
                 "-loglevel", "error",
                 "-i", str(source_path),
-                "-i", str(kick_png),
+                "-i", str(overlay_png),
                 "-filter_complex", fc_graph,
                 "-map", "[outv]",
                 "-map", "0:a?",
@@ -1317,9 +1426,9 @@ def burn_overlays(
                 str(target_path),
             ]
         else:
-            # PNG rendering failed — fall back to single-input chain
-            # without the wordmark. The black bar + URL still burn so
-            # the export isn't totally bare.
+            # PNG rendering failed / no glyph for this platform — fall
+            # back to single-input chain without the mark. The colored
+            # band + URL still burn so the export isn't totally bare.
             cmd = [
                 "ffmpeg",
                 "-y",

@@ -17,10 +17,11 @@ from __future__ import annotations
 from typing import Any
 
 # Source platform → how the source-credit handle reads. Kick gets the full
-# repost-page banner (logo + KICK.COM/handle); the others get a clean text
-# banner with the platform-correct domain so we never stamp a Kick logo on a
-# YouTube/Twitch clip. `_banner_minimal_url` shows the string as-is when it
-# already contains a domain ("." present).
+# repost-page banner (wordmark + KICK.COM/handle); the other stream platforms
+# get their own branded band (`platform_band` — brand color + a white
+# monochrome glyph + the platform-correct domain) so we never stamp a Kick
+# logo on a YouTube/Twitch/X clip. Uploads / unknown sources fall to the
+# logo-free `kick_minimal_url` text pill.
 _SOURCE_DOMAINS = {
     "youtube": "youtube.com/@{h}",
     "twitch": "twitch.tv/{h}",
@@ -44,10 +45,10 @@ def source_banner(platform: str | None, channel: str | None) -> dict[str, Any] |
         }
     domain = _SOURCE_DOMAINS.get(p)
     if domain:
-        # Logo-free text banner with the platform-correct domain.
+        # Branded band — platform brand color + white glyph + domain URL.
         return {
             "enabled": True, "platform": p,
-            "variant": "kick_minimal_url", "url": domain.format(h=handle),
+            "variant": "platform_band", "url": domain.format(h=handle),
         }
     # Unknown source (upload / unknown) → minimal text, just the handle.
     return {

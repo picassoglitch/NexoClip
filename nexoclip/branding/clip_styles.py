@@ -43,11 +43,15 @@ BannerVariantId = Literal[
     "kick_green_block",
     "kick_minimal_url",
     "kick_repost_page",
+    "platform_band",
 ]
-"""Kick banner styles. `kick_repost_page` is the spec's recommended
-default — short black bottom bar, huge KICK logo on the left, blocky
-URL center, optional LIVE NOW badge right. Matches the viral repost-page
-look operators actually see in their feed."""
+"""Source-credit banner styles. `kick_repost_page` is the spec's
+recommended default for KICK clips — short black bottom bar, huge KICK
+wordmark on the left, blocky URL center, optional LIVE NOW badge right.
+`platform_band` is the sibling for the OTHER stream platforms (YouTube /
+Twitch / X): a full-width bar in the platform's brand color with a white
+monochrome glyph + the source URL. Matches the viral repost-page look
+operators actually see in their feed."""
 
 
 AnimationIntensity = Literal["low", "medium", "high", "max"]

@@ -235,18 +235,23 @@ def test_filter_graph_includes_title_when_set(tmp_path: Path) -> None:
     )
     assert "drawtext=" in graph
     assert "Hello world" in graph
-    # Title sits at top with the configured top margin.
-    assert ":y=28" in graph or ":y=" in graph
-    # Background box, white, padded.
+    # Slice L.4 — title sits at 18% from top (345 on a 1920 canvas) so
+    # it clears the platform top-unsafe band.
+    assert ":y=345" in graph
+    # Background box, white, with the L.4 fat padding.
     assert "boxcolor=white" in graph
     assert "boxborderw=22" in graph
 
 
 def test_filter_graph_includes_banner_when_enabled(tmp_path: Path) -> None:
+    """Legacy band renderer (black_bar_classic variant) — colored band +
+    platform name + URL. The default variant (kick_repost_page) renders
+    the richer chrome covered by the kick companion test below."""
     spec = _spec_from_overlay_config({
         "banner": {
             "enabled": True,
             "platform": "kick",
+            "variant": "kick_black_bar_classic",
             "url": "kick.com/clavicular",
             "color": "#53FC18",
         },
@@ -258,19 +263,24 @@ def test_filter_graph_includes_banner_when_enabled(tmp_path: Path) -> None:
         fontfile=tmp_path / "fake.ttf",
         srt_path=None,
     )
-    # Slice L.4 repost-page banner: black band + KICK wordmark PNG
-    # (composited later via the __KICK_OVERLAY__ sentinel) + the URL
-    # uppercased in white.
+    # black_bar_classic → the legacy band renderer: colored band +
+    # platform name + URL (no wordmark PNG, no KICK.COM rewrite).
     assert "drawbox=" in graph
-    assert "color=black@1.0" in graph
-    assert "__KICK_OVERLAY__" in graph
-    assert "KICK.COM/CLAVICULAR" in graph
+    assert "0x53FC18" in graph  # #-prefixed color converted
+    assert "KICK" in graph  # platform name uppercased
+    assert "kick.com/clavicular" in graph
+    assert "__PNG_OVERLAY__" not in graph  # this variant has no logo overlay
 
 
 def test_filter_graph_banner_uses_platform_default_color_when_blank(
     tmp_path: Path,
 ) -> None:
-    """No explicit color → fall back to PLATFORM_COLORS[platform]."""
+    """No explicit color → fall back to PLATFORM_COLORS[platform].
+
+    Also pins the slice I.1 regression fix: the default banner variant
+    (kick_repost_page) is Kick-branded chrome, so a non-kick platform
+    must fall through to the legacy per-platform renderer — twitch
+    band + TWITCH wordmark, never the Kick logo sentinel."""
     spec = _spec_from_overlay_config({
         "banner": {"enabled": True, "platform": "twitch"},
     })
@@ -284,6 +294,82 @@ def test_filter_graph_banner_uses_platform_default_color_when_blank(
     # Twitch default → 0x9146FF.
     twitch = PLATFORM_COLORS["twitch"].lstrip("#")
     assert f"0x{twitch.upper()}" in graph
+    # Platform's own wordmark, not Kick chrome.
+    assert "TWITCH" in graph
+    assert "__PNG_OVERLAY__" not in graph
+    assert "KICK.COM" not in graph
+
+
+def test_filter_graph_kick_platform_keeps_repost_page_chrome(
+    tmp_path: Path,
+) -> None:
+    """Kick-sourced clips DO get the repost-page chrome — black bar +
+    the `__PNG_OVERLAY__:key=kick` wordmark sentinel burn_overlays swaps
+    for the PNG overlay, with the URL normalized to KICK.COM/<handle>."""
+    spec = _spec_from_overlay_config({
+        "banner": {"enabled": True, "platform": "kick", "url": "clavicular"},
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    assert "__PNG_OVERLAY__:key=kick" in graph
+    assert "color=black@1.0" in graph
+    assert "KICK.COM/CLAVICULAR" in graph
+
+
+def test_filter_graph_platform_band_youtube(tmp_path: Path) -> None:
+    """A YouTube source banner (variant=platform_band) → YouTube-red band
+    + the `__PNG_OVERLAY__:key=youtube` glyph sentinel + the domain URL.
+    No Kick chrome, no KICK wordmark sentinel."""
+    spec = _spec_from_overlay_config({
+        "banner": {
+            "enabled": True,
+            "platform": "youtube",
+            "variant": "platform_band",
+            "url": "youtube.com/@somestreamer",
+        },
+    })
+    graph = build_filter_graph(
+        spec,
+        output_w=1080,
+        output_h=1920,
+        fontfile=tmp_path / "fake.ttf",
+        srt_path=None,
+    )
+    yt = PLATFORM_COLORS["youtube"].lstrip("#")
+    assert f"0x{yt.upper()}" in graph  # YouTube-red band
+    assert "__PNG_OVERLAY__:key=youtube" in graph
+    assert "YOUTUBE.COM/@SOMESTREAMER" in graph  # uppercased domain
+    assert "key=kick" not in graph
+    assert "KICK.COM" not in graph
+
+
+def test_filter_graph_platform_band_twitch_and_x(tmp_path: Path) -> None:
+    """Twitch → purple band + twitch glyph; X → its glyph sentinel."""
+    for platform, url in (("twitch", "twitch.tv/ninja"), ("x", "x.com/elon")):
+        spec = _spec_from_overlay_config({
+            "banner": {
+                "enabled": True,
+                "platform": platform,
+                "variant": "platform_band",
+                "url": url,
+            },
+        })
+        graph = build_filter_graph(
+            spec,
+            output_w=1080,
+            output_h=1920,
+            fontfile=tmp_path / "fake.ttf",
+            srt_path=None,
+        )
+        assert f"__PNG_OVERLAY__:key={platform}" in graph
+        assert url.upper() in graph
+        color = PLATFORM_COLORS[platform].lstrip("#")
+        assert f"0x{color.upper()}" in graph
 
 
 def test_filter_graph_skips_drawtext_when_no_fontfile(tmp_path: Path) -> None:
@@ -422,7 +508,14 @@ def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
             target_path=target,
             overlay_config={
                 "title_text": "Hello",
-                "banner": {"enabled": True, "platform": "kick", "color": "#53FC18"},
+                # kick default (repost_page) → the two-input -filter_complex
+                # path (KICK wordmark PNG overlay); title + captions ride
+                # the main [0:v] chain inside it.
+                "banner": {
+                    "enabled": True,
+                    "platform": "kick",
+                    "color": "#53FC18",
+                },
                 "captions": {"enabled": True},
             },
             transcript_segments=[
@@ -450,6 +543,61 @@ def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
     assert "overlay=" in fc
     # Audio is copied (no re-encode).
     assert cmd[cmd.index("-c:a") + 1] == "copy"
+
+
+def test_burn_overlays_composites_platform_glyph_via_filter_complex(
+    tmp_path: Path,
+) -> None:
+    """A platform_band banner drives the two-input `-filter_complex`
+    path: main video + the platform glyph PNG overlaid. Kick's wordmark
+    uses the same generalized path; here we prove it works for YouTube
+    and that the `__PNG_OVERLAY__` sentinel is stripped before ffmpeg."""
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"fake")
+    target = tmp_path / "clip_final.mp4"
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, check, timeout=None):
+        captured.append(cmd)
+        # Encode writes the scratch .part.mp4; burn_overlays promotes it
+        # to target with os.replace on success.
+        Path(cmd[-1]).write_bytes(b"burned")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=b"", stderr=b""
+        )
+
+    with patch("nexoclip.clip.overlay_burn.subprocess.run", fake_run):
+        out = burn_overlays(
+            source_path=src,
+            target_path=target,
+            overlay_config={
+                "banner": {
+                    "enabled": True,
+                    "platform": "youtube",
+                    "variant": "platform_band",
+                    "url": "youtube.com/@aldo",
+                },
+                "captions": {"enabled": False},
+            },
+            transcript_segments=[],
+            clip_start_s=0,
+            clip_end_s=10,
+            output_w=1080,
+            output_h=1920,
+        )
+    assert out is True
+    assert target.exists()
+    cmd = captured[0]
+    # Two inputs: the source clip + the glyph PNG.
+    assert cmd.count("-i") == 2
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "overlay=" in fc
+    assert "[outv]" in fc
+    # Raw sentinel never reaches ffmpeg.
+    assert "__PNG_OVERLAY__" not in fc
+    # The second input is the YouTube glyph PNG.
+    second_i = cmd.index("-i", cmd.index("-i") + 1)
+    assert "glyph-youtube.png" in cmd[second_i + 1].replace("\\", "/")
 
 
 def test_burn_overlays_propagates_ffmpeg_failure(tmp_path: Path) -> None:

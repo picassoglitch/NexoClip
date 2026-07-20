@@ -361,7 +361,7 @@ def build_server(
 
 
 @asynccontextmanager
-async def _open_db_for_token(db_path: Path, raw_token: str):  # type: ignore[no-untyped-def]
+async def _open_db_for_token(db_path: Path | str, raw_token: str):  # type: ignore[no-untyped-def]
     """Open + migrate the DB, resolve the token to a tenant, yield the trio."""
     db = Database(db_path)
     try:
@@ -374,7 +374,7 @@ async def _open_db_for_token(db_path: Path, raw_token: str):  # type: ignore[no-
 
 def run_stdio_server(
     *,
-    db_path: Path,
+    db_path: Path | str,
     raw_token: str | None = None,
     token_env: str = "NEXOCLIP_API_TOKEN",
 ) -> None:

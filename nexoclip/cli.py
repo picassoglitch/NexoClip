@@ -89,12 +89,14 @@ def mcp_serve_cmd(
     rejected tokens fail fast at boot.
     """
     from nexoclip.mcp_server import run_stdio_server
-    from nexoclip.settings import get_settings
+    from nexoclip.settings import get_settings, resolve_db_target
 
-    settings = get_settings()
-    resolved_db_path = db_path or Path(settings.db_path)
+    # Same resolver as the web app + every other CLI command: prod runs on
+    # Postgres via DATABASE_URL, and only an explicit --db-path should open
+    # the SQLite fallback. (A DSN must stay a string — no Path() wrapping.)
+    resolved_db: str | Path = db_path or resolve_db_target(get_settings())
     try:
-        run_stdio_server(db_path=resolved_db_path, raw_token=token)
+        run_stdio_server(db_path=resolved_db, raw_token=token)
     except Exception as e:
         typer.echo(f"mcp server failed: {e}", err=True)
         raise typer.Exit(code=1) from e

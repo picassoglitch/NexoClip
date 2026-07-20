@@ -2962,8 +2962,9 @@ class VodSpeakersRepo:
         )
         await conn.commit()
         cur = await conn.execute(
-            "SELECT * FROM vod_speakers WHERE stream_id = ? AND speaker_label = ?",
-            (stream_id, speaker_label),
+            "SELECT * FROM vod_speakers "
+            "WHERE stream_id = ? AND speaker_label = ? AND tenant_id = ?",
+            (stream_id, speaker_label, tenant_id),
         )
         row = await cur.fetchone()
         assert row is not None

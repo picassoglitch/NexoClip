@@ -33,7 +33,9 @@ the operator can see what went wrong without leaving the page.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 from typing import NamedTuple
@@ -325,13 +327,32 @@ _ASS_FONT_SIZE_SCALE: dict[str, float] = {
 
 # Maps the editor's position dropdown → ASS MarginV. The values are
 # tuned for a 1080×1920 vertical canvas (`_ASS_PLAYRES_H = 1920`).
-# Larger MarginV = more space from the bottom = caption sits higher.
+# NOTE: libass measures MarginV from the edge the alignment anchors to —
+# from the BOTTOM for alignments 1-3 (bottom/lower_third), from the TOP
+# for alignments 7-9 (upper_third); centered (5) ignores MarginV.
 _ASS_MARGIN_V_BY_POSITION: dict[str, int] = {
-    "bottom":      220,    # above the platform UI band, default
-    "lower_third": 700,    # ~63% from top — under the face
-    "centered":    960,    # dead center
-    "upper_third": 1280,   # ~33% from top
+    "bottom":      220,    # 220 up from bottom — above the platform UI band
+    "lower_third": 700,    # 700 up from bottom = ~63% from top — under the face
+    "centered":    960,    # ignored by alignment 5 — dead center either way
+    "upper_third": 640,    # 640 DOWN from top = ~33% from top (top-anchored)
 }
+
+# Hard ceiling on one burn encode. Clips are bounded (≤ a few minutes), so a
+# burn past this is a wedged ffmpeg — kill it instead of pinning the caller
+# (and its heavy slot) forever.
+_BURN_TIMEOUT_S = 1800
+
+# One lock per output path: the lazy-burn GET fires whenever clip_final.mp4
+# is missing, so two concurrent requests would otherwise run two ffmpeg
+# processes racing on the same output. Keyed by str(path); bounded by the
+# number of distinct clips touched per process lifetime.
+_BURN_LOCKS: dict[str, threading.Lock] = {}
+_BURN_LOCKS_GUARD = threading.Lock()
+
+
+def _burn_lock_for(target: Path) -> threading.Lock:
+    with _BURN_LOCKS_GUARD:
+        return _BURN_LOCKS.setdefault(str(target), threading.Lock())
 
 
 def _hex_to_ass_color(hex_color: str | None) -> str | None:
@@ -1314,7 +1335,12 @@ def burn_overlays(
                 font_family=font_family_val,
             )
             if body:
-                captions_path = target_path.parent / f".captions.{ext}"
+                # Unique per invocation: concurrent burns in the same clip
+                # dir (e.g. two lazy-burn GETs racing) must not unlink each
+                # other's captions file mid-encode.
+                captions_path = target_path.parent / (
+                    f".captions.{os.getpid()}-{threading.get_ident()}.{ext}"
+                )
                 captions_path.write_text(body, encoding="utf-8")
 
     fontfile = _find_system_font()
@@ -1348,6 +1374,12 @@ def burn_overlays(
         if captions_path and captions_path.exists():
             captions_path.unlink(missing_ok=True)
         return False
+
+    # Encode to a scratch path and promote with os.replace on success —
+    # every consumer treats clip_final.mp4's existence as validity, so a
+    # partial file from a crashed/killed ffmpeg must never land on the
+    # real name (it would be served/exported forever and block regen).
+    part_path = target_path.with_suffix(".part.mp4")
 
     # Slice O.13 — brand PNG composited via overlay (true pixel parity
     # with the CSS preview which loads the same source art). The banner
@@ -1423,7 +1455,7 @@ def burn_overlays(
                 "-preset", "veryfast",
                 "-crf", "20",
                 "-c:a", "copy",
-                str(target_path),
+                str(part_path),
             ]
         else:
             # PNG rendering failed / no glyph for this platform — fall
@@ -1439,7 +1471,7 @@ def burn_overlays(
                 "-preset", "veryfast",
                 "-crf", "20",
                 "-c:a", "copy",
-                str(target_path),
+                str(part_path),
             ]
     else:
         cmd = [
@@ -1452,19 +1484,33 @@ def burn_overlays(
             "-preset", "veryfast",
             "-crf", "20",
             "-c:a", "copy",  # no re-encode of audio — saves time
-            str(target_path),
+            str(part_path),
         ]
-    proc = subprocess.run(cmd, capture_output=True, check=False)
+    try:
+        with _burn_lock_for(target_path):
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, check=False,
+                    timeout=_BURN_TIMEOUT_S,
+                )
+            except FileNotFoundError as e:
+                # Honor the module contract: failures bubble as RuntimeError.
+                raise RuntimeError("ffmpeg binary not found on PATH") from e
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(
+                    f"ffmpeg burn killed after {_BURN_TIMEOUT_S}s (wedged encode)"
+                ) from e
 
-    # Clean up the captions file regardless of outcome — it's a
-    # per-burn artifact.
-    if captions_path and captions_path.exists():
-        captions_path.unlink(missing_ok=True)
-
-    if proc.returncode != 0:
-        # Surface the LAST ~600 chars of stderr so the operator can
-        # see what ffmpeg was unhappy about without drowning in it.
-        err = proc.stderr.decode("utf-8", errors="replace")[-600:]
-        raise RuntimeError(f"ffmpeg burn failed: {err.strip()}")
+            if proc.returncode != 0:
+                # Surface the LAST ~600 chars of stderr so the operator can
+                # see what ffmpeg was unhappy about without drowning in it.
+                err = proc.stderr.decode("utf-8", errors="replace")[-600:]
+                raise RuntimeError(f"ffmpeg burn failed: {err.strip()}")
+            os.replace(part_path, target_path)
+    finally:
+        # Per-burn artifacts — never leave them behind, success or not.
+        if captions_path and captions_path.exists():
+            captions_path.unlink(missing_ok=True)
+        part_path.unlink(missing_ok=True)
 
     return True

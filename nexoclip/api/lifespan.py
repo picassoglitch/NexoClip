@@ -73,6 +73,38 @@ _DEFAULT_DISK_WATCHDOG_INTERVAL_S = 900.0
 _DEFAULT_DISK_WATCHDOG_INITIAL_DELAY_S = 60.0
 
 
+# Delay before the one-shot zernio-events recovery sweep. Short: its whole
+# point is healing events whose background task died in the LAST process
+# (deploy/crash mid-handling), so it should run right after boot settles.
+_ZERNIO_PENDING_SWEEP_DELAY_S = 15.0
+
+
+async def _zernio_pending_sweep(db: Database) -> None:
+    """One-shot crash-recovery pass over unprocessed zernio_events.
+
+    A Zernio webhook is persisted first and processed by a background
+    task; a restart between the two leaves the row `processed=0` forever
+    (`process_pending` existed for exactly this but was never wired in).
+    Runs once shortly after boot — the sweep is idempotent, so overlapping
+    with live webhook handling is safe.
+    """
+    from nexoclip.integrations.zernio.events import process_pending
+
+    await asyncio.sleep(_ZERNIO_PENDING_SWEEP_DELAY_S)
+    total = 0
+    try:
+        while True:
+            n = await process_pending(db, limit=100)
+            total += n
+            if n < 100:
+                break
+    except Exception:
+        _log.exception("zernio_pending_sweep_failed", processed_before_error=total)
+        return
+    if total:
+        _log.info("zernio_pending_sweep_done", processed=total)
+
+
 async def _webhook_loop(db: Database, interval_s: float) -> None:
     """Drain webhook subscriptions for every tenant on a loop."""
     from nexoclip.webhooks import run_webhook_dispatch
@@ -297,6 +329,9 @@ async def background_drains_lifespan(
         asyncio.create_task(
             _disk_watchdog_loop(db, output_dir, disk_watchdog_interval_s),
             name="nexoclip-disk-watchdog-loop",
+        ),
+        asyncio.create_task(
+            _zernio_pending_sweep(db), name="nexoclip-zernio-pending-sweep"
         ),
     ]
     # The channel-poll + recovery loops need the pipeline dispatcher + output

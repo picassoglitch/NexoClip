@@ -26,8 +26,11 @@ a 0-cost record. Callers without a db skip both steps (CLI / tests).
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import structlog
 
 from nexoclip.errors import TranscriptionError
 from nexoclip.ids import new_id
@@ -38,6 +41,8 @@ from .providers import TranscribeProvider, TranscribeRequest, get_provider
 
 if TYPE_CHECKING:
     from nexoclip.db import Database
+
+_log = structlog.get_logger(__name__)
 
 
 def _transcript_path(stream: Stream) -> Path:
@@ -91,7 +96,20 @@ async def transcribe(
     # require the audio file when we actually have to transcribe.
     out_path = _transcript_path(stream)
     if not force and out_path.exists():
-        return Transcript.model_validate_json(out_path.read_text("utf-8"))
+        try:
+            return Transcript.model_validate_json(out_path.read_text("utf-8"))
+        except Exception as e:  # corrupt cache must not wedge the stream
+            # A truncated/corrupt transcript.json (crash mid-write, disk
+            # full) must not permanently break every later non-forced run.
+            # Fall through and re-transcribe; if the source audio was
+            # already reclaimed, the audio-missing error below at least
+            # names an actionable condition instead of a validation dump.
+            _log.warning(
+                "transcribe.cache_invalid",
+                path=str(out_path),
+                reason=str(e)[:300],
+                stream_id=stream.id,
+            )
 
     if not stream.source_audio_path.exists():
         raise TranscriptionError(f"audio file missing: {stream.source_audio_path}")
@@ -139,7 +157,12 @@ async def transcribe(
             language=language,
         )
     )
-    out_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+    # Atomic write: transcript.json is the step's durable idempotency
+    # cache and the source audio may be reclaimed after the run — a crash
+    # mid-write must never leave a half-written cache behind.
+    tmp_path = out_path.with_name(out_path.name + ".tmp")
+    tmp_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp_path, out_path)
 
     # Task A1b — post-call cost record. Same llm_calls table the
     # Anthropic router writes into, so /dashboard/llm-calls and the

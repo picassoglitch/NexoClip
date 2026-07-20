@@ -28,6 +28,7 @@ multi-statement atomicity, where it matters, still flows through
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from collections.abc import AsyncIterator, Sequence
@@ -39,6 +40,16 @@ import aiosqlite
 
 if TYPE_CHECKING:
     import asyncpg
+
+_log = logging.getLogger("nexoclip.db.connection")
+
+# How long close() waits for registered background writers (see
+# `track_background_task`) before tearing the backend down anyway. Sized to
+# cover one usage-report HTTP attempt (10s) plus its follow-up DB writes;
+# a report riding its 30s/120s retry backoff is deliberately left running —
+# after close() detaches the handles, a straggler's connect() lazily opens
+# a fresh backend instead of hitting a closed pool.
+_CLOSE_DRAIN_TIMEOUT_S = 15.0
 
 # Backend-agnostic constraint-violation types (UNIQUE / FK / CHECK). Catch
 # this in handlers/repos instead of a driver-specific exception so a
@@ -272,6 +283,10 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
         self._pool: asyncpg.Pool | None = None
         self._lock = asyncio.Lock()
+        # Fire-and-forget writers registered via `track_background_task` —
+        # close() drains these before tearing down the backend so a late
+        # write (step event, usage report) can't hit a closed pool.
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def is_postgres(self) -> bool:
@@ -332,13 +347,52 @@ class Database:
                 )
         return self._pool
 
+    def track_background_task(self, task: asyncio.Task[Any]) -> None:
+        """Register a fire-and-forget task that writes through this Database.
+
+        close() waits (bounded by `_CLOSE_DRAIN_TIMEOUT_S`) for registered
+        tasks before tearing down the backend, so a late write — a pipeline
+        step event, a usage-report status row — lands instead of dying with
+        "pool is closed". Also holds a strong reference, so registered tasks
+        can't be garbage-collected mid-flight.
+        """
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
     async def close(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        await self._drain_background_tasks()
+        # Detach the handles BEFORE awaiting their close: asyncpg's
+        # Pool.close() yields while it waits for acquired connections, and a
+        # straggler calling connect() in that window would otherwise be
+        # handed the closing pool and die with InterfaceError("pool is
+        # closed"). Detached, a straggler lazily opens a fresh backend and
+        # its write still lands.
+        conn, self._conn = self._conn, None
+        pool, self._pool = self._pool, None
+        if conn is not None:
+            await conn.close()
+        if pool is not None:
+            await pool.close()
+
+    async def _drain_background_tasks(self) -> None:
+        """Bounded wait for registered background writers. Never raises —
+        task exceptions stay with the tasks (they're all best-effort)."""
+        deadline = asyncio.get_running_loop().time() + _CLOSE_DRAIN_TIMEOUT_S
+        while True:
+            current = asyncio.current_task()
+            pending = {t for t in self._bg_tasks if t is not current and not t.done()}
+            if not pending:
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                _log.warning(
+                    "db close: %d background write task(s) still pending "
+                    "after %.0fs drain — closing anyway (stragglers reopen "
+                    "lazily)",
+                    len(pending), _CLOSE_DRAIN_TIMEOUT_S,
+                )
+                return
+            await asyncio.wait(pending, timeout=remaining)
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[Any]:

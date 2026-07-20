@@ -263,11 +263,13 @@ def test_filter_graph_includes_banner_when_enabled(tmp_path: Path) -> None:
         fontfile=tmp_path / "fake.ttf",
         srt_path=None,
     )
-    # Colored band first, then platform name, then URL.
+    # black_bar_classic → the legacy band renderer: colored band +
+    # platform name + URL (no wordmark PNG, no KICK.COM rewrite).
     assert "drawbox=" in graph
-    assert "0x53FC18" in graph  # color converted from #-prefix
-    assert "KICK" in graph  # platform uppercased
+    assert "0x53FC18" in graph  # #-prefixed color converted
+    assert "KICK" in graph  # platform name uppercased
     assert "kick.com/clavicular" in graph
+    assert "__PNG_OVERLAY__" not in graph  # this variant has no logo overlay
 
 
 def test_filter_graph_banner_uses_platform_default_color_when_blank(
@@ -294,7 +296,7 @@ def test_filter_graph_banner_uses_platform_default_color_when_blank(
     assert f"0x{twitch.upper()}" in graph
     # Platform's own wordmark, not Kick chrome.
     assert "TWITCH" in graph
-    assert "__KICK_OVERLAY__" not in graph
+    assert "__PNG_OVERLAY__" not in graph
     assert "KICK.COM" not in graph
 
 
@@ -493,9 +495,10 @@ def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
     target = tmp_path / "clip_final.mp4"
     captured: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, check):
+    def fake_run(cmd, capture_output, check, timeout=None):
         captured.append(cmd)
-        # Pretend ffmpeg wrote the output.
+        # Pretend ffmpeg wrote the output (the scratch .part.mp4 path —
+        # burn_overlays promotes it to target with os.replace on success).
         Path(cmd[-1]).write_bytes(b"burned")
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
 
@@ -505,13 +508,12 @@ def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
             target_path=target,
             overlay_config={
                 "title_text": "Hello",
-                # black_bar_classic keeps this on the plain -vf path —
-                # the default repost_page variant would switch the cmd
-                # to -filter_complex for the Kick PNG overlay.
+                # kick default (repost_page) → the two-input -filter_complex
+                # path (KICK wordmark PNG overlay); title + captions ride
+                # the main [0:v] chain inside it.
                 "banner": {
                     "enabled": True,
                     "platform": "kick",
-                    "variant": "kick_black_bar_classic",
                     "color": "#53FC18",
                 },
                 "captions": {"enabled": True},
@@ -526,15 +528,19 @@ def test_burn_overlays_invokes_ffmpeg_with_filter_graph(
         )
     assert out is True
     assert target.exists()
-    # The captions SRT should have been cleaned up after the run.
-    assert not (target.parent / ".captions.srt").exists()
-    # ffmpeg cmd carried -vf with the filter graph.
+    # Per-burn artifacts cleaned up: the (uniquely named) captions file
+    # and the scratch .part.mp4 the encode was promoted from.
+    assert not list(target.parent.glob(".captions*"))
+    assert not list(target.parent.glob("*.part.mp4"))
+    # Banner platform=kick routes through the two-input -filter_complex
+    # graph (KICK wordmark PNG overlay); title + captions ride the main
+    # [0:v] chain inside it.
     cmd = captured[0]
     assert "ffmpeg" in cmd[0]
-    vf_idx = cmd.index("-vf")
-    vf = cmd[vf_idx + 1]
-    assert "Hello" in vf
-    assert "subtitles=" in vf
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "Hello" in fc
+    assert "subtitles=" in fc
+    assert "overlay=" in fc
     # Audio is copied (no re-encode).
     assert cmd[cmd.index("-c:a") + 1] == "copy"
 
@@ -551,8 +557,10 @@ def test_burn_overlays_composites_platform_glyph_via_filter_complex(
     target = tmp_path / "clip_final.mp4"
     captured: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, check):
+    def fake_run(cmd, capture_output, check, timeout=None):
         captured.append(cmd)
+        # Encode writes the scratch .part.mp4; burn_overlays promotes it
+        # to target with os.replace on success.
         Path(cmd[-1]).write_bytes(b"burned")
         return subprocess.CompletedProcess(
             args=cmd, returncode=0, stdout=b"", stderr=b""
@@ -597,7 +605,7 @@ def test_burn_overlays_propagates_ffmpeg_failure(tmp_path: Path) -> None:
     src.write_bytes(b"fake")
     target = tmp_path / "clip_final.mp4"
 
-    def fake_run(cmd, capture_output, check):
+    def fake_run(cmd, capture_output, check, timeout=None):
         return subprocess.CompletedProcess(
             args=cmd,
             returncode=1,
@@ -619,8 +627,9 @@ def test_burn_overlays_propagates_ffmpeg_failure(tmp_path: Path) -> None:
             output_w=1080,
             output_h=1920,
         )
-    # SRT gets cleaned up even on failure.
-    assert not (target.parent / ".captions.srt").exists()
+    # Per-burn artifacts get cleaned up even on failure.
+    assert not list(target.parent.glob(".captions*"))
+    assert not list(target.parent.glob("*.part.mp4"))
 
 
 # ---- ASS / word-level karaoke (slice F.7-F) ----------------------
@@ -695,8 +704,8 @@ def test_build_ass_escapes_curly_braces_in_word_text() -> None:
     )
     out = build_ass(lines)
     # Curly braces in the user text replaced; ASS still has its own
-    # override braces around the karaoke tags. Slice O.15 uppercases
-    # word text to match the CSS preview's text-transform.
+    # override braces around the karaoke tags. Caption words render
+    # UPPERCASED (clip-culture styling), escaping preserved.
     assert "WEIRD()WORD" in out
 
 

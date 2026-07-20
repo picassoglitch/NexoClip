@@ -49,7 +49,10 @@ def verify_zernio_signature(
         body,
         hashlib.sha256,
     ).hexdigest()
-    return hmac.compare_digest(expected, provided)
+    # Compare as bytes: `compare_digest` on str raises TypeError for
+    # non-ASCII input, which would turn a malformed/hostile header into an
+    # unhandled 500 instead of the contract's False → 403.
+    return hmac.compare_digest(expected.encode("ascii"), provided.encode("utf-8"))
 
 
 def parse_post_event(payload: dict[str, Any]) -> dict[str, Any]:

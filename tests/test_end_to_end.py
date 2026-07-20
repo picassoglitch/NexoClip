@@ -16,13 +16,13 @@ from pathlib import Path
 import pytest
 
 from tests.pipeline.test_process_vod import (  # type: ignore[import]
+    _hook_payload,
     _make_config,
     _make_personas,
     _make_router_factory,
     _stub_ffmpeg,
     _stub_ingest,
     _stub_whisper,
-    _success_payload,
 )
 from tests.llm._fakes import FakeProvider  # type: ignore[import]
 from tests.llm._fixtures import make_llm_config  # type: ignore[import]
@@ -37,7 +37,7 @@ def test_phase_0_exit_criterion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     _stub_ffmpeg(monkeypatch)
 
     fake = FakeProvider("anthropic")
-    fake.queue_success(_success_payload(n=5))
+    fake.queue_success(_hook_payload())
 
     deps = PipelineDeps(
         config=_make_config(),
@@ -73,7 +73,9 @@ def test_phase_0_exit_criterion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         assert (clip_dir / "clip.mp4").exists()
         assert (clip_dir / "metadata.json").exists()
         assert (clip_dir / "variants.json").exists()
-        assert len(entry.variants) == 5
+        # Variants are a deterministic stub now: exactly one per clip,
+        # carrying the auto-hook (the only LLM call left in the pipeline).
+        assert len(entry.variants) == 1
 
     # Cost tracking is non-optional (CLAUDE.md hard rule #6).
     assert manifest.llm_spend.total_calls == len(manifest.clip_entries)

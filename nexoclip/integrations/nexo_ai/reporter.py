@@ -351,6 +351,13 @@ def schedule_usage(
     )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
+    # Register with the owning Database too: its close() then waits for the
+    # report's follow-up DB writes (balance cache, report status) instead of
+    # closing the pool under them — the report's HTTP leg routinely outlives
+    # the pipeline run that spawned it ("pool is closed" after pipeline.done).
+    track = getattr(db, "track_background_task", None)
+    if callable(track):
+        track(task)
 
 
 def schedule_report(

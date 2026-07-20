@@ -88,11 +88,32 @@ async def resolve_speakers(
     vod_speakers_repo = VodSpeakersRepo(db)
     known = await speakers_repo.list_for_tenant()
 
+    # Idempotency (hard rule 4): a (stream, label) pair contributes to a
+    # persistent fingerprint AT MOST once. On a re-run (cached diarization,
+    # force, recovery re-dispatch) the labels resolved last time must not
+    # fold their embedding in again — that double-counts total_speech_s and
+    # drifts the fingerprint toward this one VOD.
+    already_resolved = {
+        r.speaker_label: r.resolved_speaker_id
+        for r in await vod_speakers_repo.list_for_stream(stream_id)
+        if r.resolved_speaker_id
+    }
+
     matched = 0
     created = 0
     unresolved = 0
 
     for emb in diarization.embeddings:
+        prior_id = already_resolved.get(emb.speaker_label)
+        if prior_id is not None:
+            matched += 1
+            _log.info(
+                "speaker.already_resolved",
+                stream_id=stream_id,
+                speaker_label=emb.speaker_label,
+                speaker_id=prior_id,
+            )
+            continue
         # Score against every known speaker.
         best_id: str | None = None
         best_sim = 0.0

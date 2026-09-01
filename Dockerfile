@@ -96,6 +96,16 @@ COPY scripts ./scripts
 # Volumes → New Volume → mount path `/data`). Fly.io takes the same
 # approach. If you ever switch to a platform that respects the `VOLUME`
 # declaration (raw Docker, ECS, K8s), add it back.
+#
+# CLOUD RUN HAS NO PERSISTENT DISK AT ALL. Its filesystem is tmpfs — every
+# byte written to /data counts against the instance's MEMORY limit and is
+# gone when the instance is reclaimed. Deploying there means overriding the
+# defaults below:
+#   DATABASE_URL                    → Postgres (Supabase). Not the SQLite path.
+#   NEXOCLIP_DEFAULT_OUTPUT_DIR     → a GCS volume mount, or /tmp for scratch
+#                                     with the artifacts uploaded to GCS.
+# Leaving NEXOCLIP_DB_PATH pointing at /data on Cloud Run gives you a SQLite
+# file that silently resets on every cold start.
 
 # Sensible production defaults. Override any via Railway env-var dashboard.
 #   NEXOCLIP_HOST=0.0.0.0                — bind to all interfaces (container)
@@ -123,7 +133,13 @@ ENV NEXOCLIP_DB_PATH=/data/nexoclip.db \
 # wires it through to NEXOCLIP_PORT which run.py reads.
 EXPOSE 8000
 
-# Railway sets $PORT; run.py reads NEXOCLIP_PORT. Translate at boot.
-# Use ${PORT:-8000} so the same image works locally (just `docker run -p
-# 8000:8000`) without setting PORT explicitly.
-CMD ["sh", "-c", "NEXOCLIP_PORT=${PORT:-8000} python run.py"]
+# Entrypoint dispatches on NEXOCLIP_ROLE (api | worker) so ONE image serves
+# both Cloud Run services — see infra/cloudrun/README.md. Copied last: it
+# changes more often than the dependency layers above.
+#
+# Railway and plain `docker run` are unaffected: the role defaults to `api`,
+# which is the same `NEXOCLIP_PORT=${PORT:-8000} python run.py` as before.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

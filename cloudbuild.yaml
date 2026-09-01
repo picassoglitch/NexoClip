@@ -1,0 +1,112 @@
+# Cloud Build → Artifact Registry → Cloud Run, for both ChalybClip services.
+#
+# Trigger on push to main, or run by hand:
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_REGION=us-central1,_PROJECT=chalyb-prod
+#
+# The image is LARGE — ffmpeg, OpenCV, and a full Playwright Chromium (~300 MB
+# on its own). Two consequences, both handled below:
+#   * the build needs a bigger machine and a timeout well past the 10 min
+#     default, or it is killed mid-`playwright install`;
+#   * pulling it makes Cloud Run cold starts slow, which is why the API
+#     service is deployed with startup CPU boost.
+
+substitutions:
+  _REGION: us-central1
+  _PROJECT: chalyb-prod
+  _REPO: engines
+  _SERVICE: chalybclip
+  _WORKER: chalybclip-worker
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+# pip + playwright + apt on a cold cache. 10 minutes is not enough.
+timeout: 2400s
+
+images:
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:latest
+
+steps:
+  # ---------------------------------------------------------------------
+  # Build. --cache-from lets an unchanged dependency layer be reused, which
+  # is the difference between a 3-minute build and a 20-minute one. It is a
+  # no-op on the very first build, when no :latest exists yet — hence the
+  # `|| true` on the pull.
+  # ---------------------------------------------------------------------
+  - id: pull-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker pull ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:latest || true
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --cache-from=${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:latest
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:latest
+      - .
+    waitFor: [pull-cache]
+
+  # ---------------------------------------------------------------------
+  # Push before deploy — Cloud Run pulls from the registry, not from the
+  # build workspace. The `images:` block would also push, but only after
+  # every step has run, which is too late for the deploys below.
+  # ---------------------------------------------------------------------
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}']
+    waitFor: [build]
+
+  # ---------------------------------------------------------------------
+  # Deploy the API. Config that Terraform owns (service account, secrets,
+  # scaling) is NOT repeated here — `gcloud run deploy` with only --image
+  # leaves the rest of the service spec untouched, so the two do not fight.
+  #
+  # --no-traffic + a tagged revision would be the safer shape once there are
+  # real users; today the engines are still `coming_soon` in the hub, so a
+  # straight deploy is fine.
+  # ---------------------------------------------------------------------
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --project=${_PROJECT}
+      - --quiet
+    waitFor: [push]
+
+  # ---------------------------------------------------------------------
+  # Deploy the worker — same image, NEXOCLIP_ROLE=worker.
+  #
+  # The worker MUST run with CPU always allocated. It answers a kickoff POST
+  # immediately and does the real work in an asyncio task; with the default
+  # throttling, CPU is withdrawn the moment that response is sent and the
+  # pipeline silently freezes mid-job. --no-cpu-throttling is load-bearing,
+  # not an optimization.
+  # ---------------------------------------------------------------------
+  - id: deploy-worker
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WORKER}
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_SERVICE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --project=${_PROJECT}
+      - --no-cpu-throttling
+      - --quiet
+    waitFor: [push]
